@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -83,15 +84,6 @@ function mockReferencedStoreSnapshot() {
 async function sharingFixture(others: "none" | "suggest" = "none") {
   const owner = ensureProfileForEmail("owner@example.test");
   const guest = ensureProfileForEmail("guest@example.test");
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: requestParams.sessionKey },
-    {
-      sessionId: "question-session",
-      updatedAt: 1,
-      visibility: "shared",
-      createdActor: { type: "human", source: "profile", id: owner.id },
-    },
-  );
   const cfg: OpenClawConfig = {
     gateway: {
       roles: {
@@ -103,6 +95,16 @@ async function sharingFixture(others: "none" | "suggest" = "none") {
       },
     },
   };
+  setRuntimeConfigSnapshot(cfg);
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey: requestParams.sessionKey },
+    {
+      sessionId: "question-session",
+      updatedAt: 1,
+      visibility: "shared",
+      createdActor: { type: "human", source: "profile", id: owner.id },
+    },
+  );
   const profile = (user: typeof guest) => ({
     profileId: user.id,
     displayName: user.displayName,
@@ -387,6 +389,7 @@ it.each(["replacement", "abort"] as const)(
   "fences a pending credential on exact requester %s while preserving ordinary questions",
   async (closure) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const id = await requestSecretQuestion();
       const ordinary = await call("question.request", requestParams);
       const ordinaryId = (ordinary[1] as { id: string }).id;
@@ -505,6 +508,7 @@ it("requires admitted authority, not an admin's supplied run metadata", async ()
 
 it("diverts operator-entered credentials into the store and exposes only a stored marker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const id = await requestSecretQuestion();
     const value = "test-secret-value-gateway-diversion-123";
     const client = {
@@ -546,6 +550,7 @@ it("diverts operator-entered credentials into the store and exposes only a store
 
 it("uses operator-edited hosts and keeps invalid store submissions pending for retry", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const id = await requestSecretQuestion();
     const value = "test-secret-value-retry-123";
     const answers = { answers: { secret_value: [value] } };
@@ -583,6 +588,7 @@ it.each([
   },
 ])("keeps a secret question pending when there is $behavior", async ({ answers }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const id = await requestSecretQuestion();
 
     expect(await call("question.resolve", { id, answers: { answers } })).toMatchObject(
@@ -595,6 +601,7 @@ it.each([
 
 it("rejects masked env requests while preserving ordinary question host validation and cancellation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     expect(
       await call(
         "question.request",
@@ -630,6 +637,7 @@ it("rejects masked env requests while preserving ordinary question host validati
 
 it("settles the SQLite commit before a second answer races its deferred refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     mockReferencedStoreSnapshot();
     const reload = createDeferred<{ warningCount: number }>();
     const reloadStarted = createDeferred();
@@ -686,6 +694,7 @@ it("settles the SQLite commit before a second answer races its deferred refresh"
 
 it("keeps a committed answer terminal and reports refresh failure without inviting overwrite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     mockReferencedStoreSnapshot();
     reloadSecrets.mockRejectedValue(new Error("synthetic refresh failure"));
     const id = await requestSecretQuestion();
@@ -732,6 +741,7 @@ it("keeps a committed answer terminal and reports refresh failure without inviti
 
 it("keeps store-bound questions pending when the write service is unavailable", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     vi.spyOn(storeWriteService, "write").mockImplementation(() => {
       throw new Error("database unavailable");
     });
@@ -807,6 +817,7 @@ it.each([
   "saves only the consented host policy: $scenario",
   async ({ existing, proposal, override, shown }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const entry = {
         scope: { kind: "team" as const },
         name: "SERVICE_API_KEY",

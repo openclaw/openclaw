@@ -3,6 +3,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
@@ -16,11 +20,13 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({});
   await resetSubagentRegistryForTests({ persist: false });
 });
 
 afterEach(async () => {
   await resetSubagentRegistryForTests({ persist: false });
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildActiveSubagentRuntimeContext", () => {

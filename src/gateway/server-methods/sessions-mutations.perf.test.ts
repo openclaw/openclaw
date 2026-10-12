@@ -4,6 +4,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -84,6 +85,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
   "sessions.patch %j avoids transcript-worker startup, unrelated hydration, and host ACP reads",
   async (patch) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const targetKey = "agent:main:single-patch-target";
       const snapshots = {
         skillsSnapshot: { prompt: "synthetic skill instructions ".repeat(1_000), skills: [] },
@@ -189,6 +191,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
 
 test("sessions.patchMany archives 30 human sessions without transcript hydration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const targets = Array.from({ length: 30 }, (_, index) => ({
       key: `agent:main:archive-perf-${index}`,
       expectedSessionId: `session-archive-perf-${index}`,

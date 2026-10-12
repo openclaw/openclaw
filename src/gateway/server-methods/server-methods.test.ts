@@ -10,6 +10,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
@@ -2173,6 +2177,7 @@ describe("exec approval handlers", () => {
     const fixture = await createForwardingExecApprovalFixture(testContext);
     vi.useFakeTimers();
     try {
+      setRuntimeConfigSnapshot(fixture.context.getRuntimeConfig());
       return await fixture.run(async () => {
         const { manager, forwarder, respond } = fixture;
         const expireSpy = vi.spyOn(manager, "expire");
@@ -2203,6 +2208,7 @@ describe("exec approval handlers", () => {
       });
     } finally {
       vi.useRealTimers();
+      clearRuntimeConfigSnapshot();
     }
   });
 });

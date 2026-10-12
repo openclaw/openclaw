@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { ACTIVE_PLACEMENT } from "./placement-dispatch-coordinator.test-support.js";
 import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
@@ -32,6 +36,8 @@ function reader(
 }
 
 describe("createWorkerPlacementRedispatch", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(clearRuntimeConfigSnapshot);
   it.each([
     { providerId: "fake", nodeDeviceId: null, executionMode: "worker-turn", state: "reclaimed" },
     {

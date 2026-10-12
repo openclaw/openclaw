@@ -5,6 +5,10 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -62,6 +66,7 @@ describe("CLI attempt session MCP overrides", () => {
   afterEach(async () => {
     await disposeAllSessionMcpRuntimes();
     await Promise.all(servers.splice(0).map((server) => server.close()));
+    clearRuntimeConfigSnapshot();
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     vi.restoreAllMocks();
@@ -172,6 +177,7 @@ describe("CLI attempt session MCP overrides", () => {
           },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       const params = makeRunAgentAttemptParams({
         agentDir: path.join(root, "agents", "main", "agent"),
         workspaceDir: root,

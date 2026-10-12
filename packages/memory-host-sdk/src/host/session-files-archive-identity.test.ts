@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -21,6 +22,7 @@ import { buildSessionEntry, listSessionTranscriptCorpusEntriesForAgent } from ".
 describe("session archive identity", () => {
   it("classifies canonical archives after owner writes without caller-thread SQLite", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionsDir = state.sessionsDir();
       const sessionId = "classified-archive";
       const sessionKey = "agent:main:chat:classified-archive";
@@ -74,6 +76,7 @@ describe("session archive identity", () => {
       await state.writeConfig({ session: { store: storePath } });
       clearRuntimeConfigSnapshot();
       clearConfigCache();
+      await captureRuntimeConfigAsyncReader()();
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         { sessionId, updatedAt: 1 },

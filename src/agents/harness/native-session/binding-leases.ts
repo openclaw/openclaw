@@ -4,10 +4,16 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../../../config/sessions/session-entry-current.types.js";
+import {
+  capturePluginStateNativeBindingFacts,
+  type PluginStatePinnedEntry,
+} from "../../../plugin-state/plugin-state-native-binding-facts.js";
 import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "../../../plugin-state/plugin-state-store.js";
+import { capturePluginStateNativeBindingStore } from "../../../plugin-state/plugin-state-store.native-binding.js";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import { sleep } from "../../../utils/sleep.js";
 import {
   combineNativeSessionBindingAuthority,
@@ -48,7 +54,7 @@ export function createNativeSessionBindingLeases<TRecord extends NativeSessionBi
   };
 }
 
-/** Worker-owned binding mutations; only final effect guards remain synchronous. */
+/** Worker-owned mutations publish the facts used by synchronous native effect guards. */
 export function createNativeSessionBindingLeasesV2<TRecord extends NativeSessionBindingRecord>(
   state: Pick<NativeSessionBindingStateStoreV2<TRecord>, "withCurrent" | "assertLeaseCurrent">,
   options: NativeSessionBindingLeaseConfig<TRecord>,
@@ -62,6 +68,24 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
     const blocked = unresolved.get(key);
     if (blocked) {
       throw blocked.error;
+    }
+  };
+  const assertLeaseCurrent = (key: string, owner: NativeSessionBindingLeaseOwner) => {
+    if (!owner.facts) {
+      if (!state.assertLeaseCurrent) {
+        throw new Error(options.errors.atomicUpdatesRequired);
+      }
+      warnPluginSdkDeprecation({
+        family: "native-session-binding",
+        method: "NativeSessionBindingStateStoreV2.assertLeaseCurrent",
+        replacement: "withCurrent backed by api.runtime.state.openKeyedStoreV2",
+      });
+      state.assertLeaseCurrent(key, owner.token);
+      return;
+    }
+    const current = readRecord(key, owner.facts.read());
+    if (current?.lease?.token !== owner.token || current.lease.expiresAt <= Date.now()) {
+      throw options.errors.lostLease(key);
     }
   };
 
@@ -256,7 +280,13 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       if (!acquired) {
         throw options.errors.acquisitionRejected(key);
       }
-      state.assertLeaseCurrent(key, token);
+      const bindingStore = capturePluginStateNativeBindingStore(
+        state.withCurrent({ assertCurrent() {} }),
+      );
+      if (bindingStore) {
+        owner.facts = await capturePluginStateNativeBindingFacts(bindingStore, key);
+      }
+      assertLeaseCurrent(key, owner);
       const nested = new Map(owned);
       nested.set(key, owner);
       // Exact-token renewal keeps bounded native requests serialized while a
@@ -285,24 +315,28 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       }
       // A queued renewal must settle before release reads its final row. Its
       // admission guard also refuses after deletion or owner closure.
-      await renewal;
-      if (!unknown) {
-        try {
-          await update(key, (raw) => {
-            const stored = readRecord(key, raw);
-            if (stored?.lease?.token !== token) {
-              return {};
-            }
-            const { lease: _lease, ...released } = stored;
-            return {
-              next: readRecord(key, released),
-              ttlMs: options.releaseTtlMs(key, stored),
-            };
-          });
-        } catch (error) {
-          // Crashed or unauthorized owners leave their bounded lease to expire.
-          options.onReleaseFailure?.(key, error);
+      try {
+        await renewal;
+        if (!unknown) {
+          try {
+            await update(key, (raw) => {
+              const stored = readRecord(key, raw);
+              if (stored?.lease?.token !== token) {
+                return {};
+              }
+              const { lease: _lease, ...released } = stored;
+              return {
+                next: readRecord(key, released),
+                ttlMs: options.releaseTtlMs(key, stored),
+              };
+            });
+          } catch (error) {
+            // Crashed or unauthorized owners leave their bounded lease to expire.
+            options.onReleaseFailure?.(key, error);
+          }
         }
+      } finally {
+        owner.facts?.release();
       }
     }
   };
@@ -364,7 +398,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
         throw options.errors.lostLease(key);
       }
       try {
-        state.assertLeaseCurrent(key, owner.token);
+        assertLeaseCurrent(key, owner);
       } catch (error) {
         throw owner.failure ?? error;
       }
@@ -408,8 +442,11 @@ export type NativeSessionBindingStateStoreV2<TRecord extends NativeSessionBindin
   PluginStateKeyedStore<TRecord, 2>,
   "lookup"
 > & {
-  /** Revalidate the exact unexpired lease immediately before a native side effect. */
-  assertLeaseCurrent(key: string, token: string): void;
+  /**
+   * @deprecated Worker-backed stores publish lease facts directly. Retained for external adapters
+   * until removal in a later stable release after deprecation ships.
+   */
+  assertLeaseCurrent?(key: string, token: string): void;
   withCurrent: NativeSessionBindingStateStore<TRecord>["withCurrent"];
 };
 
@@ -445,6 +482,7 @@ type NativeSessionBindingLeaseOwner = {
   quiesce(): void;
   block(error: Error, custody: unknown): void;
   failure?: Error;
+  facts?: PluginStatePinnedEntry;
   assertCurrent?: () => void;
   authority?: NativeSessionBindingAuthority;
 };

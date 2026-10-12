@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   deleteSessionEntryLifecycle,
@@ -332,6 +333,7 @@ describe("presence recipient projection", () => {
   it("preserves scoped sentinels, recipient ordering, and current visibility without changing the source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const sharedKey = "agent:main:shared";
       const incognitoKey = "agent:main:dashboard:incognito-presence";
       const keys = [
@@ -469,6 +471,8 @@ describe("presence recipient projection", () => {
 
   it("keeps solo and system authority without treating pending identity or missing read scope as solo", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      let policy: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(policy);
       const key = "agent:main:private";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },
@@ -506,7 +510,6 @@ describe("presence recipient projection", () => {
       worker.connect.role = "worker";
       worker.connect.scopes = [];
       worker.connectionKind = "worker";
-      let policy: OpenClawConfig = {};
       const projection = await createSessionRowProjection({
         cfg: policy,
         modelCatalog: [],

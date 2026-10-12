@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionActorAuthority } from "../../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
@@ -47,6 +50,10 @@ test.each(["existing", "after-check"])(
         name: "Memory project",
         originUrl,
       });
+      const cfg = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+      } as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
       const lifetime = { assertCurrent() {}, assertReadable() {} };
       const mainOwner = memorySessionActorOwners.get({
@@ -100,13 +107,7 @@ test.each(["existing", "after-check"])(
         const result = await runWithSessionActorStorage(
           { actor, authority, agentId: mainOwner.agentId, path: mainOwner.path },
           () =>
-            invokeProjectMethod(
-              "projects.remove",
-              { id: project.id, deleteCheckout: true },
-              {
-                agents: { entries: { main: { workspace: state.workspaceDir } } },
-              },
-            ),
+            invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }, cfg),
         );
         expect(result).toMatchObject({
           ok: false,
@@ -138,6 +139,10 @@ test.each(["native", "actor", "actor-changed-after-check"])(
         name: "Session project",
         originUrl,
       });
+      const cfg = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+      } as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const authority = { assertCurrent() {} };
       const actor =
         mode === "native"
@@ -162,9 +167,6 @@ test.each(["native", "actor", "actor-changed-after-check"])(
       } else {
         await upsertSessionEntryCore({ agentId: "main", env: state.env, sessionKey }, entry);
       }
-      const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-      } as OpenClawConfig;
 
       const remove = projectClone.removeClonedProjectCheckout;
       let checks = 0;
@@ -218,6 +220,7 @@ test("projects.list includes retained actor recents and refuses a changed snapsh
   await withProjectState(async (state) => {
     const profile = ensureProfileForEmail("incognito-projects@example.test");
     const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    setRuntimeConfigSnapshot(cfg);
     const folder = path.join(state.workspaceDir, "private-project");
     await fs.mkdir(folder, { recursive: true });
     const authority = { assertCurrent() {} };

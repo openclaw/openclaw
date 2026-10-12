@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   listSessionEntriesCore,
   upsertSessionEntryCore,
@@ -22,12 +23,14 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 const mocks = { upstreamFork: vi.fn() };
 const sessionKey = "agent:main:rewind-handler";
 const sourceSessionId = "rewind-handler-source";
+const cfg = { agents: { entries: { main: {} } } };
 let state: OpenClawTestState;
 
 beforeEach(async () => {
   mocks.upstreamFork.mockReset();
   setActivePluginRegistry(createEmptyPluginRegistry());
   state = await createOpenClawTestState({ label: "rewind-upstream", layout: "state-only" });
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     { sessionId: sourceSessionId, updatedAt: Date.now() },
@@ -67,7 +70,7 @@ async function invoke(
     context: {
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
-      getRuntimeConfig: runtimeConfig ?? (() => ({ agents: { entries: { main: {} } } })),
+      getRuntimeConfig: runtimeConfig ?? (() => cfg),
       getSessionEventSubscriberConnIds: () => new Set(),
     } as unknown as GatewayRequestContext,
     client,

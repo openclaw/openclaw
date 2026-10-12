@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
-  ImageGenerationProviderConfiguredContext,
   ImageGenerationResult,
 } from "openclaw/plugin-sdk/image-generation";
 import type { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
@@ -301,11 +300,7 @@ function shouldAllowPrivateImageEndpoint(req: {
 
 type OpenAIImageModelAuth = Pick<
   OpenClawPluginApi["runtime"]["modelAuth"],
-  | "ensureAuthProfileStore"
-  | "ensureAuthProfileStoreAsync"
-  | "listProfilesForProvider"
-  | "isProviderApiKeyConfigured"
-  | "isProviderApiKeyConfiguredAsync"
+  "ensureAuthProfileStoreAsync" | "listProfilesForProvider" | "isProviderApiKeyConfiguredAsync"
 >;
 
 async function resolveRequestAuthStore(
@@ -703,24 +698,6 @@ export function buildOpenAIImageGenerationProvider(
         ),
         backgrounds: [...OPENAI_BACKGROUNDS],
       },
-    },
-    // Released synchronous discovery must retain the image-specific auth policy.
-    isConfigured({ cfg, agentDir }: ImageGenerationProviderConfiguredContext) {
-      const directRoute = hasDirectOpenAIImageRoute(cfg);
-      const authStore =
-        directRoute || !agentDir?.trim()
-          ? undefined
-          : modelAuth.ensureAuthProfileStore(agentDir.trim(), { allowKeychainPrompt: false });
-      return (
-        modelAuth.isProviderApiKeyConfigured({
-          provider: "openai",
-          agentDir,
-          cfg,
-          store: authStore,
-          capability: "image-generation",
-        }) &&
-        (directRoute || hasOpenAIImageProfileRoute(cfg, authStore, modelAuth))
-      );
     },
     async isConfiguredAsync({ cfg, agentDir }) {
       const directRoute = hasDirectOpenAIImageRoute(cfg);

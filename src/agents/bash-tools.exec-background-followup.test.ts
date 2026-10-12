@@ -55,12 +55,12 @@ beforeAll(async () => {
     plugins: { enabled: false },
     skills: { load: { watch: false } },
   };
-  setRuntimeConfigSnapshot(config);
   await state.writeConfig(config);
   openOpenClawStateDatabase();
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot(config);
   model.mockReset().mockImplementation(async (params: RunEmbeddedAgentParams) => {
     await expectDefined(params.preparedRunAdmission, "real completion admission").admit(
       "gateway",

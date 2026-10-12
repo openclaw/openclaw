@@ -12,6 +12,8 @@ import {
   loadSessionCostSummariesFromCache,
 } from "./session-cost-usage.js";
 
+const config = {};
+
 vi.mock("./session-cost-usage-aggregation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-cost-usage-aggregation.js")>()),
   refreshCostUsageCacheForAgent: vi.fn(),
@@ -30,7 +32,7 @@ describe("session cost usage refresh", () => {
     );
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      const params = { agentId: "backoff-test", startMs: 0, endMs: Date.now() };
+      const params = { config, agentId: "backoff-test", startMs: 0, endMs: Date.now() };
       const refresh = vi.mocked(refreshCostUsageCacheForAgent);
       let queuedSubset: ReturnType<typeof loadSessionCostSummariesFromCache> | undefined;
       let calls = 0;
@@ -41,6 +43,7 @@ describe("session cost usage refresh", () => {
         }
         if (calls === 11) {
           queuedSubset = loadSessionCostSummariesFromCache({
+            config,
             agentId: params.agentId,
             sessions: [{ sessionFile }],
           });
@@ -166,6 +169,7 @@ describe("session cost usage refresh", () => {
           );
         } else if (++partialCalls === 1) {
           requestCostUsageCacheRefresh({
+            config,
             agentId,
             storePath,
             sessionFiles: [late],
@@ -176,7 +180,7 @@ describe("session cost usage refresh", () => {
       });
       try {
         await scope.track(async () =>
-          requestCostUsageCacheRefresh({ agentId, storePath, rebuildRows: [rebuild] }),
+          requestCostUsageCacheRefresh({ config, agentId, storePath, rebuildRows: [rebuild] }),
         );
         await vi.advanceTimersByTimeAsync(0);
         expect(refresh).toHaveBeenCalledTimes(1);
@@ -218,6 +222,7 @@ describe("session cost usage refresh", () => {
         try {
           await scope.track(() =>
             loadSessionCostSummariesFromCache({
+              config,
               agentId,
               sessions: [{ sessionFile: sessionFiles[0] }],
             }),
@@ -257,6 +262,7 @@ describe("session cost usage refresh", () => {
         try {
           await scope.track(() =>
             loadSessionCostSummariesFromCache({
+              config,
               agentId,
               sessions: [{ sessionFile: sessionFiles[0] }],
             }),
@@ -305,7 +311,7 @@ describe("session cost usage refresh", () => {
           { scope: second, sessionFile: sessionFiles[1] },
         ]) {
           await scope.track(() =>
-            loadSessionCostSummariesFromCache({ agentId, sessions: [{ sessionFile }] }),
+            loadSessionCostSummariesFromCache({ config, agentId, sessions: [{ sessionFile }] }),
           );
         }
         await vi.advanceTimersByTimeAsync(0);

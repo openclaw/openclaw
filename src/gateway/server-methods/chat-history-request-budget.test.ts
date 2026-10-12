@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
@@ -43,6 +44,7 @@ function createHistoryRequest(
 describe("chat history request byte budgets", () => {
   it("opts into smaller tool previews without changing text, paging, or full output", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:tool-previews",
@@ -130,6 +132,7 @@ describe("chat history request byte budgets", () => {
     "%s returns a small tail with a lossless back-scroll cursor",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = {
           agentId: "main",
           sessionKey: "agent:main:budgeted-history",
@@ -200,6 +203,7 @@ describe("chat history request byte budgets", () => {
 
   it("bounds default older-history responses below 1 MB without losing messages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:large-budgeted-history",
@@ -265,6 +269,7 @@ describe("chat history request byte budgets", () => {
 
   it("replaces an indivisible source row with a fetchable reference across anchored and back-scroll pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:history-sibling-budget",
@@ -361,6 +366,7 @@ describe("chat history request byte budgets", () => {
 
   it("keeps a 5 MB tool result out of history while its reference returns every byte", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:large-tool",
@@ -399,6 +405,7 @@ describe("chat history request byte budgets", () => {
 
   it("keeps recovery lookahead beyond the default response target on older pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:history-recovery-budget",

@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../../config/sessions/activity-summary.js";
 import {
   loadSessionEntryReadOnly,
@@ -39,6 +40,13 @@ afterEach(() => vi.restoreAllMocks());
 
 it("prepares current placement facts off the host thread and retries failed refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: "unit-test/model", utilityModel: "" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const identity = {
       agentId: "main",
       sessionKey: "agent:main:placement-read",
@@ -48,12 +56,7 @@ it("prepares current placement facts off the host thread and retries failed refr
     const placements = createWorkerSessionPlacementStore();
     await placements.startDispatch(identity);
     const options = {
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { model: "unit-test/model", utilityModel: "" },
-        },
-      },
+      cfg,
       modelCatalog: [],
       placementFactsReader: placements,
     };
@@ -140,6 +143,7 @@ it("prepares current placement facts off the host thread and retries failed refr
 
 it("refreshes selected placement/environment facts by revision and reuses them without SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const identity = {
       agentId: "main",
       sessionKey: "agent:main:row-facts",
@@ -343,13 +347,15 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       expect(rowReads).not.toHaveBeenCalled();
       expect(summaryReads).not.toHaveBeenCalled();
       const release = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({
-        cfg: {
-          agents: {
-            entries: { main: {} },
-            defaults: { model: "unit-test/model", utilityModel: "" },
-          },
+      const cfg = {
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "unit-test/model", utilityModel: "" },
         },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const projection = await createSessionRowProjection({
+        cfg,
         modelCatalog: [],
         context,
         placementFactsReader: placements,
@@ -422,6 +428,7 @@ it("prepares board membership and recap freshness from the physical target and r
         entries: { main: {}, work: {} },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const storePath = openOpenClawAgentDatabase({ agentId: "main" }).path;
     const otherPath = openOpenClawAgentDatabase({ agentId: "other" }).path;
     const scope = { agentId: "main", sessionKey: "global", sessionId: "row-recap", storePath };

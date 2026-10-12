@@ -1,4 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   countActiveDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
@@ -15,7 +19,14 @@ import {
   makeSettledChild,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-afterEach(() => vi.useRealTimers());
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ session: { mainKey: "main", scope: "per-sender" } });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["older batch", "cross-agent descendant", "paused member", "pending cleanup"] as const)(
   "waits only for owned work: %s",

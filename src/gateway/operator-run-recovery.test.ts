@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -359,6 +360,7 @@ describe("restart recovery authenticated operator source", () => {
   });
   it("re-admits durable input after the original authority closes without exporting credentials", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const profile = ensureProfileForEmail("recovery@example.test");
       const fixture = await createOperatorRecoveryFixture({
         stateDir: state.stateDir,

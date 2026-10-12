@@ -221,8 +221,10 @@ vi.mock("../config/gateway-dispatch-config.js", () => ({
   readGatewayDispatchConfig: loadConfig,
   readGatewayDispatchConfigWithShellEnvFallback: loadConfigWithShellEnvFallback,
 }));
+// mock-isolation: Gateway dispatch fixtures control runtime config without loading operator state.
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: loadRuntimeConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadRuntimeConfig(),
   loadConfig: loadRuntimeConfig,
 }));
 vi.mock("../gateway/call.js", () => ({

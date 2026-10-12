@@ -20,6 +20,7 @@ import {
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
   assignSessionOwner,
   deleteSessionEntryLifecycle,
@@ -57,6 +58,7 @@ describe("SQLite session participants", () => {
     "publishes fresh participants after an untracked %s write during patch preparation",
     async (writer) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:changed" };
         await upsertSessionEntryCore(scope, { sessionId: "changed", updatedAt: 1 });
         recordSessionParticipant(scope, { identity: remote("before"), promptedAt: 1 });
@@ -103,6 +105,7 @@ describe("SQLite session participants", () => {
 
   it("reuses current participant facts when publishing repeated entry patches", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:busy" };
       await upsertSessionEntryCore(scope, { sessionId: "busy", updatedAt: 1 });
       recordSessionParticipant(scope, { identity: remote("existing"), promptedAt: 1 });
@@ -139,6 +142,7 @@ describe("SQLite session participants", () => {
     "keeps a reentrant observer's newer cached state after an outer %s write",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         if (kind === "external-entry") {
           vi.useFakeTimers({ toFake: ["setImmediate"] });
         }
@@ -202,6 +206,7 @@ describe("SQLite session participants", () => {
 
   it("reinstalls participant tracking after first-use schema rollback and immediate retry", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env: state.env };
       const target = { ...scope, sessionKey: "agent:main:target" };
       const sibling = { ...scope, sessionKey: "agent:main:sibling" };
@@ -241,6 +246,7 @@ describe("SQLite session participants", () => {
     "does not hide an untracked sibling change during participant publication: $mutation, $write",
     async ({ mutation, write }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         if (mutation === "external-participant") {
           vi.useFakeTimers({ toFake: ["setImmediate"] });
         }
@@ -305,6 +311,7 @@ describe("SQLite session participants", () => {
 
   it("refuses a participant insert inside a raw transaction without changing its rows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:raw-transaction" };
       await upsertSessionEntryCore(scope, { sessionId: "raw-transaction", updatedAt: 1 });
       recordSessionParticipant(scope, { identity: profile("a"), promptedAt: 10 });
@@ -337,6 +344,7 @@ describe("SQLite session participants", () => {
 
   it("publishes the final participant view only after the outer transaction commits", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         env: state.env,
@@ -398,6 +406,7 @@ describe("SQLite session participants", () => {
 
   it("retains committed participants after a nested transaction rollback", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:rollback" };
       await upsertSessionEntryCore(scope, { sessionId: "rollback", updatedAt: 1 });
       recordSessionParticipant(scope, { identity: profile("a"), promptedAt: 10 });
@@ -420,6 +429,7 @@ describe("SQLite session participants", () => {
     "keeps cache projection errors from rolling back a recorded %s",
     async (mutation) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = {
           agentId: "main",
           env: state.env,
@@ -464,6 +474,7 @@ describe("SQLite session participants", () => {
     "refreshes participant order without reloading sibling metadata (selected: %s)",
     async (selected) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = { agentId: "main", env: state.env };
         const sessionKey = "agent:main:target";
         const database = openOpenClawAgentDatabase(scope);
@@ -519,6 +530,7 @@ describe("SQLite session participants", () => {
 
   it("isolates an invalid participant identity to its requested session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env: state.env };
       const keys = ["agent:main:before", "agent:main:invalid", "agent:main:after"] as const;
       for (const [index, sessionKey] of keys.entries()) {
@@ -575,6 +587,7 @@ describe("SQLite session participants", () => {
 
   it("does not create a missing agent database during participant reads", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       expect(listSessionParticipantsReadOnly({ agentId: "absent", env: state.env }).size).toBe(0);
       expect(existsSync(state.agentDir("absent"))).toBe(false);
     });
@@ -582,6 +595,7 @@ describe("SQLite session participants", () => {
 
   it("keeps namespaces and times separate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:collision" };
       await upsertSessionEntryCore(scope, { sessionId: "collision", updatedAt: 1 });
       const inputs = [
@@ -642,6 +656,7 @@ describe("SQLite session participants", () => {
     "updates a merged profile at the admission bound (canonical row: %s)",
     async (hasCanonicalRow) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:merged-full" };
         const old = ensureProfileForEmail("old@example.test", { env: state.env });
         const other = ensureProfileForEmail("other@example.test", { env: state.env });
@@ -722,6 +737,7 @@ describe("SQLite session participants", () => {
 
   it("keeps raw actor identity equality when SQLite replaces a lone surrogate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:raw-identity" };
       await upsertSessionEntryCore(scope, { sessionId: "raw-identity", updatedAt: 1 });
       recordSessionParticipant(scope, { identity: remote("\ud800"), promptedAt: 10 });
@@ -742,6 +758,7 @@ describe("SQLite session participants", () => {
 
   it("keeps the admission bound, unknown first time, reset history, and deletion ownership", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:bounded" };
       await upsertSessionEntryCore(scope, { sessionId: "bounded", updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -800,6 +817,7 @@ describe("SQLite session participants", () => {
 
   it("preserves over-bound repair histories and does not inflate retried cross-store copies", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const sourceScope = { agentId: "source", env: state.env, sessionKey: "agent:source:shared" };
       const targetScope = { agentId: "main", env: state.env, sessionKey: "agent:main:shared" };
       await upsertSessionEntryCore(sourceScope, { sessionId: "source", updatedAt: 1 });

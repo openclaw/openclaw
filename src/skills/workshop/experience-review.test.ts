@@ -5,6 +5,7 @@ import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-exe
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   deleteSessionEntryLifecycle,
   upsertSessionEntryCore,
@@ -59,6 +60,7 @@ describe("runSkillExperienceReview", () => {
       [{ role: "user", content: "Reconcile the budget.", timestamp: 1 }],
       { workspaceDir, modelId: "gpt-test" },
     );
+    setRuntimeConfigSnapshot(candidate.config);
     const committed: WorkshopChange = {
       id: "c1",
       agentId: "main",
@@ -93,6 +95,7 @@ describe("runSkillExperienceReview", () => {
       [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
       { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
     );
+    setRuntimeConfigSnapshot(candidate.config);
     mocks.runSkillWorkshopReview.mockImplementation(
       async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
         try {
@@ -143,6 +146,7 @@ describe("runSkillExperienceReview", () => {
         [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
         { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
       );
+      setRuntimeConfigSnapshot(candidate.config);
       await upsertSessionEntryCore(candidate.source, {
         permissionMode: "guarded",
         lifecycleRevision: "original",

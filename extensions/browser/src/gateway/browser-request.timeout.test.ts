@@ -28,7 +28,7 @@ vi.mock("../browser/routes/dispatcher.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: loadConfigMock,
+  readRuntimeConfig: loadConfigMock,
 }));
 vi.mock("../control-service.js", () => ({
   startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,

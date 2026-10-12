@@ -1,8 +1,8 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { afterEach, expect, it, vi, type Mock } from "vitest";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../infra/system-events.js";
@@ -27,6 +27,9 @@ import { testing as registryTesting } from "./subagent-registry.test-helpers.js"
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 const yieldCohort = useSubagentProgressCohort(fixture);
 
 const CHILD_RESULT = "Private child result marker.";

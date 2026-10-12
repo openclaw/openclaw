@@ -1250,7 +1250,7 @@ export function createAuthProfileStoreRuntime(
   });
 
   /** Retain read owners, never copies of their migration refusals, for a session facade. */
-  function createAuthProfileStoreReadScope(agentDir: string, config: OpenClawConfig | undefined) {
+  function captureAuthProfileStoreReadScope(agentDir: string, config: OpenClawConfig | undefined) {
     let mode = authProfileRuntimeMode.getStore();
     const env = { ...(mode?.kind === "agent-dir" ? mode.env : process.env) };
     const effectiveAgentDir = mode?.kind === "agent-dir" ? mode.agentDir : agentDir;
@@ -1261,38 +1261,46 @@ export function createAuthProfileStoreRuntime(
       owners.set(databasePath, {
         databasePath,
         candidates: resolveLegacyAuthProfileSourceCandidates({ env }),
-        readStore: () => loadPersistedSharedAuthProfileStore(env),
+        readStore: () => (mode?.kind === "agent-dir" ? (mode.sharedStore ?? null) : null),
       });
     }
-    const read = (): AuthProfileStore => {
-      const load = () =>
-        loadAuthProfileStoreForRuntime(
-          effectiveAgentDir,
-          {
-            config,
-            readOnly: true,
-            allowKeychainPrompt: false,
-            deferScopedMigrationRefusals: true,
-            onReadOwner: (owner) => {
-              owners.set(owner.databasePath, owner);
-            },
-          },
-          env,
-        );
-      const store = mode
-        ? authProfileRuntimeMode.run(mode, load)
-        : authProfileRuntimeMode.exit(load);
+    const readOptions: LoadAuthProfileStoreOptions = {
+      config,
+      readOnly: true,
+      allowKeychainPrompt: false,
+      deferScopedMigrationRefusals: true,
+      onReadOwner: (owner) => {
+        owners.set(owner.databasePath, owner);
+      },
+    };
+    const runInScope = <T>(load: () => T): T =>
+      mode ? authProfileRuntimeMode.run(mode, load) : authProfileRuntimeMode.exit(load);
+    const assertReadOwners = () => {
       // Supplied shared snapshots must still honor their owner's all-provider refusal.
       for (const owner of owners.values()) {
         assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath, undefined, config, true);
       }
+    };
+    const read = (): AuthProfileStore => {
+      const store = runInScope(() =>
+        loadAuthProfileStoreForRuntime(effectiveAgentDir, readOptions, env),
+      );
+      assertReadOwners();
       return store;
     };
-    const store = read();
+    const readAsync = async (): Promise<AuthProfileStore> => {
+      const store = await runInScope(() =>
+        loadAuthProfileStoreForRuntimeAsync(effectiveAgentDir, readOptions, env),
+      );
+      assertReadOwners();
+      return store;
+    };
     return {
       agentDir: effectiveAgentDir,
-      store,
+      env,
+      envOnly: mode?.kind === "env-only",
       read,
+      readAsync,
       getRuntimeSnapshots: () =>
         [...owners.keys()]
           .map((databasePath) => getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath))
@@ -1326,7 +1334,24 @@ export function createAuthProfileStoreRuntime(
     };
   }
 
-  /** Load auth profiles for secret resolution without keychain prompts or writes. */
+  function createAuthProfileStoreReadScope(agentDir: string, config: OpenClawConfig | undefined) {
+    const scope = captureAuthProfileStoreReadScope(agentDir, config);
+    return { ...scope, store: scope.read() };
+  }
+
+  async function createAuthProfileStoreReadScopeAsync(
+    agentDir: string,
+    config: OpenClawConfig | undefined,
+  ) {
+    const scope = captureAuthProfileStoreReadScope(agentDir, config);
+    return { ...scope, store: await scope.readAsync() };
+  }
+
+  /**
+   * @deprecated Await loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime
+   * with readOnly: true and allowKeychainPrompt: false. Retained until removal in a later stable
+   * release after deprecation ships.
+   */
   function loadAuthProfileStoreForSecretsRuntime(
     agentDir?: string,
     options?: Pick<
@@ -1339,7 +1364,25 @@ export function createAuthProfileStoreRuntime(
       | "inheritedAuthDir"
     >,
   ): AuthProfileStore {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "loadAuthProfileStoreForSecretsRuntime",
+      replacement:
+        "loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime with readOnly: true and allowKeychainPrompt: false",
+    });
     return loadAuthProfileStoreForRuntime(agentDir, {
+      ...options,
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+  }
+
+  /** Load auth profiles for secret resolution without keychain prompts or writes. */
+  function loadAuthProfileStoreForSecretsRuntimeAsync(
+    agentDir?: string,
+    options?: Parameters<typeof loadAuthProfileStoreForSecretsRuntime>[1],
+  ): Promise<AuthProfileStore> {
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, {
       ...options,
       readOnly: true,
       allowKeychainPrompt: false,
@@ -1572,13 +1615,21 @@ export function createAuthProfileStoreRuntime(
     };
   }
 
-  /** Save the auth profile store plus sidecar state, preserving runtime overlay metadata. */
+  /**
+   * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
+   * Retained until removal in a later stable release after deprecation ships.
+   */
   function saveAuthProfileStore(
     store: AuthProfileStore,
     agentDir?: string,
     options?: SaveAuthProfileStoreOptions,
     database?: AuthProfileDatabase,
   ): void {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "saveAuthProfileStore",
+      replacement: "updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth",
+    });
     // Reject lossy SDK inputs before opening the write owner; normalize its detached copy later.
     for (const credential of Object.values(store.profiles)) {
       normalizeAuthProfileSecretRefs(credential);
@@ -1706,11 +1757,13 @@ export function createAuthProfileStoreRuntime(
   return {
     prepareAuthProfileStoreForModelRuntime,
     createAuthProfileStoreReadScope,
+    createAuthProfileStoreReadScopeAsync,
     updateAuthProfileStoreWithLock,
     loadAuthProfileStore,
     loadAuthProfileStoreForRuntime,
     loadAuthProfileStoreForRuntimeAsync,
     loadAuthProfileStoreForSecretsRuntime,
+    loadAuthProfileStoreForSecretsRuntimeAsync,
     loadAuthProfileStoreWithoutExternalProfiles,
     loadAuthProfileStoreWithoutExternalProfilesAsync,
     ensureAuthProfileStore,

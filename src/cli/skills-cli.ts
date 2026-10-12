@@ -17,7 +17,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
@@ -89,7 +89,7 @@ type ResolveSkillsWorkspaceOptions = {
   skipPluginValidation?: boolean;
 };
 
-type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
+type ResolvedSkillsWorkspace = Awaited<ReturnType<typeof resolveSkillsWorkspace>>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
@@ -118,11 +118,11 @@ function normalizeExplicitAgentId(agentId?: string): string | undefined {
   return normalizedAgentId;
 }
 
-function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
+async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
-  const config = getRuntimeConfig(
+  const config = await captureRuntimeConfigAsyncReader(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
-  );
+  )();
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
@@ -139,7 +139,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
 }
 
 async function loadSkillsStatusReport(agentId: string | undefined): Promise<SkillStatusReport> {
-  const resolved = resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
+  const resolved = await resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,
@@ -175,11 +175,11 @@ async function runSkillsAction(
   });
 }
 
-function resolveClawHubTargetWorkspace(
+async function resolveClawHubTargetWorkspace(
   command: Command,
   opts: { global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
-): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
+): Promise<Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined> {
   const agentId = normalizeExplicitAgentId(resolveOptionFromCommand<string>(command, "agent"));
   if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
@@ -187,7 +187,7 @@ function resolveClawHubTargetWorkspace(
     return undefined;
   }
   if (opts.global) {
-    return { config: getRuntimeConfig(), workspaceDir: CONFIG_DIR };
+    return { config: await captureRuntimeConfigAsyncReader()(), workspaceDir: CONFIG_DIR };
   }
   return resolveSkillsWorkspace({ agentId });
 }
@@ -323,7 +323,7 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const target = resolveClawHubTargetWorkspace(command, opts);
+          const target = await resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
           }
@@ -451,7 +451,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          const target = resolveClawHubTargetWorkspace(command, opts);
+          const target = await resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
           }
@@ -537,7 +537,7 @@ export function registerSkillsCli(program: Command) {
             ? (message: string) => defaultRuntime.writeJson(formatCliJsonFailure(message))
             : defaultRuntime.error;
         try {
-          const workspace = resolveClawHubTargetWorkspace(command, opts, reportError);
+          const workspace = await resolveClawHubTargetWorkspace(command, opts, reportError);
           if (!workspace) {
             return;
           }
@@ -610,7 +610,9 @@ export function registerSkillsCli(program: Command) {
   ): Promise<void> => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       const result = await action(
-        resolveSkillsWorkspace({ agentId: resolveOptionFromCommand<string>(command, "agent") }),
+        await resolveSkillsWorkspace({
+          agentId: resolveOptionFromCommand<string>(command, "agent"),
+        }),
       );
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);

@@ -19,6 +19,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   closeSessionTranscriptReconcileWorkerPool,
@@ -73,6 +74,7 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
   const canonical = observeCanonicalWriterLeases();
   let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   try {
+    setRuntimeConfigSnapshot({});
     await persistSessionTranscriptTurn(
       { ...options, sessionId: "parent-owner", sessionKey: "agent:main:parent-owner" },
       {
@@ -126,6 +128,7 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
       await closeSessionTranscriptReconcileWorkerPool();
       await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
     } finally {
       owner?.release();
     }
@@ -148,6 +151,7 @@ it.each(["complete", "native-exit"] as const)(
     const plannerLeases = new Map<string, string>();
     let operations: Promise<PromiseSettledResult<unknown>[]> | undefined;
     try {
+      setRuntimeConfigSnapshot({});
       for (const options of targets) {
         await persistSessionTranscriptTurn(
           { ...options, sessionId, sessionKey: `agent:${options.agentId}:lifecycle` },
@@ -286,6 +290,7 @@ it.each(["complete", "native-exit"] as const)(
       await closeSessionTranscriptReconcileWorkerPool();
       await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
     }
   },
   30_000,
@@ -307,6 +312,7 @@ it.each(["complete", "native-exit"] as const)(
     let closing: Promise<boolean> | undefined;
     let closeSpy: { mockRestore(): void } | undefined;
     try {
+      setRuntimeConfigSnapshot({});
       await persistSessionTranscriptTurn(
         { ...options, sessionId: "settlement", sessionKey: "agent:main:settlement" },
         {
@@ -469,6 +475,7 @@ it.each(["complete", "native-exit"] as const)(
       await closeSessionTranscriptReconcileWorkerPool();
       await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
     }
   },
 );
@@ -483,6 +490,7 @@ it("revokes scheduled reconciliation before its first disk admission", async () 
   let closing: Promise<boolean> | undefined;
   let completion: Promise<void> | undefined;
   try {
+    setRuntimeConfigSnapshot({});
     await persistSessionTranscriptTurn(
       { ...options, sessionId: "delayed", sessionKey: "agent:main:delayed" },
       {
@@ -519,5 +527,6 @@ it("revokes scheduled reconciliation before its first disk admission", async () 
     await closeSessionTranscriptReconcileWorkerPool();
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
   }
 });

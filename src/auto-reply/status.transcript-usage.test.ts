@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
@@ -77,7 +81,13 @@ async function buildTranscriptUsageStatusMessage(args: StatusTestArgs): Promise<
 }
 
 function withStatusHome(run: () => Promise<void>) {
-  return withTempHome(run, { prefix: "openclaw-status-" });
+  return withTempHome(
+    async () => {
+      setRuntimeConfigSnapshot({});
+      await run();
+    },
+    { prefix: "openclaw-status-" },
+  ).finally(clearRuntimeConfigSnapshot);
 }
 
 describe("status transcript usage and model context", () => {

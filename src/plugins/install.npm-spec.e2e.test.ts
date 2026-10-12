@@ -275,7 +275,7 @@ describe("installPluginFromNpmSpec e2e", () => {
         import { runPluginInstallCommand } from ${JSON.stringify(new URL("../cli/plugins-install-command.ts", import.meta.url).href)};
         import { writeConfigFile } from ${JSON.stringify(new URL("../config/config.ts", import.meta.url).href)};
         import { readHookInstalls } from ${JSON.stringify(new URL("../hooks/installs.ts", import.meta.url).href)};
-        import { readPersistedInstalledPluginIndexInstallRecords } from ${JSON.stringify(new URL("./installed-plugin-index-records.ts", import.meta.url).href)};
+        import { readPersistedInstalledPluginIndexInstallRecordsAsync } from ${JSON.stringify(new URL("./installed-plugin-index-records.ts", import.meta.url).href)};
         import {
           claimAgentRunDelegatedAuthority,
           releaseAgentRunDelegatedAuthority,
@@ -335,7 +335,7 @@ describe("installPluginFromNpmSpec e2e", () => {
           observations[stage] = {
             exitCode, authorityClosed, error: errors.join("\\n"),
             configUnchanged: configBefore === await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8"),
-            pluginInstalls: readPersistedInstalledPluginIndexInstallRecords() ?? {},
+            pluginInstalls: (await readPersistedInstalledPluginIndexInstallRecordsAsync()) ?? {},
             hookInstalls: readHookInstalls(),
             npmPayloads: npmEntries.filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
             hookPayload: existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "hooks", packageName)),

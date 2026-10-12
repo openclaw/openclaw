@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
@@ -41,6 +42,7 @@ export function registerSubagentRegistrationOwnershipTests({
       "preserves retained sibling session and transcript after refused " + phase + " (%s)",
       async (sibling) => {
         await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+          setRuntimeConfigSnapshot({});
           const session = {
             agentId: "main",
             sessionKey: "global",
@@ -161,6 +163,7 @@ export function registerSubagentRegistrationOwnershipTests({
     "uses %s unknown-owner generations as a floor without superseding their retained obligations",
     async (source) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         await registerSubagentRun(registration("unknown-global", { childSessionKey: "global" }));
         await updateRun("unknown-global", (draft) => {
           delete draft.childAgentId;
@@ -196,6 +199,7 @@ export function registerSubagentRegistrationOwnershipTests({
     "refuses registration when a foreign same-key row %s after cohort preparation",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const unknown = createSubagentRunRecord({
           runId: "foreign-unknown",
           childSessionKey: "global",
@@ -261,6 +265,7 @@ export function registerSubagentRegistrationOwnershipTests({
     "persists the explicit child owner and original incarnation for %s",
     async (childSessionKey) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const params = registration("owned-registration", {
           childSessionKey,
           childAgentId: "RESEARCH",
@@ -286,6 +291,7 @@ export function registerSubagentRegistrationOwnershipTests({
     "refuses invalid new registration ownership: $childSessionKey / $childAgentId",
     async (owner) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const params = registration("invalid-owner", owner);
         await expect(registerSubagentRun(params)).rejects.toThrow("child agent");
         expect(subagentRuns.has(params.runId)).toBe(false);
@@ -299,6 +305,7 @@ export function registerSubagentRegistrationOwnershipTests({
     "refuses new registration without its original child incarnation %j",
     async (sessionEntry) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const params = registration("missing-incarnation", { sessionEntry });
         await expect(registerSubagentRun(params)).rejects.toThrow("original child sessionId");
         expect(subagentRuns.has(params.runId)).toBe(false);
@@ -312,6 +319,7 @@ export function registerSubagentRegistrationOwnershipTests({
     "preserves historical ownership on replay or replacement (replay=%s)",
     async (acceptedRunReplay) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         for (const childSessionKey of ["global", "agent:main:subagent:historical"]) {
           const params = registration(`historical-${childSessionKey}`, { childSessionKey });
           await registerSubagentRun(params);

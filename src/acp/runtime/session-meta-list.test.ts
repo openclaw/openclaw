@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -99,6 +102,7 @@ describe("ACP session listing", () => {
         agents: { ownership: "explicit", entries: { codex: {} } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:codex:acp:cold-config";
       await replaceSessionEntry(
         { agentId: "codex", sessionKey, env: state.env },

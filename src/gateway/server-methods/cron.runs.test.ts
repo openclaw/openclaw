@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../../cron/run-history-detail.js";
@@ -50,6 +51,7 @@ async function withCronHistory(
       },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const owner = roleClient("none", "history-owner");
     const foreign = roleClient("none", "history-foreign");
     const viewer = roleClient("view", "history-viewer");

@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
@@ -89,6 +89,7 @@ async function withUsageState(run: (state: OpenClawTestState) => Promise<void>) 
       agents: { ownership: "explicit", entries: { main: {}, opus: {} } },
       plugins: { enabled: false },
     });
+    await captureRuntimeConfigAsyncReader()();
     await run(state);
   });
 }
@@ -471,7 +472,7 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       session: { store: storePath },
       plugins: { enabled: false },
     });
-    const config = getRuntimeConfig();
+    const config = await captureRuntimeConfigAsyncReader()();
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
     let changeRegistryAfterInventory = false;

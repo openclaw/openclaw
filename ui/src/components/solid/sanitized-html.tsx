@@ -4,7 +4,7 @@ import { untrack } from "solid-js";
 /** Only accepts HTML escaped or sanitized by the caller's content owner. */
 export function SanitizedHtml(props: {
   html: string;
-  tag?: "article" | "code" | "div";
+  tag?: "article" | "code" | "div" | "pre";
   class?: JSX.HTMLAttributes<HTMLElement>["class"];
   style?: JSX.HTMLAttributes<HTMLElement>["style"];
   onClick?: JSX.EventHandler<HTMLElement, MouseEvent>;

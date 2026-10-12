@@ -29,7 +29,12 @@ vi.mock("../../../globals.js", () => ({
 
 const pluginRegistry = createMockPluginRegistry([]);
 const loadPluginRegistryHandleMock = vi.fn(() => pluginRegistry);
-vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+// mock-isolation: Message helper fixtures use empty config without reading operator state.
+vi.mock("../../../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
+  loadConfig: () => ({}),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
+}));
 vi.mock("../../../plugins/channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPluginIds: () => ["configured-channel"],
   resolveDiscoverableScopedChannelPluginIds: (params: { channelIds: string[] }) =>

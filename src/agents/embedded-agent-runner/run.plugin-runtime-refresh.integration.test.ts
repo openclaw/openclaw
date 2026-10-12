@@ -31,6 +31,8 @@ beforeEach(async () => {
   resetSharedRunIntegrationHarnessMocks();
   const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
   state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {

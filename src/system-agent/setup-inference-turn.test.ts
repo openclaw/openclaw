@@ -29,6 +29,7 @@ import {
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
@@ -191,13 +192,20 @@ describe("setup inference plugin ownership", () => {
             createEmptyPluginRegistry(),
           );
           await using generationCache = createPluginCache();
-          const generation = loadSetupInferencePluginGeneration({
-            cache: generationCache,
-            config,
-            workspaceDir: state.workspaceDir,
-            selection: { provider: "fixture", modelId: "model", runtime: "fixture-runtime" },
-          });
-          expect(generation.metadataSnapshot.byPluginId.has("fixture-runtime")).toBe(true);
+          const sql = observeMainThreadSql();
+          try {
+            sql.calibrate();
+            const generation = await loadSetupInferencePluginGeneration({
+              cache: generationCache,
+              config,
+              workspaceDir: state.workspaceDir,
+              selection: { provider: "fixture", modelId: "model", runtime: "fixture-runtime" },
+            });
+            expect(generation.metadataSnapshot.byPluginId.has("fixture-runtime")).toBe(true);
+            sql.expectIdle();
+          } finally {
+            sql.restore();
+          }
           expect(resolvePluginMetadataSnapshot(input)).toBe(before);
         });
       },

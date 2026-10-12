@@ -7,6 +7,7 @@ import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-
 import { roleClient, rolePolicyConfig } from "../../gateway/session-sharing.test-utils.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
@@ -20,6 +21,7 @@ it.each([false, true])(
   async (revoked) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const client = roleClient("view", "foreign-mirror-member");
       const profileId = expectDefined(client.authenticatedUserProfile, "fixture profile").profileId;
       const source = {

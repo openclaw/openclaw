@@ -18,6 +18,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "./session-transcript-reconcile-pool.js";
 import {
@@ -42,6 +43,7 @@ const scope = { ...options, sessionId: "lease-failure", sessionKey: "agent:main:
 it("preserves verification until the writer closes after read-only reconciliation", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-reconcile-verification-") };
   await withEnvAsync(env, async () => {
+    setRuntimeConfigSnapshot({});
     try {
       await persistSessionTranscriptTurn(scope, {
         messages: [{ eventId: "seed", message: { role: "user", content: "lease fixture" } }],
@@ -57,6 +59,7 @@ it("preserves verification until the writer closes after read-only reconciliatio
       closeOpenClawAgentDatabasesForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
     }
   });
 });
@@ -74,6 +77,7 @@ it.each([
   async (fault) => {
     const stateDir = tempDirs.make("openclaw-reconcile-lease-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      setRuntimeConfigSnapshot({});
       const workers: Worker[] = [];
       const ports: MessagePort[] = [];
       const modes: SessionTranscriptReconcileWorkerInput["mode"][] = [];
@@ -309,6 +313,7 @@ it.each([
         await closeOpenClawStateDatabaseAsync();
 
         closeOpenClawStateDatabaseForTest();
+        clearRuntimeConfigSnapshot();
       }
     });
   },

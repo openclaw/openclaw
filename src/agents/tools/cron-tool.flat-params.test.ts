@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
 
@@ -20,7 +21,12 @@ function expectAdd(params: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   gateway.mockReset().mockResolvedValue({ ok: true });
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("cron shorthand recovery", () => {

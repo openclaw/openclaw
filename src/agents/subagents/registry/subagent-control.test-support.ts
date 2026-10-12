@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -69,12 +70,11 @@ export function useSubagentControlFixture() {
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-    await writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({ agents: { defaults: { workspace: stateDir } } }),
-    );
+    const config: OpenClawConfig = { agents: { defaults: { workspace: stateDir } } };
+    await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
     clearConfigCache();
     clearRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(config);
     await resetSubagentRegistryForTests({ persist: false });
     gateway.mockReset().mockImplementation(async (request) => {
       if (request.method !== "agent.wait") {

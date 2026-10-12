@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -26,6 +27,7 @@ describe("worker placement idle suspension", () => {
   let placements: ReturnType<typeof createWorkerSessionPlacementStore>;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     nowMs = 1_000;
     const root = tempDirs.make("openclaw-worker-idle-sweep-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });

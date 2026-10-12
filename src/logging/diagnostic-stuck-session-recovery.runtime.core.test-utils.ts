@@ -2,6 +2,10 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -183,6 +187,7 @@ describe("stuck session recovery", () => {
       layout: "state-only",
       prefix: "openclaw-recovery-context-",
     });
+    setRuntimeConfigSnapshot({});
     const tempDir = openClawState.stateDir;
     try {
       await saveCronStore(path.join(tempDir, "cron", "jobs.json"), {
@@ -225,6 +230,7 @@ describe("stuck session recovery", () => {
       await logged;
     } finally {
       await openClawState.cleanup();
+      clearRuntimeConfigSnapshot();
     }
 
     expect(warnLogMessages()).toEqual([

@@ -18,6 +18,10 @@ import {
   markReplyOperationExecutionStarted,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
@@ -88,6 +92,7 @@ it("projects direct subagent activity only for its own current-lifecycle session
   const parentKey = "agent:main:main";
   const childKey = "agent:main:subagent:attachment-fix";
   await resetSubagentRegistryForTests({ persist: false });
+  setRuntimeConfigSnapshot({});
   await addSubagentRunForTests({
     runId: "run-attachment-fix",
     childSessionKey: childKey,
@@ -139,6 +144,7 @@ it("projects direct subagent activity only for its own current-lifecycle session
     releaseAgentRunContext("run-attachment-fix", claim);
     clearAgentRunContext("run-attachment-fix");
     await resetSubagentRegistryForTests({ persist: false });
+    clearRuntimeConfigSnapshot();
   }
 });
 

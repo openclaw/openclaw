@@ -75,7 +75,7 @@ OpenClaw stores session transcripts in the [per-agent SQLite database](/referenc
 
 Gateway logs may include tool summaries, errors, and URLs; session transcripts can include pasted secrets, file contents, command output, and links.
 
-- Logs, diagnostics, and support exports mask sensitive values. Session transcripts, tool arguments, tool results, and `.env` reads preserve their original text, including credentials.
+- File logs store raw records with owner-only (`0600`) permissions. Log tails (`logs.tail`), console output, diagnostics/support bundles, and remote/OTel export mask sensitive values independently. Direct file reads are raw; protect them like the agent/state databases. Session transcripts, tool arguments, tool results, and `.env` reads preserve their original text, including credentials.
 - Add custom patterns for logs and diagnostics via `logging.redactPatterns` (tokens, hostnames, internal URLs); these patterns do not alter model context or transcripts.
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
 - Prune old session transcripts and log files if you do not need long retention.

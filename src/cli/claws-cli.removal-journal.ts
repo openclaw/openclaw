@@ -9,11 +9,12 @@ import {
   serializeClawRemovalJournal,
   type ClawRemovalJournalGateway,
 } from "../claws/removal-journal-contract.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
 export const clawRemovalJournalGateway: ClawRemovalJournalGateway = async (input, authority) => {
+  const config = await captureRuntimeConfigAsyncReader()();
   authority.assertCurrent();
   const agentId = input.kind === "begin" ? input.entry.agentId : input.journal.agentId;
   const operationId = input.kind === "begin" ? input.operationId : input.journal.operationId;
@@ -21,9 +22,7 @@ export const clawRemovalJournalGateway: ClawRemovalJournalGateway = async (input
     phase: input.kind,
     agentId,
     operationId,
-    binding: resolveClawMonitorCleanupBinding(
-      resolveCronJobsStorePathFromConfig(getRuntimeConfig()),
-    ),
+    binding: resolveClawMonitorCleanupBinding(resolveCronJobsStorePathFromConfig(config)),
     lease: authority.identity,
     sourceIdentity: authority.sourceIdentity,
     expectedInstallDigest: input.expectedInstallDigest,

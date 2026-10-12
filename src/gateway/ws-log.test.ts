@@ -262,7 +262,7 @@ describe("gateway ws log helpers", () => {
     },
   );
 
-  test("summarizeAgentEventForWsLog compacts assistant payloads", () => {
+  test("summarizeAgentEventForWsLog counts assistant content and media", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "12345678-1234-1234-1234-123456789abc",
       sessionKey: "agent:main:main",
@@ -280,34 +280,31 @@ describe("gateway ws log helpers", () => {
     expect(summary.stream).toBe("assistant");
     expect(summary.aseq).toBe(2);
     expect(summary.media).toBe(2);
-    expect(summary.text).toBeTypeOf("string");
-    expect(summary.text).not.toContain("\n");
+    expect(summary.textChars).toBe(260);
+    expect(summary).not.toHaveProperty("text");
   });
 
-  test.each([
-    { name: "Unicode whitespace", text: "\u00a0hello\u2028world\ufeff", expected: "hello world" },
-    { name: "blank text", text: "\u00a0\n ".repeat(200), expected: undefined },
-    { name: "long leading whitespace", text: `${" ".repeat(512)}hello`, expected: "hello" },
-    {
-      name: "long interior whitespace",
-      text: `hello${" ".repeat(512)}world`,
-      expected: "hello world",
-    },
-    {
-      name: "trailing whitespace at the limit",
-      text: `${"a".repeat(160)}${" ".repeat(512)}`,
-      expected: "a".repeat(160),
-    },
-    {
-      name: "emoji at the limit",
-      text: `${"a".repeat(158)}😀tail`,
-      expected: `${"a".repeat(158)}…`,
-    },
-    { name: "long text", text: "a".repeat(8192), expected: `${"a".repeat(159)}…` },
-  ])("summarizeAgentEventForWsLog preserves $name", ({ text, expected }) => {
-    const summary = summarizeAgentEventForWsLog({ stream: "assistant", data: { text } });
-    expect(summary.text).toBe(expected);
-    expect(Object.hasOwn(summary, "text")).toBe(expected !== undefined);
+  test.each(["assistant", "tool"])("keeps %s content out of verbose event logs", (stream) => {
+    setVerbose(true);
+    setGatewayWsLogStyle("full");
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const marker = "synthetic-private-content";
+    const summary = summarizeAgentEventForWsLog({
+      runId: "run-1",
+      sessionKey: "agent:main:thread-1",
+      stream,
+      data: { text: marker, meta: marker, phase: "start", name: "exec" },
+    });
+
+    logWs("out", "event", { event: "agent", ...summary });
+
+    expect(output).toHaveBeenCalled();
+    expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+    expect(output).toHaveBeenLastCalledWith(
+      expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
+    );
   });
 
   test("summarizeAgentEventForWsLog includes tool metadata", () => {

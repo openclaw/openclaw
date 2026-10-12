@@ -4,7 +4,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
@@ -107,7 +107,7 @@ describeLive("openai reasoning compat live", () => {
 
       const agentDir = resolveDefaultAgentDir(cfg);
       const { authStorage } = await discoverAuthStorageFacts(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
+      const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
       const model = modelRegistry.find(provider, modelId) as Model | null;
 
       if (!model) {
@@ -164,7 +164,7 @@ describeLive("openai reasoning compat live", () => {
 
       const agentDir = resolveDefaultAgentDir(cfg);
       const { authStorage } = await discoverAuthStorageFacts(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
+      const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
       const model = modelRegistry.find(provider, modelId) as Model | null;
 
       if (!model) {

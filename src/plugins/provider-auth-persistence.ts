@@ -398,9 +398,9 @@ async function stageProviderAuthProfileBatchCore(
 
   return createProviderAuthPersistenceReceipt(prepared.profiles, prepared.commit, async () => {
     let profileRollbackError: unknown;
-    let rollbackResult: ReturnType<typeof persisted.rollback> | undefined;
+    let rollbackResult: Awaited<ReturnType<typeof persisted.rollback>> | undefined;
     try {
-      rollbackResult = persisted.rollback();
+      rollbackResult = await persisted.rollback();
     } catch (error) {
       profileRollbackError = error;
     }

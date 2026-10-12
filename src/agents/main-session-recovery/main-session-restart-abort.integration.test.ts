@@ -1,6 +1,8 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   appendTranscriptMessage,
@@ -41,6 +43,10 @@ vi.mock("../../gateway/call.js", async (importOriginal) => ({
   callGateway: vi.fn(async () => ({ runId: "resumed-chat-run" })),
 }));
 
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 async function migrateLegacyInterruption(sessionKey: string, stateDir: string) {
   const { db } = openOpenClawAgentDatabase({ agentId: "main" });
   // Restore the previous writer's certified bytes; current writers accept outcomes only.
@@ -62,6 +68,7 @@ it.each([
   "unclaimed legacy",
 ] as const)("resumes restart-safe work across shutdown and upgrade (%s)", async (order) => {
   await withOpenClawTestState({ label: "restart-aborted-chat" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:dashboard:restart-chat";
     const sessionId = "restart-chat-session";
     const runId = "interrupted-chat-run";
@@ -246,6 +253,7 @@ it.each([
 
 it("preserves a terminal receipt recorded under the interrupted continuation's source", async () => {
   await withOpenClawTestState({ label: "restart-terminal-receipt" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:dashboard:delivered-chat";
     const sessionId = "delivered-chat-session";
     const runId = "interrupted-continuation";

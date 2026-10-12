@@ -13,6 +13,7 @@ import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -80,6 +81,7 @@ export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<vo
       tools: { sessions: { visibility: "all" } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     for (const [agentId, sessionKey, sessionId] of [
       ["main", REQUESTER, "session-tools-requester-id"],
       ["main", TARGET, TARGET_ID],

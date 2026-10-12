@@ -2,7 +2,7 @@ import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   warn,
   computeBackoff,
@@ -217,7 +217,7 @@ function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }):
 
 export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   const { scheduler } = opts;
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const account = resolveSlackAccount({

@@ -35,10 +35,7 @@ export function createOnboardingRecommendationsStore(params: {
       if (result === undefined) {
         return null;
       }
-      if (result.ok && result.type === "onboardingRecommendations.read") {
-        return result.record;
-      }
-      throw new Error("Unexpected onboarding recommendations read result");
+      return result.record;
     },
     writeOffer: (offer: WriteOnboardingRecommendationsOfferParams) => {
       const captured = prepareOnboardingRecommendationOffer(offer);

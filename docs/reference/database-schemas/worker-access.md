@@ -92,6 +92,15 @@ cache refreshes. Row receipts do not grant permission, and a missing receipt is
 not proof of absence. Outside processes use the Gateway or exclusive offline
 ownership; ordinary readers do not poll for foreign commits.
 
+Transcript readers retain bounded hot/cold facts under the existing session write
+receipts. Archive, restore, session deletion, and native writes invalidate those
+facts; an unknown receipt falls back to the durable marker. Consecutive read pages
+reuse the fact, while an already-open snapshot keeps its own local result.
+Participant projections carry an autocommit read into the metadata CAS owner's
+unchanged immediate write transaction. Ordinary readers establish their own native
+snapshot. Concurrent participant updates remain independent of metadata CAS. These
+caches change no schema, retention, stored format, or update behavior.
+
 ## Session and ancillary worker operations
 
 Parent forks use the existing session-entry worker for both transcript copying
@@ -538,6 +547,22 @@ Released synchronous SDK and unbound native incognito owners remain explicit
 inventory debt, including config health, pairing allowlists, skill-library
 selection, upstream links, and native session reset. Schema, stored formats,
 retention, and update behavior are unchanged.
+
+Bundled ACP readers use the existing metadata worker. Session patches reuse one
+metadata result, and sends reuse their prepared result unless they create a new
+target. The worker applies lifecycle filtering once. Model catalog creation,
+refresh, and disk-backed provider removal have asynchronous SDK replacements;
+captured in-memory catalogs keep their immediate behavior. Auth profile batch
+updates and compensation use the auth worker, while ordinary labels and CLI
+fingerprints await prepared reads.
+
+Native binding leases pin committed plugin-state facts for their lifetime and
+consume writer receipts at their final effect checks. A confirmed compound
+rollback refreshes those facts once through the existing settlement path.
+Claw config preparation similarly reuses committed provenance until lifecycle
+invalidation. External database writes while the Gateway owns state are not
+observed. Deprecated SDK adapters, native incognito, and atomic credential or
+deletion effects retain their explicitly inventoried synchronous paths.
 
 Config set, patch, and unset commands require exclusive offline ownership. Stop
 the Gateway through its service owner before editing config with these commands.

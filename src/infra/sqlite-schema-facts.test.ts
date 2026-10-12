@@ -583,6 +583,9 @@ describe("admitted SQLite schema facts", () => {
           expect(read()).toEqual(["first"]);
           const reads = rowReads();
           writer.exec("UPDATE session_participants SET actor_id='second'");
+          expect(reader.prepare("SELECT actor_id FROM session_participants").get()?.actor_id).toBe(
+            "first",
+          );
           expect(read()).toEqual(["first"]);
           expect(rowReads()).toBe(reads);
           reader.exec("COMMIT; BEGIN");

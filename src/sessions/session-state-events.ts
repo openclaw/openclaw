@@ -120,9 +120,6 @@ export async function getSessionStateVersions(
       { context },
     );
     context.admission.assertCurrent();
-    if (result && !result.ok) {
-      throw new Error(result.message);
-    }
     return result?.type === "sessionState.versions" ? result.versions : {};
   } catch (error) {
     log.warn(`failed to read session state versions: ${String(error)}`);
@@ -149,9 +146,6 @@ export async function listSessionStateEventsSince(
       { context },
     );
     context.admission.assertCurrent();
-    if (result && !result.ok) {
-      throw new Error(result.message);
-    }
     if (result?.type === "sessionState.events") {
       return result.page;
     }

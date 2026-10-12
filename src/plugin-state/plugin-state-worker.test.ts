@@ -8,6 +8,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import type {
@@ -103,7 +104,12 @@ describe("worker plugin state", () => {
 
   it("keeps a session-bound comparison from claiming state after its session changes", async () => {
     await withOpenClawTestState({ label: "plugin-state-session-current" }, async (state) => {
-      const target = { agentId: "main", sessionKey: "agent:main:claim", env: state.env };
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:claim",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
+        env: state.env,
+      };
       const entry = { sessionId: "claim-session", updatedAt: 1, lifecycleRevision: "original" };
       await upsertSessionEntryCore(target, entry);
       const read = await withSessionEntryReadOnlyInWorker(
@@ -159,6 +165,7 @@ describe("worker plugin state", () => {
       const targets = ["lease", "mutation"].map((key) => ({
         agentId: "main",
         sessionKey: `agent:main:${key}`,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
         env: state.env,
       }));
       for (const target of targets) {

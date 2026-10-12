@@ -9,6 +9,7 @@ import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
@@ -87,6 +88,7 @@ it("preserves signed empty Responses messages before reasoning across a cold run
       tools: { allow: ["cache_probe"], toolSearch: false },
     };
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     await loadAndActivateRootPluginRegistry({
       config,
       workspaceDir: state.workspaceDir,

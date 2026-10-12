@@ -24,9 +24,9 @@ export type UserBackgroundOptions = OpenClawStateDatabaseOptions & {
   signal?: AbortSignal;
 };
 
-async function readBackground(
+async function readBackground<Command extends UserBackgroundReadCommand>(
   context: OpenClawStateWorkerContext,
-  command: UserBackgroundReadCommand,
+  command: Command,
   options: UserBackgroundOptions,
 ) {
   for (;;) {
@@ -40,9 +40,6 @@ async function readBackground(
     );
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
-    if (reply && (!reply.ok || reply.type !== command.type)) {
-      throw new Error(reply.ok ? "Unexpected background read reply" : reply.message);
-    }
     // An upload/removal or profile merge cannot publish stale bytes after its commit.
     if (isCurrent()) {
       return { reply, isCurrent };
@@ -65,9 +62,6 @@ export async function getUserBackground(
   if (!reply) {
     return { status: "no_durable_identity" };
   }
-  if (!reply.ok || reply.type !== "userBackground.snapshot") {
-    throw new Error("Unexpected background snapshot reply");
-  }
   return reply.result;
 }
 
@@ -89,9 +83,6 @@ export async function getUserBackgroundImage(
   if (!reply) {
     return { image: undefined, byteLength: undefined, isCurrent };
   }
-  if (!reply.ok || reply.type !== "userBackground.image") {
-    throw new Error("Unexpected background image reply");
-  }
   return { image: reply.image, byteLength: reply.byteLength, isCurrent };
 }
 
@@ -111,9 +102,6 @@ async function mutateBackground(
   );
   if (!reply) {
     return { status: "no_durable_identity" };
-  }
-  if (!reply.ok || reply.type !== "userBackground.snapshot") {
-    throw new Error("Unexpected background snapshot reply");
   }
   if (reply.result.status !== "ok" || !reply.profileId) {
     return reply.result;

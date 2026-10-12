@@ -21,8 +21,11 @@ vi.mock("./command-execution-startup.js", () => ({
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Cold-route fixtures keep config and plugin discovery independent of operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => testState.config,
+  loadConfig: () => testState.config,
+  captureRuntimeConfigAsyncReader: () => async () => testState.config,
 }));
 
 vi.mock("../runtime.js", () => ({

@@ -143,9 +143,6 @@ export async function inspectGatewayCrashLoopBreakerAsync(
     { type: "gatewayBoot.breaker", input: nowMs },
     { signal, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "gatewayBoot.breaker")) {
-    throw new Error("Unexpected Gateway crash-loop breaker result");
-  }
   return reply?.decision ?? buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 });
 }
 

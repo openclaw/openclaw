@@ -262,5 +262,5 @@ More providers you can include in the live matrix (if you have creds/config):
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 <Tip>
-Do not hardcode "all models" in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine plus whatever keys are available.
+Do not hardcode "all models" in docs. The authoritative list is whatever `await discoverModelsAsync(...)` returns on your machine plus whatever keys are available.
 </Tip>

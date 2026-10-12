@@ -21,6 +21,7 @@ import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { readAcpSessionEntryAsync, readAcpSessionMetaAsync } from "./session-meta-read.js";
 import * as metadataReads from "./session-meta-readonly.js";
 import * as storeReads from "./session-meta-store.js";
+import { upsertAcpSessionMeta } from "./session-meta-write.js";
 
 const meta: SessionAcpMeta = {
   backend: "acpx",
@@ -112,6 +113,24 @@ it.each(["cold-file", "incognito"] as const)(
           ).toBe(false);
         } else {
           expect(await readAcpSessionMetaAsync({ sessionKey, agentId: "main" })).toEqual(meta);
+          expect(
+            await metadataReads.readAcpSessionMetaForEntryAsync({ sessionKey, entry }),
+          ).toEqual(meta);
+          await upsertAcpSessionMeta({
+            cfg,
+            env: state.env,
+            sessionKey,
+            mutate: () => ({ ...meta, runtimeSessionName: "updated-runtime" }),
+          });
+          expect(
+            await metadataReads.readAcpSessionMetaForEntryAsync({ sessionKey, entry }),
+          ).toMatchObject({ runtimeSessionName: "updated-runtime" });
+          expect(
+            await metadataReads.readAcpSessionMetaForEntryAsync({
+              sessionKey,
+              entry: { ...entry, lifecycleRevision: "retired" },
+            }),
+          ).toBeUndefined();
           sql.expectIdle();
         }
       } finally {

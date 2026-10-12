@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
@@ -33,6 +33,12 @@ const installMocks = vi.hoisted(() => ({
   removeChromeStoreInstallRequests: vi.fn(),
   repairChromeExtensionNativeHosts: vi.fn(),
   uninstallChromeExtensionNativeHosts: vi.fn(),
+}));
+
+const configMocks = vi.hoisted(() => ({ read: vi.fn<() => OpenClawConfig>() }));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => configMocks.read(),
 }));
 
 vi.mock("../browser/extension-relay/relay-auth.js", async (importOriginal) => ({
@@ -81,7 +87,7 @@ describe("browser extension pairing Gateway URL", () => {
     error: vi.fn(defaultRuntime.error),
   };
   beforeEach(() => {
-    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({});
+    configMocks.read.mockReset().mockReturnValue({});
     output.json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
     output.log = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
     output.error = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
@@ -237,7 +243,7 @@ describe("browser extension pairing Gateway URL", () => {
   );
 
   it("pairs desktop helpers through the local Gateway wake-up route", async () => {
-    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
+    configMocks.read.mockReturnValue({
       gateway: { mode: "local" },
     });
 
@@ -261,7 +267,7 @@ describe("browser extension pairing Gateway URL", () => {
   ])(
     "rejects conflicting desktop pairing targets before reading a relay key",
     async ({ config, args, message }) => {
-      vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue(config);
+      configMocks.read.mockReturnValue(config);
       relayMocks.ensureExtensionRelayToken.mockClear();
 
       await expect(run(["pair", "--local-gateway", "--json", ...args])).rejects.toThrow(
@@ -274,7 +280,7 @@ describe("browser extension pairing Gateway URL", () => {
   );
 
   it("pairs with the allocated extension relay when another profile pins the default port", async () => {
-    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
+    configMocks.read.mockReturnValue({
       browser: {
         profiles: {
           pinned: { cdpPort: 18799, color: "#00AA00" },
@@ -304,7 +310,7 @@ describe("browser extension pairing Gateway URL", () => {
       port: 21117,
     },
   ])("prints safe $label v2 metadata through the lazy root CLI", async ({ config, port }) => {
-    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue(config);
+    configMocks.read.mockReturnValue(config);
     const { registerBrowserCli } = await import("./browser-cli.js");
     const program = new Command();
     registerBrowserCli(program, ["node", "openclaw", "browser", "extension", "cdp", "--json"]);
@@ -344,7 +350,7 @@ describe("browser extension pairing Gateway URL", () => {
   });
 
   it("refuses --legacy-bearer when legacy auth is disabled", async () => {
-    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
+    configMocks.read.mockReturnValue({
       browser: { extensionRelay: { allowLegacyAuth: false } },
     });
 

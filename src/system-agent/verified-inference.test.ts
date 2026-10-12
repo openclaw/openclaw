@@ -468,7 +468,7 @@ describe("verified OpenClaw inference binding", () => {
       agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
     } satisfies OpenClawConfig;
     const route = await requireRoute(cliConfig, "cli");
-    const resolveAuth = vi.fn(() => "strict-cli-credential");
+    const resolveAuth = vi.fn(async () => "strict-cli-credential");
     const resolveArtifact = vi.fn(async () => "claude-cli-artifact-v1");
     const binding = await createBinding(
       route,

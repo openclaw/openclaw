@@ -333,9 +333,6 @@ export async function prepareUserProfileGitHubAttribution(
       { context, current: true },
     );
     context.admission.assertCurrent();
-    if (reply && (!reply.ok || reply.type !== "userProfiles.githubAttribution.resolve")) {
-      throw new Error("GitHub attribution reader returned an unexpected result");
-    }
     const isCurrent = authority.bind([
       ...selectedProfileIds,
       ...(reply?.canonicalProfileIds ?? []),

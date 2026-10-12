@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -12,6 +13,7 @@ import { resetNodeHostPluginRegistry } from "./plugin-node-host.test-support.js"
 afterEach(() => {
   resetNodeHostPluginRegistry();
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -32,6 +34,7 @@ describe("Codex node command availability", () => {
             entries: { codex: { enabled: state !== "disabled" } },
           },
         };
+        setRuntimeConfigSnapshot(config);
         await ensureNodeHostPluginRegistry({
           config,
           env: process.env,

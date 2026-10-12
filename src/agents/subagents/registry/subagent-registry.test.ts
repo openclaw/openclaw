@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import {
   runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
@@ -233,12 +234,14 @@ describe("subagent registry seam flow", () => {
       hasHooks: (hookName: string) => hookName === "subagent_ended",
       runSubagentEnded,
     } as never);
-  const mockSingleCollectorConcurrency = () =>
+  const mockSingleCollectorConcurrency = () => {
     mocks.getRuntimeConfig.mockReturnValue({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const, store: mocks.resolveStorePath() },
     });
+    setRuntimeConfigSnapshot(mocks.getRuntimeConfig());
+  };
   const getLifecycleHandler = () => {
     const handler = expectDefined(mocks.onAgentEvent.mock.calls.at(-1)?.[0], "lifecycle handler");
     return (
@@ -307,6 +310,7 @@ describe("subagent registry seam flow", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const, store: mocks.resolveStorePath() },
     });
+    setRuntimeConfigSnapshot(mocks.getRuntimeConfig());
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
     });
@@ -350,6 +354,7 @@ describe("subagent registry seam flow", () => {
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
     await mod.resetSubagentRegistryForTests({ persist: false });
     swarmSchedulerTesting.reset();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     vi.useRealTimers();
   });

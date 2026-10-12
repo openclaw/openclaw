@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { withSessionActor } from "../config/sessions/session-actor-scope.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
@@ -40,6 +41,8 @@ function observeRowFacts(
 
 it("reuses actor row facts after metadata writes and refreshes Board presence after a write", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const scope = { agentId: "main", sessionKey: "agent:main:actor-row-facts" };
     const entry = {
       sessionId: "actor-row-facts",
@@ -68,7 +71,7 @@ it("reuses actor row facts after metadata writes and refreshes Board presence af
           return owner.readRowFacts(input);
         });
         const release = retainSessionListForegroundWork();
-        const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+        const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
         const query = { agentId: scope.agentId, key: scope.sessionKey };
         try {
           await projection.ensureMaterialized();

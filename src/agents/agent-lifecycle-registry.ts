@@ -614,12 +614,6 @@ async function readLifecycleFactsInWorker(
   if (!reply) {
     return { deletionBlocked: false, provenance: null };
   }
-  if (!reply.ok) {
-    throw new Error(reply.message);
-  }
-  if (reply.type !== "agentLifecycle.read") {
-    throw new Error("Unexpected agent lifecycle result");
-  }
   return reply.facts;
 }
 

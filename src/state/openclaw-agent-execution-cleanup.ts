@@ -27,7 +27,6 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   params.assertOwned();
   // A confirmed native close already released its lease; exit alone still needs recovery.
   if (params.closed?.()) {
-    assertExistingDatabaseIdentity(params.lease.sharedStatePath, params.lease.sharedStateIdentity);
     return;
   }
   const observed = await readDatabasePathIdentity(params.lease.sharedStatePath);

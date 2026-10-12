@@ -2,7 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
+import { resolveAuthStorePathForDisplayAsync } from "../../agents/auth-profiles/paths.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
@@ -212,7 +212,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   lines.push(
     `Default: ${params.defaultProvider}/${params.defaultModel}`,
     `Agent: ${params.activeAgentId}`,
-    `Auth store: ${shortenHomePath(resolveAuthStorePathForDisplay(params.agentDir))}`,
+    `Auth store: ${shortenHomePath(await resolveAuthStorePathForDisplayAsync(params.agentDir))}`,
   );
   if (params.resetModelOverride) {
     lines.push(`(previous selection reset to default)`);

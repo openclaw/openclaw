@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
@@ -28,6 +29,7 @@ afterEach(() => {
 it("coalesces usage publications and flushes committed totals for an immediate overview", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(config);
     const target = {
       agentId: "main",
       sessionKey: "agent:main:usage-coalescing",
@@ -137,6 +139,7 @@ it("projects committed usage after startup preparation without borrowing its exp
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
     const append = (tokens: number) =>
       persistSessionTranscriptTurn(target, {
+        config,
         messages: [
           {
             message: {

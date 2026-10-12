@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -31,6 +32,7 @@ describe("session creation display titles", () => {
           session: { store: storePath },
         };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const common = {
           cfg,
           incognito,
@@ -131,6 +133,7 @@ describe("session creation display titles", () => {
         const incognito = storage === "incognito";
         const storePath = storage === "shared" ? state.statePath("shared.sqlite") : undefined;
         const cfg = { agents: { entries: { main: {}, other: {} } }, session: { store: storePath } };
+        setRuntimeConfigSnapshot(cfg);
         const prepared = createDeferredCore();
         let preparing = 0;
         const keys = ["first", "second"].map(

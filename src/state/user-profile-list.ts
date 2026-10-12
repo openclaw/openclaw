@@ -504,9 +504,6 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
       { current: true },
     );
     context.admission.assertCurrent();
-    if (reply && (!reply.ok || reply.type !== "userProfiles.catalog")) {
-      throw new Error(reply.ok ? "Unexpected profile catalog reply" : reply.message);
-    }
     if (
       profileRevision !== readUserProfileVersion() ||
       bindingRevision !== readUserProfileEmailBindingRevision()

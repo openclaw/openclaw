@@ -12,6 +12,10 @@ import {
   type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -103,12 +107,14 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.cp(templateRepo, repo, { mode: fsConstants.COPYFILE_FICLONE, recursive: true });
     repo = await fs.realpath(repo);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
+    setRuntimeConfigSnapshot({}, {});
     now = 1_700_000_000_000;
     service = new ManagedWorktreeService({ env, now: () => now });
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    resetConfigRuntimeState();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });

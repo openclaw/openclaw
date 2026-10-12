@@ -36,6 +36,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntry } from "./session-accessor.js";
@@ -54,6 +55,7 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 it.each(["cold", "preexisting"] as const)(
@@ -62,6 +64,8 @@ it.each(["cold", "preexisting"] as const)(
     const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-handle-lifetime-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const options = { agentId: "main", env };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const initial = openOpenClawAgentDatabase(options);
     await replaceSessionEntry(
       { ...options, sessionKey: "agent:main:retained" },
@@ -76,7 +80,7 @@ it.each(["cold", "preexisting"] as const)(
     const statements = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
     try {
       await runSessionStartupMigration({
-        cfg: { agents: { entries: { main: {} } } },
+        cfg,
         env,
         log: { info: vi.fn(), warn: vi.fn() },
       });
@@ -505,6 +509,7 @@ it("keeps copied state directories self-contained for combined gateway reads", a
 
   await withEnvAsync({ OPENCLAW_STATE_DIR: canonicalSourceStateDir }, async () => {
     const env = { ...process.env };
+    setRuntimeConfigSnapshot(cfg);
     await replaceSessionEntry(
       { agentId: "main", env, sessionKey },
       { sessionId: "copied-session", updatedAt: 1 },

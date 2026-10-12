@@ -9,8 +9,8 @@ async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<Ope
   if (config) {
     return config;
   }
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
+  const { captureRuntimeConfigAsyncReader } = await import("../config/config.js");
+  return await captureRuntimeConfigAsyncReader()();
 }
 
 export async function createChannelMcpRuntime(

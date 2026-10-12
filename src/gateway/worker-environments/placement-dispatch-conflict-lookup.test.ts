@@ -1,5 +1,9 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -27,6 +31,8 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 
 const tempDirs = useStateDatabaseTempDirs();
 
+afterAll(() => clearRuntimeConfigSnapshot());
+
 describe("worker placement dispatch conflict lookup", () => {
   let root: string;
   let database: OpenClawStateDatabase;
@@ -41,6 +47,7 @@ describe("worker placement dispatch conflict lookup", () => {
     });
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     workerPlacementWarn.mockClear();
     root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });

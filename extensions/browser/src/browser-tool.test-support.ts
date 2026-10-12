@@ -217,7 +217,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    getRuntimeConfig: configMocks.loadConfig,
+    readRuntimeConfig: configMocks.loadConfig,
   };
 });
 

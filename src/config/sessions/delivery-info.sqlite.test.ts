@@ -6,6 +6,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { extractDeliveryInfo, extractDeliveryInfoBatch } from "./delivery-info.js";
 import {
   loadExactSessionEntryCandidatesReadOnlyBatch,
@@ -17,6 +18,7 @@ const deliveryContext = { channel: "telegram", to: "telegram:123456", accountId:
 const expected = { deliveryContext, threadId: undefined };
 
 async function seedFallback(state: OpenClawTestState) {
+  setRuntimeConfigSnapshot({});
   await replaceSessionEntry(
     { agentId: "main", env: state.env, sessionKey },
     {

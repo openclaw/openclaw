@@ -1,6 +1,5 @@
 // Full-entry coverage for retrying empty errored assistant turns.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   resolveSqliteScope,
@@ -31,6 +30,7 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
+let sessionAccess: typeof import("../../config/sessions/session-accessor.js");
 
 type AssistantContent = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>["content"];
 
@@ -78,12 +78,15 @@ function successAttempt(provider: string, model: string): EmbeddedRunAttemptResu
 describe("runEmbeddedAgent silent-error retry", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+    sessionAccess = await import("../../config/sessions/session-accessor.js");
   });
 
   beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.empty-error-retry" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
   });
@@ -320,9 +323,9 @@ describe("runEmbeddedAgent silent-error retry", () => {
         expect(error).toBeInstanceOf(Error);
         expect(hasRecordedModelFallbackStop(error)).toBe(true);
         expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ ...scope, readConsistency: "latest" })?.providerReview).toEqual(
-          accepted ? undefined : review,
-        );
+        expect(
+          sessionAccess.loadSessionEntry({ ...scope, readConsistency: "latest" })?.providerReview,
+        ).toEqual(accepted ? undefined : review);
         if (failure === "abort") {
           expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toMatchObject({
             aborted: true,
@@ -340,7 +343,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
       useOpenAIPlatformAuthFixture();
       const params = createOverflowRunParams(state);
       const scope = { agentId: params.agentId, sessionKey: params.sessionKey };
-      await replaceSessionEntry(scope, { sessionId: params.sessionId, updatedAt: 1 });
+      await sessionAccess.replaceSessionEntry(scope, { sessionId: params.sessionId, updatedAt: 1 });
       const review = {
         explanation: "Review the pending operation.",
         continuation: { message: "/literal confirmation" },
@@ -382,7 +385,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
       });
       expect(result.meta.agentMeta?.providerRefusal?.review).toEqual(review);
       expect(
-        loadSessionEntry({ ...scope, readConsistency: "latest" })?.providerReview,
+        sessionAccess.loadSessionEntry({ ...scope, readConsistency: "latest" })?.providerReview,
       ).toMatchObject({
         sessionId: params.sessionId,
         runId: "run-misalignment",

@@ -5,6 +5,7 @@ import {
   type ErrorShape,
   type MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -48,6 +49,7 @@ export async function withMentionInbox(
 }
 
 async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) {
+  setRuntimeConfigSnapshot(cfg);
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
   const alice = ensureProfileForEmail("alice@mentions.example.test");

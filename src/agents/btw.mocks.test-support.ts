@@ -90,9 +90,10 @@ vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
 }));
 
+// mock-isolation: BTW fixtures supply their own auth and model registries without opening real stores.
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
-  discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
+  discoverModelsAsync: async (...args: unknown[]) => discoverModelsMock(...args),
 }));
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({

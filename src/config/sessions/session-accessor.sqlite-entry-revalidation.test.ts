@@ -23,6 +23,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   loadExactSessionEntry,
@@ -52,6 +53,7 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
 });
 
@@ -66,6 +68,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-entry-revalidation-")),
     };
     scope = { agentId: "main", env, sessionKey };
+    setRuntimeConfigSnapshot({});
     await upsertSessionEntryCore(scope, {
       label: "original",
       sessionId: "session-1",

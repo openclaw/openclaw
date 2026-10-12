@@ -15,7 +15,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import { installPluginFromNpmSpec } from "./install.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { packPlugins, startStaticRegistry } from "./test-helpers/npm-registry-fixtures.js";
@@ -214,7 +214,7 @@ describe("post-core update required dependency publication", () => {
               }),
             );
             expect(successfulNpmInstalls, JSON.stringify(result)).toBe(1);
-            const persisted = readPersistedInstalledPluginIndexInstallRecords();
+            const persisted = await readPersistedInstalledPluginIndexInstallRecordsAsync();
             if (!persisted) {
               throw new Error("Expected the persisted installed-plugin index");
             }

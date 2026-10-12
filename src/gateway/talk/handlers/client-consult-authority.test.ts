@@ -10,6 +10,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/io.runtime.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -116,6 +117,7 @@ describe("voice consult registration authority", () => {
     workerGrantReads = [];
     tempDir = tempDirs.make("openclaw-consult-authority-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    await captureRuntimeConfigAsyncReader()();
     await replaceSessionEntry(scope, { sessionId: "original-consult-session", updatedAt: 1 });
     await voiceSessions.createOrResumeClientVoiceSession({
       ...scope,

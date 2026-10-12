@@ -1,5 +1,5 @@
 import {
-  readAcpSessionEntry,
+  readAcpSessionEntryAsync,
   prepareAcpSessionEntryRead,
   type AcpSessionEntryPreparer,
   type PreparedAcpSessionEntryRead,
@@ -42,7 +42,7 @@ export async function reconcileTelegramAcpBindingsOnStartup(
         preparations.set(targetSessionKey, prepared);
         prepared.assertCurrent();
       }
-      const sessionEntry = prepared ? prepared.session : readAcpSessionEntry(input);
+      const sessionEntry = prepared ? prepared.session : await readAcpSessionEntryAsync(input);
       if (!sessionEntry || sessionEntry.storeReadFailed) {
         continue;
       }

@@ -32,9 +32,11 @@ vi.mock("../cli/progress.js", () => ({
   withProgress: vi.fn(async (_opts, run) => run({ setLabel: progressSetLabel })),
 }));
 
+// mock-isolation: Daemon configuration tests use a synthetic install plan and config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: loadConfig,
   loadConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadConfig(),
 }));
 
 vi.mock("./gateway-install-token.js", () => ({

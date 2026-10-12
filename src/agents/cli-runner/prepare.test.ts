@@ -15,7 +15,11 @@ import {
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   loadSessionEntryReadOnly,
@@ -633,14 +637,17 @@ describe("prepareCliRunContext", () => {
       loadManifestModelCatalog: vi.fn(() => []),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
-    getRuntimeConfigMock.mockReturnValue({});
+    const config: OpenClawConfig = {};
+    getRuntimeConfigMock.mockReturnValue(config);
+    setRuntimeConfigSnapshot(config);
     mockBuildMediaTaskRuntimeContext.mockResolvedValue(undefined);
     ensureSandboxWorkspaceForSessionMock.mockReset();
     ensureSandboxWorkspaceForSessionMock.mockResolvedValue(null);
     // Discovery cases explicitly opt out of the prepared empty catalog.
-    fixture = createCliRunnerPrepareFixture((params) =>
-      prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
-    );
+    fixture = createCliRunnerPrepareFixture((params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+    });
   });
 
   afterEach(async () => {
@@ -658,6 +665,7 @@ describe("prepareCliRunContext", () => {
     setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     await fixture.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each(["process", "plugin"] as const)(

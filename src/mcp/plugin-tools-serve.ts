@@ -18,7 +18,7 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -98,8 +98,11 @@ export async function servePluginToolsMcp(): Promise<void> {
   routeLogsToStderr();
 
   await serveRegisteredToolsMcpServer({
-    acquireRegistry: () =>
-      acquirePluginToolsForMcp({ config: getRuntimeConfig(), agentId: resolveToolsMcpAgentId() }),
+    acquireRegistry: async () =>
+      acquirePluginToolsForMcp({
+        config: await captureRuntimeConfigAsyncReader()(),
+        agentId: resolveToolsMcpAgentId(),
+      }),
     createServer: (tools, sdkResourceHost) => {
       if (tools.length === 0) {
         process.stderr.write("plugin-tools-serve: no plugin tools found\n");

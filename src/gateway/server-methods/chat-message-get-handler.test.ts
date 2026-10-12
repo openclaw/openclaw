@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -34,6 +35,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 describe("chat.message.get recovery visibility", () => {
   it("hides recovered failures across hidden announce chunks while retaining unresolved and partial replies", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:message-recovery",
@@ -186,6 +188,7 @@ describe("chat.message.get recovery visibility", () => {
 
 it("resolves one indexed message per worker request while hiding stale announce pairs", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:indexed-message-get",
@@ -283,6 +286,7 @@ it("resolves one indexed message per worker request while hiding stale announce 
 describe("durable tool output inspection", () => {
   it("fetches a retained history reference without crossing conversation or pending-input ownership", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:retained-reference",
@@ -398,6 +402,7 @@ describe("durable tool output inspection", () => {
 
   it("reopens SQLite with bounded history previews and exact recoverable tool text", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:tool-output",
@@ -563,6 +568,7 @@ describe("durable tool output inspection", () => {
 
   it("rejects a full structured message above the transport budget", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:tool-transport",

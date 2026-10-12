@@ -128,8 +128,8 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
         { keys: [key(stateKey)], entry: staleAliasEntry },
         { keys: [key(missingKey), key(stateKey)], entry: stateEntry },
         { keys: [key(stateKey), key(markerKey)], entry: markerEntry },
-        { keys: [key(markerKey), key(stateKey)] },
-        { keys: [key(stateKey), key(unboundKey)] },
+        { keys: [key(markerKey), key(stateKey)], entry: markerEntry },
+        { keys: [key(stateKey), key(unboundKey)], entry: stateEntry },
         { keys: [key(unboundKey)], entry: staleAliasEntry },
         { keys: [key(stateKey)], entry: { sessionId: "state-session", sessionStartedAt: 101 } },
         { keys: [key(stateKey)], entry: { sessionId: "state-session", sessionStartedAt: 100 } },
@@ -234,7 +234,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       await projection.ensureMaterialized();
       acpSelects.counts.metadata = 0;
       const rows = vi.spyOn(rowProjection, "readSessionRowInputs");
-      const metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntry");
+      const metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntryAsync");
       try {
         const result = await listProjectedSessions({
           projection,

@@ -204,13 +204,17 @@ async function closeCurrentDurableTab(
   getResolvedBrowserConfig?: CloseParams["getResolvedBrowserConfig"],
 ): Promise<DurableCleanupResult> {
   // Empty session cleanup must not initialize Browser control or its CDP graph.
-  const [{ getRuntimeConfig }, { resolveCdpControlPolicy }, { closeTrackedCdpTarget }, config] =
-    await Promise.all([
-      import("openclaw/plugin-sdk/runtime-config-snapshot"),
-      import("./cdp-reachability-policy.js"),
-      import("./cdp.helpers.js"),
-      import("./config.js"),
-    ]);
+  const [
+    { readRuntimeConfig: getRuntimeConfig },
+    { resolveCdpControlPolicy },
+    { closeTrackedCdpTarget },
+    config,
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/runtime-config-snapshot"),
+    import("./cdp-reachability-policy.js"),
+    import("./cdp.helpers.js"),
+    import("./config.js"),
+  ]);
   let resolved = await getResolvedBrowserConfig?.();
   if (!resolved) {
     const cfg = getRuntimeConfig();

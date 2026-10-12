@@ -22,8 +22,14 @@ const mocks = vi.hoisted(() => ({
   callGatewayFromCliWithTransport: vi.fn(),
 }));
 
+// mock-isolation: Session-tail fixtures select synthetic Gateway settings without reading operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
 }));
 
 // mock-isolation: Exercise CLI selection without connecting to an operator Gateway.

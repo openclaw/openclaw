@@ -14,6 +14,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   applySessionEntryLifecycleMutation,
   appendTranscriptMessage,
@@ -75,6 +76,7 @@ describe("SQLite session handle lifecycle", () => {
       sessionKey: "agent:main:handle-session",
       storePath: path.join(tempDirs.make("openclaw-session-handle-"), "sessions.json"),
     };
+    setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
   });
@@ -83,6 +85,7 @@ describe("SQLite session handle lifecycle", () => {
     archiveMaterializationHook.afterMaterialize = undefined;
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it("releases a transcript read after JSON parsing fails mid-stream", async () => {

@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -93,6 +94,7 @@ describe("health and status resident session summaries", () => {
         agents: { entries: { main: {} } },
         session: { store: storePath },
       };
+      setRuntimeConfigSnapshot(cfg);
       const first = "agent:main:first";
       const second = "agent:main:second";
       const added = "agent:main:added";
@@ -177,6 +179,7 @@ describe("health and status resident session summaries", () => {
         },
         session: { store: storePath },
       };
+      setRuntimeConfigSnapshot(cfg);
       const agentIds = ["main", "worker"];
       const suffixes = Array.from({ length: 12 }, (_, index) => String(index).padStart(2, "0"));
       const sessionKeys = agentIds.flatMap((id) =>
@@ -265,6 +268,7 @@ describe("health and status resident session summaries", () => {
       let cfg: OpenClawConfig = {
         agents: { entries: { main: {} } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const mainKey = "agent:main:primary";
       const backfill = observeSessionRowBackfill([mainKey]);
       const committed = await upsertSessionEntryCore(
@@ -341,6 +345,7 @@ describe("health and status resident session summaries", () => {
             defaults: { systemAgent: { agentId: "main" } },
           },
         };
+        setRuntimeConfigSnapshot(cfg);
         sessionChanges.emit({ all: true, scope: "config" });
         const topology = await buildHealthAgentSummaries(
           cfg,

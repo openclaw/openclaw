@@ -4,11 +4,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import {
-  isUserGitHubConnectionCommit,
-  type UserGitHubConnectionCommit,
-} from "./user-github-connections.types.js";
-import { isProfileDisplayRow } from "./user-profile-display-validation.js";
+import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
 
 export type UserProfileMutationChanges = {
@@ -58,49 +54,9 @@ export function runUserProfileWriteTransaction<T>(
   );
 }
 
-function isDisplayEntries(value: unknown): value is Array<[string, ProfileDisplayRow | undefined]> {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (entry) =>
-        Array.isArray(entry) &&
-        entry.length === 2 &&
-        typeof entry[0] === "string" &&
-        (entry[1] === undefined || (isProfileDisplayRow(entry[1]) && entry[1].id === entry[0])),
-    )
-  );
-}
-function isEmailBinding(value: unknown, email: string): value is UserProfileEmailBinding | null {
-  return (
-    value === null ||
-    (isRecord(value) &&
-      value.email === email &&
-      typeof value.profileId === "string" &&
-      (value.bindingId === null || typeof value.bindingId === "string"))
-  );
-}
 export function isUserProfileMutationPublication(
   value: unknown,
 ): value is UserProfileMutationPublication {
-  return (
-    isRecord(value) &&
-    value.kind === "user-profile-mutation" &&
-    Number.isSafeInteger(value.sequence) &&
-    isRecord(value.changes) &&
-    [value.changes.profiles, value.changes.identities, value.changes.channels].every(
-      (keys) => Array.isArray(keys) && keys.every((key) => typeof key === "string"),
-    ) &&
-    isDisplayEntries(value.before) &&
-    isDisplayEntries(value.after) &&
-    (value.githubConnections === undefined ||
-      isUserGitHubConnectionCommit(value.githubConnections)) &&
-    Array.isArray(value.emailBindings) &&
-    value.emailBindings.every(
-      (change) =>
-        isRecord(change) &&
-        typeof change.email === "string" &&
-        isEmailBinding(change.before, change.email) &&
-        isEmailBinding(change.after, change.email),
-    )
-  );
+  // Only the typed profile writer publishes this private admission/commit fact.
+  return isRecord(value) && value.kind === "user-profile-mutation";
 }

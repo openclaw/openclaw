@@ -1,12 +1,19 @@
 import "./sessions-spawn-tool.mocks.test-support.js";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import {
+  drainSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../test-utils/session-state-cleanup.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { readParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import {
@@ -39,6 +46,7 @@ describe("sessions_spawn tool", () => {
   });
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     hoisted.prepareModelChoiceMock.mockReset().mockImplementation(supportedSpawnModelChoice);
     acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
@@ -55,6 +63,11 @@ describe("sessions_spawn tool", () => {
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.inProcessCreationMock.mockReset();
     hoisted.runSubagentProgressMock.mockClear();
+  });
+
+  afterEach(async () => {
+    await drainSessionStateForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   function registerAcpBackendForTest(healthy = true) {
@@ -100,7 +113,12 @@ describe("sessions_spawn tool", () => {
   }
 
   function makeTool(options: SpawnOptions = {}) {
-    return createSessionsSpawnTool({ agentSessionKey: "agent:main:main", ...options });
+    return createTool({ agentSessionKey: "agent:main:main", ...options });
+  }
+
+  function createTool(options: SpawnOptions = {}) {
+    setRuntimeConfigSnapshot(options.config ?? {});
+    return createSessionsSpawnTool(options);
   }
 
   function makeVisibleTool(options: SpawnOptions = {}) {
@@ -113,7 +131,7 @@ describe("sessions_spawn tool", () => {
   }
 
   registerSessionsSpawnCompletionTests({
-    createTool: (options) => createSessionsSpawnTool(options),
+    createTool,
     registerAcpBackendForTest,
     mocks: hoisted,
     mockCallArg,
@@ -693,7 +711,7 @@ describe("sessions_spawn tool", () => {
   });
 
   registerSessionsSpawnVisibleCleanupTests({
-    createTool: (options) => createSessionsSpawnTool(options),
+    createTool,
   });
 
   it("applies spawn depth limits to visible dashboard descendants", async () => {

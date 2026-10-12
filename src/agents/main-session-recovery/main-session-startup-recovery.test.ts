@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -83,9 +84,13 @@ beforeEach(() => {
   resetAgentEventsForTest();
   resetGatewayWorkAdmission();
   tmpDir = tempDirs.make();
+  setRuntimeConfigSnapshot({});
 });
 
-afterEach(() => resetGatewayWorkAdmission());
+afterEach(() => {
+  resetGatewayWorkAdmission();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("main-session startup recovery", () => {
   it("preserves a claimless delivered continuation but marks one with only older receipts", async () => {
@@ -461,6 +466,7 @@ describe("main-session startup recovery", () => {
           owner === "old"
             ? { agents: { entries: { main: {} } }, session: { store: storePath } }
             : {};
+        setRuntimeConfigSnapshot(cfg);
         if (shared) {
           openOpenClawAgentDatabase({ agentId: owner, path: storePath });
         }

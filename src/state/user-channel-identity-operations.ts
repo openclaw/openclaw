@@ -67,9 +67,6 @@ export async function listCanonicalUserChannelIdentities(
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "userProfiles.channelIdentity.list") {
-    throw new Error("Channel identity reader returned an unexpected result");
-  }
   return unwrapIdentityResult(reply.result, profileId);
 }
 
@@ -189,9 +186,6 @@ export async function prepareConfiguredCommandOwnerAuthority(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "operator.channelPolicy") {
-    throw new Error("Configured command owner reader returned an unexpected result");
-  }
   const recoveryReference =
     reply.row && readConfiguredCommandOwnerPolicy(JSON.parse(reply.row.value_json), fingerprint);
   if (!recoveryReference) {
@@ -238,9 +232,6 @@ export async function prepareUserChannelIdentityAuthority(
     context.admission.assertCurrent();
     if (!reply) {
       return undefined;
-    }
-    if (!reply.ok || reply.type !== "userProfiles.channelIdentity.resolve") {
-      throw new Error("Channel authority reader returned an unexpected result");
     }
     if (!reply.linked) {
       return undefined;
@@ -318,9 +309,6 @@ async function prepareUserProfileAuthority(
       );
       if (!reply) {
         return undefined;
-      }
-      if (!reply.ok || reply.type !== "userProfiles.authority.resolve") {
-        throw new Error("Profile authority reader returned an unexpected result");
       }
       return reply.profile;
     },

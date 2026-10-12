@@ -27,6 +27,7 @@ import {
 it("reads committed durable rows without host SQL and checks caller authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:saved";
     const scope = { agentId: "main", sessionKey: key, env: state.env };
     const params = { cfg, key, env: state.env };

@@ -215,8 +215,8 @@ async function runEmbeddedAgentCommand(
 }
 
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
-  const { getRuntimeConfig } = await import("../config/io.js");
-  return getRuntimeConfig();
+  const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+  return await captureRuntimeConfigAsyncReader()();
 }
 
 function usesRemoteGateway(cfg: OpenClawConfig): boolean {

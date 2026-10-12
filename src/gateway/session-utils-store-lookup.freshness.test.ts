@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
 import {
   loadSessionEntry,
@@ -24,6 +25,7 @@ import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 it("reads current qualified facts and recovers lifecycle timestamps only when requested", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:qualified-lifecycle";
     const sessionId = "qualified-lifecycle";
     const scope = { agentId: "main", sessionKey: key, env };
@@ -94,6 +96,7 @@ it.for(["membership", "explicit", "qualified"] as const)(
   async (ordering) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const key = "agent:main:sharing-before-snapshot";
       const scope = { agentId: "main", sessionKey: key, env };
       await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
@@ -195,6 +198,7 @@ it.for(["membership", "explicit", "qualified"] as const)(
 it("consumes a fresh metadata snapshot before the next queued writer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:concurrent-metadata";
     const scope = { agentId: "main", sessionKey: key, env };
     replaceSessionEntrySync(scope, {
@@ -261,6 +265,7 @@ it.each(["during", "repeated", "consume"] as const)(
   async (timing) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const key = "agent:main:sharing-before-snapshot";
       const scope = { agentId: "main", sessionKey: key, env };
       await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
