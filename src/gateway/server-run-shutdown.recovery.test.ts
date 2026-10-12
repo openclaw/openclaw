@@ -36,7 +36,6 @@ import { registerChatAbortController, type ChatAbortControllerEntry } from "./ch
 import { registerQueuedChatTurn, type QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "./server-chat.agent-events.test-helpers.js";
-import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
 import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
@@ -116,10 +115,10 @@ it.each(["admission", "queue", "delegated"] as const)(
         }),
       ).toBe(true);
     }
-    const gatewayRuntime = createMockGatewayRecoveryRuntime({
-      dispatchAgent: vi
-        .fn<GatewayRecoveryRuntime["dispatchAgent"]>()
-        .mockResolvedValue({ runId: "resumed-run", status: "ok" }),
+    const gatewayRuntime = createMockGatewayRecoveryRuntime();
+    vi.mocked(gatewayRuntime.dispatchAgent).mockResolvedValue({
+      runId: "resumed-run",
+      status: "ok",
     });
     const recoveryLog = vi.spyOn(mainSessionRecoveryLog, "info");
     try {
