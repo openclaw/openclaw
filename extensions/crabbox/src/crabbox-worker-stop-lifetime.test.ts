@@ -60,7 +60,7 @@ describe("Crabbox stop lifetime", () => {
     "keeps Azure recovery within the original stop deadline after %i ms",
     async (elapsedMs) => {
       let now = 0;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
       const runCommand = vi
         .fn<CrabboxCommandRunner>()
         .mockImplementationOnce(async () => {

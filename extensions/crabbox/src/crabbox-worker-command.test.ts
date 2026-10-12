@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   isUnrecognizedLease,
   runCrabboxCommand,
+  runCrabboxCommandWithCoordinatorRetry,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
 
@@ -129,7 +130,7 @@ describe("Crabbox coordinator timeouts", () => {
     "keeps the stop deadline and diagnostic, process timeout=%s",
     async (processTimeout) => {
       let elapsedMs = 0;
-      const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+      const now = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
       const timeouts: number[] = [];
       const sleep = vi.fn(async (ms: number) => {
         elapsedMs += ms;
@@ -159,6 +160,50 @@ describe("Crabbox coordinator timeouts", () => {
       }
     },
   );
+
+  it("keeps the coordinator retry deadline bounded when the wall clock rewinds", async () => {
+    // Wall-clock rewind model: Date.now rewinds between seed and read, but
+    // performance.now (monotonic) never rewinds. pre-fix (Date.now): seed uses
+    // pre-rewind, read uses post-rewind, so remaining is amplified by the
+    // rewind delta. post-fix (performance.now): seed and read both advance
+    // forward monotonically, remaining stays bounded within the budget.
+    let monotonicMs = 0;
+    let dateNowCallCount = 0;
+    const rewindMs = 90_000;
+    const budgetMs = 5_000;
+    const performanceNow = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => {
+      dateNowCallCount += 1;
+      // First call seeds deadline (wall clock before rewind);
+      // subsequent calls read remaining (wall clock after rewind).
+      return dateNowCallCount === 1 ? monotonicMs : monotonicMs - rewindMs;
+    });
+    const timeouts: number[] = [];
+    try {
+      await runCrabboxCommandWithCoordinatorRetry({
+        action: "stop",
+        args: ["stop", "--id", LEASE_ID],
+        binary: "crabbox",
+        timeoutMs: budgetMs,
+        runCommand: async (_argv, options) => {
+          timeouts.push(options.timeoutMs);
+          // Advance monotonic clock to simulate elapsed time between seed and read.
+          monotonicMs += 1_000;
+          return transportFailure;
+        },
+        sleep: async () => {},
+      }).catch(() => {});
+      // post-fix (performance.now): every retry timeoutMs stays within budget.
+      // pre-fix (Date.now): the rewind amplifies remaining so timeoutMs
+      // exceeds budget by ~rewindMs.
+      for (const t of timeouts) {
+        expect(t).toBeLessThanOrEqual(budgetMs);
+      }
+    } finally {
+      performanceNow.mockRestore();
+      dateNow.mockRestore();
+    }
+  });
 });
 it.each(["output capture failed", "cleanup could not confirm process exit", "spawn ENOENT"])(
   "reports the runner failure without retaining private error data: %s",
