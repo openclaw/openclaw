@@ -29,6 +29,7 @@ import {
 } from "./device-pairing-worker.js";
 import {
   getPairedDevice,
+  getPendingDevicePairing,
   listDevicePairing,
   listDevicePairingReadOnly,
   removePairedDevice,
@@ -307,6 +308,44 @@ test.each([
     writer.mockRestore();
   }
 });
+
+test.each(["lookup", "pending read", "token revocation"] as const)(
+  "keeps unrelated node authority when a %s publishes a revision the cache missed",
+  async (source) => {
+    const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
+    const other = {
+      ...structuredClone(node),
+      deviceId: "other",
+      publicKey: "synthetic-other-key",
+      tokens: {
+        node: { token: "synthetic-other-token", role: "node", scopes: [], createdAtMs: 1 },
+      },
+    };
+    persistDevicePairingStoreState(
+      { pendingById: {}, pairedByDeviceId: { node, other } },
+      baseDir,
+      "paired",
+    );
+    await readDevicePairingNodeSnapshot(baseDir);
+    const binding = getPublishedPairedDeviceBinding("node", baseDir);
+    expect(binding).not.toBeNull();
+    // Boot and Doctor migrations commit without a worker receipt.
+    persistDevicePairingStoreState(
+      { pendingById: {}, pairedByDeviceId: { node, other: { ...other, lastSeenAtMs: 2 } } },
+      baseDir,
+      "paired",
+    );
+    if (source === "lookup") {
+      await getPairedDevice("other", baseDir);
+    } else if (source === "pending read") {
+      await getPendingDevicePairing("synthetic-missing-request", baseDir);
+    } else {
+      await revokeDeviceToken({ deviceId: "other", role: "node", baseDir });
+      expect(getPublishedPairedDeviceBinding("other", baseDir)).toBeNull();
+    }
+    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+  },
+);
 
 test.each([
   { change: "unrelated operator approval", remainsCurrent: true },
