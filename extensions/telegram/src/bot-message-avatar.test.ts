@@ -152,8 +152,8 @@ describe("Telegram native direct portraits", () => {
   it("never shares native photos between senders or bot accounts", async () => {
     const first = account();
     const second = account("another-bot");
-    await first.resolve(context(), {});
-    await first.resolve(context(1000000002), {});
+    first.resolve(context(), {});
+    first.resolve(context(1000000002), {});
     second.resolve(context(), {});
     await vi.advanceTimersByTimeAsync(0);
     expect(first.api.getUserProfilePhotos.mock.calls.map(([id]) => id)).toEqual([
@@ -175,17 +175,17 @@ describe("Telegram native direct portraits", () => {
     expect(resolveMedia).not.toHaveBeenCalled();
   });
 
-  it("does not use a group photo, bot photo, or a private chat's different peer", async () => {
+  it("does not use a group photo, bot photo, or a private chat's different peer", () => {
     const { api, resolve } = account();
     const ctx = context();
     expect(
-      await resolve(
+      resolve(
         { ...ctx, message: { ...ctx.message, chat: { id: -123, type: "group", title: "Group" } } },
         {},
       ),
     ).toBeUndefined();
     expect(
-      await resolve(
+      resolve(
         {
           ...ctx,
           message: { ...ctx.message, from: { id: 1000000002, is_bot: false, first_name: "Other" } },
@@ -194,7 +194,7 @@ describe("Telegram native direct portraits", () => {
       ),
     ).toBeUndefined();
     expect(
-      await resolve(
+      resolve(
         {
           ...ctx,
           message: { ...ctx.message, from: { id: 1000000001, is_bot: true, first_name: "Bot" } },
