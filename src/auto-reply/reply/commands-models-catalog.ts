@@ -452,7 +452,7 @@ export async function loadModelsProviderData(
       if (choices.length > 1) {
         const configuredEvaluation = configuredDecisions.evaluateNative(
           entry,
-          await configuredDecisions.evaluateEntry(entry, variants.length ? variants : [entry]),
+          configuredDecisions.evaluateEntry(entry, variants.length ? variants : [entry]),
         );
         const configuredRuntime = resolveCatalogDecisionRuntime({
           cfg,
