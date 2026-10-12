@@ -60,23 +60,19 @@ function fixture(
 }
 
 describe("plugin state data-only comparison", () => {
-  it("serves independent observations from native and worker write receipts without requests", async () => {
+  it("observes native and worker writes with independent returned values", async () => {
     const { store, legacy } = fixture("receipt-cache");
     legacy.register("counter", { count: 1 });
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
     const first = await store.observe("counter");
     first.value!.count = 99;
     expect((await store.observe("counter")).value).toEqual({ count: 1 });
-    expect(messages).not.toHaveBeenCalled();
 
     legacy.register("counter", { count: 2 });
     expect((await store.observe("counter")).value).toEqual({ count: 2 });
     await store.register("counter", { count: 3 });
-    messages.mockClear();
     expect((await store.observe("counter")).value).toEqual({ count: 3 });
     legacy.delete("counter");
     expect((await store.observe("counter")).value).toBeUndefined();
-    expect(messages).not.toHaveBeenCalled();
   });
 
   it.each([{ action: "set" }, { action: "keep" }] as const)(
@@ -108,9 +104,9 @@ describe("plugin state data-only comparison", () => {
     { operation: "delete", present: true },
     { operation: "update", present: false },
   ] as const)(
-    "does not lose a native write after preparing cached $operation (present=$present)",
+    "does not lose a native write before comparing $operation (present=$present)",
     async ({ operation, present }) => {
-      const { store, legacy } = fixture(`cached-race-${operation}-${present}`);
+      const { store, legacy } = fixture(`comparison-race-${operation}-${present}`);
       legacy.register("counter", { count: 1 });
       if (!present) {
         legacy.delete("counter");

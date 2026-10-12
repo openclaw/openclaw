@@ -483,6 +483,7 @@ export async function consultRealtimeVoiceAgent(params: {
     "Realtime voice agent consult interrupted by a session lifecycle change.",
   );
   const sessionWorkAdmission = await beginSessionWorkAdmission({
+    agentId,
     scope: storePath,
     identities: [params.sessionKey, initialSessionEntry?.sessionId],
     onInterrupt: () => lifecycleAbortController.abort(lifecycleInterruption),
