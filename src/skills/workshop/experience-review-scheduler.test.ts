@@ -12,6 +12,7 @@ import {
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const log = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn() }));
+// mock-isolation: Capture review log severity without initializing real log sinks.
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 
 beforeEach(() => {

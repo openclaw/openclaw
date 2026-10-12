@@ -5,7 +5,9 @@ const { serve, unavailable } = vi.hoisted(() => ({
   serve: vi.fn<(handler: (input: unknown) => unknown) => void>(),
   unavailable: new Error("Session storage is unavailable"),
 }));
+// mock-isolation: Capture the worker handler without opening a real worker message port.
 vi.mock("openclaw/plugin-sdk/worker-task-server", () => ({ serveWorkerTasks: serve }));
+// mock-isolation: Throw on storage import so this test detects eager session-storage loading.
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", () => {
   throw unavailable;
 });

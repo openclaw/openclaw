@@ -4,6 +4,7 @@ import { enqueueCommandInLane, GatewayDrainingError } from "./command-queue.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 
 const diag = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+// mock-isolation: Capture queue log severity without initializing real diagnostic sinks.
 vi.mock("../logging/diagnostic-runtime.js", () => ({
   diagnosticLogger: diag,
   logLaneEnqueue: vi.fn(),
