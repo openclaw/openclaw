@@ -50,9 +50,8 @@ export function jsonOrderedTextArray(
   orderBy: Expression<unknown>,
 ): AliasableExpression<string> {
   // SQLite consumes caller-ordered rows; PostgreSQL requires ordering within the aggregate.
-  /* kysely-allow-raw: Engine-owned ordered JSON aggregation, returned as text on both engines. */
   return isPostgresSqlConnection(db)
-    ? sql<string>`coalesce(array_to_json(array_agg(${value} order by ${orderBy}))::text, '[]')`
+    ? /* kysely-allow-raw: Engine-owned ordered JSON aggregation. */ sql<string>`coalesce(array_to_json(array_agg(${value} order by ${orderBy}))::text, '[]')`
     : expressionBuilder().fn<string>("json_group_array", [value]);
 }
 
@@ -63,8 +62,9 @@ export function jsonRemoveKey(
 ): AliasableExpression<string | null> {
   if (isPostgresSqlConnection(db)) {
     // jsonb normalizes key order/whitespace and keeps the last duplicate; parsed values agree, bytes may differ.
-    /* kysely-allow-raw: Engine-owned JSON key removal. */
-    return sql<string | null>`(${value}::jsonb - ${key}::text)::text`;
+    return /* kysely-allow-raw: Engine-owned JSON key removal. */ sql<
+      string | null
+    >`(${value}::jsonb - ${key}::text)::text`;
   }
   return expressionBuilder().fn<string | null>("json_remove", [
     value,

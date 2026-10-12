@@ -1675,9 +1675,19 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["terminalizeBoundDeliveryQueueEntry", "pruneOrdinaryDeliveryReceipts"],
+        operations: [
+          "terminalizeBoundDeliveryQueueEntry",
+          "pruneOrdinaryDeliveryReceipts",
+          "pruneDeliveryQueueTombstones",
+        ],
         evidence:
-          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Bounded pruning also serves native namespace migration through delivery-queue-sqlite.kernel.ts:192. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+      },
+      {
+        tier: "W",
+        operations: ["pruneDeliveryQueueTombstoneAges"],
+        evidence:
+          "Sole runtime caller: src/infra/delivery-queue.worker.ts:480 → delivery-queue-sqlite.kernel.ts:409.",
       },
     ],
   ],
