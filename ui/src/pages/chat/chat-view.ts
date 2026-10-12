@@ -40,6 +40,7 @@ import {
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import {
   type ChatPlacementStartupNoticeProps,
   renderChatComposerNotices,
@@ -55,11 +56,11 @@ import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
 import {
   renderComposerQuestionDock,
   resolveComposerQuestionPanel,
-} from "./components/chat-composer-question.ts";
+} from "./components/chat-composer-question.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
-import { renderChatComposerQueue } from "./components/chat-composer-view.ts";
-import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposerQueue } from "./components/chat-composer-view.tsx";
+import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
@@ -437,8 +438,11 @@ export function renderChat(props: ChatProps) {
     ...inputDisplay.queue,
   ];
   const composerProps = { ...props, displayQueue };
+  const subagents = projectSubagentStatus({ ...props, runWorking }, false);
   const defaultComposer = renderChatComposer({
     ...props,
+    waitingSubagents: subagents.wait,
+    onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
     // Full conversation panes have one progress owner: Details. Catalog and
     // compact embedded composers retain their existing standalone presentation.
     progressCard: props.detailsEnabled ? null : props.progressCard,

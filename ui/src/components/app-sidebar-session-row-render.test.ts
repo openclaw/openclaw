@@ -16,6 +16,7 @@ import {
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
 import "./app-sidebar.ts";
+import { installTitleTooltips } from "./tooltip-title.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
   routingDefaults: { mainKey: "main", scope: "per-sender" },
@@ -56,6 +57,24 @@ function createHost() {
   document.body.append(container);
   return { host, container };
 }
+
+it("materializes the archive hint on hover without changing the action name", () => {
+  vi.useFakeTimers();
+  onTestFinished(installTitleTooltips(document));
+  const { host, container } = createHost();
+  const session = projectSidebarSession({ key: "agent:main:thread", label: "Research" });
+  render(renderRecentSession({ host, session }), container);
+  const archive = container.querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!;
+  const name = archive.getAttribute("aria-label");
+  const hint = archive.title;
+  expect(hint).not.toBe("");
+  expect(container.querySelector("openclaw-tooltip")).toBeNull();
+
+  archive.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+  const tooltip = document.querySelector("openclaw-tooltip");
+  expect(tooltip?.content).toBe(hint);
+  expect(archive.getAttribute("aria-label")).toBe(name);
+});
 
 it("renders the saved chip identity before agent discovery without reviving another agent's chip", async () => {
   const { host, container } = createHost();

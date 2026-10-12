@@ -9,7 +9,7 @@ import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import "./web-awesome.ts";
 
-export type NativeLinkMenuAction = "inline" | "external" | "copy";
+type NativeLinkMenuAction = "inline" | "external" | "copy";
 type Props = {
   x: number;
   y: number;

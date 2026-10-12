@@ -141,7 +141,7 @@ export class PaletteSessionSettings {
   render(options: SettingsOptions) {
     const { draft, context, preferences, onChange } = options;
     const { place, gateway, submission } = draft;
-    const placementLocked = !gateway.placementPolicyReady || place.requiredPlacement;
+    const placementLocked = place.requiredPlacement;
     if (placementLocked) {
       this.places = false;
     }

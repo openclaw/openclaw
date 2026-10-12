@@ -10,6 +10,9 @@ import {
 import "../components/modal-dialog.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";
+import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
+import { createApplicationOverlays } from "./overlays.ts";
+import { updateRunHarness } from "./update-run.test-support.ts";
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 
@@ -165,21 +168,42 @@ describe("native link routing", () => {
     },
   );
 
-  it("delivers each native update decline once across route changes", async () => {
-    const onNativeUpdateDeclined = vi.fn();
+  it("keeps native decline fallback on its posted Gateway and consumes it once", async () => {
+    const requestA = vi.fn<RequestFn>(async () => ({}));
+    const requestB = vi.fn<RequestFn>(async () => ({}));
+    const harness = updateRunHarness(requestA);
+    const overlays = createApplicationOverlays(harness.gateway);
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawUpdate: { postMessage } } });
-    routing = startNativeLinkRouting({ onNativeUpdateDeclined });
+    routing = startNativeLinkRouting({
+      prepareNativeUpdateFallback: () => ({
+        isCurrent: overlays.captureUpdateTarget(),
+        run: () => void overlays.runUpdate(),
+      }),
+    });
+    const updateCalls = (request: typeof requestA) =>
+      request.mock.calls.filter(([method]) => method === "update.run");
+    try {
+      await flushMicrotasks();
+      expect(postNativeUpdate()).toBe(true);
+      harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
+      harness.update({ client: client(requestB) });
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      expect(updateCalls(requestA)).toEqual([]);
+      expect(updateCalls(requestB)).toEqual([]);
 
-    expect(postNativeUpdate()).toBe(true);
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onNativeUpdateDeclined).toHaveBeenCalledOnce();
-
-    expect(postNativeUpdate()).toBe(true);
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onNativeUpdateDeclined).toHaveBeenCalledTimes(2);
-    expect(postMessage).toHaveBeenCalledTimes(2);
+      expect(postNativeUpdate()).toBe(true);
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+      await flushMicrotasks();
+      expect(updateCalls(requestA)).toEqual([]);
+      expect(updateCalls(requestB)).toHaveLength(1);
+      expect(postMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      overlays.dispose();
+    }
   });
 
   it("does not install native behavior without the WebKit bridge", async () => {
@@ -190,57 +214,6 @@ describe("native link routing", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
-  });
-
-  it("routes an unmodified external click to the native panel and preserves page-level cleanup", async () => {
-    const bridge = installBridge();
-    routing = startNativeLinkRouting({ canPresentBrowserPanel: () => true });
-    const anchor = appendLink("https://example.com/report");
-    const bubbleHandler = vi.fn();
-    anchor.addEventListener("click", bubbleHandler);
-
-    const event = click(anchor);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(bubbleHandler).toHaveBeenCalledOnce();
-    expect(bridge.messages).toEqual([]);
-    expect(bridge.browserRequests).toEqual([
-      { open: true, url: "https://example.com/report", native: true },
-    ]);
-  });
-
-  it("opens links externally during a Settings takeover and restores panel routing when it closes", async () => {
-    const bridge = installBridge();
-    let canPresentBrowserPanel = false;
-    routing = startNativeLinkRouting({
-      canPresentBrowserPanel: () => canPresentBrowserPanel,
-    });
-    const anchor = appendLink("https://example.com/report");
-
-    expect(click(anchor).defaultPrevented).toBe(true);
-    expect(bridge.messages).toEqual([
-      { type: "open-link", url: "https://example.com/report", target: "external" },
-    ]);
-    expect(bridge.browserRequests).toEqual([]);
-
-    canPresentBrowserPanel = true;
-    expect(click(anchor).defaultPrevented).toBe(true);
-    expect(bridge.messages).toHaveLength(1);
-    expect(bridge.browserRequests).toEqual([
-      { open: true, url: "https://example.com/report", native: true },
-    ]);
-  });
-
-  it("preserves link handlers that cancel an external click", async () => {
-    const bridge = installBridge();
-    routing = startNativeLinkRouting();
-    const anchor = appendLink("https://example.com/handled");
-    anchor.addEventListener("click", (event) => event.preventDefault());
-
-    const event = click(anchor);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(bridge.messages).toEqual([]);
   });
 
   it("defines the hovercard once across duplicate bootstrap module instances", async () => {

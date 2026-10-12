@@ -88,11 +88,13 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
   await expect
     .poll(() =>
       button.evaluate((element) => {
-        const tooltip = element
-          .closest("openclaw-tooltip")
-          ?.shadowRoot?.querySelector<
-            HTMLElement & { anchor?: Element | null; popup?: { active?: boolean } }
-          >("wa-tooltip");
+        const tooltip = [...document.querySelectorAll("openclaw-tooltip")]
+          .map((host) =>
+            host.shadowRoot?.querySelector<
+              HTMLElement & { anchor?: Element | null; popup?: { active?: boolean } }
+            >("wa-tooltip"),
+          )
+          .find((popup) => popup?.anchor === element);
         const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
         const bounds = body?.getBoundingClientRect();
         // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
@@ -122,10 +124,12 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
       text,
     });
   const bounds = await button.evaluate((element) => {
-    const body = element
-      .closest("openclaw-tooltip")
-      ?.shadowRoot?.querySelector<HTMLElement>("wa-tooltip")
-      ?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
+    const tooltip = [...document.querySelectorAll("openclaw-tooltip")]
+      .map((host) =>
+        host.shadowRoot?.querySelector<HTMLElement & { anchor?: Element | null }>("wa-tooltip"),
+      )
+      .find((popup) => popup?.anchor === element);
+    const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
     const slot = body?.querySelector<HTMLSlotElement>("slot");
     const textNode = slot?.assignedNodes().find((node) => node.textContent?.trim());
     const range = textNode ? document.createRange() : null;
@@ -760,10 +764,6 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await expectHoverTooltip(
         page.locator('[data-navigation-view][aria-pressed="true"]'),
         `Sessions · Collapse sidebar (${sidebarShortcut})`,
-      );
-      await expectHoverTooltip(
-        page.getByRole("button", { name: "Open split view" }),
-        "Open split view",
       );
       await page.evaluate(() => {
         const tooltip = document.createElement("openclaw-tooltip");

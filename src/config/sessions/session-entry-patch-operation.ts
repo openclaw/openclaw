@@ -3,6 +3,11 @@ import {
   projectAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkUpdate,
 } from "./ambient-transcript-watermark-projection.js";
+import {
+  projectLastRoutePatch,
+  projectSessionMetaPatch,
+  type PreparedSessionMetaPatch,
+} from "./metadata-projection.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
@@ -49,6 +54,17 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | {
+      kind: "inbound-metadata";
+      metadata: PreparedSessionMetaPatch;
+      sessionKey: string;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+    }
+  | {
+      kind: "last-route";
+      route: Omit<Parameters<typeof projectLastRoutePatch>[0], "existing">;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+    }
   | { kind: "public-fields"; patch: Partial<SessionEntry> }
   | { kind: "ambient-transcript-watermark"; watermark: AmbientTranscriptWatermarkUpdate }
   | {
@@ -165,6 +181,18 @@ function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "inbound-metadata": {
+      const patch = projectSessionMetaPatch({
+        prepared: operation.metadata,
+        existing: existingEntry,
+        sessionKey: operation.sessionKey,
+      });
+      return existingEntry ? patch : { ...operation.creation, ...patch };
+    }
+    case "last-route": {
+      const patch = projectLastRoutePatch({ ...operation.route, existing: existingEntry });
+      return existingEntry ? patch : { ...operation.creation, ...patch };
+    }
     case "ensure-identity":
       return existingEntry?.sessionId
         ? null

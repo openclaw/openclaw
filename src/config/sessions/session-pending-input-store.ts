@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
@@ -13,7 +12,6 @@ import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-e
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   openOpenClawAgentDatabase,
-  getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -300,7 +298,7 @@ export async function preparePendingInputStore(
         })(),
       );
     },
-    // Released synchronous recorder completion keeps its native visibility contract.
+    // Released SDK completion retains immediate transaction semantics until the next major.
     nativeMutation,
     mutate(
       input: PendingInputMutation,
@@ -335,37 +333,42 @@ export async function preparePendingInputStore(
                 }
               },
             };
-            const hot =
-              inputActor.actor.snapshot(authority) ?? (await inputActor.actor.read(authority));
-            if (!hot.entry) {
-              throw new Error("Input actor lost its staged session");
-            }
-            const expectedState = buildRestartRecoveryExpectedState(hot.entry);
+            let expectedState: ReturnType<typeof buildRestartRecoveryExpectedState> | undefined;
             let receipt: ReturnType<typeof readPendingInputMutationReceipt>;
-            const outcome = await runSessionActorCommand(inputActor.actor, authority, (snapshot) =>
-              inputActor.actor.acceptInput(
-                {
-                  commandId: randomUUID(),
-                  phaseId: `accept:${input.runId}`,
-                  expected: snapshot?.version ?? hot.version,
-                  pending: input,
-                  lifecycle: {},
-                  expectedState,
-                },
-                authority,
-                {
-                  committed(commit) {
-                    receipt = readPendingInputMutationReceipt(
-                      commit.value.pendingInputReceipt,
-                      input,
-                    );
-                    if (!receipt) {
-                      throw new Error("Input actor omitted its committed custody receipt");
-                    }
-                    publish?.(committedFacts, assertOpen);
+            const outcome = await runSessionActorCommand(
+              inputActor.actor,
+              authority,
+              async (snapshot) => {
+                const hot = snapshot ?? (await inputActor.actor.read(authority));
+                if (!hot.entry) {
+                  throw new Error("Input actor lost its staged session");
+                }
+                // Select lifecycle facts inside the FIFO, then retain them across version rebasing.
+                expectedState ??= buildRestartRecoveryExpectedState(hot.entry);
+                return inputActor.actor.acceptInput(
+                  {
+                    commandId: randomUUID(),
+                    phaseId: `accept:${input.runId}`,
+                    expected: hot.version,
+                    pending: input,
+                    lifecycle: {},
+                    expectedState,
                   },
-                },
-              ),
+                  authority,
+                  {
+                    committed(commit) {
+                      receipt = readPendingInputMutationReceipt(
+                        commit.value.pendingInputReceipt,
+                        input,
+                      );
+                      if (!receipt) {
+                        throw new Error("Input actor omitted its committed custody receipt");
+                      }
+                      publish?.(committedFacts, assertOpen);
+                    },
+                  },
+                );
+              },
             );
             if (outcome.kind !== "committed") {
               throwSessionInputActorFailure(outcome, authorityFailure);
@@ -431,22 +434,8 @@ export async function preparePendingInputStore(
             options,
             identity?.key.slice(5),
             assertOpen,
-            async (execution, source, context) => {
+            async (execution, source) => {
               const result = await execution.runExisting(source, async (worker) => {
-                const native = getOpenClawAgentDatabaseIfOpen(options);
-                const revision = native && readSqliteNativeMutationRevision(native.db);
-                const assertPublicationCurrent = () => {
-                  context.assertCurrent();
-                  if (
-                    getOpenClawAgentDatabaseIfOpen(options) !== native ||
-                    (native &&
-                      (native.db.isTransaction ||
-                        revision === undefined ||
-                        readSqliteNativeMutationRevision(native.db) !== revision))
-                  ) {
-                    throw new Error("Pending input authority changed before publication");
-                  }
-                };
                 const outcome = await worker
                   .execute({ type: "session.pendingInputs.mutate", input })
                   .then(
@@ -459,10 +448,7 @@ export async function preparePendingInputStore(
                   if (admitted.admission.settlement?.kind === "completed" && receipt) {
                     if (publish) {
                       assertOpen();
-                    }
-                    if (publish) {
-                      assertPublicationCurrent();
-                      publish(committedFacts, assertPublicationCurrent);
+                      publish(committedFacts, assertOpen);
                     }
                     return receipt;
                   }

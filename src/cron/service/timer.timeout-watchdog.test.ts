@@ -21,8 +21,7 @@ import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-
 import { stop } from "./ops-lifecycle.js";
 import type { CronServiceDeps, CronServiceState } from "./state.js";
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
-import { runMissedJobs } from "./timer.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const SCHEDULED_AT = Date.parse("2026-05-10T09:00:00.000Z");
 const fixtures = setupCronRegressionFixtures({
@@ -138,6 +137,10 @@ describe("cron execution watchdogs", () => {
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
       expect(record?.status).toBe("timed_out");
       expect(record?.error).toContain("timed out");
+      expect(requireJob(state, job.id)).toMatchObject({ enabled: true });
+      expect(requireJob(state, job.id).state.nextRunAtMs).toBeGreaterThan(SCHEDULED_AT);
+      expect(requireJob(state, job.id).state.autoDisabled).toBeUndefined();
+      expect(requireJob(state, job.id).state.lastErrorReason).toBe("timeout");
       expect(record?.sessionKey).toBe("key-attrib");
       expect(record?.detail).toMatchObject({
         provider: "deepseek",

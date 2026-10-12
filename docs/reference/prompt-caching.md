@@ -39,12 +39,20 @@ the session and keep both stable. Start a new session for a planned change.
 Invalidating reuse means the next request misses that cached state; it does not
 necessarily delete the provider's older cache entry before its normal expiry.
 
+## Stable tools between turns
+
+WebChat keeps the `message` reaction description and schema stable between runs
+in the same conversation, including runs without a current-prompt reaction grant.
+Code Mode's schema-derived `exec` description stays stable with it. Reaction
+execution still requires the current prompt's live authority; an advertised
+action does not grant permission to execute it.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request
 and when persisting the result. Subsequent turns therefore replay the same
-bounded text instead of introducing a different truncation notice. Redaction
-still runs before model-visible output is recorded. Large batches can exceed
+bounded text instead of introducing a different truncation notice. Tool text
+is preserved without secret masking. Large batches can exceed
 the aggregate result budget when reducing them would rewrite already-sent
 history; session pruning and compaction remain the owners of intentional
 history changes.
@@ -53,6 +61,11 @@ OpenAI Chat Completions also preserves valid native tool-call IDs during replay
 and disambiguates repeated IDs deterministically. Changing result text or IDs
 between turns can invalidate an otherwise reusable provider prefix. Stable
 request inputs support cache reuse; actual hits still depend on the provider.
+
+Responses replay derives synthetic assistant message IDs from recorded source-turn
+identity when available. Retiring earlier history therefore preserves the IDs of
+retained failed-turn markers. Error diagnostics remain transcript metadata and do
+not enter the provider request.
 
 Internal browser conversations reuse their opaque session cache key for private
 subagent completions, so the completion does not switch to a different affinity
@@ -225,9 +238,9 @@ Live AWS acceptance proof remains a gap until a maintainer with Bedrock access r
 
 For `openrouter/anthropic/*` model refs, both Chat Completions builders apply the [shared marker layout](#chat-completions-cache-markers), but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops automatic marker injection. `cacheRetention: "long"` requests `ttl: "1h"` on these verified routes; `"none"` disables markers. See [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
 
-`contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, and `openrouter/zai/*` model refs, because these routes handle provider-side prompt caching without needing OpenClaw's injected markers.
+`contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, `openrouter/x-ai/*`, `openrouter/zai/*`, `openrouter/google/gemini-2.5*`, and `openrouter/google/gemini-3*` model refs, because these routes handle provider-side prompt caching without needing OpenClaw's injected markers. Older Gemini models and other `google/*` models (for example Gemma) are excluded because OpenRouter caches them only with explicit `cache_control` markers, if at all.
 
-Source: `extensions/openrouter/index.ts` (`OPENROUTER_CACHE_TTL_MODEL_PREFIXES`).
+Source: `extensions/openrouter/index.ts` (`OPENROUTER_CACHE_TTL_MODEL_FAMILY`).
 
 DeepSeek cache construction on OpenRouter is best-effort and can take a few seconds; an immediate follow-up request may still show `cached_tokens: 0`. Verify with a repeated same-prefix request after a short delay, using `usage.prompt_tokens_details.cached_tokens` as the cache-hit signal.
 
@@ -459,6 +472,7 @@ OpenClaw also checks that each converted request history extends the previous re
 - **High `cacheWrite` on most turns**: check for volatile system-prompt inputs; verify the model/provider supports your cache settings.
 - **High `cacheWrite` on Anthropic**: often means the cache breakpoint is landing on content that changes every request. A volatile system-suffix change can preserve the stable system-prefix checkpoint while invalidating later conversation checkpoints; cache observations report `systemPromptSuffix` for that change.
 - **Low OpenAI `cacheRead`**: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache. A volatile system-suffix change can cause a one-turn drop that recovers on the next request; enable cache tracing and look for `systemPromptSuffix` in the `[prompt-cache]` warning. A small or stepwise shortfall can reflect provider granularity, but does not rule out prompt changes or cache availability.
+  The warning's `requests` field pairs the last measured cache hit with the dropping request. For encoded HTTP requests, it includes cache-key presence and hash, continuation-ID presence, exact request bytes, a SHA-256 hash of the first 4096 bytes (or the whole request if smaller), model and route hashes, and the number of encoded attempts within that model call. Available response metadata includes HTTP status, numeric `openai-processing-ms`, and hashes of allowlisted request-ID, model, account, and region headers. Raw keys, IDs, headers, and prompt content are never included. Missing fields mean the transport did not supply that evidence; retries across model calls and unobserved transport retries are not counted.
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
 - **Bedrock Nova requests without cache hits**: set `cacheRetention` explicitly to `short` or `long`, verify that the model is one of the supported variants above, and check that the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 

@@ -158,6 +158,7 @@ it("rejects a read revoked during dispatch and joins worker close", async () => 
       env: state.env,
       storePath: database.path,
       sessionKeys: [sessionKey],
+      lifecycleSessionKey: sessionKey,
       projection: "full",
     }),
   ).rejects.toThrow(/revoked/);
@@ -190,6 +191,7 @@ it("rejects a configured alias redirected while its read is in flight", async ()
       env: state.env,
       storePath: path.join(alias, "agents", "main", "agent", "openclaw-agent.sqlite"),
       sessionKeys: [sessionKey],
+      lifecycleSessionKey: sessionKey,
       projection: "full",
     }),
   ).rejects.toThrow(/outside captured discovery custody/);

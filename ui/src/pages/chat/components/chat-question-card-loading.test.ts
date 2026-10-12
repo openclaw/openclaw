@@ -4,7 +4,7 @@ import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
-import { renderComposerQuestionDock } from "./chat-composer-question.ts";
+import { renderComposerQuestionDock } from "./chat-composer-question.tsx";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { ChatQuestionCard, QuestionPanelProps } from "./chat-question-card.ts";
 

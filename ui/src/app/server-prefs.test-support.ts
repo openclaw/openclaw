@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { RuntimeConfigExternalMutationOptions } from "../lib/config/config-gateway-operations.ts";
 import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
@@ -84,11 +85,8 @@ export function createProfilePrefsServer(
         if (method !== "users.prefs.set") {
           throw new Error("unexpected global mutation: " + method);
         }
-        const update = params as {
-          entries: Record<string, unknown>;
-          expectedEntries: Record<string, unknown>;
-        };
-        for (const [key, expected] of Object.entries(update.expectedEntries)) {
+        const update = params as UsersPrefsSetParams;
+        for (const [key, expected] of Object.entries(update.expectedEntries ?? {})) {
           if (JSON.stringify(entries[key] ?? null) !== JSON.stringify(expected)) {
             return { status: "conflict" };
           }

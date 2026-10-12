@@ -30,6 +30,8 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -451,6 +453,8 @@ export function withCurrentChatSendSession<T>(params: {
   session: PreparedChatSendSession;
   getRuntimeConfig: () => OpenClawConfig;
   includeMembership: boolean;
+  includeActivePath?: boolean;
+  includeLifecycle?: boolean;
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
 }) {
   const { session } = params;
@@ -502,8 +506,29 @@ export function withCurrentChatSendSession<T>(params: {
     target: session.sessionTarget,
     logicalStorePath: session.storePath,
     includeMembership: params.includeMembership,
+    transcript:
+      params.includeActivePath && session.expectedLeafEntryId !== undefined
+        ? {
+            sessionKey: session.sessionTarget.storeKey,
+            agentId: session.agentId,
+            entryIds: [],
+            activePathEntryId: session.expectedLeafEntryId,
+            includeSession: true,
+          }
+        : undefined,
+    includeLifecycle: params.includeLifecycle,
     consume,
     assertConfigCurrent,
+  }).catch((error: unknown) => {
+    if (isSessionTranscriptProjectionUnavailableError(error)) {
+      // Read workers report readiness; the host owns deferred repair and retry.
+      startSessionTranscriptIndexReconcile({
+        agentId: session.agentId,
+        path: session.sessionTarget.storePath,
+        preferredSessionId: error.sessionId,
+      });
+    }
+    throw error;
   });
 }
 

@@ -363,8 +363,9 @@ it.each([
       host.transcript.scrollToEnd({ behavior });
       await expect.poll(distance).toBe(0);
     } else {
-      thread.scrollTop = 0;
-      await settleFrames();
+      await new Promise<void>((resolve) => {
+        host.transcript.scrollToOffset(0, () => resolve());
+      });
       let arrived = false;
       const stop = subscribeTranscriptScroll(thread, (event) => {
         if (event.type === "offset" && event.scrolling && distance() === 0) {

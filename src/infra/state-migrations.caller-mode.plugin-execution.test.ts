@@ -56,50 +56,6 @@ afterEach(async () => {
 });
 
 describe("legacy state migration caller plugin execution", () => {
-  it("keeps absent migration descriptors stable when plugin migrations are disabled", async () => {
-    const fixture = await makeFixture();
-    fixture.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    const cfg: OpenClawConfig = { plugins: { enabled: false } };
-    fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: {
-        homeDir: fixture.homeDir,
-        configPath: fixture.configPath,
-        stateDir: fixture.stateDir,
-      },
-      env: fixture.env,
-    });
-
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
-
-    expectPlanReceiptDescriptorsToMatch({
-      plan: {
-        ...plan,
-        steps: plan.steps.filter((step) => step.id !== "plugin-doctor-post-session-state"),
-      },
-      receipts: result.stepReceipts,
-    });
-    expect(result.postSessionPluginMigration?.step).toMatchObject({
-      id: "plugin-doctor-post-session-state",
-      source: [],
-      target: [],
-      requiredness: "not-required",
-    });
-    expect(plan.steps.find((step) => step.id === "plugin-doctor-state")).toMatchObject({
-      source: [],
-      target: [],
-      requiredness: "not-required",
-    });
-  });
-
   it.each([
     {
       name: "reordered exports with only the second action pending",

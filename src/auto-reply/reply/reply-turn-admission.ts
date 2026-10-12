@@ -9,6 +9,7 @@ import {
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { beginForegroundSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import {
   isRestartRecoveryTombstone,
   SessionWorkStartChangedError,
@@ -126,6 +127,7 @@ function rejectLifecycleInvalidatedWork(params: {
 export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
+  const workspaceReadiness = captureAgentWorkspaceReadiness(params.sessionKey);
   const workSignal = getAsyncWorkSignal();
   const activeAtAdmission = replyRunRegistry.get(params.sessionKey);
   const releaseForeground =
@@ -245,6 +247,7 @@ export async function admitReplyTurn(
         let recoveryClaimStarted = false;
         const admission = storePath
           ? await beginSessionWorkAdmission({
+              agentId: params.agentId,
               owner: REPLY_WORK_ADMISSION_OWNER,
               scope: storePath,
               isSettling: () =>
@@ -272,6 +275,7 @@ export async function admitReplyTurn(
                 assertDatabaseOwnerCurrent();
                 const assertCurrent = () => {
                   params.assertRequestCurrent?.();
+                  workspaceReadiness?.assertCurrent();
                   assertDatabaseOwnerCurrent();
                   if (
                     !admitting ||
@@ -343,6 +347,7 @@ export async function admitReplyTurn(
                   params.sessionKey || sessionId,
                   currentEntry,
                   {
+                    allowPendingWorkspace: workspaceReadiness ? true : undefined,
                     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
                     allowRestartTombstoneReplacement:
                       (params.resetTriggered && params.allowRestartTombstoneReset === true) ||

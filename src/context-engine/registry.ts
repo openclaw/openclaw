@@ -523,7 +523,7 @@ async function resolveRawContextEngineRef(
  */
 export async function resolveLogicalTurnContextEngines(
   config?: OpenClawConfig,
-  options?: ResolveContextEngineOptions,
+  options?: ResolveContextEngineOptions & { beforeCustomEngine?: () => Promise<void> },
 ): Promise<LogicalTurnContextEngineResolution> {
   const initialization = options?.initialize?.();
   try {
@@ -550,6 +550,10 @@ export async function resolveLogicalTurnContextEngines(
       try {
         if (initialization) {
           await initialization;
+          getAsyncWorkSignal()?.throwIfAborted();
+        }
+        if (configuredEngineId !== defaultEngineId && options?.beforeCustomEngine) {
+          await options.beforeCustomEngine();
           getAsyncWorkSignal()?.throwIfAborted();
         }
         fallback = await resolveContextEngineFactory(sources.fallback, sourceResources, () =>

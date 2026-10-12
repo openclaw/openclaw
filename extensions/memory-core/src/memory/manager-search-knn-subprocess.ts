@@ -1,5 +1,6 @@
 // Parent-side subprocess boundary for synchronous sqlite-vec KNN work.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   ensureSqliteLibrarySelected,
   SQLITE_IDLE_HANDLE_TTL_MS,
@@ -46,81 +47,10 @@ function toAbortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("memory vector KNN aborted");
 }
 
-function createVectorKnnAdmission(maxConcurrent: number) {
-  let active = 0;
-  const waiters: Array<{
-    signal?: AbortSignal;
-    resolve: (release: () => void) => void;
-    reject: (error: Error) => void;
-    abort: () => void;
-  }> = [];
-
-  const releaseNext = (): void => {
-    while (waiters.length > 0) {
-      const next = waiters.shift()!;
-      next.signal?.removeEventListener("abort", next.abort);
-      if (next.signal?.aborted) {
-        next.reject(toAbortError(next.signal));
-        continue;
-      }
-      next.resolve(createRelease());
-      return;
-    }
-    active -= 1;
-  };
-  const createRelease = (): (() => void) => {
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      releaseNext();
-    };
-  };
-
-  return {
-    get full() {
-      return active >= maxConcurrent;
-    },
-    get waiting() {
-      return waiters.length > 0;
-    },
-    acquire: async (signal?: AbortSignal) => {
-      if (signal?.aborted) {
-        throw toAbortError(signal);
-      }
-      if (active < maxConcurrent) {
-        active += 1;
-        return createRelease();
-      }
-      return await new Promise<() => void>((resolve, reject) => {
-        const waiter = {
-          signal,
-          resolve,
-          reject,
-          abort: () => {
-            const index = waiters.indexOf(waiter);
-            if (index >= 0) {
-              waiters.splice(index, 1);
-            }
-            reject(toAbortError(signal!));
-          },
-        };
-        waiters.push(waiter);
-        signal?.addEventListener("abort", waiter.abort, { once: true });
-        if (signal?.aborted) {
-          waiter.abort();
-        }
-      });
-    },
-  };
-}
-
-const vectorKnnAdmission = createVectorKnnAdmission(MAX_CONCURRENT_VECTOR_KNN_CHILDREN);
+const vectorKnnAdmission = createPermitPool(MAX_CONCURRENT_VECTOR_KNN_CHILDREN);
 const databaseAdmissions = new Map<
   string,
-  { admission: ReturnType<typeof createVectorKnnAdmission>; users: number }
+  { admission: ReturnType<typeof createPermitPool>; users: number }
 >();
 const children = new Map<
   string,
@@ -204,13 +134,16 @@ export async function runVectorKnnInSubprocess(
 ): Promise<VectorKnnResponse> {
   let entry = databaseAdmissions.get(params.databasePath);
   if (!entry) {
-    entry = { admission: createVectorKnnAdmission(1), users: 0 };
+    entry = { admission: createPermitPool(1), users: 0 };
     databaseAdmissions.set(params.databasePath, entry);
   }
   entry.users += 1;
   let release: (() => void) | undefined;
   try {
-    release = await entry.admission.acquire(params.signal);
+    release = (await entry.admission.acquire({ signal: params.signal })) ?? undefined;
+    if (!release) {
+      throw toAbortError(params.signal!);
+    }
     return await runAdmittedVectorKnn(params);
   } finally {
     release?.();
@@ -239,13 +172,18 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
 
   let worker = children.get(params.databasePath);
   if (!worker) {
-    if (vectorKnnAdmission.full) {
+    let permit = vectorKnnAdmission.tryAcquire();
+    if (!permit) {
       const idleWorker = [...children.values()].find((candidate) => candidate.idleTimer);
       if (idleWorker) {
         idleWorker.retire();
       }
+      permit = await vectorKnnAdmission.acquire({ signal: params.signal });
     }
-    const releaseAdmission = await vectorKnnAdmission.acquire(params.signal);
+    if (!permit) {
+      throw toAbortError(params.signal!);
+    }
+    const releaseAdmission = permit;
     if (params.signal?.aborted) {
       releaseAdmission();
       throw toAbortError(params.signal);
@@ -398,7 +336,7 @@ async function runAdmittedVectorKnn(params: VectorKnnSubprocessParams): Promise<
           child.stdout.on("data", ownedWorker.retire);
           ownedWorker.idleTimer = setTimeout(ownedWorker.retire, SQLITE_IDLE_HANDLE_TTL_MS);
           ownedWorker.idleTimer.unref();
-          if (vectorKnnAdmission.waiting) {
+          if (vectorKnnAdmission.pendingCount > 0) {
             ownedWorker.retire();
           } else {
             setChildReferenced(child, false);

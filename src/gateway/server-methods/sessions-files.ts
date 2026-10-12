@@ -36,6 +36,7 @@ import type { SessionTranscriptReadScope } from "../session-transcript-readers.j
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import {
   execOpenPath,
@@ -608,11 +609,10 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
             });
             return;
           }
-          const placement = loaded.entry?.sessionId
-            ? context.workerSessionPlacementService
-                ?.getMany([loaded.entry.sessionId])
-                .get(loaded.entry.sessionId)
-            : undefined;
+          const placement = await readSessionWorkerPlacementAsync({
+            context,
+            sessionId: loaded.entry?.sessionId,
+          });
           if (isCloudWorkerPlacementState(placement?.state)) {
             respond(true, {
               ok: false,

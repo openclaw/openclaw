@@ -5,10 +5,7 @@ import {
   readSessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  readSessionTranscriptWatermark,
-  type SessionTranscriptWatermark,
-} from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark-read.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -62,15 +59,13 @@ export function setSessionActivitySummaryState(
   return true;
 }
 
-/** Activity lists supply batched watermarks; explicit ensure reads one exact target. */
+/** Presentation consumes the watermark prepared with the row; it never opens its transcript. */
 export function projectSessionActivitySummary(
   params: ActivitySummaryTarget & {
     cfg: OpenClawConfig;
     entry: SessionEntry | undefined;
     enabled?: boolean;
     watermark?: SessionTranscriptWatermark;
-    /** Physical target for cold reads; pending work retains its configured-path identity. */
-    storeTarget?: { agentId: string; storePath: string };
   },
 ): SessionActivitySummary | undefined {
   const { entry } = params;
@@ -100,15 +95,7 @@ export function projectSessionActivitySummary(
   const enabled =
     params.enabled ??
     Boolean(resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId }));
-  const watermark = summary
-    ? (params.watermark ??
-      readSessionTranscriptWatermark({
-        agentId: params.storeTarget?.agentId ?? params.agentId,
-        sessionId: entry.sessionId,
-        sessionKey: params.key,
-        storePath: params.storeTarget?.storePath ?? storePath,
-      }))
-    : undefined;
+  const watermark = params.watermark;
   const fresh =
     summary &&
     summary.formatRevision === ACTIVITY_SUMMARY_FORMAT_REVISION &&

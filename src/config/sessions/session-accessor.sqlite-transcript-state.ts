@@ -454,7 +454,11 @@ export function advanceTranscriptMutationAtInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   value: number,
-  options: { strictly?: boolean; windowUpdatedAt?: number } = {},
+  options: {
+    strictly?: boolean;
+    windowUpdatedAt?: number;
+    lastMessagePreview?: string | null;
+  } = {},
 ): void {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     let transcriptUpdatedAt = Math.floor(value);
@@ -511,6 +515,9 @@ export function advanceTranscriptMutationAtInTransaction(
         indexedSeq: projection?.indexedSeq ?? null,
         activeMessageCount: projection?.activeMessageCount ?? null,
         needsRebuild: projection ? (projection.needsRebuild ? 1 : 0) : null,
+        ...(options.lastMessagePreview !== undefined
+          ? { lastMessagePreview: options.lastMessagePreview }
+          : {}),
       });
       return;
     }
@@ -572,7 +579,12 @@ export function advanceTranscriptMutationAtInTransaction(
         },
         getSqliteReadScopeRevision(database.db),
       );
-      publishSessionTranscriptAuthority(database, context);
+      publishSessionTranscriptAuthority(database, {
+        ...context,
+        ...(options.lastMessagePreview !== undefined
+          ? { lastMessagePreview: options.lastMessagePreview }
+          : {}),
+      });
     }
   });
 }
@@ -581,10 +593,12 @@ export function touchTranscriptMutationInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   windowUpdatedAt?: number,
+  lastMessagePreview?: string | null,
 ): void {
   advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), {
     strictly: true,
     windowUpdatedAt,
+    lastMessagePreview,
   });
 }
 

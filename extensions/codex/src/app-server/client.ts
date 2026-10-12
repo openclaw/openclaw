@@ -215,7 +215,7 @@ export class CodexAppServerClient {
 
   static async start(
     options?: Partial<CodexAppServerStartOptions>,
-    assertCurrent?: () => void,
+    assertCurrent?: () => void | Promise<void>,
   ): Promise<CodexAppServerClient> {
     const defaults = resolveCodexAppServerRuntimeOptions().start;
     const startOptions = {
@@ -227,6 +227,7 @@ export class CodexAppServerClient {
       throw new Error("Managed Codex app-server start options must be resolved before spawn.");
     }
     if (startOptions.transport === "websocket" || startOptions.transport === "unix") {
+      await assertCurrent?.();
       return new CodexAppServerClient(createWebSocketTransport(startOptions));
     }
     // The spawn callback runs synchronously before registration; initialization
@@ -238,7 +239,7 @@ export class CodexAppServerClient {
       });
       return client;
     } catch (error) {
-      assertCurrent?.();
+      await assertCurrent?.();
       if (client?.transportExited && hasCodexAppServerNaturalExit(client.child)) {
         throw (
           client.child.startupFailure?.error ??

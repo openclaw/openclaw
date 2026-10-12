@@ -51,7 +51,7 @@ function messageEvent(row: SessionActorMemoryHistoryRow): SessionTranscriptMessa
   return { event: row.event, eventSeq: row.rawSeq, seq: row.messagePosition! + 1 };
 }
 
-function boundedTail(
+export function readSessionActorMemoryBoundedTail(
   window: SessionActorMemoryWindow,
   navigation: Navigation,
   options: SessionTranscriptBoundedMessageTailOptions,
@@ -430,7 +430,7 @@ export function readSessionActorMemoryHistoryFacts(
       };
     }
     case "session.history.bounded-tail":
-      return boundedTail(window, navigation, query.input.options);
+      return readSessionActorMemoryBoundedTail(window, navigation, query.input.options);
     case "session.history.visitor-source": {
       const rows = navigation.visibleMessages;
       const start = resolveIntegerOption(query.input.offset, 0, { min: 0, max: rows.length });

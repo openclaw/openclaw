@@ -187,6 +187,7 @@ export async function prepareGatewayKernelState(params: {
           workerPlacementModule.createGatewayWorkerPlacementRuntime({
             scheduler,
             placements: workerEnvironmentStartup.placementStore,
+            initialPlacements: await workerEnvironmentStartup.placementStore.listAsync(),
             getCommittedRuntimeConfig,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
@@ -437,7 +438,7 @@ export async function prepareGatewayKernelState(params: {
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () =>
-    !startupState.sidecarsReady && !lifecycle.closePreludeStarted;
+    (!startupState.dispatchReady || !startupState.sidecarsReady) && !lifecycle.closePreludeStarted;
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,

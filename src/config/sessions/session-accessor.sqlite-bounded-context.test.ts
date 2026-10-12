@@ -7,6 +7,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.j
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -48,6 +49,7 @@ async function withBoundedContextScope(
   }) => Promise<void>,
 ): Promise<void> {
   await withOpenClawTestState({ label: "bounded-transcript-context" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionId: "bounded-context",
@@ -342,6 +344,12 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
       "new",
     ]);
     expect(context.events.at(-1)).toMatchObject({ parentId: "middle" });
+    expect(context.parents).toEqual(
+      new Map([
+        ["summary", "prior-reset"],
+        ["new", "middle"],
+      ]),
+    );
     expect(context.opaqueParents.get("middle")).toBe("summary");
     expect(context.boundaryCount).toBe(2);
   });

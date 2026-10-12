@@ -4,6 +4,8 @@ import type {
   AcpRuntimeTurnInput,
   AcpRuntimeTurnResult,
 } from "@openclaw/acp-core/runtime/types";
+import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
@@ -134,6 +136,7 @@ export async function emitCancelledAcpTurn(
 
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
+  source?: SessionSourceAssertion;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
   onBeforePrompt?: () => Promise<void> | void;
@@ -159,7 +162,11 @@ export async function consumeAcpTurnStream(params: {
   }
   if (params.runtime.startTurn) {
     // Submission readiness and terminal cleanup are independent backend-owned turn boundaries.
-    const turn = params.runtime.startTurn(params.turn);
+    const startTurn = params.runtime.startTurn.bind(params.runtime);
+    const { turn } = await runWithAgentToolSourceExecutionScope(params.source, async () => {
+      params.source?.();
+      return { turn: startTurn(params.turn) };
+    });
     let promptReadinessOpen = true;
     let promptNotificationStarted = false;
     const readinessPromise = turn.promptStarted?.then(
@@ -273,7 +280,7 @@ export async function consumeAcpTurnStream(params: {
     };
   }
 
-  const events = params.runtime.runTurn(params.turn);
+  const events = startLegacyTurnEvents(params.runtime, params.turn, params.source);
   await params.onPromptStarted?.({ authoritative: false });
   return await consumeAcpTurnEvents({
     events,
@@ -281,4 +288,28 @@ export async function consumeAcpTurnStream(params: {
     onEvent: params.onEvent,
     onOutputEvent: params.onOutputEvent,
   });
+}
+
+async function* startLegacyTurnEvents(
+  runtime: AcpRuntime,
+  turn: AcpRuntimeTurnInput,
+  source: SessionSourceAssertion | undefined,
+): AsyncGenerator<AcpRuntimeEvent> {
+  let iterator: AsyncIterator<AcpRuntimeEvent> | undefined;
+  try {
+    const started = await runWithAgentToolSourceExecutionScope(source, async () => {
+      source?.();
+      const current = runtime.runTurn(turn)[Symbol.asyncIterator]();
+      iterator = current;
+      return { iterator: current, next: await current.next() };
+    });
+    let next = started.next;
+    while (!next.done) {
+      yield next.value;
+      next = await started.iterator.next();
+    }
+    iterator = undefined;
+  } finally {
+    await iterator?.return?.();
+  }
 }

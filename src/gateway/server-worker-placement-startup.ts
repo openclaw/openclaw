@@ -72,6 +72,7 @@ type WorkerPlacementSidecar = { stop: () => Promise<void> };
 export type GatewayWorkerPlacementRuntimeParams = {
   scheduler: GatewayScheduler;
   placements: WorkerSessionPlacementStore;
+  initialPlacements: readonly WorkerSessionPlacementRecord[];
   getCommittedRuntimeConfig: () => OpenClawConfig;
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
@@ -221,6 +222,7 @@ export function createGatewayWorkerPlacementRuntime(
   const dispatchService = coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
       placements: params.placements,
+      initialPlacements: params.initialPlacements,
       environments: params.environments,
       // Must read true before enrollment cancellation in every shutdown path, so an interrupted
       // provisioning is retained rather than terminalized. Runtime reset replaces the drain signal.
@@ -390,6 +392,7 @@ export function createGatewayWorkerPlacementRuntime(
     placements: params.placements,
     resolveWorkspace,
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
+    isInterruptedTurn: dispatchService.isInterruptedTurn,
     waitForAdmissionNode: runtimeRefresh.wait,
     waitForInitialPlacement: dispatchService.waitForInitialPlacement,
     redispatchPlacement,

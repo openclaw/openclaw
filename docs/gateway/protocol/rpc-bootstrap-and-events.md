@@ -32,7 +32,16 @@ or the full `chat.history.sessionInfo` for details. Omitting `rowMode` preserves
 the full row contract. Title, preview, and Activity recap enrichment remain
 controlled by their existing include flags.
 
-Control UI list requests use compact rows and a bounded diagnostic `source`:
+The sidebar requests `rowMode: "sidebar"` to retain navigation, identity, unread,
+run, placement, and membership facts while omitting execution settings and usage.
+Repeated display objects are sent once in the response's `sharedFacts` array.
+A row's optional `sharedFacts` contains indexes into that response-local array;
+merge those partial objects into the row before reconciling it with cached state.
+The row's own fields take precedence. Fields outside the sidebar projection are
+unrequested, not deletion receipts, just as with compact rows. Other clients can
+continue requesting compact or full rows without decoding shared facts.
+
+Control UI list requests use a bounded diagnostic `source`:
 `sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`, `agent-roster`,
 `command-palette`, or `skill-workshop`.
 The source does not change selection or access. List and event rows include
@@ -108,7 +117,9 @@ does not identify an agent. The SDK sends a stable opaque `subscriptionId` for
 each wire observer and includes it in resubscriptions and unsubscribe requests.
 For multiple IDs on one connection and session, full-stream interest takes
 precedence until its last owner releases; approvals remain enabled while any
-owner requests them. Omitting the ID retains the legacy single-observer behavior.
+owner requests them. Unsubscribing an observer resets the connection's text baseline;
+remaining observers receive a complete snapshot before append-only delivery resumes.
+Omitting the ID retains the legacy single-observer behavior.
 Older clients remain compatible with the updated Gateway; the updated SDK's
 ownership fields require an updated Gateway.
 

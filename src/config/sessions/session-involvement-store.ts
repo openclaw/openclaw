@@ -1,30 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
-import {
-  prepareUserProfileCatalog,
-  readUserProfileAliases,
-} from "../../state/user-profile-list.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 import type { SessionInvolvementMutation } from "./session-sharing-store.types.js";
 
 type InvolvementParams = SessionInvolvementMutation & { assertCurrent?: () => void };
-
-/** Released v2026.9.8 MentionInbox.recordCommittedInput completion contract. */
-export function updateSessionProfileInvolvement(
-  scope: SessionAccessScope,
-  params: InvolvementParams,
-): boolean {
-  const profiles = [...new Set(params.profileIds)].map((profileId) => ({
-    profileId,
-    aliases: [...readUserProfileAliases(profileId, { env: scope.env })],
-  }));
-  return updatePreparedSessionProfileInvolvement(scope, params, profiles).accepted;
-}
 
 export async function updateSessionProfileInvolvementAsync(
   scope: SessionCollaborationScope,

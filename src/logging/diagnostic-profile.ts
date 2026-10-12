@@ -49,7 +49,7 @@ export function assertProfile(valid: boolean): asserts valid {
   }
 }
 
-function hasProfilerConflict() {
+export function hasProfilerConflict() {
   const options = parseNodeOptionsEnvVar(process.env.NODE_OPTIONS);
   return (
     options === null ||

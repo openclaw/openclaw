@@ -15,7 +15,7 @@ export type MemoryPublicationState = {
   fts: { enabled: boolean; available: boolean };
   extensionPath?: string;
 };
-export type MemoryPublicationFragment = { row: number; part: number; json: string; last: boolean };
+export type MemoryPublicationFragment = { json: string; last: boolean };
 export type MemoryEmbeddingCacheEntry = {
   hash: string;
   embedding: number[];
@@ -81,46 +81,42 @@ export type MemoryPublicationOperations = {
     output: MemoryPublicationResult<boolean>;
   };
   "cache.stage.start": {
-    input: { operation: string; header: MemoryEmbeddingCacheHeader; rows: number };
+    input: { header: MemoryEmbeddingCacheHeader };
     output: void;
   };
   "cache.write": {
-    input: { operation: string; expectedRevision: number };
+    input: undefined;
     output: MemoryPublicationResult<boolean>;
   };
   "cache.write.inline": {
     input: {
       header: MemoryEmbeddingCacheHeader;
       entries: MemoryEmbeddingCacheEntry[];
-      expectedRevision: number;
     };
     output: MemoryPublicationResult<boolean>;
   };
   "cache.clear": {
-    input: { identities: MemoryIndexProviderIdentity[]; expectedRevision: number };
+    input: { identities: MemoryIndexProviderIdentity[] };
     output: MemoryPublicationResult<boolean>;
   };
   "stage.start": {
-    input: { operation: string; header: MemorySourceIndexHeader; rows: number };
+    input: { header: MemorySourceIndexHeader };
     output: void;
   };
   "stage.append": {
-    input: { operation: string; fragments: MemoryPublicationFragment[] };
+    input: { fragments: MemoryPublicationFragment[] };
     output: void;
   };
-  "stage.discard": { input: { operation: string }; output: void };
+  "stage.discard": { input: undefined; output: void };
   "source.replace": {
-    input: { operation: string; state: MemoryPublicationState };
+    input: { state: MemoryPublicationState };
     output: MemoryPublicationResult<{
-      beforeRevision: number;
-      databaseRevision: number;
       retainedDrift: boolean;
     }>;
   };
   "source.replace.inline": {
     input: {
       header: MemorySourceIndexHeader;
-      rows: number;
       fragments: MemoryPublicationFragment[];
       state: MemoryPublicationState;
     };

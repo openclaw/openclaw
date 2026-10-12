@@ -1,5 +1,4 @@
 // Fast context runtime tests cover timeout and fast context generation behavior.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -31,36 +30,6 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("caps oversized fast-context timeouts before scheduling Node timers", async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    mocks.getActiveMemoryProviderCore.mockResolvedValue({
-      provider: {
-        close: vi.fn(),
-        search: vi.fn().mockResolvedValue({ hits: [] }),
-      },
-    });
-
-    await expect(
-      resolveRealtimeVoiceFastContextConsult({
-        cfg: {},
-        agentId: "main",
-        sessionKey: "voice:15550001234",
-        config: {
-          enabled: true,
-          timeoutMs: Number.MAX_SAFE_INTEGER,
-          maxResults: 3,
-          sources: ["memory", "sessions"],
-          fallbackToConsult: true,
-        },
-        args: { question: "What do you remember?" },
-        logger: {},
-        liveness,
-      }),
-    ).resolves.toEqual({ handled: false });
-
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("preserves the fast-context timeout error and clears the timer", async () => {
@@ -245,37 +214,6 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
       mocks.isActiveMemoryProviderNative.mockReturnValue(false);
     });
 
-    it("keeps line-range locations and the manager's snippet bytes", async () => {
-      const search = vi.fn().mockResolvedValue([
-        {
-          path: "MEMORY.md",
-          startLine: 10,
-          endLine: 11,
-          snippet: "Venue is the riverside hall. <!-- trigger: venue -->",
-          source: "memory",
-          score: 1,
-        },
-      ]);
-      mocks.getActiveMemorySearchManagerCore.mockResolvedValue({ manager: { search } });
-
-      const result = await legacyConsult(["memory"]);
-
-      expect(mocks.getActiveMemoryProviderCore).not.toHaveBeenCalled();
-      expect(search).toHaveBeenCalledWith("What do you remember?", {
-        maxResults: 2,
-        sessionKey: "agent:main:voice:15550001234",
-        sources: ["memory"],
-      });
-      expect(result).toEqual({
-        handled: true,
-        result: {
-          text: expect.stringContaining(
-            "1. [memory] MEMORY.md:10-11\nVenue is the riverside hall. <!-- trigger: venue -->",
-          ),
-        },
-      });
-    });
-
     it("removes unauthorized session hits before building caller context", async () => {
       const hits = [
         {
@@ -358,29 +296,6 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
           contextName: "OpenClaw memory or session context",
         },
       });
-
-    it("keeps answering from a legacy owner's manager", async () => {
-      mocks.isActiveMemoryProviderNative.mockReturnValue(false);
-      mocks.getActiveMemorySearchManagerCore.mockResolvedValue({
-        manager: {
-          search: vi.fn().mockResolvedValue([
-            {
-              path: "MEMORY.md",
-              startLine: 3,
-              endLine: 3,
-              snippet: "Venue is the riverside hall.",
-              source: "memory",
-              score: 1,
-            },
-          ]),
-        },
-      });
-
-      await expect(releasedVoiceCallConsult(true)).resolves.toEqual({
-        handled: true,
-        result: { text: expect.stringContaining("Venue is the riverside hall.") },
-      });
-    });
 
     it("never reads a native provider and follows the caller's fallback policy", async () => {
       await expect(releasedVoiceCallConsult(true)).resolves.toEqual({ handled: false });

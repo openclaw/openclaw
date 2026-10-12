@@ -197,13 +197,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       controller.hostUpdated();
       await vi.advanceTimersByTimeAsync(0);
       await Promise.resolve();
-      expect(harness.request).toHaveBeenCalledWith(
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        {
-          sessionKeys: [],
-        },
-        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
-      );
+      expect(harness.request).not.toHaveBeenCalled();
       expect(getRows).toHaveBeenCalledOnce();
 
       harness.emit({
@@ -396,11 +390,7 @@ describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
     await host.updateComplete;
     await Promise.resolve();
 
-    expect(harness.request).toHaveBeenCalledExactlyOnceWith(
-      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      { sessionKeys: [] },
-      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
-    );
+    expect(harness.request).not.toHaveBeenCalled();
 
     const viewer = {};
     const store = sessionPullRequestsForGateway(harness.gateway);
@@ -516,38 +506,20 @@ describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
     const host = mountLifecycleHost(harness.gateway, () => [row]);
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
-    expect(harness.request).toHaveBeenLastCalledWith(
-      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      {
-        sessionKeys: [],
-      },
-      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
-    );
+    expect(harness.request).not.toHaveBeenCalled();
 
     host.requestUpdate();
     host.remove();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(harness.request).toHaveBeenLastCalledWith(
-      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      {
-        sessionKeys: [],
-      },
-      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
-    );
+    expect(harness.request).not.toHaveBeenCalled();
 
     document.body.append(host);
     host.requestUpdate();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(harness.request).toHaveBeenLastCalledWith(
-      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      {
-        sessionKeys: [],
-      },
-      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
-    );
+    expect(harness.request).not.toHaveBeenCalled();
   });
 });

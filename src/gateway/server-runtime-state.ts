@@ -106,6 +106,7 @@ export async function createGatewayHttpTransport(params: {
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
   isStartupPending?: () => boolean;
+  waitForRequestRuntime?: () => Promise<void>;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
@@ -356,6 +357,7 @@ export async function createGatewayHttpTransport(params: {
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      waitForRequestRuntime: params.waitForRequestRuntime,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       httpRequestLifetime: params.httpRequestLifetime,
       isTerminalEnabled: params.isTerminalEnabled,
@@ -381,6 +383,7 @@ export async function createGatewayHttpTransport(params: {
       desktopSessionRegistry: params.desktopSessionRegistry,
       nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      waitForRequestRuntime: params.waitForRequestRuntime,
       isStartupPending: params.isStartupPending,
       ingressTransport,
       reportUnattributableProxy,

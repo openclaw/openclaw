@@ -4,7 +4,6 @@ import {
   createRenderEffect,
   createRoot,
   createSignal,
-  flush,
   onCleanup,
   runWithOwner,
   untrack,
@@ -70,7 +69,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     static observedAttributes = [...attributes.keys()];
     #values = new Map(properties.map(([key, property]) => [key, property.default]));
     #upgraded = new Map<string, unknown>();
-    #notify?: () => void;
+    #publish = new Map<string, () => void>();
     #dispose?: () => void;
     #unsubscribe?: () => void;
     #application?: ApplicationContext;
@@ -131,8 +130,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           throw new TypeError(`Cannot reflect non-primitive bridge property ${key}`);
         }
       }
-      this.#notify?.();
-      void this.#commit();
+      this.#publish.get(key)?.();
+      if (!this.#solidOwned) {
+        void this.#commit();
+      }
     }
 
     attributeChangedCallback(name: string, _old: string | null, value: string | null) {
@@ -214,9 +215,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             runWithOwner(null, () => this.#mount());
           }
         }
-        // Queued during Lit's property commit, before its updateComplete reactions.
-        // Never flush reentrantly from a Solid render/effect callback.
-        flush();
         return true;
       }));
     }
@@ -237,9 +235,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       const view = () => {
-        // Solid-owned hosts publish property updates while their parent renders.
-        const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-        this.#notify = () => setRevision((value) => value + 1);
         const props = {
           ...defaults,
           get children() {
@@ -247,9 +242,15 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           },
         };
         for (const [key] of properties) {
+          // Wrap callable values so Solid treats callbacks as data, not computations.
+          const [value, setValue] = createSignal(
+            { value: this.#values.get(key) },
+            { ownedWrite: true, equals: (left, right) => Object.is(left.value, right.value) },
+          );
+          this.#publish.set(key, () => setValue({ value: this.#values.get(key) }));
           Object.defineProperty(props, key, {
             get: () => {
-              revision();
+              value();
               return this.#values.get(key);
             },
           });
@@ -284,7 +285,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     #disposeRoot() {
-      this.#notify = undefined;
+      this.#publish.clear();
       this.#unsubscribe?.();
       this.#unsubscribe = undefined;
       const outlet = this.#start?.parentNode;

@@ -72,7 +72,8 @@ extension DashboardWindowController {
                 cuaDriverBundled: CuaDriverArtifact.bundledExecutableURL != nil,
                 peekabooBridgeEnabled: state.peekabooBridgeEnabled,
                 activeComputerPresenceEnabled: state.activeComputerPresenceEnabled,
-                unattendedDesktopEnabled: MacDesktopAvailabilityCoordinator.shared.unattendedEnabled),
+                unattendedDesktopEnabled: MacDesktopAvailabilityCoordinator.shared.unattendedEnabled,
+                aiSetupAvailable: true),
             desktopAvailability: .init(state: MacDesktopAvailabilityCoordinator.shared.refresh()),
             browser: .init(
                 importAvailable: state.connectionMode == .local && BrowserProfileImportModel.shared.importAvailable,

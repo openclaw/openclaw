@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -242,8 +243,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const header = page.locator(".chat-pane__header");
       await header.waitFor({ state: "visible" });
-      await header.locator(".chat-side-panel-toggle").click();
-      await header.getByRole("button", { name: "Focus", exact: true }).click();
+      await selectChatLayoutAction(header, /^(Side panel|Minimize side panel)$/);
+      await selectChatLayoutAction(header, "Focus");
       await gateway.setOnline(false);
 
       await expect
@@ -268,20 +269,18 @@ suite.define(() => {
       expect(await outlet.getAttribute("aria-disabled")).toBeNull();
       expect(await header.isVisible()).toBe(true);
 
-      const headerActions = header.locator("fieldset.chat-pane__actions");
-      expect(
-        await headerActions.evaluate((element) => (element as HTMLFieldSetElement).disabled),
-      ).toBe(true);
-      const actionButtons = headerActions.getByRole("button");
-      expect(await actionButtons.count()).toBeGreaterThan(0);
-      for (const button of await actionButtons.all()) {
-        expect(await button.isDisabled()).toBe(true);
-      }
-      const restore = header.getByRole("button", { name: "Restore split", exact: true });
-      expect(await restore.isEnabled()).toBe(true);
-      await restore.click();
+      expect(await header.getByRole("button", { name: "Layout", exact: true }).isEnabled()).toBe(
+        true,
+      );
+      const layoutMenu = await openChatLayoutMenu(header);
+      const split = layoutMenu.getByRole("menuitem", { name: "Open split view", exact: true });
+      expect(await split.isDisabled()).toBe(true);
+      await page.keyboard.press("Escape");
+      await split.waitFor({ state: "hidden" });
+      await selectChatLayoutAction(header, "Restore split");
       await page.locator(".side-panel-empty--selector").waitFor();
-      expect(await header.locator(".chat-side-panel-toggle").isEnabled()).toBe(true);
+      await selectChatLayoutAction(header, "Minimize side panel");
+      await page.locator(".side-panel-empty--selector").waitFor({ state: "hidden" });
     } finally {
       await closeContext(context);
     }
@@ -661,6 +660,13 @@ suite.define(() => {
       });
       await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
 
+      const failure = page.locator(".login-gate__failure");
+      expect(await failure.evaluate((element) => element.tagName)).toBe("SECTION");
+      expect(await page.locator(".login-gate__failure-summary").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__failure-steps").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__failure-docs").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__help").count()).toBe(0);
+
       const metrics = await page.evaluate(() => {
         const gate = document.querySelector<HTMLElement>(".login-gate");
         const card = document.querySelector<HTMLElement>(".login-gate__card");
@@ -728,23 +734,6 @@ suite.define(() => {
         throw new Error("Missing failure documentation link bounds");
       }
       expect(failureDocsBox.y + failureDocsBox.height).toBeLessThanOrEqual(500);
-    } finally {
-      await closeContext(context);
-    }
-  });
-
-  it("keeps failure recovery visible without generic help", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-
-    try {
-      await renderLoginGate(page, suite.server.baseUrl);
-      const failure = page.locator(".login-gate__failure");
-      expect(await failure.evaluate((element) => element.tagName)).toBe("SECTION");
-      expect(await page.locator(".login-gate__failure-summary").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__failure-steps").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__failure-docs").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__help").count()).toBe(0);
     } finally {
       await closeContext(context);
     }

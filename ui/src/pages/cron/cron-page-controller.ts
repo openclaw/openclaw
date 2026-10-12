@@ -610,16 +610,19 @@ export class CronPageController {
       // stays on the captured CronState after navigation.
       const stillEditing = editing || Boolean(cronState.cronEditingJob);
       this.deliveryDirectory.afterSave(cronState, connectionScope, editorGeneration, stillEditing);
-      if (stillEditing) {
+      if (editing) {
         return;
       }
       if (runNow && result.jobId) {
         // Explicit create-and-run intent survives navigation while saving.
         await runCronJob(cronState, result.jobId, "force");
       }
-      cronState.cronCreateOpen = false;
       // Creating returns to the overview's all-job history.
-      if (cronState.cronRunsScope === "job") {
+      if (
+        !cronState.cronEditingJob &&
+        !cronState.cronCreateOpen &&
+        cronState.cronRunsScope === "job"
+      ) {
         await loadCronRunsForJob(cronState, null);
       }
     });

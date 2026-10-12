@@ -210,6 +210,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
   try {
     // Reserve before asynchronous source acquisition so Stop can retire queued ingress.
     admission = await beginSessionWorkAdmission({
+      agentId: scope.agentId,
       scope: configuredPath,
       identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
       onInterrupt: (reason) => controller.abort(reason),

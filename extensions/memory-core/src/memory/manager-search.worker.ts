@@ -113,11 +113,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (request.kind === "forget-index-plan") {
     return { kind: request.kind, plan: await readMemoryForgetIndexInWorker(request) };
   }
-  if (
-    request.kind === "origin-rows" ||
-    request.kind === "origin-exists" ||
-    request.kind === "session-tombstones"
-  ) {
+  if (request.kind === "origin-rows" || request.kind === "session-tombstones") {
     return readMemoryOriginsInWorker(request);
   }
   if (request.kind === "recall-metadata") {

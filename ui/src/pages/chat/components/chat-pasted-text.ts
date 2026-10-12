@@ -116,3 +116,19 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
 }
 
 customElements.define("openclaw-chat-pasted-text", ChatPastedText);
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-pasted-text": HTMLAttributes<ChatPastedText> & {
+        "prop:src"?: ChatPastedText["src"];
+        "prop:sizeBytes"?: ChatPastedText["sizeBytes"];
+        "prop:scope"?: ChatPastedText["scope"];
+        "prop:onOpen"?: ChatPastedText["onOpen"];
+        "prop:composerAction"?: ChatPastedText["composerAction"];
+        "prop:composerRemoveAction"?: ChatPastedText["composerRemoveAction"];
+        "prop:admission"?: ChatPastedText["admission"];
+      };
+    }
+  }
+}

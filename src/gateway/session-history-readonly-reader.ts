@@ -3,7 +3,10 @@ import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../co
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
-import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
+import {
+  readSessionTranscriptHistoryEventPageFromProjection,
+  readTranscriptDisplayDeltaFromProjection,
+} from "../config/sessions/session-accessor.sqlite-history-query.js";
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
@@ -20,6 +23,7 @@ import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
+import type { ReadRecentSessionConversationTextOptions } from "../config/sessions/transcript-recent-text.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../state/openclaw-agent-db-readonly.js";
@@ -27,7 +31,10 @@ import { isSubagentCoordinationHistoryInput } from "./chat-display-projection.hi
 import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
-import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import {
+  createSessionTranscriptReader,
+  selectSessionTranscriptProjection,
+} from "./session-transcript-read-kernel.js";
 import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
@@ -134,6 +141,12 @@ export function createReadonlySessionHistoryReader(
     () => (sourceDatabases ??= resolveSourceDatabases?.()),
   );
   return {
+    readHistoryEventPage: (
+      options: Parameters<typeof readSessionTranscriptHistoryEventPageFromProjection>[1],
+    ) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptHistoryEventPageFromProjection(projection, options),
+      ),
     readHistoryRevision: () =>
       readSnapshot((projection) => ({
         database: projection.database.db,
@@ -148,6 +161,10 @@ export function createReadonlySessionHistoryReader(
     readBoundedMessageTail: (options: SessionTranscriptBoundedMessageTailOptions) =>
       readSnapshot((projection) =>
         readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      ),
+    readRecentConversationText: (options: ReadRecentSessionConversationTextOptions) =>
+      readSnapshot((projection) =>
+        selectSessionTranscriptProjection(projection, { kind: "recent-text", options }),
       ),
     readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
       const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");

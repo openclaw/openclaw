@@ -223,7 +223,8 @@ using the same installation owner, then retry the Control UI update.
 After package replacement, compatibility config reads from older updaters run
 in a fresh process using the updated package and its dependencies. This also
 applies to updates driven by 2026.9.4. If an optional read fails, the updater
-prints `candidate-config-read-failed` and leaves the service definition unchanged.
+prints `candidate-config-read-failed` with the reader's error or exit reason and
+leaves the service definition unchanged. The reader's stderr is not echoed.
 Reads follow the restored package after a rollback. Inspect the reported problem
 with the updated CLI after the update.
 Node and Bun readers run only one child per read. An attempted nested reader
@@ -296,6 +297,15 @@ repeated full-tree scans. Content changes inside that private candidate during
 publication are not detected. Its full fingerprint is retained for recovery;
 resumed publication and repair still verify package contents. This optimization
 applies when the installed updater contains it; older updaters keep their checks.
+
+Native pnpm updates also relocate pnpm 12 launcher paths before publishing them.
+After activation, unresolved launcher targets produce a warning with repair
+guidance without rolling back the updated package. These protections require
+the installed updater to contain the fix. If an older updater left `openclaw`
+pointing into a missing `.openclaw-update-native-*` directory, reinstall the
+same version with `pnpm add -g --force openclaw@<installed-version>` using the
+same account and global directories to recreate the launcher. Back up first
+and follow the [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
 
 If a pnpm-owned install fails with `IO error: not a terminal`, the installed
 updater may be triggering an interactive pnpm build-approval prompt while
@@ -587,6 +597,55 @@ A newer candidate cannot run before an already-blocked older updater downloads i
 The candidate's dependency inventory can, however, avoid modifying old recovery
 artifacts during an update that has already passed admission.
 
+### Recover an unfinished publication after a remount
+
+An older updater can reject an unfinished journal before downloading a fix when
+filesystem device numbers change after a reboot or remount. With a version containing
+this fix installed, run `openclaw update repair` from an independent terminal. Repair
+can settle `prepared`, `publishing`, `publication-complete`, and superseded operations
+when the journal's inodes still match under a consistent device-number mapping.
+Ordinary update admission stays strict.
+
+If the installed updater cannot read the journal, a separately installed OpenClaw
+version containing this fix provides the same settlement-only path:
+
+```bash
+node /path/to/recovery-openclaw/dist/package-update-activation-recovery.mjs \
+  --anchor '/absolute/path/to/.openclaw.package-activation-<key>' \
+  --operation '<recorded-operation-id>' repair
+```
+
+Use the original anchor and operation ID with a supported external Node or Bun
+runtime. Keep other updaters and package managers stopped. Ordinary `status` and
+update admission remain strict for unfinished identity-mismatched journals.
+
+For an already installed candidate, repair requires the staging path to be absent,
+consistent device-number changes with matching object inodes,
+the original intact helper and retained previous generation, a matching full
+candidate-tree fingerprint, valid package inventories and manifest, and unchanged
+launchers. Device projection applies only to digest verification: historical
+identities in the journal are not rewritten. Version or inode matches alone do
+not qualify; changed content, unsafe journal permissions or links, active update
+ownership, and unfinished rollback remain refusals.
+
+If a manual installation has replaced the candidate with a newer version, repair
+verifies that installation's manifest, dist inventories, entry targets, and launchers
+before archiving the old operation as `superseded-by-manual-install`. Old package
+trees and helpers remain preserved as evidence; they do not have to pass the old
+candidate's fingerprint checks.
+
+For the recorded candidate, under fresh executor ownership, repair records
+`publication-settled-external-change` and preserves the entire journal and recovery
+evidence in the reported archive. Removing that closed receipt from the active
+admission path lets the older updater continue without interpreting a new receipt
+kind. If archival fails while the active receipt remains, resolve the reported
+error and rerun the same command. If the helper reports an unconfirmed archive
+after moving the control directory, preserve and inspect the reported archive;
+the original command no longer has an active journal to reopen. The helper does
+not republish or roll back a package, delete retained generations, or restart or
+verify the Gateway. It does not execute the original helper. Other unfinished
+layouts still require their original recovery owner.
+
 ### Recover a completed receipt with an older updater
 
 An installed 2026.9.8 or 2026.9.9 updater can reject a completed `anchor-retired`
@@ -796,6 +855,18 @@ and rotation. After resolving the refusal cause, retry the update. Once the
 upgrade succeeds, subsequent updates check the new version before activation.
 
 ### From chat
+
+In the Control UI, expand **Update available** in the Inbox to check the latest
+Dev Git target. The card checks again before opening update confirmation. While
+checking, it hides the previous SHA and disables the update action. A failed
+check shows an error; retry the action to check again. Opening the card does not
+start an update.
+
+Update confirmation belongs to the Gateway and profile that opened it. Switching
+Gateways or profiles retires the pending confirmation; open it again on the
+intended Gateway. Native updates also check current administrator access when you
+confirm and show an access error if it was revoked. Once an update starts, its
+progress report remains available through that Gateway's restart.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's

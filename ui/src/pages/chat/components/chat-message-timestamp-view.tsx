@@ -206,10 +206,6 @@ function MessageMetadata(props: { meta: GroupMeta | null }) {
   );
 }
 
-export function renderSolidMessageMeta(timestamp: number, meta: GroupMeta | null) {
-  return <MessageMeta timestamp={timestamp} meta={meta} />;
-}
-
 export function MessageMeta(props: { timestamp: number; meta: GroupMeta | null }) {
   const metadata = [<MessageMetadata meta={props.meta} />];
   const hasMetadata = () =>

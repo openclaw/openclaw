@@ -320,78 +320,63 @@ function rebindChannelPluginConfig(
 ): ChannelPlugin["config"] {
   const rebind = (cfg: OpenClawConfig) =>
     rebindChannelConfig(cfg, sourceChannelId, targetChannelId);
-  const rebindWriter = <Params extends { cfg: OpenClawConfig }>(
-    read: () => ((params: Params) => OpenClawConfig) | undefined,
+  function withConfig<Args extends unknown[], Result>(
+    method: (cfg: OpenClawConfig, ...args: Args) => Result,
+  ): (cfg: OpenClawConfig, ...args: Args) => Result;
+  function withConfig<Args extends unknown[], Result>(
+    method: ((cfg: OpenClawConfig, ...args: Args) => Result) | undefined,
+  ): ((cfg: OpenClawConfig, ...args: Args) => Result) | undefined;
+  function withConfig<Args extends unknown[], Result>(
+    method: ((cfg: OpenClawConfig, ...args: Args) => Result) | undefined,
+  ) {
+    return (
+      method && ((cfg: OpenClawConfig, ...args: Args) => method.call(config, rebind(cfg), ...args))
+    );
+  }
+  const withAccount = <Account, Result>(
+    method: ((account: Account, cfg: OpenClawConfig) => Result) | undefined,
   ) =>
-    read()
+    method &&
+    ((account: Account, cfg: OpenClawConfig) => method.call(config, account, rebind(cfg)));
+  const withParams = <Params extends { cfg: OpenClawConfig }, Result>(
+    method: ((params: Params) => Result) | undefined,
+  ) => method && ((params: Params) => method.call(config, { ...params, cfg: rebind(params.cfg) }));
+  const rebindWriter = <Params extends { cfg: OpenClawConfig }>(
+    method: ((params: Params) => OpenClawConfig) | undefined,
+  ) =>
+    method
       ? (params: Params) =>
           restoreReboundChannelConfig({
             original: params.cfg,
-            updated: read()?.call(config, { ...params, cfg: rebind(params.cfg) }) ?? params.cfg,
+            updated: method.call(config, { ...params, cfg: rebind(params.cfg) }),
             sourceChannelId,
             targetChannelId,
           })
       : undefined;
   return {
     ...config,
-    listAccountIds: (cfg) => config.listAccountIds(rebind(cfg)),
-    resolveAccount: (cfg, accountId) => config.resolveAccount(rebind(cfg), accountId),
-    resolveAccountAsync: config.resolveAccountAsync
-      ? (cfg, accountId) => config.resolveAccountAsync!(rebind(cfg), accountId)
-      : undefined,
-    inspectAccount: config.inspectAccount
-      ? (cfg, accountId) => config.inspectAccount?.(rebind(cfg), accountId)
-      : undefined,
-    defaultAccountId: config.defaultAccountId
-      ? (cfg) => config.defaultAccountId?.(rebind(cfg)) ?? ""
-      : undefined,
-    setAccountEnabled: rebindWriter(() => config.setAccountEnabled),
-    deleteAccount: rebindWriter(() => config.deleteAccount),
-    isEnabled: config.isEnabled
-      ? (account, cfg) => config.isEnabled?.(account, rebind(cfg)) ?? false
-      : undefined,
-    disabledReason: config.disabledReason
-      ? (account, cfg) => config.disabledReason?.(account, rebind(cfg)) ?? ""
-      : undefined,
-    isConfigured: config.isConfigured
-      ? (account, cfg) => config.isConfigured?.(account, rebind(cfg)) ?? false
-      : undefined,
-    isLinked: config.isLinked
-      ? (account, cfg) => config.isLinked?.(account, rebind(cfg)) ?? "unknown"
-      : undefined,
-    unconfiguredReason: config.unconfiguredReason
-      ? (account, cfg) => config.unconfiguredReason?.(account, rebind(cfg)) ?? ""
-      : undefined,
-    unlinkedReason: config.unlinkedReason
-      ? (account, cfg) => config.unlinkedReason?.(account, rebind(cfg)) ?? ""
-      : undefined,
-    describeAccount: config.describeAccount
-      ? (account, cfg) => config.describeAccount!(account, rebind(cfg))
-      : undefined,
-    describeAccountAsync: config.describeAccountAsync
-      ? (account, cfg) => config.describeAccountAsync!(account, rebind(cfg))
-      : undefined,
-    resolveAllowFrom: config.resolveAllowFrom
-      ? (params) => config.resolveAllowFrom?.({ ...params, cfg: rebind(params.cfg) })
-      : undefined,
-    resolveAllowFromAsync: config.resolveAllowFromAsync
-      ? (params) => config.resolveAllowFromAsync!({ ...params, cfg: rebind(params.cfg) })
-      : undefined,
-    formatAllowFrom: config.formatAllowFrom
-      ? (params) => config.formatAllowFrom?.({ ...params, cfg: rebind(params.cfg) }) ?? []
-      : undefined,
-    hasConfiguredState: config.hasConfiguredState
-      ? (params) => config.hasConfiguredState?.({ ...params, cfg: rebind(params.cfg) }) ?? false
-      : undefined,
-    hasConfiguredStateAsync: config.hasConfiguredStateAsync
-      ? (params) => config.hasConfiguredStateAsync!({ ...params, cfg: rebind(params.cfg) })
-      : undefined,
-    hasPersistedAuthState: config.hasPersistedAuthState
-      ? (params) => config.hasPersistedAuthState?.({ ...params, cfg: rebind(params.cfg) }) ?? false
-      : undefined,
-    resolveDefaultTo: config.resolveDefaultTo
-      ? (params) => config.resolveDefaultTo?.({ ...params, cfg: rebind(params.cfg) })
-      : undefined,
+    listAccountIds: withConfig(config.listAccountIds),
+    resolveAccount: withConfig(config.resolveAccount),
+    resolveAccountAsync: withConfig(config.resolveAccountAsync),
+    inspectAccount: withConfig(config.inspectAccount),
+    defaultAccountId: withConfig(config.defaultAccountId),
+    setAccountEnabled: rebindWriter(config.setAccountEnabled),
+    deleteAccount: rebindWriter(config.deleteAccount),
+    isEnabled: withAccount(config.isEnabled),
+    disabledReason: withAccount(config.disabledReason),
+    isConfigured: withAccount(config.isConfigured),
+    isLinked: withAccount(config.isLinked),
+    unconfiguredReason: withAccount(config.unconfiguredReason),
+    unlinkedReason: withAccount(config.unlinkedReason),
+    describeAccount: withAccount(config.describeAccount),
+    describeAccountAsync: withAccount(config.describeAccountAsync),
+    resolveAllowFrom: withParams(config.resolveAllowFrom),
+    resolveAllowFromAsync: withParams(config.resolveAllowFromAsync),
+    formatAllowFrom: withParams(config.formatAllowFrom),
+    hasConfiguredState: withParams(config.hasConfiguredState),
+    hasConfiguredStateAsync: withParams(config.hasConfiguredStateAsync),
+    hasPersistedAuthState: withParams(config.hasPersistedAuthState),
+    resolveDefaultTo: withParams(config.resolveDefaultTo),
   };
 }
 

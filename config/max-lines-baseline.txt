@@ -166,7 +166,6 @@ extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
-extensions/voice-call/index.test.ts
 extensions/voice-call/src/media-stream.ts
 extensions/voice-call/src/webhook.test.ts
 extensions/voice-call/src/webhook.ts
@@ -268,7 +267,6 @@ src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
 src/agents/tools/video-generate-tool.test.ts
 src/agents/tools/web-fetch.ts
-src/agents/transcript-redact.test.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
@@ -296,7 +294,6 @@ src/auto-reply/reply/queue/drain.ts
 src/auto-reply/reply/reply-run-registry.test.ts
 src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
-src/auto-reply/status.test.ts
 src/channels/plugins/bundled.shape-guard.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
@@ -334,11 +331,9 @@ src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
 src/commands/doctor/repair-sequencing.test.ts
-src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
-src/commands/gateway-status.test.ts
 src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.probe.ts
@@ -382,9 +377,7 @@ src/gateway/mcp-http.test.ts
 src/gateway/node-registry.test.ts
 src/gateway/node-registry.ts
 src/gateway/openai-http.test.ts
-src/gateway/openai-http.ts
 src/gateway/openresponses-http.test.ts
-src/gateway/openresponses-http.ts
 src/gateway/server-channels.test.ts
 src/gateway/server-channels.ts
 src/gateway/server-chat.agent-events.test.ts
@@ -399,7 +392,6 @@ src/gateway/server-methods/agent.media-and-routing.test-utils.ts
 src/gateway/server-methods/agent.reset-and-identity.test-utils.ts
 src/gateway/server-methods/agent.sessions-and-models.test-utils.ts
 src/gateway/server-methods/agents-mutate.test.ts
-src/gateway/server-methods/agents.ts
 src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
@@ -460,7 +452,6 @@ src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
-src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
@@ -551,6 +542,5 @@ ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
-ui/src/pages/config/view.browser.test.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/test-helpers/control-ui-e2e.ts

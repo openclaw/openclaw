@@ -8,6 +8,7 @@ import {
   captureIncognitoSessionSource,
   withIncognitoSessionEntry,
 } from "../../config/sessions/session-incognito-binding.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -550,6 +551,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
           },
     );
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
+    const deliverySource = composeSessionSourceAssertion([assertSourceCurrent], (check) => {
+      check();
+      params.opts.abortSignal?.throwIfAborted();
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    });
     const deliveryParams = {
       cfg,
       deps: params.deps,
@@ -559,11 +565,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionEntry,
       result,
       payloads,
-      assertDeliveryCurrent: () => {
-        params.opts.assertSourceCurrent?.();
-        params.opts.abortSignal?.throwIfAborted();
-        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-      },
+      assertDeliveryCurrent: deliverySource,
       onDeliveryResult: (delivered: AgentCommandDeliveryResult) => {
         const deliveryStatus = delivered.deliveryStatus;
         const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(

@@ -97,6 +97,15 @@ reply.
 
 ## Provider selection
 
+Use `openclaw configure --section memory` for optional interactive provider/model
+and credential setup. Local guided and classic onboarding offer the same step.
+The selected cloud or local HTTP route must return a valid vector for synthetic text before
+you can save it. Existing settings and per-agent overrides survive skipping or
+failed verification; SecretRefs stay references in the saved config. The check
+does not open the memory index, download a local model, or re-index your files.
+Ollama and LM Studio use their running servers and already-downloaded embedding
+models; see [interactive memory setup](/cli/configure#memory-section).
+
 | Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
 | ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                             |
@@ -198,6 +207,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 <ParamField path="remote.baseUrl" type="string">
   Custom API base URL. Provider credentials and headers are inherited only when this resolves to the provider's configured destination.
 </ParamField>
+
+OpenAI-compatible embeddings use the same private-network policy as model inference.
+Configured custom and local origins are trusted by default, without extending that trust
+to redirects to another origin. The selected provider's
+`models.providers.<id>.request.allowPrivateNetwork` also applies: `false` blocks private
+destinations, while `true` explicitly permits private-network requests.
+
 <ParamField path="remote.apiKey" type="string">
   API key owned by the remote destination. Set this when `remote.baseUrl` points somewhere other than the provider's configured destination.
 </ParamField>

@@ -14,6 +14,7 @@ import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visib
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { workerInferenceMetadata } from "../../gateway/worker-environments/inference-placement.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   isManifestPluginAvailableForControlPlane,
@@ -166,6 +167,26 @@ export async function prepareModelSelectionRuntime(params: {
       inheritedCliRuntime ||
       (policy.forcedByEnvironment && policy.runtime !== "openclaw"),
     );
+  }
+  if (
+    runtime.kind === "set" &&
+    runtime.runtime === "openclaw" &&
+    !sessionEntry?.authProfileOverride
+  ) {
+    const requiredProfile = params.cfg.cloudWorkers?.requiredProfile;
+    const workerProfile = requiredProfile
+      ? params.cfg.cloudWorkers?.profiles?.[requiredProfile]
+      : undefined;
+    // Mandatory worker-local turns validate provider access on the node.
+    if (
+      workerProfile &&
+      workerInferenceMetadata({
+        providerId: workerProfile.provider,
+        profileSnapshot: workerProfile,
+      }).inference
+    ) {
+      needsRuntimeChoice = false;
+    }
   }
   if (needsRuntimeChoice) {
     const { preparePublishedModelRuntimeChoice } =

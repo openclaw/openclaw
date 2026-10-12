@@ -22,7 +22,7 @@ import {
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
-import { schemaAdmission } from "./sqlite-schema-admission.js";
+import { readSqliteTextEncoding, schemaAdmission } from "./sqlite-schema-admission.js";
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
@@ -38,6 +38,55 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
 
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "retains %s encoding through schema changes, sibling reads, and reopen",
+    (encoding) => {
+      const filename = path.join(tempDirs.make("sqlite-encoding-admission-"), "agent.sqlite");
+      const writer = openDatabase(
+        `PRAGMA encoding = '${encoding}'; CREATE TABLE original(id)`,
+        false,
+        filename,
+      );
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        admitSqliteSchema(writer);
+        expect(getAdmittedSqliteSchemaFacts(writer)?.textEncoding).toBe(encoding);
+        const sibling = openDatabase("", true, filename);
+        writer.exec("CREATE TABLE added(id)");
+        expect(getAdmittedSqliteSchemaFacts(sibling)?.textEncoding).toBe(encoding);
+        expect(tableExists(sibling, "added")).toBe(true);
+        expect(readSqliteTextEncoding(writer)).toBe(encoding);
+        sibling.close();
+        expect(readSqliteTextEncoding(writer)).toBe(encoding);
+        expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
+          "PRAGMA encoding",
+        ]);
+        writer.close();
+        const reopened = openDatabase("", true, filename);
+        reopened.exec("CREATE INDEX added_id ON added(id)");
+        expect(getAdmittedSqliteSchemaFacts(reopened)?.textEncoding).toBe(encoding);
+        expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
+          "PRAGMA encoding",
+          "PRAGMA encoding",
+        ]);
+      } finally {
+        observation.restore();
+      }
+    },
+  );
+
+  it("does not retain the default encoding before the first schema object exists", () => {
+    const filename = path.join(tempDirs.make("sqlite-empty-encoding-"), "agent.sqlite");
+    const database = openDatabase("", true, filename);
+    expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
+    database.exec("PRAGMA encoding = 'UTF-16le'; CREATE TABLE original(id)");
+    expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-16le");
+    database.close();
+    expect(getAdmittedSqliteSchemaFacts(openDatabase("", true, filename))?.textEncoding).toBe(
+      "UTF-16le",
+    );
+  });
+
   it("publishes the next write after cold writer discovery throws", () => {
     const filename = path.join(tempDirs.make("sqlite-custody-recovery-"), "agent.sqlite");
     {
@@ -45,10 +94,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
       initial.exec("CREATE TABLE proof (value INTEGER NOT NULL)");
     }
     const writer = openDatabase("", false, filename);
-    const sibling = openDatabase("", true, filename);
-    const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
-    expect(before).toBeTypeOf("string");
-
     expect(() =>
       withSqliteDatabaseAdmissionExchange(
         () => {
@@ -57,6 +102,11 @@ describe("native SQLite schema snapshots and callbacks", () => {
         () => writer.exec("INSERT INTO proof VALUES (1)"),
       ),
     ).toThrow("synthetic writer discovery refusal");
+
+    // Admitting the sibling earlier would warm the writer discovery this case exercises.
+    const sibling = openDatabase("", true, filename);
+    const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
+    expect(before).toBeTypeOf("string");
     expect(sibling.prepare("SELECT value FROM proof").all()).toEqual([]);
 
     writer.exec("INSERT INTO proof VALUES (2)");
@@ -454,6 +504,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
         try {
           expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(version);
           expect(tableExists(reader, "committed_sibling")).toBe(version === 2);
+          // Schema capture retains the physical encoding across native snapshots.
           expect(admission.queries).toHaveLength(3);
         } finally {
           admission.restore();

@@ -112,9 +112,10 @@ export async function handleCodexSubcommand(
   const previousPolicyCheck = inputCtx.assertNativePolicyCurrent;
   const ctx = {
     ...inputCtx,
-    assertNativePolicyCurrent: () => {
-      previousPolicyCheck?.();
-      nativePolicy.assertCurrent();
+    nativePolicySource: nativePolicy.source,
+    assertNativePolicyCurrent: async () => {
+      await previousPolicyCheck?.();
+      await nativePolicy.assertCurrent();
     },
   };
   const usageCommand = normalized === "unbind" ? "detach" : normalized;

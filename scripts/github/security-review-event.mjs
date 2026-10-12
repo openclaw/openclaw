@@ -246,11 +246,7 @@ async function resolvePullRequests(api, event, eventName, repository) {
     throw new Error("Security review event does not identify the expected repository.");
   }
   const prefix = `/repos/${repository}`;
-  if (
-    eventName === "pull_request_target" ||
-    eventName === "issue_comment" ||
-    eventName === "workflow_dispatch"
-  ) {
+  if (eventName === "pull_request_target" || eventName === "issue_comment") {
     if (
       eventName === "issue_comment" &&
       (!event.issue?.pull_request ||
@@ -263,23 +259,8 @@ async function resolvePullRequests(api, event, eventName, repository) {
     ) {
       return { selected: [], truncated: false };
     }
-    // Already queued forwarding jobs may still dispatch during the cutover.
-    // The input only names the PR; authorization always uses live comments.
-    // GitHub Actions' bot account; its numeric ID cannot be claimed by a user.
-    if (
-      eventName === "workflow_dispatch" &&
-      (event.sender?.id !== 41898282 ||
-        event.sender?.login !== "github-actions[bot]" ||
-        event.sender?.type !== "Bot")
-    ) {
-      throw new Error("Security review requires an automatic pull request or CI event.");
-    }
     const number =
-      eventName === "pull_request_target"
-        ? event.pull_request?.number
-        : eventName === "issue_comment"
-          ? event.issue?.number
-          : Number(event.inputs?.pull_request);
+      eventName === "pull_request_target" ? event.pull_request?.number : event.issue?.number;
     if (!positiveInteger(number)) {
       throw new Error("Security review event has no valid pull request number.");
     }

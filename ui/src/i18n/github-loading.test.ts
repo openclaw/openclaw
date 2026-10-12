@@ -27,7 +27,7 @@ it.each([
   },
   {
     surface: "connections",
-    load: () => import("../features/github-connections/github-connections.ts"),
+    load: () => import("../features/github-connections/github-connections.tsx"),
   },
   {
     surface: "CI details",

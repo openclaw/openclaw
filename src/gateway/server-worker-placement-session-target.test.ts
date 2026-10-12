@@ -39,6 +39,7 @@ afterEach(() => resetConfigRuntimeState());
 
 test("prepares an actor workspace and guards exact placement metadata without host session SQL", async () => {
   await withStateDirEnv("actor-placement-source-", async () => {
+    setRuntimeConfigSnapshot({});
     const identity = {
       agentId: "main",
       sessionKey: "agent:main:dashboard:incognito-placement-source",
@@ -233,6 +234,7 @@ test.each([
       });
       try {
         const runtime = createGatewayWorkerPlacementRuntime({
+          initialPlacements: await placements.listAsync(),
           scheduler,
           placements,
           environments,

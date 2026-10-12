@@ -308,13 +308,9 @@ function SystemsInventory(props: { controller: SystemsController }) {
   );
 }
 
-export const SystemsSidebar = defineSolidBridge<SystemsSidebarProps>(
-  "openclaw-systems-sidebar",
-  SystemsSidebarContent,
-  {
-    properties: { controller: { default: undefined, attribute: false } },
-  },
-);
+defineSolidBridge<SystemsSidebarProps>("openclaw-systems-sidebar", SystemsSidebarContent, {
+  properties: { controller: { default: undefined, attribute: false } },
+});
 
 declare global {
   interface HTMLElementTagNameMap {

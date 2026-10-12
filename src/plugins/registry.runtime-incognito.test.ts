@@ -1,9 +1,13 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as gatewayCreation from "../gateway/session-create-service.js";
@@ -154,6 +158,8 @@ it("classifies sandbox authority from its captured actor despite a different con
 });
 
 it("rechecks delegated harness authority after admission waits", async () => {
+  setRuntimeConfigSnapshot({});
+  onTestFinished(clearRuntimeConfigSnapshot);
   const { runtime, caller, harness } = registry();
   const key = "agent:main:dashboard:incognito-delegated";
   await actor.sessions.create(authority, {

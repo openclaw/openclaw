@@ -7,6 +7,7 @@ import {
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { SessionStoreRegistryRead } from "./session-sqlite-target.js";
+import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetInventoryRequest,
@@ -139,7 +140,9 @@ export function prepareSessionStoreTargetInventoryRead(
               [...request.paths],
               request.registryDiscovery,
             ],
-            true,
+            // Only fixed-store visibility depends on the session rows. Per-agent
+            // topology changes with physical files or registry ownership, not activity.
+            !isPerAgentSessionStoreConfig(request.config.session?.store),
           );
           let inventory =
             memo.read() ??

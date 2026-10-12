@@ -15,6 +15,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderAuthChoicePlatformSupported } from "../plugins/provider-auth-choice-platform.js";
 import {
   type ProviderAuthChoiceMetadata,
@@ -231,7 +232,14 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
     // Declining discovery must not turn an already configured install into fresh setup.
     setupComplete,
   };
-  return { cfg, targetAgentId, authChoices, detectionRequiredProviders, manual };
+  return {
+    cfg,
+    targetAgentId,
+    authChoices,
+    detectionRequiredProviders,
+    manual,
+    pluginMetadataSnapshot,
+  };
 }
 
 /** Manual setup options use only config and manifests, never machine or credential probes. */
@@ -296,6 +304,7 @@ async function discoverSetupInference(
     authChoices,
     detectionRequiredProviders,
     manual,
+    pluginMetadataSnapshot,
   }: Awaited<ReturnType<typeof prepareSetupInferenceOptions>>,
   deps: DetectSetupInferenceDeps,
   signal: AbortSignal,
@@ -308,7 +317,14 @@ async function discoverSetupInference(
   };
   // Provider services, saved sign-ins, and CLI version probes are independent.
   // Overlap them so cold detection waits for the slowest probe instead of their sum.
-  const appGuided = discoverAppGuidedCandidates({ cfg, workspace, authChoices, deps, signal });
+  const appGuided = discoverAppGuidedCandidates({
+    cfg,
+    workspace,
+    authChoices,
+    metadataSnapshot: pluginMetadataSnapshot,
+    deps,
+    signal,
+  });
   const partial: SetupInferenceDetection = {
     ...manual,
     candidates: [],
@@ -410,12 +426,14 @@ async function discoverAppGuidedCandidates({
   cfg,
   workspace,
   authChoices,
+  metadataSnapshot,
   deps,
   signal,
 }: {
   cfg: OpenClawConfig;
   workspace: string;
   authChoices: readonly ProviderAuthChoiceMetadata[];
+  metadataSnapshot?: PluginMetadataSnapshot;
   deps: DetectSetupInferenceDeps;
   signal: AbortSignal;
 }): Promise<SetupInferenceCandidate[]> {
@@ -432,6 +450,7 @@ async function discoverAppGuidedCandidates({
       config: cfg,
       workspaceDir: workspace,
       choices: discoveryChoices,
+      metadataSnapshot,
       signal,
       enablePluginInConfig: deps.enablePluginInConfig,
       resolvePluginProviders: deps.resolvePluginProviders,

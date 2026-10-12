@@ -77,6 +77,9 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,
@@ -115,6 +118,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     const admission = await sessionLifecycle.beginSessionWorkAdmission({
       scope: storePath,
       identities: [activeKey, "active-session"],
+      run: {
+        runId: "active",
+        sessionKey: activeKey,
+        sessionId: "active-session",
+        agentId: "main",
+      },
       assertAllowed: () => {},
       onInterrupt: () => admission.release(),
     });
@@ -195,9 +204,18 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           },
         });
       }
+      await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: grandchildKey,
+        defaultSessionId: "grandchild-session",
+      });
       await registerSubagentRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: grandchildKey })
+          ?.entry,
         requesterSessionKey: endedKey,
         requesterAgentId: "main",
         requesterDisplayKey: endedKey,
@@ -258,15 +276,21 @@ it.each(["child", "ancestor"])(
     const healthyKey = "agent:main:subagent:healthy";
     const ancestorKey = "agent:broken:subagent:ancestor";
     if (faultOwner === "ancestor") {
-      await writeSubagentSessionEntry({
+      const ancestorStore = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "broken",
         sessionKey: ancestorKey,
         defaultSessionId: "ancestor-session",
+        lifecycleRevision: "original-ancestor",
       });
       await registerSubagentRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
+        childAgentId: "broken",
+        sessionEntry: loadExactSessionEntryReadOnly({
+          storePath: ancestorStore,
+          sessionKey: ancestorKey,
+        })?.entry,
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,
@@ -283,14 +307,28 @@ it.each(["child", "ancestor"])(
       agentId: childAgent,
       sessionKey: badKey,
       defaultSessionId: "bad-session",
+      lifecycleRevision: "original-child",
     });
     for (const [runId, childSessionKey] of [
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
+      const childAgentId = runId === "bad" ? childAgent : "main";
+      const childStore = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: childAgentId,
+        sessionKey: childSessionKey,
+        defaultSessionId: `${runId}-session`,
+        lifecycleRevision: "original-child",
+      });
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId,
+        sessionEntry: loadExactSessionEntryReadOnly({
+          storePath: childStore,
+          sessionKey: childSessionKey,
+        })?.entry,
         requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
         requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
         requesterDisplayKey: parentKey,

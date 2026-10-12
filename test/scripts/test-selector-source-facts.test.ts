@@ -25,6 +25,31 @@ const files = [{ file: "source.ts", parseImports: true }];
 beforeEach(() => spawn.mockReset());
 
 describe("test selector native crash recovery", () => {
+  it.each([null, [["worker"]], [["worker", 1]]])(
+    "rejects invalid runtime-worker export facts: %j",
+    (workerExports) => {
+      spawn.mockReturnValue({
+        ...crashedScan,
+        status: 0,
+        signal: null,
+        stderr: "",
+        stdout: JSON.stringify([
+          {
+            imports: [],
+            mocks: [],
+            workerExports,
+            typeOnlyImports: [],
+            matches: [],
+            references: [],
+          },
+        ]),
+      });
+      expect(() => readTestSelectorSourceFacts(process.cwd(), files, [], 1024)).toThrow(
+        "Invalid runtime worker exports",
+      );
+    },
+  );
+
   it("rescans without workers and preserves complete facts and request order", async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-source-scan-recovery-"));
     try {
@@ -64,6 +89,7 @@ syncBuiltinESMExports();`,
             file,
             imports: [`./${file.replace(".ts", ".js")}`],
             mocks: [],
+            workerExports: [],
             typeOnlyImports: [],
             matches: ["needle"],
             references: ["needle"],

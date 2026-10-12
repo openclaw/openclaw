@@ -2,18 +2,16 @@ import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import { getCodeModeSourceAppend } from "../../agents/transcript-code-mode-source.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
+import { projectSessionRowTranscriptPreview } from "../../gateway/session-row-transcript-preview.js";
 import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { redactSecrets } from "../../logging/redact.js";
 import {
   deferOpenClawAgentPostCommitPublication,
-  openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
@@ -30,12 +28,7 @@ import {
   readTranscriptEventMessage,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
-import {
-  getSessionKysely,
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-  type ResolvedTranscriptScope,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   createTranscriptIdentityInserter,
   readIdempotencyKeyOwner,
@@ -54,9 +47,7 @@ import {
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import {
   createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
@@ -68,7 +59,7 @@ import {
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
 import {
-  isSteerConfirmationRewrite,
+  transcriptRewritePreservesAdmission,
   transcriptRewritePreservesProjection,
 } from "./session-transcript-rewrite-effects.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
@@ -76,6 +67,7 @@ import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
+  readTranscriptStorageEncoding,
   transcriptEventJsonSql,
   type PreparedTranscriptPayload,
 } from "./transcript-payload.js";
@@ -233,7 +225,10 @@ export function appendTranscriptEventInTransaction(
         actor.hot.transcript.version.rawSeq = seq;
         actor.hot.transcript.watermark.maxSeq = seq;
         const stored: unknown = JSON.parse(eventJson);
-        actor.transcript.payloads.set(seq, stored);
+        actor.transcript.payloads.set(seq, {
+          event: stored,
+          serializedBytes: Buffer.byteLength(eventJson) + 1,
+        });
         // SAFETY: The same canonical event feeds the existing projection and tree codecs.
         actor.transcript.navigation.push({ ...(stored as SessionTreeEntry), seq });
       }
@@ -309,6 +304,15 @@ export function appendTranscriptEventInTransaction(
           database,
           scope.sessionId,
           deferWindowTouch ? windowUpdatedAt : undefined,
+          projectionNeedsRebuild
+            ? undefined
+            : projectSessionRowTranscriptPreview(
+                persistedEvent,
+                Buffer.byteLength(
+                  eventJson,
+                  readTranscriptStorageEncoding(database.db) === "UTF-8" ? "utf8" : "utf16le",
+                ) + 1,
+              ),
         );
       }
       scheduleTranscriptProjectionReconcile(
@@ -552,9 +556,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     seq: number;
   }[],
   options: { legacyTextStorage?: boolean } = {},
-): void {
+): string | undefined {
   if (rows.length === 0) {
-    return;
+    return undefined;
   }
   const rewrites = rows.map((row) => {
     const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(row.event));
@@ -622,13 +626,13 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
           );
         }
       }
-      // Steering correlation changes no admitted input. Keep its running turn's fence,
-      // while every other payload rewrite still invalidates admissions and cursors.
-      if (
-        !rewrites.every((row) => isSteerConfirmationRewrite(row.expectedEventJson, row.eventJson))
-      ) {
-        rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
-      }
+      // Correlation and identical prompt captures preserve admitted input; other
+      // payload rewrites still invalidate admissions and cursors.
+      const generation = rewrites.every((row) =>
+        transcriptRewritePreservesAdmission(row.expectedEventJson, row.eventJson),
+      )
+        ? undefined
+        : rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
       if (!projectionUnchanged) {
         if (options.legacyTextStorage) {
           // Media Doctor rebuilds after the physical storage migration; schema-22 readers
@@ -639,6 +643,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         }
       }
       touchTranscriptMutationInTransaction(database, resolved.sessionId);
+      return generation;
     },
   );
 }
@@ -706,17 +711,6 @@ export function readTranscriptMessageByScopedIdempotencyKey(
     : undefined;
 }
 
-export function readSessionTranscriptMessageByEventId(
-  scope: SessionTranscriptRuntimeScope,
-  eventId: string,
-): { messageId: string; message: unknown } | undefined {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readHotSessionTranscriptSnapshot(database, resolved.sessionId, "identity", () =>
-    readTranscriptMessageByEventId(database, resolved, eventId),
-  );
-}
-
 export function readTranscriptMessageByEventId(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
@@ -726,17 +720,10 @@ export function readTranscriptMessageByEventId(
   return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
 }
 
-export function redactTranscriptMessageForStorage<TMessage>(
-  message: TMessage,
-  options: Pick<TranscriptMessageAppendOptions<TMessage>, "config">,
-): TMessage {
+export function sanitizeTranscriptMessageForStorage<TMessage>(message: TMessage): TMessage {
   return isTranscriptAgentMessage(message)
-    ? (redactTranscriptMessage(
-        message,
-        options.config,
-        getCodeModeSourceAppend(options),
-      ) as TMessage)
-    : redactSecrets(message);
+    ? (sanitizeTranscriptMessage(message) as TMessage)
+    : message;
 }
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {

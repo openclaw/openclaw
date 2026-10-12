@@ -1,15 +1,20 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  closeAgentWorkAdmissions,
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
@@ -258,6 +263,7 @@ describe("plugin runtime session creation", () => {
 
   it("fences work admission until trusted initialization completes", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-fence" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-fence";
       const callbackStarted = createDeferred();
@@ -380,6 +386,7 @@ describe("plugin runtime session creation", () => {
 
   it("rejects creation while pre-existing session work is admitted", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-active" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-active";
       const workStarted = createDeferred();
@@ -635,6 +642,7 @@ describe("plugin runtime session creation", () => {
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-restart-admission" },
       async () => {
+        setRuntimeConfigSnapshot({});
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:codex-restart-pending";
         const storePath = runtime.session.resolveStorePath(undefined, { agentId: "main" });
@@ -664,6 +672,7 @@ describe("plugin runtime session creation", () => {
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-rollback-race" },
       async () => {
+        setRuntimeConfigSnapshot({});
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:codex-binding-race";
         let sessionId: string | undefined;
@@ -727,7 +736,9 @@ describe("plugin runtime session work admission", () => {
   const sessionKey = "agent:main:voice:caller";
   const sessionId = "voice-session-id";
 
+  afterEach(clearRuntimeConfigSnapshot);
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     const tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     await createRuntimeAgent().session.upsertSessionEntry({
@@ -735,6 +746,28 @@ describe("plugin runtime session work admission", () => {
       sessionKey,
       entry: { sessionId, updatedAt: Date.now() },
     });
+  });
+
+  it("refuses plugin work and session creation while the agent is draining", async () => {
+    const runtime = createRuntimeAgent();
+    const reason = new Error("agent deletion began");
+    const reopen = closeAgentWorkAdmissions({ agentId: "main", reason });
+    const run = vi.fn(async () => {});
+    try {
+      await expect(
+        runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run),
+      ).rejects.toBe(reason);
+      await expect(
+        runtime.session.createSessionEntry({
+          cfg: {},
+          key: "agent:main:harness:codex:draining",
+          initialEntry: { agentHarnessId: "codex" },
+        }),
+      ).rejects.toBe(reason);
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      reopen();
+    }
   });
 
   it("waits for a queued archive mutation and rejects the stale start", async () => {
@@ -801,13 +834,17 @@ describe("plugin runtime session work admission", () => {
       });
     const run = vi.fn(async () => {});
     const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
-    await snapshotRead.promise;
-    captureRead.mockRestore();
-    releaseMutation.resolve();
-    await mutation;
-
-    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-    expect(run).not.toHaveBeenCalled();
+    try {
+      await snapshotRead.promise;
+      captureRead.mockRestore();
+      releaseMutation.resolve();
+      await mutation;
+      await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      releaseMutation.resolve();
+      await Promise.allSettled([mutation, work]);
+    }
   });
 
   it("holds admission through the callback and relays lifecycle interruption", async () => {

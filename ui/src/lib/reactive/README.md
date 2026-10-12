@@ -33,12 +33,12 @@ delivery order, replay behavior, and completion contract.
 
 ## Adapter families
 
-| Module                   | Owners                                            |
-| ------------------------ | ------------------------------------------------- |
-| `application.ts`         | Gateway snapshots, config, agent selection        |
-| `application-native.ts`  | Native device settings                            |
-| `domain-capabilities.ts` | Agents, roster activity, channels, runtime config |
-| `events-browser.ts`      | Lobster visits                                    |
+| Module                   | Owners                                                            |
+| ------------------------ | ----------------------------------------------------------------- |
+| `application.ts`         | Gateway snapshots, config, agent selection, overlays, Web Push    |
+| `application-native.ts`  | Native device settings and notifications                          |
+| `domain-capabilities.ts` | Agents, agent identity, roster activity, channels, runtime config |
+| `events-browser.ts`      | Lobster visits                                                    |
 
 `projectTheme()` exposes preference and applied-palette projections separately.
 Preferences change immediately; `appliedPalette` advances only after the theme

@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -9,6 +10,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -43,6 +45,19 @@ async function createPolicyOperation(
   const policyKey = incognito
     ? `agent:main:dashboard:incognito-${name}`
     : `agent:main:${name}-policy`;
+  const config: OpenClawConfig = {
+    ...(mainAlias || options.store
+      ? {
+          session: {
+            ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
+            ...(options.store ? { store: options.store } : {}),
+          },
+        }
+      : {}),
+    agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+    tools: { sandbox: { tools: { deny: ["exec"] } } },
+  };
+  setRuntimeConfigSnapshot(config);
   const policyEntry = await upsertSessionEntryCore(
     { agentId: "main", sessionKey: policyKey, storePath: options.policyStorePath },
     {
@@ -62,18 +77,7 @@ async function createPolicyOperation(
     sessionKey: `agent:main:${name}`,
     runtimePolicySessionKey: mainAlias ? "agent:main:main" : policyKey,
     senderIsOwner: true,
-    config: {
-      ...(mainAlias || options.store
-        ? {
-            session: {
-              ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
-              ...(options.store ? { store: options.store } : {}),
-            },
-          }
-        : {}),
-      agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
-      tools: { sandbox: { tools: { deny: ["exec"] } } },
-    },
+    config,
   });
   const operation = createTestReplyOperation({ sessionKey: run.run.sessionKey, sessionId: name });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));

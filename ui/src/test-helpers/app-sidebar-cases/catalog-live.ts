@@ -16,6 +16,7 @@ import {
   mountSessionCatalogSidebar,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog pagination", () => {
@@ -132,7 +133,7 @@ describe("AppSidebar session catalog pagination", () => {
       },
     ];
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
     expect(section?.querySelector(".sidebar-session-catalog-new")).toBeNull();
@@ -218,7 +219,7 @@ describe("AppSidebar session catalog pagination", () => {
     sidebar.sessionData.sessionsResult = backingResult;
     sidebar.sessionData.sessionResultsByAgent = { main: backingResult };
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     expect(
       sidebar.querySelectorAll(
@@ -271,7 +272,7 @@ describe("AppSidebar session catalog pagination", () => {
     sidebar.sessionData.sessionsResult = runningResult;
     sidebar.sessionData.sessionResultsByAgent = { main: runningResult };
     sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
     expect(
@@ -336,7 +337,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "main",
         catalog,
       } satisfies SessionsCatalogHostEvent);
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
 
       expect(sidebar.textContent).toContain("Fast host");
       expect(request).toHaveBeenCalledTimes(1);
@@ -418,7 +419,7 @@ describe("AppSidebar session catalog pagination", () => {
           ],
         },
       } satisfies SessionsCatalogHostEvent);
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
 
       expect(sidebar.textContent).toContain("Eventually ready");
       pendingTimeout.resolve(finalPage);

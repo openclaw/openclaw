@@ -203,7 +203,7 @@ describe("AgentsHomePage", () => {
 
     setActive(true);
     await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
-    expect(request).toHaveBeenCalledWith("agents.list", {});
+    expect(request).toHaveBeenCalledWith("agents.list", { includeSessionPlacement: true });
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
       expect.objectContaining({ includeLastMessage: true, archived: "all" }),

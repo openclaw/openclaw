@@ -13,6 +13,7 @@ import * as dispatch from "../../auto-reply/dispatch.js";
 import { mintReplyMessageActionTurnCapability } from "../../auto-reply/reply/agent-runner-utils.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -82,6 +83,7 @@ it.each(admissionScenarios)(
             ? "released"
             : scenario;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runId = "retained-preparation";
       const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
@@ -397,6 +399,7 @@ it.each(
   "keeps authenticated $mode prompt reactions scoped through SQLite ($outcome)",
   async ({ mode, outcome }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:reaction-source";
       const sessionId = "reaction-source-session";
       const scope = { agentId: "main", sessionKey, sessionId };
@@ -639,7 +642,7 @@ it.each(
           identityLabel: "Human",
           expectedSessionId: sessionId,
         });
-        const before = listSessionReactions(scope, { sessionId });
+        const before = await listSessionReactions(scope, { sessionId });
         expect(before[messageId]).toEqual([
           { emoji: "👍", count: 1, identities: [{ id: profile.id, label: "Human" }] },
         ]);
@@ -666,7 +669,7 @@ it.each(
         if (outcome === "allowed") {
           expect((await react()).details).toMatchObject({ messageId, changed: true });
           expect(commitRequests).toBeGreaterThan(0);
-          expect(listSessionReactions(scope, { sessionId })[messageId]).toEqual([
+          expect((await listSessionReactions(scope, { sessionId }))[messageId]).toEqual([
             {
               emoji: "👍",
               count: 2,
@@ -698,7 +701,7 @@ it.each(
           } else {
             expect(preparationRevoked).toBe(true);
           }
-          expect(listSessionReactions(scope, { sessionId })).toEqual(before);
+          expect(await listSessionReactions(scope, { sessionId })).toEqual(before);
           expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual(
             [],
           );
@@ -706,7 +709,7 @@ it.each(
         probe.mockRestore();
         if (outcome === "allowed") {
           await react({ remove: true });
-          expect(listSessionReactions(scope, { sessionId })).toEqual(before);
+          expect(await listSessionReactions(scope, { sessionId })).toEqual(before);
         }
         expect(external).not.toHaveBeenCalled();
       } finally {

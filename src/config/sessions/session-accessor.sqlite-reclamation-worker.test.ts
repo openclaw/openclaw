@@ -13,7 +13,6 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -132,7 +131,6 @@ test("retains one archive Worker across refused and interleaved reclamation oper
             refusalPoint = point;
             await expect(
               runSqliteSessionReclamation({
-                forceInProcess: false,
                 plan: operation,
                 assertCommitAllowed: () => {
                   if (superseded) {
@@ -146,9 +144,9 @@ test("retains one archive Worker across refused and interleaved reclamation oper
             refusalPoint = undefined;
             superseded = false;
           }
-          await expect(
-            runSqliteSessionReclamation({ forceInProcess: false, plan: operation }),
-          ).resolves.toMatchObject({ kind: operation.kind });
+          await expect(runSqliteSessionReclamation({ plan: operation })).resolves.toMatchObject({
+            kind: operation.kind,
+          });
           expect(spawn).toHaveBeenCalledTimes(1);
         }
         expect(loadSessionEntry(scope)).toBeUndefined();
@@ -160,9 +158,9 @@ test("retains one archive Worker across refused and interleaved reclamation oper
   });
 });
 
-test.each(["path", "root"] as const)(
+test.each(["root"] as const)(
   "retires a retained Worker by the symlinked %s its requester used",
-  async (retirement) => {
+  async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const link = path.join(state.root, "state-link");
       const stateDir = expectDefined(state.env.OPENCLAW_STATE_DIR, "test state directory");
@@ -183,13 +181,10 @@ test.each(["path", "root"] as const)(
       );
       try {
         await runSqliteSessionReclamation({
-          forceInProcess: false,
           plan,
         });
         expect(spawned).toHaveLength(1);
-        await (retirement === "path"
-          ? closeOpenClawAgentDatabaseByPathAsync(databaseOptions.path)
-          : closeOpenClawAgentDatabasesAsync(link));
+        await closeOpenClawAgentDatabasesAsync(link);
         expect(spawned[0]?.threadId).toBe(-1);
       } finally {
         vi.restoreAllMocks();
@@ -246,7 +241,6 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
       const fixture = entries[index];
       assert.ok(fixture);
       await runSqliteSessionReclamation({
-        forceInProcess: false,
         plan: fixture.plan,
         diagnostics,
       });
@@ -330,7 +324,6 @@ test.each(["established", "first-created"] as const)(
       try {
         await expect(
           runSqliteSessionReclamation({
-            forceInProcess: false,
             plan,
           }),
         ).rejects.toThrow("OpenClaw state database read admission changed");
@@ -388,7 +381,6 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
       try {
         await expect(
           runSqliteSessionReclamation({
-            forceInProcess: false,
             plan,
           }),
         ).rejects.toThrow("synthetic reclamation crash");
@@ -630,7 +622,6 @@ test("retains a selected maintenance row protected after native preparation", as
     try {
       await expect(
         runSqliteSessionReclamation({
-          forceInProcess: false,
           plan,
           refreshMaintenanceProtection: refreshed,
         }),
