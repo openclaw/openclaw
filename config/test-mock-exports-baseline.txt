@@ -7353,7 +7353,6 @@
 ["src/gateway/server-methods/sessions-viewers.test.ts","./sessions-read.js","9677f6c202a45ccc0544aa34e8e2d965253565b8a7bbe91355fbadb3ae1ea0ee",1]
 ["src/gateway/server-methods/sessions.abort-agent-scope.test.ts","../call.js","aa96f7a407f0f755211fea7a4f6d7799f0fb141190de1607210fcb70bbb480e7",1]
 ["src/gateway/server-methods/sessions.abort-agent-scope.test.ts","../server-session-key.js","58c28f91aa5ea3e8516a7fb8de34c6a9abe3a51e002719874b1f0f550aca70f3",1]
-["src/gateway/server-methods/sessions.abort-agent-scope.test.ts","./chat-abort-handler.js","8e1266da3c75f809fd6a66a3ceae0016649a0f399cd2502139462ab0ccd7ba4a",1]
 ["src/gateway/server-methods/sessions.abort-agent-scope.test.ts","./chat.js","9663f9b2a0d3c0e32edad91afb75514bf09cf03f66200f4dc02dad1f83e301ac",1]
 ["src/gateway/server-methods/sessions.send-followup-status.test.ts","../../agents/subagents/registry/subagent-registry.js","cb28fd3175a191b7e486cef1a26c359b64647b843d1812a892fcb5c5a6cad052",1]
 ["src/gateway/server-methods/sessions.send-followup-status.test.ts","../../agents/subagents/spawn/subagent-spawn-cleanup.js","262981eaf4932ea55e152e564c6248220c7033ebb84d4c409fed116bd58f7d9b",1]
