@@ -6821,7 +6821,6 @@
 ["src/gateway/event-web-push.storage-scope.test.ts","./session-sharing-preparation.js","606aedaf9e1dea177b54454e1e98b9268b94f455f8eff3ae94636667e57c163c",1]
 ["src/gateway/event-web-push.storage-scope.test.ts","./session-sharing.js","cfb9a71c9c65595e089081a52aff4eab8031ab66e03ab8adb7febcb113111ffc",1]
 ["src/gateway/event-web-push.test.ts","../infra/push-web.js","391eb71879eff720e848e138e99feb5566ce31c1ad660da724a352e7f1cb72f1",1]
-["src/gateway/exec-approval-ios-push.test.ts","../config/config.js","c7b5442fa828576883f77ea055c950395eb6a3a64762dadda7e0e8fe2dfd3696",1]
 ["src/gateway/exec-approval-ios-push.test.ts","../infra/push-apns.js","4a4fe9ccde8b13a5fd97b10e906ffa44d62de9793f36af29dc974365450e75aa",1]
 ["src/gateway/gateway-cli-backend.live-helpers.test.ts","../../packages/gateway-client/src/readiness.js","e5feb821234f658953d99cb7cfdafe1765c015649f1264e6302636b9f01ba6ea",1]
 ["src/gateway/gateway-connection.test-mocks.ts","../infra/tailnet.js","f4a96e8b019e4e929d6340261b01c194129c04f052052eb6f02c94b4d402325a",1]
