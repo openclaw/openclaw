@@ -1116,6 +1116,11 @@ const config = {
       "src/profile-evidence-sharding.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/srt-sandbox`]: {
+      ...bundledPluginWorkspace(),
+      // Internal runtime contracts are exported for focused tests and used by their owner modules.
+      ignoreExportsUsedInFile: true,
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/slack`]: {
       ...bundledPluginWorkspace([
         // The vendor integrity test executes this verifier by path.

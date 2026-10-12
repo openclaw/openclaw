@@ -1,0 +1,127 @@
+{
+  "id": "srt-sandbox",
+  "categories": [
+    "security"
+  ],
+  "activation": {
+    "onStartup": true
+  },
+  "name": "SRT Sandbox",
+  "description": "Docker-free local sandbox backend for OpenClaw built on the Anthropic Sandbox Runtime (macOS Seatbelt).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "binShell": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^\\/"
+      },
+      "network": {
+        "type": "string",
+        "enum": [
+          "deny",
+          "allow"
+        ]
+      },
+      "allowedDomains": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "writablePaths": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\)"
+        }
+      },
+      "commandTimeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 2147000
+      },
+      "perSessionNetwork": {
+        "type": "boolean"
+      },
+      "parentProxy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "http": {
+            "type": "string",
+            "format": "uri"
+          },
+          "https": {
+            "type": "string",
+            "format": "uri"
+          },
+          "noProxy": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "windows": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "srtWinPath": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\)"
+          },
+          "proxyPortBase": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 60000
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "binShell": {
+      "label": "Shell",
+      "help": "Absolute path to the POSIX shell used to run sandboxed commands. Defaults to /bin/bash.",
+      "advanced": true
+    },
+    "network": {
+      "label": "Network",
+      "help": "Network posture for sandboxed commands. 'deny' blocks all outbound network (default); 'allow' leaves it open. macOS/Linux only; Windows execution rejects every network mode before native setup."
+    },
+    "allowedDomains": {
+      "label": "Allowed Domains",
+      "help": "Domains allowed when network is deny. An empty list denies all outbound network. macOS/Linux only; Windows execution rejects every network mode before native setup.",
+      "advanced": true
+    },
+    "writablePaths": {
+      "label": "Extra Writable Paths",
+      "help": "Additional absolute paths added to the sandbox writable allowlist beyond the scope workspace directories.",
+      "advanced": true
+    },
+    "commandTimeoutSeconds": {
+      "label": "Command Timeout Seconds",
+      "help": "Timeout for buffered backend commands.",
+      "advanced": true
+    },
+    "perSessionNetwork": {
+      "label": "Per-session Network",
+      "help": "Run each session with an isolated SRT network broker. macOS/Linux only; Windows execution rejects every network mode before native setup.",
+      "advanced": true
+    },
+    "parentProxy": {
+      "label": "Parent Proxy",
+      "help": "Optional upstream HTTP/HTTPS proxy for per-session network brokers. macOS/Linux only; Windows execution rejects every network mode before native setup.",
+      "advanced": true
+    },
+    "windows": {
+      "label": "Windows",
+      "help": "Reserved Windows discovery settings. Native execution is disabled with SRT 0.0.76 because shared account, credential, WFP and ACL setup has no exclusive ownership or retirement-safe rollback contract. proxyPortBase has no runtime effect.",
+      "advanced": true
+    }
+  }
+}
