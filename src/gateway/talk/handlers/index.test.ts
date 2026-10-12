@@ -2654,6 +2654,51 @@ describe("talk.session unified handlers", () => {
     },
   );
 
+  it("closes a live managed-room Talk session when talk.session.close receives a padded sessionId", async () => {
+    const respond = vi.fn();
+    const client = { connId: "conn-1", connect: { scopes: ["operator.admin"] } };
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        brain: "direct-tools",
+        sessionKey: "session:main",
+      },
+      client,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        ...bindSessionRowProjection({}, () => projection),
+      },
+    });
+    const session = expectRespondOk(respond, {
+      transport: "managed-room",
+      brain: "direct-tools",
+    });
+    expect(session.sessionId).toBeTypeOf("string");
+    const closeRespond = vi.fn();
+    await callTalkHandler("talk.session.close", {
+      params: { sessionId: ` ${String(session.sessionId)} ` },
+      id: "2",
+      client,
+      respond: closeRespond,
+      context: {},
+    });
+    expectRespondOk(closeRespond, { ok: true });
+    const missing = vi.fn();
+    await callTalkHandler("talk.session.close", {
+      params: { sessionId: session.sessionId },
+      id: "3",
+      client,
+      respond: missing,
+      context: {},
+    });
+    expectRespondError(missing, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: Unknown Talk session",
+    });
+  });
+
   it("keeps browser-owned transports on the client session endpoint", async () => {
     const respond = vi.fn();
     await callTalkHandler("talk.session.create", {

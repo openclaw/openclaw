@@ -203,11 +203,11 @@ export function rememberUnifiedTalkSession(
   sessionId: string,
   session: UnifiedTalkSessionRecord,
 ): void {
-  unifiedTalkSessions.set(sessionId, session);
+  unifiedTalkSessions.set(sessionId.trim(), session);
 }
 
 export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionRecord {
-  const session = unifiedTalkSessions.get(sessionId);
+  const session = unifiedTalkSessions.get(sessionId.trim());
   if (!session) {
     throw new Error("Unknown Talk session");
   }
@@ -216,7 +216,8 @@ export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionReco
 
 /** Retains the realtime relay's admitted target without reinterpreting current defaults. */
 export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: string | undefined) {
-  const session = unifiedTalkSessions.get(sessionId);
+  const id = sessionId.trim();
+  const session = unifiedTalkSessions.get(id);
   if (session?.kind !== "realtime-relay") {
     return undefined;
   }
@@ -225,14 +226,14 @@ export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: strin
   return {
     target,
     isCurrent: () =>
-      unifiedTalkSessions.get(sessionId) === session &&
+      unifiedTalkSessions.get(id) === session &&
       session.connId === connId &&
       session.sessionTarget === target,
   };
 }
 
 export function forgetUnifiedTalkSession(sessionId: string): void {
-  unifiedTalkSessions.delete(sessionId);
+  unifiedTalkSessions.delete(sessionId.trim());
 }
 
 export function requireUnifiedTalkSessionConn(
