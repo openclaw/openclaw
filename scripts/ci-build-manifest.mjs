@@ -1698,8 +1698,15 @@ if (hybridHostedEligible) {
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-shard": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
-    "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
+    "ios-screenshot-shard": count(
+      workflowEventName !== "pull_request" &&
+        parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS),
+      2,
+    ),
+    "ios-screenshot-evidence": count(
+      workflowEventName !== "pull_request" &&
+        parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS),
+    ),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),
     "docker-seed-e2e": count(
@@ -1859,7 +1866,6 @@ manifest.pr_job_count =
       countPrJobs(manifest.run_ios_build) +
       (manifest.run_ui_real_gateway ? uiRealGatewayShards.length : 0) +
       countPrJobs(manifest.run_android_access_native, 2) +
-      countPrJobs(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 3) +
       countPrJobs(manifest.run_android_screenshots);
 
 for (const [key, value] of Object.entries(manifest)) {

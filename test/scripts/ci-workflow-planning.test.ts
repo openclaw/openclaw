@@ -3424,8 +3424,12 @@ describe("ci workflow guards", () => {
       expect(base.filter((name) => name === "macos-node")).toHaveLength(
         eventName === "pull_request" ? 0 : 3,
       );
-      expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
-      expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
+      expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(
+        eventName === "pull_request" ? 0 : 2,
+      );
+      expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(
+        eventName === "pull_request" ? 0 : 1,
+      );
       expect(base.filter((name) => name === "android-screenshots")).toHaveLength(
         eventName === "pull_request" ? 0 : 1,
       );
@@ -8426,7 +8430,7 @@ describe("ci workflow guards", () => {
     },
     {
       label: "iOS app pull request",
-      screenshots: true,
+      screenshots: false,
       changedPath: "apps/ios/Sources/Foo.swift",
       selectedJobs: [],
     },
@@ -8447,7 +8451,7 @@ describe("ci workflow guards", () => {
     },
     {
       label: "shared native",
-      screenshots: true,
+      screenshots: false,
       changedPath: "apps/shared/OpenClawKit/Sources/Foo.swift",
       selectedJobs: ["android"],
     },
@@ -8455,7 +8459,7 @@ describe("ci workflow guards", () => {
       (changedPath) => ({
         label: `Screenshot input ${changedPath}`,
         changedPath,
-        screenshots: true,
+        screenshots: false,
         selectedJobs: [],
       }),
     ),
@@ -11873,8 +11877,13 @@ describe("ci workflow guards", () => {
       expected: {
         "checks-node-compat": false,
         "ios-build": true,
-        "ios-screenshot-shard": true,
+        "ios-screenshot-shard": false,
       },
+    },
+    {
+      label: "fork PR with screenshot inputs",
+      context: { eventName: "pull_request", headRepository: "contributor/openclaw" },
+      expected: { "ios-screenshot-shard": false },
     },
     {
       label: "canonical Blacksmith push with screenshot inputs",
