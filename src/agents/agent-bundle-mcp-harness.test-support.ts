@@ -100,3 +100,43 @@ export async function makeConnectRuntime(params: {
   });
   return runtime;
 }
+
+/**
+ * A runtime whose live catalog already has an authenticated server ("user-mail")
+ * plus a requester-connect surface covering that same server and a second,
+ * unauthenticated one ("calendar").
+ */
+export async function makeMixedAuthConnectRuntime(params: {
+  sessionId: string;
+  requesterSenderId: string;
+  publicOrigin?: string;
+}): Promise<SessionMcpRuntime> {
+  const runtime = makeRuntime(params);
+  runtime.requesterConnect = await createRequesterMcpConnect({
+    serverNames: new Set(["user-mail", "calendar"]),
+    mcpServers: {
+      "user-mail": {
+        url: "https://mcp.example/user-mail",
+        auth: "oauth",
+        oauth: { identity: "per-requester" },
+      },
+      calendar: {
+        url: "https://mcp.example/rpc",
+        auth: "oauth",
+        oauth: { identity: "per-requester" },
+      },
+    },
+    safeServerNamesByServer: new Map([
+      ["user-mail", "user-mail"],
+      ["calendar", "calendar"],
+    ]),
+    requesterScope: {
+      requesterSenderId: params.requesterSenderId,
+      messageChannel: "telegram",
+      agentAccountId: "bot",
+    },
+    cfg: params.publicOrigin ? { gateway: { publicOrigin: params.publicOrigin } } : undefined,
+    configFingerprint: "connect-fingerprint",
+  });
+  return runtime;
+}
