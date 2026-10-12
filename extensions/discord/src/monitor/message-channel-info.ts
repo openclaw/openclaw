@@ -1,8 +1,4 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelType, Message } from "../internal/discord.js";
@@ -31,11 +27,8 @@ function cacheDiscordChannelInfo(
   ttlMs: number,
   nowMs: number,
 ): void {
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
-  if (expiresAt !== undefined) {
-    discordChannelInfoCacheState.entries.set(channelId, { value, expiresAt });
-    pruneMapToMaxSize(discordChannelInfoCacheState.entries, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);
-  }
+  discordChannelInfoCacheState.entries.set(channelId, { value, expiresAt: nowMs + ttlMs });
+  pruneMapToMaxSize(discordChannelInfoCacheState.entries, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);
 }
 
 function normalizeDiscordChannelId(value: unknown): string {
@@ -72,11 +65,10 @@ export async function resolveDiscordChannelInfo(
   client: DiscordChannelInfoClient,
   channelId: string,
 ): Promise<DiscordChannelInfo | null> {
-  const rawNow = Date.now();
-  const now = asDateTimestampMs(rawNow);
+  const now = Date.now();
   const cached = discordChannelInfoCacheState.entries.get(channelId);
   if (cached) {
-    if (now !== undefined && cached.expiresAt > now) {
+    if (cached.expiresAt > now) {
       return cached.value;
     }
     discordChannelInfoCacheState.entries.delete(channelId);
@@ -84,18 +76,18 @@ export async function resolveDiscordChannelInfo(
   try {
     const channel = await client.fetchChannel(channelId);
     if (!channel) {
-      cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, rawNow);
+      cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, now);
       return null;
     }
     const payload = buildDiscordChannelInfo(channel, { rawTypeFallback: true });
     if (!payload) {
       return null;
     }
-    cacheDiscordChannelInfo(channelId, payload, DISCORD_CHANNEL_INFO_CACHE_TTL_MS, rawNow);
+    cacheDiscordChannelInfo(channelId, payload, DISCORD_CHANNEL_INFO_CACHE_TTL_MS, now);
     return payload;
   } catch (err) {
     logVerbose(`discord: failed to fetch channel ${channelId}: ${String(err)}`);
-    cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, rawNow);
+    cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, now);
     return null;
   }
 }
