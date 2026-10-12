@@ -8,7 +8,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import "./github-connections.ts";
+import "./github-connections.tsx";
 
 const system: ToolsGitHubStatusResult["effective"] = {
   source: "system-configured",

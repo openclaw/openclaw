@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
+import { markCanonicalSessionValidationPending } from "../../../../src/config/sessions/session-canonical-key.js";
 import { seedCanonicalSessionValidation } from "../../../../src/config/sessions/session-canonical-validation.js";
 import { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db-lifecycle.js";
@@ -210,6 +211,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })?.db === db).toBe(
         true,
       );
+      runSqliteImmediateTransactionSync(db, () => {
+        markCanonicalSessionValidationPending(database, [sessionKey]);
+      });
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
       expect(db.isOpen).toBe(false);
       await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).rejects.toThrow(
