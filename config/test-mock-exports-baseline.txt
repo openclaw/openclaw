@@ -583,7 +583,6 @@
 ["extensions/feishu/src/bot.test.ts","./reply-dispatcher.js","e75cfb7cbd5aee218be450697137a279d2fe35aca65ed0a48724f78acce6c0aa",1]
 ["extensions/feishu/src/bot.test.ts","./send.js","48a44248ec228b9fc9964824b76013922d03c0df919ff92dd7aec5e304ea49ae",1]
 ["extensions/feishu/src/card-ux-launcher.test.ts","./send.js","7c01bfcbaa4c5711594f084919d75b429c8a9f1528aee48d9dd0b481ba762e48",1]
-["extensions/feishu/src/channel.outbound.test.ts","./channel.runtime.js","95011d45608c43961f32fdeff94f517007737660ee1773175eeba41e638629d9",1]
 ["extensions/feishu/src/channel.test.ts","./channel.runtime.js","171c324ddecd4c03523ef463ae8c4233af9137fbc116b5e6ad7e5ef2301c681d",1]
 ["extensions/feishu/src/channel.test.ts","./client.js","a766f99084fc866bc01bc95c92ea86833c7054111e419c674ca435a652c9f1e0",1]
 ["extensions/feishu/src/channel.test.ts","./probe.js","a3acb61673a1576ead3240201b51bda3e884559460121492dd152f6ac1beea54",1]

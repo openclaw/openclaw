@@ -62,7 +62,6 @@ extensions/feishu/src/doctor.ts
 extensions/feishu/src/docx.ts
 extensions/feishu/src/monitor.comment.ts
 extensions/feishu/src/outbound.test.ts
-extensions/feishu/src/outbound.ts
 extensions/feishu/src/reply-dispatcher.test.ts
 extensions/feishu/src/reply-dispatcher.ts
 extensions/feishu/src/streaming-card.test.ts

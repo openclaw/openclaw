@@ -170,7 +170,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         text: {
           resolveTextChunkLimit: vi.fn(() => 4000),
           resolveChunkMode: vi.fn(() => "line"),
-          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          resolveMarkdownTableMode: vi.fn(() => "block"),
           convertMarkdownTables: vi.fn((text) => text),
           chunkTextWithMode: vi.fn((text) => [text]),
           chunkMarkdownTextWithMode: vi.fn((text) => [text]),
@@ -1875,14 +1875,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       streamingInstances.push = origPush;
       nowSpy.mockRestore();
     }
-  });
-
-  it("falls back to post mode for 6 tables with explicit renderMode=card", async () => {
-    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "off", "feishu"));
-    const { options } = createDispatcherHarness();
-    await options.deliver({ text: makeTableText(6) }, { kind: "final" });
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -560,28 +560,6 @@ describe("Feishu cards and delivery", () => {
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
     expect(feishuOutboundSendTextMock).not.toHaveBeenCalled();
   });
-  it("falls back when presentation text exceeds the card table limit", async () => {
-    feishuOutboundSendPayloadMock.mockResolvedValueOnce(receipt);
-    const sixTables = Array.from(
-      { length: 6 },
-      (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
-    ).join("\n\n");
-    expect(
-      details(
-        await run("send", {
-          to: "chat:oc_group_1",
-          message: sixTables,
-          presentation: { title: "Status", blocks: [{ type: "text", text: "Build completed" }] },
-        }),
-      ),
-    ).toMatchObject({ ok: true, messageId: "om_sent" });
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledOnce();
-    expect(args(feishuOutboundSendPayloadMock)).toMatchObject({
-      to: "chat:oc_group_1",
-      text: sixTables,
-    });
-  });
   it("hides raw card JSON and preserves trusted media access in oversized fallbacks", async () => {
     feishuOutboundSendPayloadMock.mockResolvedValueOnce(receipt);
     await run(

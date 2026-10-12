@@ -1,11 +1,14 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { createConfiguredFeishuClient } from "./configured-client.js";
+import { createFeishuClient } from "./client.js";
+import { resolveConfiguredFeishuAccount } from "./configured-client.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
 
 type FeishuSendTarget = {
-  client: ReturnType<typeof createConfiguredFeishuClient>;
+  client: ReturnType<typeof createFeishuClient>;
   receiveId: string;
   receiveIdType: ReturnType<typeof resolveReceiveIdType>;
+  /** The account that delivers, after default-account selection. */
+  accountId: string;
 };
 
 export function resolveFeishuSendTarget(params: {
@@ -14,7 +17,8 @@ export function resolveFeishuSendTarget(params: {
   accountId?: string;
 }): FeishuSendTarget {
   const target = params.to.trim();
-  const client = createConfiguredFeishuClient(params);
+  const account = resolveConfiguredFeishuAccount(params);
+  const client = createFeishuClient(account);
   const receiveId = normalizeFeishuTarget(target);
   if (!receiveId) {
     throw new Error(`Invalid Feishu target: ${params.to}`);
@@ -26,5 +30,6 @@ export function resolveFeishuSendTarget(params: {
     client,
     receiveId,
     receiveIdType: resolveReceiveIdType(withoutProviderPrefix),
+    accountId: account.accountId,
   };
 }

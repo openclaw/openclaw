@@ -15,6 +15,7 @@ import {
   assertFeishuPostWithinEnvelope,
   buildFeishuPostMessageContent,
   chunkFeishuMarkdownByEnvelope,
+  feishuPostWithinEnvelope,
   materializeFeishuPostMarkdownSoftBreaks,
   type FeishuMarkdownChunkOptions,
 } from "./markdown.js";
@@ -397,7 +398,13 @@ export async function sendMessageFeishu(
   const target = resolveFeishuSendTarget(params);
   let messageText = text;
   if (!preparedPostText) {
-    const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+    // The target resolved the delivering account, including defaultAccount, so
+    // the table mode follows that account rather than the raw id.
+    const tableMode = resolveMarkdownTableMode({
+      cfg,
+      channel: "feishu",
+      accountId: target.accountId,
+    });
     messageText = materializeFeishuPostMarkdownSoftBreaks(
       convertMarkdownTables(text ?? "", tableMode),
     );
@@ -469,10 +476,19 @@ export async function editMessageFeishu(params: {
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
+    accountId: account.accountId,
   });
-  const messageText = convertMarkdownTables(text!, tableMode);
-  const normalizedText = materializeFeishuPostMarkdownSoftBreaks(messageText);
-  const content = buildFeishuPostMessageContent({ messageText: normalizedText });
+  const convertedContent = buildFeishuPostMessageContent({
+    messageText: materializeFeishuPostMarkdownSoftBreaks(convertMarkdownTables(text!, tableMode)),
+  });
+  // An edit is a single message and cannot fan out across several, so a conversion that
+  // pads the text past the envelope gives way to the text as authored, which is the form
+  // that arrived inside it.
+  const content = feishuPostWithinEnvelope(convertedContent)
+    ? convertedContent
+    : buildFeishuPostMessageContent({
+        messageText: materializeFeishuPostMarkdownSoftBreaks(text!),
+      });
   assertFeishuPostWithinEnvelope(content, "Feishu message edit");
   // Feishu's PATCH endpoint only edits cards; rich-post edits require the typed PUT endpoint.
   const response = await client.im.message.update({
