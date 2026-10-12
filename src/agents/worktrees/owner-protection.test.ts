@@ -304,12 +304,11 @@ describe("createManagedWorktreeOwnerPolicy", () => {
       entry: entries[sessionKey],
     }));
     const policy = createManagedWorktreeOwnerPolicy({}, () => now);
-    const census = await policy.prepareOwners(
-      [...Object.keys(entries), "agent:main:missing"].map((ownerId) => ({
-        ...cleanupRecord,
-        ownerId,
-      })),
-    );
+    const records = [];
+    for (const ownerId of [...Object.keys(entries), "agent:main:missing"]) {
+      records.push({ ...cleanupRecord, ownerId });
+    }
+    const census = await policy.prepareOwners(records);
     expect(census.readOwnerState?.("session", "agent:main:live")).toBe("active");
     expect(census.readOwnerState?.("session", "agent:main:stale")).toBe("idle");
     expect(census.readOwnerState?.("session", "agent:main:archived")).toBe("retired");

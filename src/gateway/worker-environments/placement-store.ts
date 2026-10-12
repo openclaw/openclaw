@@ -31,8 +31,10 @@ import {
   readPlacementProjection,
   type PlacementTurnClaimAuthority,
 } from "./placement-turn-authority.js";
-import { attachWorkerTurnExecutionIdentityStore } from "./placement-turn-claim-events.js";
-import { registerWorkerTurnClaimClosedHandler } from "./placement-turn-claim-events.js";
+import {
+  attachWorkerTurnExecutionIdentityStore,
+  registerWorkerTurnClaimClosedHandler,
+} from "./placement-turn-claim-events.js";
 import { createPlacementTurnClaimWorkerOps } from "./placement-turn-claims-store.js";
 import { waitForPlacementTurnClaimRelease } from "./placement-turn-wait.js";
 import { createPlacementWorkspaceJournalWorkerOps } from "./placement-workspace-journal-store.js";
