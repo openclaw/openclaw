@@ -217,6 +217,19 @@ describe("release docs mirrors", () => {
     return { rootDir, version, sources: [source] };
   }
 
+  it.each([
+    ["LF annotated delimiter", "\n--- # end\n"],
+    ["CRLF document-end delimiter", "\r\n... # end\r\n"],
+  ])("renders a release page with a %s", (_name, closing) => {
+    const options = mirrorFixture();
+    fs.writeFileSync(
+      path.join(options.rootDir, source),
+      `---\ntitle: "Release title"${closing}\n# Release title\n\nExact prose.\n`,
+    );
+    expect(renderReleaseDocsMirror(options)).toContain("### Release title");
+    expect(renderReleaseDocsMirror(options)).toContain("Exact prose.");
+  });
+
   it("retains prose, credits, tables, images and code while flattening wrappers and links", () => {
     const code = '```md\n<Accordion title="example">\n[local](/do-not-change)\n```';
     const input = [
