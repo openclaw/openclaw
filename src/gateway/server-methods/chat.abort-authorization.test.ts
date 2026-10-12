@@ -846,8 +846,12 @@ describe("chat.abort original authority and registration", () => {
         expect(first.controller.signal.aborted).toBe(true);
         expect(second.controller.signal.aborted).toBe(firstEffect === "lifecycle");
         if (firstEffect === "lifecycle") {
-          expect(context.dedupe.get("agent:pending")?.payload).toMatchObject({ stopReason: "rpc" });
-          expect(context.dedupe.get("chat:pending")?.payload).toMatchObject({ stopReason: "rpc" });
+          expect(context.dedupe.get("agent:pending")).toMatchObject({
+            payload: { stopReason: "rpc" },
+          });
+          expect(context.dedupe.get("chat:pending")).toMatchObject({
+            payload: { stopReason: "rpc" },
+          });
           expect(context.dedupe.has("pending-chat:pending")).toBe(false);
         } else {
           expect([...context.dedupe]).toEqual(pending);
