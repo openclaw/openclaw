@@ -115,9 +115,23 @@ describe("runMemorySearchWithDeadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("does not accept task success after the active deadline has expired", async () => {
+  it("keeps an in-budget search when only the wall clock jumps", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
+    const result = runMemorySearchWithDeadline({
+      timeoutMs: 15_000,
+      run: async () => "done",
+    });
+    await Promise.resolve();
+    vi.setSystemTime(60_000);
+
+    await expect(result).resolves.toBe("done");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not accept task success after the active deadline has expired", async () => {
+    vi.useFakeTimers();
+    const started = performance.now();
     let resolveTask: ((value: string) => void) | undefined;
     let taskSignal: AbortSignal | undefined;
     const result = runMemorySearchWithDeadline({
@@ -133,8 +147,8 @@ describe("runMemorySearchWithDeadline", () => {
     await Promise.resolve();
 
     // Resolve from an I/O-style continuation before the overdue timer callback
-    // receives its turn; the live budget check must still make timeout win.
-    vi.setSystemTime(15_000);
+    // receives its turn; the monotonic budget check must still make timeout win.
+    vi.spyOn(performance, "now").mockReturnValue(started + 15_000);
     resolveTask?.("late success");
 
     await resultAssertion;
