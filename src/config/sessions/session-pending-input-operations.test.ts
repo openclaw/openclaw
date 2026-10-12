@@ -21,7 +21,9 @@ import {
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
+import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   openOpenClawAgentDatabase,
@@ -52,6 +54,49 @@ const message = (runId: string) => ({
   content: `Synthetic pending input ${runId}`,
   timestamp: 1,
   idempotencyKey: `${runId}:user`,
+});
+
+it("accepts supplied legacy completion callbacks without falling back from async completion", async () => {
+  const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+  const legacy = vi.fn(() => outcome);
+  const recorder = {
+    ...createUserTurnTranscriptRecorder({ message: message("legacy"), target: scope }),
+    completeProcessingAsync: undefined,
+    completeProcessing: legacy,
+  };
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  const plugin = new PluginInstance("pending-input-legacy-recorder");
+  try {
+    await plugin.run(async () => {
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("completeProcessingAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+    expect(
+      await completeUserTurnProcessing(
+        { ...recorder, completeProcessingAsync: async () => undefined },
+        outcome,
+      ),
+    ).toBeUndefined();
+    await expect(
+      completeUserTurnProcessing(
+        {
+          ...recorder,
+          completeProcessingAsync: async () => {
+            throw new Error("Async completion failed");
+          },
+        },
+        outcome,
+      ),
+    ).rejects.toThrow("Async completion failed");
+    expect(legacy).toHaveBeenCalledTimes(2);
+  } finally {
+    warning.mockRestore();
+    await plugin.dispose();
+  }
 });
 
 function createFixture() {
@@ -226,7 +271,7 @@ it("stages and settles an agent user-turn recorder without caller-thread SQL", a
       const cancelledReceipt = await fixture.stage("cancelled");
       cancelled = cancelledReceipt;
       const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-      expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
       expect(recorder.getProcessingCompletion?.()).toEqual(outcome);
       recorder.finishPendingInput?.("interrupted");
       cancelledReceipt.finish("cancelled");
@@ -487,7 +532,7 @@ it("refuses processing completion when the admitted lifecycle changes during the
   });
 });
 
-it.each(["lost reply", "unknown settlement"] as const)(
+it.each(["lost reply", "unknown settlement", "independent committed write"] as const)(
   "settles staging with %s without replaying its native write",
   async (fault) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -525,6 +570,18 @@ it.each(["lost reply", "unknown settlement"] as const)(
                       facts: { kind: "pending-input-settlement", operation: "stage" },
                     });
                     expect(nativeAdmission?.settlement?.kind).toBe("completed");
+                    if (fault === "independent committed write") {
+                      runOpenClawAgentWriteTransaction(
+                        (database) => {
+                          writeSessionEntry(database, "agent:main:independent-input", {
+                            sessionId: "independent-input",
+                            updatedAt: 2,
+                          });
+                        },
+                        { agentId: scope.agentId },
+                      );
+                      return result;
+                    }
                     if (fault === "unknown settlement") {
                       const observed = expectDefined(nativeAdmission, "Expected native admission");
                       const settlement = vi

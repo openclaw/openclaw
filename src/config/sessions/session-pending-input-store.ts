@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
@@ -9,11 +8,9 @@ import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identi
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   openOpenClawAgentDatabase,
-  getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -172,14 +169,11 @@ export async function preparePendingInputStore(
     );
     return operation;
   };
-  const nativeMutation = (
+  const mutateIncognito = (
     input: PendingInputMutation,
     guard: (stage: "transaction" | "commit", facts?: PendingInputCustodyGrant) => void,
   ) => {
     assertOpen();
-    if (actor) {
-      throw new IncognitoSessionSyncAccessError("complete", "completeAsync");
-    }
     return mutatePendingInput(
       input,
       {
@@ -300,8 +294,6 @@ export async function preparePendingInputStore(
         })(),
       );
     },
-    // Released synchronous recorder completion keeps its native visibility contract.
-    nativeMutation,
     mutate(
       input: PendingInputMutation,
       guard: (stage: "transaction" | "commit", facts?: PendingInputCustodyGrant) => void,
@@ -400,7 +392,7 @@ export async function preparePendingInputStore(
           }
           if (incognito) {
             let committedFacts: PendingInputCustodyGrant | undefined;
-            const result = nativeMutation(input, (stage, facts) => {
+            const result = mutateIncognito(input, (stage, facts) => {
               committedFacts = facts;
               guard(stage, facts);
             });
@@ -431,22 +423,8 @@ export async function preparePendingInputStore(
             options,
             identity?.key.slice(5),
             assertOpen,
-            async (execution, source, context) => {
+            async (execution, source) => {
               const result = await execution.runExisting(source, async (worker) => {
-                const native = getOpenClawAgentDatabaseIfOpen(options);
-                const revision = native && readSqliteNativeMutationRevision(native.db);
-                const assertPublicationCurrent = () => {
-                  context.assertCurrent();
-                  if (
-                    getOpenClawAgentDatabaseIfOpen(options) !== native ||
-                    (native &&
-                      (native.db.isTransaction ||
-                        revision === undefined ||
-                        readSqliteNativeMutationRevision(native.db) !== revision))
-                  ) {
-                    throw new Error("Pending input authority changed before publication");
-                  }
-                };
                 const outcome = await worker
                   .execute({ type: "session.pendingInputs.mutate", input })
                   .then(
@@ -459,10 +437,7 @@ export async function preparePendingInputStore(
                   if (admitted.admission.settlement?.kind === "completed" && receipt) {
                     if (publish) {
                       assertOpen();
-                    }
-                    if (publish) {
-                      assertPublicationCurrent();
-                      publish(committedFacts, assertPublicationCurrent);
+                      publish(committedFacts, assertOpen);
                     }
                     return receipt;
                   }

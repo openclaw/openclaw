@@ -377,15 +377,6 @@ async function stagePreparedPendingInput(
       kind: "complete" as const,
       outcome,
     });
-    const complete = options.trackCompletion
-      ? (outcome: AgentRunTerminalOutcome) => {
-          if (finished || completion) {
-            throw new Error("Input completion owner has already been released or is settling");
-          }
-          assertCompletion();
-          return store.nativeMutation(completionInput(outcome), assertCompletion).outcome!;
-        }
-      : undefined;
     const completeAsync = options.trackCompletion
       ? (outcome: AgentRunTerminalOutcome) => {
           if (completion) {
@@ -461,7 +452,7 @@ async function stagePreparedPendingInput(
       }
     });
     const completionMethods = {
-      ...(complete ? { complete, completeAsync } : {}),
+      ...(completeAsync ? { completeAsync } : {}),
       settled: store.settled,
     };
     if (committed) {

@@ -409,6 +409,7 @@ export function createSessionHistoryWorkerReaders(
     readMembershipFacts: reader("session-membership-facts", "membership facts", (value) => value),
     readMembers: reader("session-members", "members", (value) => value),
     readSuggestions: reader("session-suggestions", "suggestions", (value) => value.suggestions),
+    readReactions: reader("session-reactions", "reactions", (value) => value.reactions),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
       return runRequest(

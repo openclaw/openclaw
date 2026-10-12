@@ -712,43 +712,6 @@ describe("committed pending input release", () => {
     expect(pendingCount()).toBe(0);
   });
 
-  it("preserves the released synchronous completion contract inside an outer rollback", async () => {
-    const first = await stagePrivate();
-    expect(() =>
-      runOpenClawAgentWriteTransaction(() => {
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-        throw new Error("before commit");
-      }, options()),
-    ).toThrow("before commit");
-    expect(completionRows()).toEqual([]);
-    expect(pendingCount()).toBe(1);
-    first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-    expect(pendingCount()).toBe(0);
-  });
-
-  it("preserves released synchronous completion when a postcommit observer fails", async () => {
-    const first = await stagePrivate();
-    setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    onTestFinished(() => {
-      errorLog.mockRestore();
-      resetLogger();
-    });
-    expect(() =>
-      runOpenClawAgentWriteTransaction((current) => {
-        deferOpenClawAgentPostCommitPublication(current, () => {
-          throw new Error("observer failed");
-        });
-        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
-      }, options()),
-    ).not.toThrow();
-    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("SQLite post-commit notification failed"),
-    );
-    expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
-    expect(pendingCount()).toBe(0);
-  });
-
   it.each(["owner", "session", "lifecycle"] as const)(
     "rejects a private completion after %s changes",
     async (boundary) => {
