@@ -1,7 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "./session-accessor.js";
 import {
   addSessionSuggestionInWorker as addSessionSuggestion,
@@ -11,6 +10,7 @@ import {
 } from "./session-metadata-write.async.js";
 import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "./session-suggestion-policy.js";
 import { listSessionSuggestions } from "./session-suggestion-store.read.js";
+import { SESSION_WORK_START_INVALIDATED_ERROR_CODE } from "./work-start-error.js";
 
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
 const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
@@ -208,10 +208,11 @@ describe("session suggestion store", () => {
     ];
     for (const mutate of mutations) {
       for (const expectedSessionId of ["session-a", ""]) {
-        await expect(mutate(expectedSessionId)).rejects.toThrow(SessionWorkStartInvalidatedError);
-        await expect(mutate(expectedSessionId)).rejects.toThrow(
-          "session changed before suggestion mutation",
-        );
+        await expect(mutate(expectedSessionId)).rejects.toMatchObject({
+          name: "SessionWorkStartInvalidatedError",
+          code: SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+          message: "session changed before suggestion mutation",
+        });
       }
       await expect(mutate()).resolves.toBeDefined();
     }

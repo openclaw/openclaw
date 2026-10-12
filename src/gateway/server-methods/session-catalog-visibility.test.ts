@@ -787,9 +787,9 @@ describe("session catalog caller visibility", () => {
         provider: provider({
           list: vi.fn(async () => {
             const projection = [...projections].at(-1)!;
-            projection
-              .describe({ agentId: "main", key: "agent:main:other" })!
-              .membership.add("profile-owner");
+            projection.describe({ agentId: "main", key: "agent:main:other" })!.membership = new Set(
+              ["profile-owner"],
+            );
             return [host([session("other-thread", "agent:main:other")])];
           }),
           archive,
