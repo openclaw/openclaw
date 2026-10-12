@@ -3,4 +3,4 @@
 export * from "./audio-transcode.js";
 export * from "./ffmpeg-exec.js";
 export * from "./image-ops.js";
-export { probeVideoDimensions } from "./media-probe.js";
+export { probeAudioDurationMs, probeVideoDimensions } from "./media-probe.js";

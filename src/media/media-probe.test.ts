@@ -1,3 +1,4 @@
+import { fstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,14 +17,19 @@ let testDir = "";
 let songPath = "";
 let clipPath = "";
 let voicePath = "";
+let probeAudioDurationMs: typeof import("./media-probe.js").probeAudioDurationMs;
 let probeMediaFilesWithinBudget: typeof import("./media-probe.js").probeMediaFilesWithinBudget;
 let probePlaybackMediaFileDescriptor: typeof import("./media-probe.js").probePlaybackMediaFileDescriptor;
 let probeVideoDimensions: typeof import("./media-probe.js").probeVideoDimensions;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ probeMediaFilesWithinBudget, probePlaybackMediaFileDescriptor, probeVideoDimensions } =
-    await import("./media-probe.js"));
+  ({
+    probeAudioDurationMs,
+    probeMediaFilesWithinBudget,
+    probePlaybackMediaFileDescriptor,
+    probeVideoDimensions,
+  } = await import("./media-probe.js"));
   testDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-probe-"));
   songPath = path.join(testDir, "song.mp3");
   clipPath = path.join(testDir, "clip.mp4");
@@ -56,6 +62,32 @@ async function probeMediaFile(filePath: string, kind: MediaProbeKind): Promise<M
   });
   return result ?? {};
 }
+
+describe("probeAudioDurationMs", () => {
+  it("probes buffered audio from a seekable regular file", async () => {
+    let probedRegularFile = false;
+    runFfprobe.mockImplementation(async (_args, options) => {
+      probedRegularFile = fstatSync(options?.stdinFileDescriptor ?? -1).isFile();
+      return JSON.stringify({ format: { duration: "0.257" } });
+    });
+
+    await expect(probeAudioDurationMs(Buffer.from("audio"), "audio/mp4")).resolves.toBe(257);
+    expect(probedRegularFile).toBe(true);
+  });
+
+  it("skips non-audio containers without invoking ffprobe", async () => {
+    await expect(
+      probeAudioDurationMs(Buffer.from("#EXTM3U"), "application/vnd.apple.mpegurl"),
+    ).resolves.toBeUndefined();
+    expect(runFfprobe).not.toHaveBeenCalled();
+  });
+
+  it("omits buffered audio duration when probing fails", async () => {
+    runFfprobe.mockRejectedValueOnce(new Error("ffprobe unavailable"));
+
+    await expect(probeAudioDurationMs(Buffer.from("audio"), "audio/ogg")).resolves.toBeUndefined();
+  });
+});
 
 describe("probeMediaFile", () => {
   it("returns audio duration from one bounded file probe", async () => {

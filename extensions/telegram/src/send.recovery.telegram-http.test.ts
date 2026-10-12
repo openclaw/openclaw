@@ -757,6 +757,33 @@ describe("Telegram send recovery conformance over HTTP", () => {
     );
   });
 
+  it.each([
+    { entry: "durable", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
+    { entry: "durable", method: "sendAudio", contentType: "audio/mpeg", asVoice: false },
+    { entry: "streaming", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
+    { entry: "streaming", method: "sendAudio", contentType: "audio/mp4", asVoice: false },
+  ] as const)(
+    "sends a rounded probed duration with $entry $method uploads",
+    async ({ entry, method, contentType, asVoice }) => {
+      const probe = vi.spyOn(mediaRuntime, "probeAudioDurationMs").mockResolvedValue(12_600);
+      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+        buffer: Buffer.from("audio-bytes"),
+        kind: "audio",
+        contentType,
+        fileName: "clip",
+      });
+      const mediaUrl = "https://example.com/clip";
+      if (entry === "durable") {
+        await sendMessageTelegram("123", "", { cfg, api: bot.api, mediaUrl, asVoice });
+      } else {
+        await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
+      }
+      expect(probe).toHaveBeenCalledWith(Buffer.from("audio-bytes"), contentType);
+      expect(requests.map((request) => request.method)).toEqual([method]);
+      expect(String(requests[0]!.fields.duration)).toBe("13");
+    },
+  );
+
   it("does not claim delivery when all text is rejected as empty", async () => {
     const description = "text must be non-empty";
     rejections.push(`Bad Request: ${description}`, `Bad Request: ${description}`);

@@ -2,7 +2,7 @@ import { InputFile } from "grammy";
 import type { Message } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { isGifMedia, kindFromMime, probeAudioDurationMs } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { loadWebMedia } from "openclaw/plugin-sdk/web-media";
@@ -102,6 +102,7 @@ export function resolveTelegramOutboundMediaSenders(params: {
   asVoice?: boolean;
   sendImageAsPhoto?: boolean;
 }): { sender: TelegramOutboundMediaSender; documentSender: TelegramOutboundMediaSender } {
+  let audioDurationMsPromise: Promise<number | undefined> | undefined;
   const createSender = (label: TelegramOutboundMediaKind): TelegramOutboundMediaSender => {
     const operation = MEDIA_SEND_METHODS[label];
     const method: (
@@ -112,15 +113,23 @@ export function resolveTelegramOutboundMediaSenders(params: {
     return {
       label,
       operation,
-      send: (effectiveParams) =>
-        method.call(
-          params.api,
-          params.chatId,
-          params.plan.file,
-          label === "document" && params.forceDocument
-            ? { ...effectiveParams, disable_content_type_detection: true }
-            : effectiveParams,
-        ),
+      send: async (effectiveParams) => {
+        // Telegram shows 0:00 for some voice/audio uploads unless duration is explicit.
+        const durationMs =
+          label === "voice" || label === "audio"
+            ? await (audioDurationMsPromise ??= probeAudioDurationMs(
+                params.media.buffer,
+                params.media.contentType,
+              ))
+            : undefined;
+        return await method.call(params.api, params.chatId, params.plan.file, {
+          ...effectiveParams,
+          ...(durationMs ? { duration: Math.max(1, Math.round(durationMs / 1000)) } : {}),
+          ...(label === "document" && params.forceDocument
+            ? { disable_content_type_detection: true }
+            : {}),
+        });
+      },
     };
   };
   const documentSender = createSender("document");
