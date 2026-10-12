@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
@@ -22,6 +23,8 @@ import {
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
+import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -39,6 +42,15 @@ const CHILD_KEY = "agent:main:subagent:announce-continuity-child";
 const CHILD_SESSION_ID = "announce-continuity-child";
 const CHILD_RESULT = "CHILD_RESULT_7f3a9c";
 const ANNOUNCE_REPLY = `ANNOUNCE_REPLY_${CHILD_RESULT}`;
+const ACCOUNT_PROFILE_ID = "anthropic:account";
+const IDENTITYLESS_PROFILE_ID = "anthropic:identityless";
+const identitylessLogin = (access: string): AuthProfileCredential => ({
+  type: "oauth",
+  provider: "anthropic",
+  access,
+  refresh: `${access}-refresh`,
+  expires: Date.now() + 3_600_000,
+});
 
 // Claude-shaped fixture: honors --session-id/--resume, appends each turn to the native
 // transcript Claude would resume, and records what the turn could reach. A completion
@@ -70,7 +82,7 @@ const loopbackTools = mcpServers.openclaw
   ? (await callOpenClaw("tools/list", {})).tools.map((tool) => tool.name).toSorted()
   : [];
 // Only the turn's own leading envelope marks a completion; carried context may quote one.
-const completion = /^\[Inter-session message\][^\n]*sourceTool=subagent_announce/.test(prompt);
+const completion = /^\[Inter-session message\][^\n]*sourceTool=subagent_announce/m.test(prompt);
 const forbiddenCall = completion
   ? (await callOpenClaw("tools/call", { name: "exec", arguments: { command: "true" } })).content
       .map((block) => block.text)
@@ -248,10 +260,6 @@ describe("Claude CLI completion announce continuity", () => {
     } as OpenClawConfig;
     await state.writeConfig(config);
     await fs.mkdir(state.workspaceDir, { recursive: true });
-    await replaceSessionEntry(
-      { sessionKey: REQUESTER_KEY, storePath },
-      { sessionId: REQUESTER_SESSION_ID, updatedAt: 1 },
-    );
     // The completion turn's cap is the requester policy captured on the child at spawn.
     await replaceSessionEntry(
       { sessionKey: CHILD_KEY, storePath },
@@ -275,6 +283,34 @@ describe("Claude CLI completion announce continuity", () => {
     cliBackendsTesting.resetDepsForTest();
     await state.cleanup();
   });
+
+  /** Pins one auth profile, or none for an opaque native Claude login. */
+  async function seedRequester(profile?: { id: string; credential: AuthProfileCredential }) {
+    if (profile) {
+      saveAuthProfileStore(
+        { version: 1, profiles: { [profile.id]: profile.credential } },
+        state.agentDir(),
+      );
+    }
+    await replaceSessionEntry(
+      { sessionKey: REQUESTER_KEY, storePath },
+      {
+        sessionId: REQUESTER_SESSION_ID,
+        updatedAt: 1,
+        ...(profile ? { authProfileOverride: profile.id, authProfileOverrideSource: "user" } : {}),
+      },
+    );
+  }
+
+  async function runCompletionAfterFirstTurn() {
+    const first = await runTurn({ runId: "run-requester-1", body: "Spawn the docs review." });
+    const completion = await runTurn({
+      runId: "run-completion-1",
+      body: `A background task finished. Child result: ${CHILD_RESULT}. Process the completion update now.`,
+      opts: completionOpts,
+    });
+    return { first, completion };
+  }
 
   function requesterEntry(): SessionEntry {
     const entry = loadSessionEntry({ sessionKey: REQUESTER_KEY, storePath });
@@ -315,6 +351,12 @@ describe("Claude CLI completion announce continuity", () => {
           sessionEntry,
           sessionKey: REQUESTER_KEY,
           storePath,
+          sessionTarget: {
+            agentId: "main",
+            sessionId: REQUESTER_SESSION_ID,
+            sessionKey: REQUESTER_KEY,
+            storePath,
+          },
           sessionStore: { [REQUESTER_KEY]: sessionEntry },
           workspaceDir: state.workspaceDir,
           agentDir: state.agentDir(),
@@ -346,17 +388,18 @@ describe("Claude CLI completion announce continuity", () => {
   }
 
   it("keeps the completion turn restricted and carries its exchange into the next resume once", async () => {
-    const first = await runTurn({ runId: "run-requester-1", body: "Spawn the docs review." });
+    await seedRequester({
+      id: ACCOUNT_PROFILE_ID,
+      credential: { type: "token", provider: "anthropic", token: "synthetic-account-a" },
+    });
+    const { first, completion } = await runCompletionAfterFirstTurn();
     const boundSessionId = getCliSessionBinding(requesterEntry(), "claude-cli")?.sessionId;
     expect(first).toMatchObject({ resumed: false, sessionId: boundSessionId });
     expect(first.mcpServers).toEqual(["openclaw", "userDocs"]);
     expect(first.nativeTools).toBeNull();
+    const stored: InternalSessionEntry = requesterEntry();
+    expect(stored.cliHistoryBoundary).toMatchObject({ state: "known" });
 
-    const completion = await runTurn({
-      runId: "run-completion-1",
-      body: `A background task finished. Child result: ${CHILD_RESULT}. Process the completion update now.`,
-      opts: completionOpts,
-    });
     // Denial: the completion turn keeps its own isolated, restricted surface.
     expect(completion.sessionId).not.toBe(boundSessionId);
     expect(completion.mcpServers).toEqual(["openclaw"]);
@@ -380,5 +423,43 @@ describe("Claude CLI completion announce continuity", () => {
     const later = await runTurn({ runId: "run-requester-3", body: "Thanks." });
     expect(later).toMatchObject({ resumed: true, sessionId: boundSessionId });
     expect(later.prompt).not.toContain(ANNOUNCE_REPLY);
+  });
+
+  it("withholds the exchange from a resume under an opaque native login", async () => {
+    await seedRequester();
+    const { completion } = await runCompletionAfterFirstTurn();
+    expect(completion.reply).toBe(ANNOUNCE_REPLY);
+    const binding = getCliSessionBinding(requesterEntry(), "claude-cli");
+    expect(binding?.authEpoch).toBeUndefined();
+    expect(binding?.unseenTurns).toBeUndefined();
+
+    const next = await runTurn({ runId: "run-requester-2", body: "What did the review find?" });
+    expect(next).toMatchObject({ resumed: true, sessionId: binding?.sessionId });
+    expect(next.prompt).not.toContain(CHILD_RESULT);
+    expect(next.prompt).not.toContain(ANNOUNCE_REPLY);
+  });
+
+  it("refuses the saved exchange after an identity-less login is reassigned", async () => {
+    await seedRequester({
+      id: IDENTITYLESS_PROFILE_ID,
+      credential: identitylessLogin("synthetic-login-a"),
+    });
+    await runCompletionAfterFirstTurn();
+    const binding = getCliSessionBinding(requesterEntry(), "claude-cli");
+    expect(binding?.unseenTurns?.[0]?.reply).toBe(ANNOUNCE_REPLY);
+
+    // Another account's token under the same profile keeps native reuse but cannot own history.
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { [IDENTITYLESS_PROFILE_ID]: identitylessLogin("synthetic-login-b") },
+      },
+      state.agentDir(),
+    );
+    const next = await runTurn({ runId: "run-requester-2", body: "What did the review find?" });
+    expect(next).toMatchObject({ resumed: true, sessionId: binding?.sessionId });
+    expect(next.prompt).not.toContain(CHILD_RESULT);
+    expect(next.prompt).not.toContain(ANNOUNCE_REPLY);
+    expect(getCliSessionBinding(requesterEntry(), "claude-cli")?.unseenTurns).toBeUndefined();
   });
 });

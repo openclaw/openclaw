@@ -290,9 +290,10 @@ export async function settlePreservedCliSessionTurn(
           setCliSessionBinding(entry, params.provider, { ...bound, unseenTurns: undefined });
           return true;
         }
-        // An exchange from another auth identity must not enter this native session.
+        // Keep text only for a known auth identity that also ran the exchange.
         if (
           !unseenTurn ||
+          bound.authEpoch === undefined ||
           bound.authProfileId !== normalizeOptionalString(ran.authProfileId) ||
           bound.authEpoch !== normalizeOptionalString(ran.authEpoch) ||
           bound.authEpochVersion !== ran.authEpochVersion

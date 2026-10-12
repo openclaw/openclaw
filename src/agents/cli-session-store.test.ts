@@ -303,7 +303,7 @@ describe("preserved CLI turn settlement", () => {
   const unseenTurn = { prompt: "Child finished: CHILD_RESULT", reply: "Relayed the result." };
 
   async function settle(params: {
-    stored: typeof bound & { unseenTurns?: (typeof unseenTurn)[] };
+    stored: Partial<typeof bound> & { sessionId: string; unseenTurns?: (typeof unseenTurn)[] };
     ran: Partial<typeof bound>;
   }) {
     return await withTempSessionStore(async ({ storePath }) => {
@@ -345,6 +345,11 @@ describe("preserved CLI turn settlement", () => {
     { name: "another auth profile", ran: { authProfileId: "anthropic:personal" } },
     { name: "another auth epoch", ran: { authEpoch: "epoch-b" } },
     { name: "a replaced binding", ran: {}, stored: { ...bound, sessionId: "native-newer" } },
+    {
+      name: "an opaque native login",
+      ran: { authProfileId: undefined, authEpoch: undefined },
+      stored: { ...bound, authProfileId: undefined, authEpoch: undefined },
+    },
   ])("leaves the binding unchanged for $name", async ({ ran, stored }) => {
     await expect(settle({ stored: stored ?? bound, ran })).resolves.toEqual(stored ?? bound);
   });

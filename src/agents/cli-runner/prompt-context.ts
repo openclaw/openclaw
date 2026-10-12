@@ -1,4 +1,5 @@
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
@@ -192,9 +193,12 @@ export async function prepareCliSystemPrompt(
 function prependCliSessionResumeUserContext(
   run: Pick<RunCliAgentParams, "currentInboundContext" | "cliSessionBinding">,
   reusableCliSession: CliReusableSession,
+  historyAuthorized: boolean,
 ): RunCliAgentParams["currentInboundContext"] {
   const context = run.currentInboundContext;
+  // Missed exchanges are saved conversation text: native reuse alone cannot replay them.
   const unseenTurns =
+    historyAuthorized &&
     (reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift") &&
     reusableCliSession.sessionId === run.cliSessionBinding?.sessionId
       ? run.cliSessionBinding.unseenTurns
@@ -226,15 +230,20 @@ export function createCliCurrentPromptRenderer(
     "currentInboundContext" | "inputProvenance" | "cliSessionBinding"
   >,
   reusableCliSession: CliReusableSession,
-  inlineContext?: string,
+  /** The session gap note, and the history writer whose account boundary authorizes replay. */
+  notes: { gap?: string; writer?: CliHistoryWriter } = {},
 ) {
-  const context = prependCliSessionResumeUserContext(params, reusableCliSession);
+  const context = prependCliSessionResumeUserContext(
+    params,
+    reusableCliSession,
+    notes.writer !== undefined,
+  );
   return (prompt: string, preferResumableText = false) =>
     composeCliPromptContext(
       annotateInterSessionPromptText(
         buildCurrentInboundPrompt({ context, prompt, preferResumableText }),
         params.inputProvenance,
       ),
-      { prependContext: inlineContext },
+      { prependContext: notes.gap },
     );
 }

@@ -390,7 +390,8 @@ export async function verifyCliBackendAnnounceOrdering({
 
 /**
  * A restricted completion turn runs in its own Claude session. The requester's next
- * turn resumes its bound session, which must then hold that exchange as quoted context.
+ * turn resumes its bound session, which holds that exchange as quoted context only when
+ * the requester's history account boundary is known; an opaque login must withhold it.
  * Read from Claude's own transcript for that session, the record the model resumes.
  */
 export async function verifyCliBackendAnnounceContinuity({
@@ -404,13 +405,17 @@ export async function verifyCliBackendAnnounceContinuity({
   requestTimeoutMs: number;
   logStep: (step: string, details?: Record<string, unknown>) => void;
 }) {
-  const boundCliSessionId = () =>
-    getCliSessionBinding(loadGatewaySessionEntryReadOnly(announce.sessionKey).entry, "claude-cli")
-      ?.sessionId;
+  const binding = () =>
+    getCliSessionBinding(loadGatewaySessionEntryReadOnly(announce.sessionKey).entry, "claude-cli");
+  const boundCliSessionId = () => binding()?.sessionId;
+  const pendingExchanges = binding()?.unseenTurns?.length ?? 0;
   const boundBefore = boundCliSessionId();
   if (!boundBefore) {
     throw new Error("CLI announce probe has no bound Claude session");
   }
+  const historyAuthorized =
+    loadGatewaySessionEntryReadOnly(announce.sessionKey).entry?.cliHistoryBoundary?.state ===
+    "known";
   const followUp = await client.request(
     "agent",
     {
@@ -439,11 +444,17 @@ export async function verifyCliBackendAnnounceContinuity({
   logStep("announce-continuity:resumed", {
     boundCliSessionId: boundBefore,
     userTurns: userTexts.length,
+    historyAuthorized,
+    pendingExchanges,
     carriedCompletion: carried !== undefined,
     followUpReply: extractPayloadText(followUp.result),
   });
   // The completion turn never ran in the bound session itself.
   expect(userTexts.some((text) => text.startsWith("[Inter-session message]"))).toBe(false);
+  if (!historyAuthorized) {
+    expect(carried, "an unowned login must not replay the completion exchange").toBeUndefined();
+    return;
+  }
   expect(carried, "resumed Claude session lacks the completion exchange").toBeDefined();
   // Quoted context is JSON, so the relayed reply appears in its escaped form.
   expect(carried).toContain(

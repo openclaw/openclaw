@@ -384,6 +384,11 @@ binding (each capped at 2,000 characters, newest 8 turns) and prepends them once
 as a marked context block, to the next turn that resumes the bound session. The
 separate turn's tool restrictions are unchanged. A fresh session recovers the same
 exchange from saved history instead, and chat history shows each turn once.
+Like saved-history recovery, this replay requires the
+[history account boundary](#history-account-boundaries) of the resuming turn. An
+opaque native login keeps no exchange, and an identity-less OAuth credential or a
+changed account withholds and drops it; the resumed session then has only its own
+native history.
 
 ### History account boundaries
 

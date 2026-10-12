@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { buildCliSessionDriftNote, buildCliSessionUnseenTurnsContext } from "../cli-session.js";
 import { createCliCurrentPromptRenderer, prepareCliTurnPromptContext } from "./prompt-context.js";
 
@@ -41,7 +42,7 @@ it.each([false, true])(
 it("keeps a transient session notice at the top of the native user prompt", () => {
   const session = { mode: "reuse", sessionId: "native-session" } as const;
   const note = "[OpenClaw: Messages occurred outside this Claude session.]";
-  const render = createCliCurrentPromptRenderer({}, session, note);
+  const render = createCliCurrentPromptRenderer({}, session, { gap: note });
   expect(render("Read the latest token.")).toBe(`${note}\n\nRead the latest token.`);
   expect(render("Read the latest token.", true)).toBe(`${note}\n\nRead the latest token.`);
   expect(createCliCurrentPromptRenderer({}, session)("Read the latest token.")).toBe(
@@ -51,12 +52,14 @@ it("keeps a transient session notice at the top of the native user prompt", () =
 
 const unseenTurns = [{ prompt: "Child result: CHILD_RESULT", reply: "Relayed." }];
 const cliSessionBinding = { sessionId: "native-bound", unseenTurns };
+const historyWriter = {} as CliHistoryWriter;
 
 describe("CLI resume user context", () => {
   it("puts the drift note before exchanges the resumed session missed", () => {
     const render = createCliCurrentPromptRenderer(
       { currentInboundContext: { text: "Conversation info" }, cliSessionBinding },
       { mode: "reuse-with-drift", sessionId: "native-bound", drift: { reasons: ["prompt-tools"] } },
+      { writer: historyWriter },
     );
 
     expect(render("ask")).toBe(
@@ -77,6 +80,16 @@ describe("CLI resume user context", () => {
       createCliCurrentPromptRenderer(
         { currentInboundContext: { text: "Conversation info" }, cliSessionBinding },
         session,
+        { writer: historyWriter },
+      )("ask"),
+    ).toBe("Conversation info\n\nask");
+  });
+
+  it("withholds missed exchanges without the history account boundary", () => {
+    expect(
+      createCliCurrentPromptRenderer(
+        { currentInboundContext: { text: "Conversation info" }, cliSessionBinding },
+        { mode: "reuse", sessionId: "native-bound" },
       )("ask"),
     ).toBe("Conversation info\n\nask");
   });
