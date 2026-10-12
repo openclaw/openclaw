@@ -48,9 +48,9 @@ const AUDIO_ONLY_CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["audio"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
 
-function appendFileBlocks(body: string | undefined, suffix: string | undefined): string {
+function appendFileBlocks(body: string, suffix: string | undefined): string {
   if (suffix === undefined) {
-    return body ?? "";
+    return body;
   }
   const base = typeof body === "string" ? body.trim() : "";
   if (!base) {

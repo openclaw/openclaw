@@ -58,7 +58,7 @@ export function* tokenizeHtmlTags(html: string): Generator<HtmlTagToken> {
       end,
       name,
       closing,
-      selfClosing: !closing && raw.trimEnd().endsWith("/>"),
+      selfClosing: !closing && raw.endsWith("/>"),
     };
     cursor = end;
   }
