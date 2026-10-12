@@ -399,7 +399,7 @@ describe("Codex app-server model catalog", () => {
     listModelsMock.mockResolvedValueOnce({ models: [] });
     const cancellation = new CodexAppServerLocalRequestCancellationError(
       "account/read",
-      "retry timed out",
+      "timed out",
       true,
     );
     rpc.request
