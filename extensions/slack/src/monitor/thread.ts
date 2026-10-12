@@ -1,10 +1,6 @@
 import type { ConversationsRepliesResponse, WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
@@ -133,11 +129,7 @@ export async function resolveSlackThreadStarter(params: {
   ]);
   const cached = THREAD_STARTER_CACHE.get(cacheKey);
   if (cached && !params.refresh) {
-    const now = asDateTimestampMs(Date.now());
-    if (now !== undefined && cached.expiresAt > now) {
-      return cached.value;
-    }
-    THREAD_STARTER_CACHE.delete(cacheKey);
+    return cached.value;
   }
   if (params.refresh) {
     THREAD_STARTER_CACHE.delete(cacheKey);
@@ -162,17 +154,12 @@ export async function resolveSlackThreadStarter(params: {
       ts: message.ts,
       files,
     };
-    const expiresAt = resolveExpiresAtMsFromDurationMs(THREAD_STARTER_CACHE_TTL_MS);
-    if (expiresAt !== undefined) {
-      if (THREAD_STARTER_CACHE.has(cacheKey)) {
-        THREAD_STARTER_CACHE.delete(cacheKey);
-      }
-      THREAD_STARTER_CACHE.set(cacheKey, {
-        value: starter,
-        expiresAt,
-      });
-      evictThreadStarterCache();
-    }
+    THREAD_STARTER_CACHE.delete(cacheKey);
+    THREAD_STARTER_CACHE.set(cacheKey, {
+      value: starter,
+      expiresAt: Date.now() + THREAD_STARTER_CACHE_TTL_MS,
+    });
+    evictThreadStarterCache();
     return starter;
   } catch (err) {
     logVerbose(

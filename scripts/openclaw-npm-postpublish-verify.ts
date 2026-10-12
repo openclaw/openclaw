@@ -47,6 +47,7 @@ import { escapeRegExp } from "./lib/regexp.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
@@ -271,6 +272,9 @@ const NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 const NPM_REGISTRY_PROVENANCE_ATTEMPTS = 30;
 const NPM_REGISTRY_PROVENANCE_RETRY_MAX_DELAY_MS = 10_000;
 
+type ReleasePublishWorkflowIdentity = { ref: string; sha: string };
+type VerifyDerivedReleasePublishWorkflow = (identity: ReleasePublishWorkflowIdentity) => void;
+
 type FetchRegistryJsonOptions = {
   fetchImpl?: typeof fetch;
   maxBodyBytes?: number;
@@ -283,6 +287,7 @@ function resolveNpmProvenanceVerificationPolicy(
   expectedWorkflow?: {
     ref?: string;
     sha?: string;
+    verifyDerived?: VerifyDerivedReleasePublishWorkflow;
   },
 ) {
   const parsedVersion = parseReleaseVersion(version);
@@ -300,8 +305,28 @@ function resolveNpmProvenanceVerificationPolicy(
     /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(workflowRef ?? "");
   let protectedReleasePublishTrusted = false;
   if (protectedReleasePublishMatch) {
-    const expectedRef = expectedWorkflow?.ref;
-    const expectedSha = expectedWorkflow?.sha;
+    const expectedDependencyUri = `git+${NPM_PROVENANCE_REPOSITORY}@${workflowRef}`;
+    let expectedRef = expectedWorkflow?.ref;
+    let expectedSha = expectedWorkflow?.sha;
+    if (!expectedRef && !expectedSha && expectedWorkflow?.verifyDerived && workflowRef) {
+      // Without an explicit override, the attested tag and commit are only a
+      // claim; they become the expected identity after live trusted-source checks.
+      const attestedSha =
+        statement.predicate?.buildDefinition?.resolvedDependencies?.find(
+          (dependency) => dependency.uri === expectedDependencyUri,
+        )?.digest?.gitCommit ?? "";
+      if (
+        !/^[a-f0-9]{40}$/u.test(attestedSha) ||
+        attestedSha.slice(0, 12) !== protectedReleasePublishMatch[1]
+      ) {
+        throw new Error(
+          "npm provenance SHA-pinned release-publish ref has no matching workflow revision to verify.",
+        );
+      }
+      expectedWorkflow.verifyDerived({ ref: workflowRef, sha: attestedSha });
+      expectedRef = workflowRef;
+      expectedSha = attestedSha;
+    }
     if (
       expectedRef !== workflowRef ||
       !/^[a-f0-9]{40}$/u.test(expectedSha ?? "") ||
@@ -311,7 +336,6 @@ function resolveNpmProvenanceVerificationPolicy(
         "npm provenance SHA-pinned release-publish ref does not match the approved workflow ref and SHA.",
       );
     }
-    const expectedDependencyUri = `git+${NPM_PROVENANCE_REPOSITORY}@${workflowRef}`;
     protectedReleasePublishTrusted =
       statement.predicate?.buildDefinition?.resolvedDependencies?.some(
         (dependency) =>
@@ -362,6 +386,8 @@ export async function verifyNpmProvenanceAttestation(params: {
   attestations: NpmRegistryAttestation[];
   expectedWorkflowRef?: string;
   expectedWorkflowSha?: string;
+  /** Verifies an attested release-publish identity when no expected workflow is supplied. */
+  verifyDerivedWorkflow?: VerifyDerivedReleasePublishWorkflow;
   integrity: string;
   packageName: string;
   verifyBundle?: VerifyNpmProvenanceBundle;
@@ -398,6 +424,7 @@ export async function verifyNpmProvenanceAttestation(params: {
           policy = resolveNpmProvenanceVerificationPolicy(statement, params.version, {
             ref: params.expectedWorkflowRef,
             sha: params.expectedWorkflowSha,
+            verifyDerived: params.verifyDerivedWorkflow,
           });
         } catch (error) {
           policyError = error;
@@ -433,6 +460,31 @@ export async function verifyNpmProvenanceAttestation(params: {
   throw new Error(
     `npm provenance attestation does not match ${params.packageName}@${params.version} and its registry integrity.`,
   );
+}
+
+/**
+ * Accepts an attested release-publish identity only when GitHub still has the
+ * exact lightweight tag at that commit and the commit is reachable from main.
+ */
+export function verifyAttestedReleasePublishWorkflow(
+  identity: ReleasePublishWorkflowIdentity,
+  runGh?: (args: string[]) => string,
+): void {
+  const repository = NPM_PROVENANCE_REPOSITORY.replace("https://github.com/", "");
+  verifyReleaseToolingIdentity({
+    repository,
+    runGh,
+    workflowFullRef: identity.ref,
+    workflowRef: identity.ref.replace(/^refs\/tags\//u, ""),
+    workflowSha: identity.sha,
+  });
+  verifyReleaseToolingIdentity({
+    repository,
+    runGh,
+    workflowFullRef: "refs/heads/main",
+    workflowRef: "main",
+    workflowSha: identity.sha,
+  });
 }
 
 export function collectInstalledPackageErrors(params: {
@@ -1277,6 +1329,8 @@ async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<v
     attestations,
     expectedWorkflowRef: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF,
     expectedWorkflowSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
+    // Explicit env overrides stay strict; otherwise derive the attested publish tooling.
+    verifyDerivedWorkflow: (identity) => verifyAttestedReleasePublishWorkflow(identity),
   });
   console.log(
     `openclaw-npm-postpublish-verify: registry signature and provenance attestation verified (${version})`,

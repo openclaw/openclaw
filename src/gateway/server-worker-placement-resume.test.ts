@@ -102,6 +102,7 @@ describe("worker automatic resume", () => {
             : replacement.environments.get(environmentId),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        initialPlacements: placements.list(),
         scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         placements,

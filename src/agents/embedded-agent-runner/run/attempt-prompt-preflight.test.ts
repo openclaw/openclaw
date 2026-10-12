@@ -5,6 +5,7 @@ import { testing } from "../../openai-transport-stream.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
@@ -300,6 +301,41 @@ describe("attempt prompt preflight", () => {
     expect(replaceSessionMessages).toHaveBeenCalledWith(
       sessionManager.buildSessionContext().messages,
     );
+  });
+
+  it("warns and keeps client recovery when V2 pending input exceeds the hard budget", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const result = await prepareEmbeddedAttemptPromptPreflight({
+        attempt,
+        compactionReplayEnabled: true,
+        providerCompactionAtRequestBoundary: true,
+        contextEnginePromptAuthority: "assembled",
+        contextTokenBudget: 100,
+        pendingInputTokens: 101,
+        hookMessagesForCurrentPrompt: [],
+        includeBoundaryTimestamp: false,
+        promptForPrecheck: "oversized input",
+        reserveTokens: 20,
+        sessionMessageCount: 0,
+        state: {
+          contextBudgetStatus: undefined,
+          preflightRecovery: undefined,
+          promptError: null,
+          promptErrorSource: null,
+          skipPromptSubmission: false,
+        },
+        systemPrompt: "",
+        toolResultMaxChars: 1_000,
+      });
+      expect(result.preflightRecovery).toEqual({ route: "compact_only" });
+      expect(result.skipPromptSubmission).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("falling back to client compaction: pending input exceeds"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("does not persist heuristic pre-prompt tool-result truncation", async () => {

@@ -127,28 +127,28 @@ function limitExtensionSchemas(params: {
         : { ...entry, configSchema: buildOmittedExtensionConfigSchema(kind, entry.id) },
     );
 
-  return {
-    plugins: limitSchemas(params.plugins, "plugin").map((plugin) => ({
+  const plugins = limitSchemas(params.plugins, "plugin");
+  for (const [index, plugin] of plugins.entries()) {
+    if (!plugin.providerRequest) {
+      continue;
+    }
+    plugins[index] = {
       ...plugin,
-      ...(plugin.providerRequest
-        ? {
-            providerRequest: {
-              providers: Object.fromEntries(
-                Object.entries(plugin.providerRequest.providers ?? {}).map(([id, policy]) => [
-                  id,
-                  {
-                    ...policy,
-                    // Each model schema appears under both defaults and agent entries.
-                    ...(policy.modelParamsSchema && !keepSchema(policy.modelParamsSchema, 2)
-                      ? { modelParamsSchema: buildOmittedExtensionConfigSchema("plugin", id) }
-                      : {}),
-                  },
-                ]),
-              ),
-            },
-          }
-        : {}),
-    })),
+      providerRequest: {
+        providers: Object.fromEntries(
+          Object.entries(plugin.providerRequest.providers ?? {}).map(([id, policy]) => [
+            id,
+            // Each model schema appears under both defaults and agent entries.
+            policy.modelParamsSchema && !keepSchema(policy.modelParamsSchema, 2)
+              ? { ...policy, modelParamsSchema: buildOmittedExtensionConfigSchema("plugin", id) }
+              : policy,
+          ]),
+        ),
+      },
+    };
+  }
+  return {
+    plugins,
     channels: limitSchemas(params.channels, "channel"),
   };
 }

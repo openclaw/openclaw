@@ -496,14 +496,13 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
         }
       }
-      const readStoreTargetResult = async (
-        request: Omit<SessionStoreTargetReadRequest, "candidates">,
-      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
-        const preparedRequest = {
-          ...request,
-          env: captureSessionTranscriptStorageEnvironment(request.env),
-          candidates: capturedCandidates,
-        };
+      const runRead = async (
+        input: Extract<
+          SessionHistoryWorkerInput,
+          { kind: "session-store-target" | "session-target-inventory" }
+        >,
+        inputBytes: number,
+      ) => {
         const reply = await runWithSqliteDatabaseAdmissionTurn(
           admissionPaths,
           () =>
@@ -512,13 +511,26 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 assertCurrent();
                 dispatched = true;
                 lane.nativeSequence++;
-                return { kind: "session-store-target", request: preparedRequest };
+                return input;
               },
-              { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+              { inputBytes, timeoutMs: 60_000 },
             ),
           admissionFamilies,
         );
-        const result = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+        return unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+      };
+      const readStoreTargetResult = async (
+        request: Omit<SessionStoreTargetReadRequest, "candidates">,
+      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
+        const preparedRequest = {
+          ...request,
+          env: captureSessionTranscriptStorageEnvironment(request.env),
+          candidates: capturedCandidates,
+        };
+        const result = await runRead(
+          { kind: "session-store-target", request: preparedRequest },
+          JSON.stringify(preparedRequest).length * 2,
+        );
         if (
           typeof result === "boolean" ||
           Array.isArray(result) ||
@@ -587,25 +599,10 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             env: captureSessionTranscriptStorageEnvironment(request.env),
             candidates: capturedCandidates,
           };
-          const reply = await runWithSqliteDatabaseAdmissionTurn(
-            admissionPaths,
-            () =>
-              lane.pool.run(
-                () => {
-                  assertCurrent();
-                  dispatched = true;
-                  lane.nativeSequence++;
-                  return { kind: "session-target-inventory", request: preparedRequest };
-                },
-                {
-                  inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
-                  timeoutMs: 60_000,
-                },
-              ),
-            admissionFamilies,
+          const result = await runRead(
+            { kind: "session-target-inventory", request: preparedRequest },
+            measureSessionStoreTargetInventoryInputBytes(preparedRequest),
           );
-          const result =
-            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||

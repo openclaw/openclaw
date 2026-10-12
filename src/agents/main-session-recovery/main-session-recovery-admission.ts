@@ -1,4 +1,5 @@
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
@@ -17,6 +18,7 @@ export type MainSessionRecoveryAdmission = {
 
 /** Keeps pending dispatch visible to foreground admission until the Gateway adopts it. */
 export async function runWithMainSessionRecoveryAdmission<T>(params: {
+  agentId?: string;
   storePath: string;
   sessionKey: string;
   canonicalSessionKey?: string;
@@ -45,6 +47,9 @@ export async function runWithMainSessionRecoveryAdmission<T>(params: {
   let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>>;
   try {
     admission = await beginSessionWorkAdmission({
+      agentId:
+        params.agentId ??
+        parseAgentSessionKey(params.canonicalSessionKey ?? params.sessionKey)?.agentId,
       scope: params.storePath,
       identities: [params.sessionKey, params.canonicalSessionKey, params.sessionId],
       owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,

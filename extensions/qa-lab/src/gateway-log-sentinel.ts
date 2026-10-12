@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   extractQaMessageText,
-  readQaMessageFunctionCalls,
+  readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 
@@ -12,6 +12,7 @@ type GatewayLogSentinelKind =
   | "plugin-hook-failure"
   | "plugin-contract-error"
   | "direct-reply-self-message"
+  | "final-reply-delivery-failure"
   | "codex-app-server-timeout"
   | "stalled-agent-run"
   | "cron-model-allowlist"
@@ -70,6 +71,16 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
       /\b(?:missing|invalid|registration|register|manifest|contract|schema|declare|error)\b/iu.test(
         line,
       ),
+  },
+  {
+    // Channel reply dispatchers log `<channel> final reply failed: <error>` when
+    // the final answer never reached the chat; the channel may only show a
+    // generic notice, so the log line is the actionable evidence.
+    kind: "final-reply-delivery-failure",
+    verdict: "product-bug",
+    owner: "openclaw-routing",
+    productImpact: "P1",
+    test: (line) => /\bfinal reply failed\b/iu.test(line),
   },
   {
     kind: "codex-app-server-timeout",
@@ -150,31 +161,15 @@ function parseJsonArguments(value: unknown): unknown {
 }
 
 function hasCurrentChatMessageSend(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isRecord(block)) {
-        continue;
-      }
-      const type = readNonEmptyString(block.type)?.toLowerCase();
-      if (
-        type !== "tool_use" &&
-        type !== "toolcall" &&
-        type !== "tool_call" &&
-        type !== "function_call"
-      ) {
-        continue;
-      }
-      if (
-        isCurrentChatMessageSend(block.name, block.input ?? block.arguments ?? block.args ?? null)
-      ) {
-        return true;
-      }
-    }
-  }
-
-  for (const call of readQaMessageFunctionCalls(message)) {
-    if (isCurrentChatMessageSend(call.tool, call.args)) {
+  for (const { block, tool, args } of readQaMessageToolCalls(message, {
+    includeFunctionCalls: true,
+  })) {
+    if (
+      isCurrentChatMessageSend(
+        tool,
+        block ? (block.input ?? block.arguments ?? block.args ?? null) : args,
+      )
+    ) {
       return true;
     }
   }

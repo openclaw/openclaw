@@ -67,6 +67,30 @@ function createAssistant(
 }
 
 describe("compaction replay owner rewrites", () => {
+  it("uses persisted V2 output usage rather than ciphertext length for checkpoint pressure", () => {
+    const owner = createAssistant([], 0);
+    const item = { type: "compaction" as const, encrypted_content: "opaque".repeat(100_000) };
+    captureOpenAIResponsesCompaction(
+      owner,
+      item,
+      "retained-users",
+      model,
+      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      [{ type: "message", role: "user", content: [{ type: "input_text", text: "keep" }] }, item],
+      123,
+    );
+    const serializedOwner = JSON.stringify(owner);
+    const restored: AssistantMessage = JSON.parse(serializedOwner);
+    const pressure = resolveCompactionReplayPressure([restored], model, replayIdentity, {
+      text: (value) => value.length,
+      image: () => 2000,
+      json: () => 1,
+    });
+    // 123 provider output tokens + 4 plaintext chars + three metadata allowances.
+    expect(pressure?.prefixTokens).toBe(130);
+    expect(pressure?.measuredTokens).toBeUndefined();
+  });
+
   it("invalidates a checkpoint when replacing content in its covered prefix", () => {
     const covered = { type: "text" as const, text: "covered" };
     const suffix = { type: "toolCall" as const, id: "call_1", name: "read", arguments: {} };
