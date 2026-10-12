@@ -305,12 +305,18 @@ function classifyStructuredClaudeCliOAuthFailureReason(
   err: unknown,
 ): OAuthRefreshFailureReason | null {
   const failure = asOptionalObjectRecord(err);
-  if (
-    failure?.name !== "FailoverError" ||
-    failure.provider !== "claude-cli" ||
-    failure.reason !== "auth" ||
-    failure.status !== 401
-  ) {
+  if (failure?.name !== "FailoverError" || failure.provider !== "claude-cli") {
+    return null;
+  }
+  // The claude subprocess reports an expired native login either as the
+  // classified 401 auth failure or, when the CLI runner keeps its own expiry
+  // status, as session_expired/410. Both carry the same login recovery. The
+  // expiry wording is still required below, so an ordinary expired CLI
+  // conversation session does not turn into a re-auth hint.
+  const isStructuredLoginFailure =
+    (failure.reason === "auth" && failure.status === 401) ||
+    (failure.reason === "session_expired" && failure.status === 410);
+  if (!isStructuredLoginFailure) {
     return null;
   }
   const rawError = typeof failure.rawError === "string" ? failure.rawError : "";
@@ -480,6 +486,24 @@ export function buildOAuthRefreshFailureLoginCommand(
   return sanitizedProvider === "claude-cli"
     ? `${formatCliCommand("claude auth login")} && ${command}`
     : command;
+}
+
+/**
+ * One-line recovery text for a classified OAuth login expiry. Shared by channel
+ * failure replies and the persisted terminal-run error the Control UI renders,
+ * so both surfaces name the same re-authentication step. The chat `/login`
+ * recovery variant (with a button presentation) stays in the reply layer.
+ */
+export function buildOAuthRefreshFailureRecoveryText(
+  failure: Pick<OAuthRefreshFailure, "provider" | "profileId">,
+  options?: { includeProfileId?: boolean },
+): string {
+  const loginCommand = buildOAuthRefreshFailureLoginCommand(failure.provider, {
+    profileId: options?.includeProfileId ? failure.profileId : undefined,
+  });
+  const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
+  const providerText = failure.provider ? ` for ${failure.provider}` : "";
+  return `⚠️ Model login expired on the gateway${providerText}. Re-auth with ${loginCommandMarkdown} in a terminal, then try again.`;
 }
 
 /** Build operator guidance for an active profile cooldown or disable window. */
