@@ -112,8 +112,10 @@ and resolved values still fail startup or reject the update.
 
   <Accordion title="Local CLI (tts-local-cli)">
     <ParamField path="command" type="string">Local executable or command string for CLI TTS.</ParamField>
-    <ParamField path="args" type="string[]">Command arguments. Supports `{{Text}}`, `{{OutputPath}}`, `{{OutputDir}}`, `{{OutputBase}}` placeholders.</ParamField>
+    <ParamField path="args" type="string[]">Command arguments. Supports `{{Text}}`, `{{OutputPath}}`, `{{OutputDir}}`, `{{OutputBase}}`, `{{VoiceId}}` placeholders.</ParamField>
     <ParamField path="outputFormat" type='"mp3" | "opus" | "wav"'>Expected CLI output format. Default `mp3` for audio attachments.</ParamField>
+    <ParamField path="voices" type="string[]">Voice ids your command accepts. These are what `/voice list` shows and what `/voice set` chooses from (`/talkvoice` on Discord). Ignored unless every entry is a string.</ParamField>
+    <ParamField path="voiceId" type="string">Active voice, expanded into the command as `{{VoiceId}}`. Defaults to the first entry of `voices`. Need not appear in `voices`: the list advertises choices, `voiceId` selects what runs. With neither set, `{{VoiceId}}` expands to nothing.</ParamField>
     <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Overrides the resolved TTS request timeout when set. When omitted, follows the request timeout; the plugin default is `120000`.</ParamField>
     <ParamField path="cwd" type="string">Optional command working directory.</ParamField>
     <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>

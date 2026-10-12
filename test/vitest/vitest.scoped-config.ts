@@ -212,7 +212,7 @@ export function createScopedVitestConfig(
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
     scopedDir,
   });
-  const effectiveInclude = includeFromEnv ?? cliInclude ?? include;
+  const effectiveInclude = includeFromEnv ?? (cliInclude && cliInclude.length > 0 ? cliInclude : include);
   const scopedInclude = relativizeScopedPatterns(effectiveInclude, scopedDir);
   const unitFastExcludePatterns =
     options?.excludeUnitFastTests === false

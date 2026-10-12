@@ -6462,7 +6462,7 @@ jobs:
               continue
             fi
             case "$selected:$result" in
-              true:success | false:success | false:skipped) ;;
+              true:success | true:abandoned | false:success | false:skipped) ;;
               *)
                 echo "::error title=CI job did not succeed::${name} finished with ${result} (selected=${selected:-missing})"
                 failures=1
