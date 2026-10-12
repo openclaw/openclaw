@@ -36,7 +36,7 @@ import {
   triggerBoardCronJob,
   type BoardCapabilityAuthority,
 } from "./board-host-tools.js";
-import type { GatewayRequestOptions } from "./server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 describe("board data handler loading", () => {
   it("loads only requested data/action handlers and preserves one-shot usage reads", async () => {
@@ -46,11 +46,14 @@ describe("board data handler loading", () => {
     } as BoardCapabilityAuthority;
     const publish = vi.fn();
     const client = { connId: "board-reader" };
-    const invocation = {
+    const invocation: GatewayRequestHandlerOptions = {
       req: { type: "req", id: "board-data", method: "board.data.read" },
-      context: {},
-      client,
-    } as GatewayRequestOptions;
+      params: {},
+      respond: publish,
+      isWebchatConnect: () => false,
+      context: {} as GatewayRequestHandlerOptions["context"],
+      client: client as GatewayRequestHandlerOptions["client"],
+    };
     sessionsList.mockImplementation(({ respond }) => respond(true, { sessions: [] }));
     usageStatus.mockImplementation(({ respond }) => respond(true, { providers: [] }));
     cronRun.mockImplementation(({ respond }) => respond(true, { ok: true }));
