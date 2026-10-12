@@ -15,6 +15,17 @@ import { DEFAULT_ELEVENLABS_BASE_URL, normalizeElevenLabsBaseUrl } from "./share
 
 const DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2";
 
+// Synchronous transcription options that are safe to forward from
+// providerOptions (audio defaults / model entry) into the multipart body.
+// These keys do not change the response contract: the provider still expects
+// a `payload.text` string. Options that alter the response (e.g. `webhook`,
+// `use_multi_channel`) are intentionally excluded from the allowlist.
+const ELEVENLABS_SYNC_TRANSCRIPTION_OPTIONS = [
+  "no_verbatim",
+  "tag_audio_events",
+  "diarize",
+] as const;
+
 async function transcribeElevenLabsAudio(
   req: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
@@ -39,15 +50,25 @@ async function transcribeElevenLabsAudio(
       capability: "audio",
       transport: "media-understanding",
     });
+  const fields: Record<string, string | number | boolean | undefined> = {
+    model_id: model,
+    language_code: req.language,
+    prompt: req.prompt,
+  };
+  for (const key of ELEVENLABS_SYNC_TRANSCRIPTION_OPTIONS) {
+    const value = req.query?.[key];
+    if (value !== undefined) {
+      // Avoid duplicating a key that the caller already pinned via the
+      // dedicated fields above; the allowlist keys never collide with
+      // model_id/language_code/prompt, so this simply forwards the option.
+      fields[key] = value;
+    }
+  }
   const form = buildAudioTranscriptionFormData({
     buffer: req.buffer,
     fileName: req.fileName,
     mime: req.mime,
-    fields: {
-      model_id: model,
-      language_code: req.language,
-      prompt: req.prompt,
-    },
+    fields,
   });
   const { response, release } = await postTranscriptionRequest({
     url: `${baseUrl}/v1/speech-to-text`,
