@@ -22,6 +22,7 @@ import type {
   CronJob,
   CronMessageChannel,
 } from "../types.js";
+import { isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronNotificationJob,
   type CronNotificationJob,
@@ -329,8 +330,11 @@ export function maybeEmitFailureAlert(
   },
 ) {
   recordUnresolvedFailure(params.job, params.failureNotificationDetail);
+  // A disabled one-shot will not run again, so its terminal failure cannot wait for the threshold.
+  const terminalOneShot =
+    params.status === "error" && params.job.schedule.kind === "at" && !isJobEnabled(params.job);
   const alertConfig = params.alertConfig;
-  if (!alertConfig || params.consecutiveCount < alertConfig.after) {
+  if (!alertConfig || (!terminalOneShot && params.consecutiveCount < alertConfig.after)) {
     return;
   }
   // Best-effort delivery suppresses inherited alert noise, not an independently
