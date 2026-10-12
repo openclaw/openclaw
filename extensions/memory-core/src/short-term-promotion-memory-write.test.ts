@@ -205,3 +205,89 @@ it.runIf(process.platform !== "win32")(
     expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
   },
 );
+
+it("refuses to rewrite a memory file that is not valid UTF-8", async () => {
+  const malformed = Buffer.concat([
+    Buffer.from("# Long-Term Memory\n\n- note: a", "utf-8"),
+    Buffer.from([0xff]),
+    Buffer.from("b\n", "utf-8"),
+  ]);
+  const memoryPath = await setupMemoryFile("placeholder");
+  await fs.writeFile(memoryPath, malformed);
+  const lossy = malformed.toString("utf-8");
+
+  await expect(
+    commitMemoryContent({
+      filePath: memoryPath,
+      tempPrefix: `${path.basename(memoryPath)}.promotion`,
+      expectedHash: hashMemoryContent(lossy),
+      expectedContent: lossy,
+      allowInPlaceFallback: true,
+      content: `${lossy}- promoted entry\n`,
+    }),
+  ).rejects.toMatchObject({
+    name: "MemoryFileNotUtf8Error",
+    message: expect.stringContaining("not valid UTF-8") as unknown as string,
+  });
+
+  // The refusal must leave the file byte-for-byte unchanged, U+FFFD included nowhere.
+  expect(await fs.readFile(memoryPath)).toEqual(malformed);
+});
+
+it("refuses before any write attempt even when the parent directory is read-only", async () => {
+  const malformed = Buffer.concat([
+    Buffer.from("# Long-Term Memory\n\n- note: a", "utf-8"),
+    Buffer.from([0xff]),
+    Buffer.from("b\n", "utf-8"),
+  ]);
+  const memoryPath = await setupMemoryFile("placeholder", true);
+  await fs.writeFile(memoryPath, malformed);
+  const lossy = malformed.toString("utf-8");
+
+  await expect(
+    commitMemoryContent({
+      filePath: memoryPath,
+      tempPrefix: `${path.basename(memoryPath)}.promotion`,
+      expectedHash: hashMemoryContent(lossy),
+      expectedContent: lossy,
+      allowInPlaceFallback: true,
+      content: `${lossy}- promoted entry\n`,
+    }),
+  ).rejects.toMatchObject({ name: "MemoryFileNotUtf8Error" });
+
+  expect(await fs.readFile(memoryPath)).toEqual(malformed);
+});
+
+it("merges valid non-ASCII memory including a literal replacement character", async () => {
+  // A validator that rejects every decoded U+FFFD must fail this test: the
+  // original bytes contain an intentional replacement character that has to
+  // survive the merge byte-for-byte.
+  const original = "# Long-Term Memory\n\n- note: 中文 🦀 \uFFFD tail\n";
+  const memoryPath = await setupMemoryFile(original);
+
+  await commitMemoryContent({
+    filePath: memoryPath,
+    tempPrefix: `${path.basename(memoryPath)}.promotion`,
+    expectedHash: hashMemoryContent(original),
+    content: `${original}- promoted entry\n`,
+  });
+
+  const written = await fs.readFile(memoryPath);
+  expect(
+    written.subarray(0, Buffer.byteLength(original)).equals(Buffer.from(original, "utf-8")),
+  ).toBe(true);
+  expect(written.toString("utf-8")).toContain("- promoted entry");
+});
+
+it("still creates a missing memory file (first promotion)", async () => {
+  const memoryPath = await setupMemoryFile("placeholder");
+  await fs.rm(memoryPath);
+
+  await commitMemoryContent({
+    filePath: memoryPath,
+    tempPrefix: `${path.basename(memoryPath)}.promotion`,
+    content: "# Long-Term Memory\n\n- first entry\n",
+  });
+
+  expect(await fs.readFile(memoryPath, "utf-8")).toContain("first entry");
+});
