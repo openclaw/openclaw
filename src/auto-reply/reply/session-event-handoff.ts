@@ -305,6 +305,10 @@ export function enqueueSessionEventForHost(
     settlement = "settling";
     const complete = () => {
       settlement = "finished";
+      // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
+      // must carry the still-live assertion so revoked ingress rejects before the new
+      // attempt prepares a session or admits a turn.
+      const pendingAcceptanceAssertion = accepted ? undefined : acceptanceAssertion;
       acceptanceAssertion = undefined;
       // Only a policy publication retains an unstarted occurrence: it is re-admitted
       // under the current policy instead of being destroyed. The rejection may land
@@ -313,6 +317,8 @@ export function enqueueSessionEventForHost(
       // and abandonment still settle terminally and consume the occurrence.
       const configChangeRetention =
         configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
+      const attempt = options.readmissionAttempt ?? 0;
+      const canReadmit = configChangeRetention && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
       const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
       if (status === "failed" && !configChangeRetention) {
         log.error("session event execution failed", {
@@ -325,16 +331,21 @@ export function enqueueSessionEventForHost(
       }
       signal.removeEventListener("abort", onAbort);
       generationLease?.release();
-      const retainCustody =
-        (options.preserveOccurrenceOnRejection && !adopted && !started) || configChangeRetention;
+      // Passive-promotion preservation is reserved for occurrences that already
+      // existed as passive notices before a failed promotion; policy re-admissions
+      // never opt into it, so terminal cancellation, abandonment, or a failed retry
+      // of a producer-owned occurrence always consumes instead of resurfacing as
+      // contract-less passive text in a later ordinary turn.
+      const retainCustody = configChangeRetention
+        ? canReadmit
+        : Boolean(options.preserveOccurrenceOnRejection && !adopted && !started);
       if (retainCustody) {
         ownership.release();
       } else {
         ownership.cancel();
       }
       if (configChangeRetention) {
-        const attempt = options.readmissionAttempt ?? 0;
-        if (attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
+        if (canReadmit) {
           try {
             // Re-dispatch from scratch so admission, execution, and delivery all bind
             // the current policy. The captured target, producer authority ceiling,
@@ -351,8 +362,14 @@ export function enqueueSessionEventForHost(
               ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
               ...(options.expectedTarget ? { expectedTarget: options.expectedTarget } : {}),
               ...(options.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
+              ...(pendingAcceptanceAssertion
+                ? { assertAcceptanceCurrent: pendingAcceptanceAssertion }
+                : {}),
               occurrences,
-              preserveOccurrenceOnRejection: true,
+              // Deliberately no preserveOccurrenceOnRejection: the occurrence is
+              // producer-owned, not a pre-existing passive notice, so any terminal
+              // settlement of this attempt (cancel, Stop, admission refusal) consumes
+              // it instead of parking contract-less text for a later turn.
               readmissionAttempt: attempt + 1,
               // A durable producer still commits its attempt only once the re-admitted
               // turn is adopted.
@@ -361,13 +378,34 @@ export function enqueueSessionEventForHost(
               ...(options.createIfMissing ? { createIfMissing: options.createIfMissing } : {}),
             });
           } catch (error) {
-            // Re-admission itself rejected; the released occurrence stays in passive
-            // custody for the next ordinary turn.
-            log.warn("session event policy readmission failed; occurrence retained", {
+            // Re-admission rejected synchronously (retired producer, moved destination,
+            // revoked ingress). The released occurrence carries no producer contract,
+            // so it must not wait as passive text for a later ordinary turn; consume
+            // it terminally instead.
+            claimSystemEventTurn(
+              resolveSystemEventQueueKey(sessionKey, agentId),
+              occurrences,
+              () => {},
+              agentId,
+            )?.cancel();
+            log.error("session event policy readmission rejected; occurrence settled", {
+              source: options.source,
+              agentId,
+              sessionKey,
               eventId: occurrence.id,
               error: String(error),
             });
           }
+        } else {
+          // Bounded re-admission is exhausted; the occurrence was already consumed
+          // above so it never drains into a later turn as contract-less text.
+          log.error("session event policy readmission attempts exhausted; occurrence settled", {
+            source: options.source,
+            agentId,
+            sessionKey,
+            eventId: occurrence.id,
+            error: failure,
+          });
         }
       }
       if (!accepted) {
