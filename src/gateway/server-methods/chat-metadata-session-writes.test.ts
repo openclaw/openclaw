@@ -14,10 +14,6 @@ import {
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import {
-  projectionLane,
-  rotateDatabaseWorkers,
-} from "../../config/sessions/session-transcript-worker-resources.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -606,8 +602,6 @@ it.each([
             await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
               preserveActivity: true,
               skipMaintenance: true,
-              // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
-              assertCommitAllowed: () => {},
             });
           } else if (changeEntry && scenario.committed) {
             runOpenClawAgentWriteTransaction((current) => {
@@ -675,8 +669,7 @@ it.each([
             message: "Session changed while preparing its metadata. Retry the request.",
           });
           expect(changed.respond).not.toHaveBeenCalled();
-          // Retire cached readers without releasing request-owned registrations.
-          await rotateDatabaseWorkers(projectionLane);
+          await closeOpenClawAgentDatabasesAsync(state.root);
           expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
           return;
         }
@@ -686,7 +679,7 @@ it.each([
         expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
         expect(changed.error).toBeUndefined();
         expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
-        await rotateDatabaseWorkers(projectionLane);
+        await closeOpenClawAgentDatabasesAsync(state.root);
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       } finally {
         release?.();

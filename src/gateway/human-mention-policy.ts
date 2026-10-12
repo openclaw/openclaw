@@ -12,10 +12,7 @@ import {
   type UsersMentionableResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  updateSessionProfileInvolvement,
-  updateSessionProfileInvolvementAsync,
-} from "../config/sessions/session-accessor.js";
+import { updateSessionProfileInvolvementAsync } from "../config/sessions/session-accessor.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -301,28 +298,6 @@ export function createHumanMentionPolicy(params: {
   }
 
   return {
-    recordCommittedInvolvement(input: MentionCommittedInput): void {
-      if (isIncognitoSessionKey(input.sessionKey)) {
-        return;
-      }
-      const cfg = params.getRuntimeConfig();
-      const target = resolveSessionSharingTarget({
-        cfg,
-        sessionKey: input.sessionKey,
-        agentId: input.agentId,
-      });
-      const profileIds = involvedProfiles(input, target, cfg);
-      if (target && profileIds.length) {
-        updateSessionProfileInvolvement(
-          { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
-          {
-            expectedSessionId: input.sessionId,
-            profileIds,
-            change: { kind: "mention", source: input.committedSource },
-          },
-        );
-      }
-    },
     async recordCommittedInvolvementAsync(input: MentionCommittedInput): Promise<void> {
       const cfg = params.getRuntimeConfig();
       const agent = resolveRequestedSessionAgentId(cfg, input.sessionKey, input.agentId);

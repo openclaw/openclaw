@@ -38,31 +38,58 @@ export function recordedUpdateRunDrivers(record: UpdateRunRecord): UpdateRunDriv
   ];
 }
 
+// Ancestors are fixed when a process starts, so an identity-verified ancestor stays one
+// for this process's lifetime. Keys carry the recorded start identity, and every check
+// still re-verifies driver liveness, so a reused PID never matches a retained entry.
+// Retaining the proof keeps a later transient process-inspection failure from
+// revoking a continuation this process already verified.
+const verifiedAncestorDrivers = new Set<string>();
+
+function updateRunDriverKey(driver: UpdateRunDriver): string {
+  return `${driver.host}\n${driver.pid}\n${driver.startIdentity}`;
+}
+
+type UpdateRunContinuationCheck = "continuation" | "not-continuation" | "ancestry-unverified";
+
 /** Correlation alone cannot let another process continue a live update. */
-function isCurrentUpdateRunContinuation(
+function inspectCurrentUpdateRunContinuation(
   record: UpdateRunRecord,
   inheritedRunId: string | undefined,
-): boolean {
+): UpdateRunContinuationCheck {
   if (record.runId !== inheritedRunId?.trim() || hasUnrecordedUpdateRunDriver(record)) {
-    return false;
+    return "not-continuation";
   }
-  const drivers = recordedUpdateRunDrivers(record);
-  const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
-  if (!ancestry.complete) {
-    return false;
-  }
+  let ancestry: ReturnType<typeof inspectSelfAndAncestorPidsSync> | undefined;
   let ownsDriver = false;
-  for (const driver of drivers) {
+  for (const driver of recordedUpdateRunDrivers(record)) {
     const liveness = inspectUpdateRunDriver(driver);
     if (liveness === "dead") {
       continue;
     }
-    if (liveness !== "alive" || !ancestry.pids.has(driver.pid)) {
-      return false;
+    if (liveness !== "alive") {
+      return "not-continuation";
+    }
+    const key = updateRunDriverKey(driver);
+    if (!verifiedAncestorDrivers.has(key)) {
+      ancestry ??= inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+      if (!ancestry.complete) {
+        return "ancestry-unverified";
+      }
+      if (!ancestry.pids.has(driver.pid)) {
+        return "not-continuation";
+      }
+      verifiedAncestorDrivers.add(key);
     }
     ownsDriver = true;
   }
-  return ownsDriver;
+  return ownsDriver ? "continuation" : "not-continuation";
+}
+
+function formatUnverifiedUpdateRunAncestry(record: UpdateRunRecord): string {
+  const pids = recordedUpdateRunDrivers(record)
+    .map((driver) => driver.pid)
+    .join(", ");
+  return `Update ${record.runId} was inherited by this process, but this host could not read this process's ancestry to verify that its live driver (PID ${pids}) started it, so it was not treated as a continuation. This is a process-inspection failure, not evidence of another update. Retry when the host is less busy; if it persists, let the update finish, then run \`openclaw update repair\`.`;
 }
 
 export function formatUpdateRunOwnership(record: UpdateRunRecord): string {
@@ -95,11 +122,18 @@ export function inspectUpdateRepairDriverAdmission(
 ): UpdateRepairDriverAdmission {
   let continuation: UpdateRunRecord | undefined;
   for (const run of runs) {
-    if (isCurrentUpdateRunContinuation(run, inheritedRunId)) {
+    const check = inspectCurrentUpdateRunContinuation(run, inheritedRunId);
+    if (check === "continuation") {
       continuation = run;
     } else if (!inspectUpdateRunDriverAbandonment(run, { explicit: true })) {
       // A captured continuation remains relevant after its driver terminalizes it.
-      return { kind: "conflict", message: formatUpdateRunOwnership(run) };
+      return {
+        kind: "conflict",
+        message:
+          check === "ancestry-unverified"
+            ? formatUnverifiedUpdateRunAncestry(run)
+            : formatUpdateRunOwnership(run),
+      };
     }
   }
   return continuation ? { kind: "continuation", run: continuation } : { kind: "recovery", runs };

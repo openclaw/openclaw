@@ -4,10 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -26,7 +25,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryRoute,
@@ -88,7 +87,7 @@ import {
 import type { SessionEntry } from "./types.js";
 
 const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-accessor-");
 
 vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
@@ -112,14 +111,8 @@ describe("session accessor seam", () => {
 
   beforeEach(() => {
     cleanupArchivedSessionTranscriptsMock.mockReset();
-    tempDir = tempDirs.make("openclaw-session-accessor-");
+    tempDir = tempDirs.make();
     storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeStateDatabaseForTest();
   });
 
   it("returns typed sync append outcomes for missing, rebound, and duplicate rows", async () => {
@@ -825,7 +818,7 @@ describe("session accessor seam", () => {
     expect(result.rejectedReason).toBe("session-rebound");
   });
 
-  it("does not write the session database when entry preparation is rejected", async () => {
+  it("keeps the session entry unchanged when entry preparation is rejected", async () => {
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -836,9 +829,7 @@ describe("session accessor seam", () => {
       updatedAt: 10,
       initializationPending: true,
     });
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    const fixedTime = new Date("2020-01-01T00:00:00.000Z");
-    fs.utimesSync(databasePath, fixedTime, fixedTime);
+    const before = loadSessionEntry(scope);
 
     const rejected = await createSessionEntryWithTranscript(scope, () => ({
       ok: false,
@@ -850,11 +841,7 @@ describe("session accessor seam", () => {
       error: "still initializing",
       phase: "entry",
     });
-    expect(fs.statSync(databasePath).mtimeMs).toBe(fixedTime.getTime());
-    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
-      sessionId: "pending-session",
-      initializationPending: true,
-    });
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toEqual(before);
   });
 
   it.each([

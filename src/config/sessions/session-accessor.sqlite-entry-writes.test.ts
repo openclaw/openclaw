@@ -13,7 +13,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { loadExactSessionEntry, patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
+import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
@@ -34,14 +34,21 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
       scope,
     );
     const assertCommitAllowed = vi.fn();
-    const onCommitted = vi.fn();
-    const patch = (fields: Partial<SessionEntry>) =>
-      patchSessionEntryCore(scope, () => fields, {
-        assertCommitAllowed,
-        onCommitted,
-        preserveActivity: true,
-        skipMaintenance: true,
-      });
+    const patch = async (fields: Partial<SessionEntry>) =>
+      runOpenClawAgentWriteTransaction((writer) => {
+        const fresh = readSessionEntrySelectionSnapshot(writer, scope.sessionKey, true, true);
+        const current = fresh[0]?.entry;
+        if (!current) {
+          throw new Error("Missing entry before patch");
+        }
+        return writeSessionEntryPatchInDatabase(writer, {
+          sessionKey: scope.sessionKey,
+          fresh,
+          writeBase: current,
+          next: { ...current, ...fields },
+          options: { assertCommitAllowed },
+        }).entry;
+      }, scope);
     // Settle the initial transcript observation before measuring unchanged rows.
     await patch({});
     const sql = trackSqliteStatementExecutions(
@@ -60,7 +67,6 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
     );
     try {
       assertCommitAllowed.mockClear();
-      onCommitted.mockClear();
       await expect(
         patch({ skillsSnapshot: structuredClone(skillsSnapshot) }),
       ).resolves.toMatchObject({
@@ -69,7 +75,6 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
       });
       expect(sql.counts).toEqual({ nodes: 0, windows: 0, snapshots: 0 });
       expect(assertCommitAllowed).toHaveBeenCalled();
-      expect(onCommitted).toHaveBeenCalledOnce();
 
       await patch({
         lastRunError: "retained error",

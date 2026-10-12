@@ -510,6 +510,7 @@ describe("native transcript catalog SDK", () => {
           message: { role: "user", content: eventId },
         });
       }
+      await reconcileSessionTranscriptIndexes({ agentId: scope.agentId });
       // Equal-length branch replacements must not reuse the old ordinal as an anchor.
       await expect(read(2, first.nextCursor)).rejects.toThrow("no longer matches");
     });

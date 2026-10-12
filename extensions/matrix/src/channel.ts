@@ -59,7 +59,7 @@ import {
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
-import { resolveMatrixConversationRouteOwner } from "./matrix/conversation-route-owner.js";
+import { prepareMatrixConversationRouteOwnersAsync } from "./matrix/conversation-route-owner.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
@@ -469,7 +469,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         resolveInboundConversation: resolveMatrixInboundConversation,
         resolveDeliveryTarget: resolveMatrixDeliveryTarget,
         resolveOutboundSessionRoute: resolveMatrixOutboundSessionRoute,
-        resolveConversationRouteOwner: resolveMatrixConversationRouteOwner,
+        prepareConversationRouteOwnersAsync: prepareMatrixConversationRouteOwnersAsync,
         targetResolver: {
           looksLikeId: (raw) => {
             const trimmed = raw.trim();

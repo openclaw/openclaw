@@ -42,6 +42,12 @@ run to keep its complete matrix running after a failure. Native matrix fail-fast
 applies only to unlabeled PRs in other repositories. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
 
+Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
+`checks-ui-e2e` shards (Control UI and browser extension), and every
+`checks-ui-e2e-real-gateway` shard, including desktop resize proof. These use the
+same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
+change-selected UI coverage; the label does not expand unrelated platform lanes.
+
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
 self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at

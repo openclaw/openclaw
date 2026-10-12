@@ -94,7 +94,10 @@ async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boole
     hasText: "Native Claude terminal",
   });
   await row.click({ button: "right", force: options.force });
-  await page.locator('wa-dropdown-item[value="terminal"]').click({ force: options.force });
+  await page
+    .locator("openclaw-catalog-session-menu")
+    .getByRole("menuitem", { name: "Open in terminal", exact: true })
+    .click({ force: options.force });
 }
 
 async function openClaudeCatalogTerminal(page: Page) {

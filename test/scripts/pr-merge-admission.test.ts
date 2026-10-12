@@ -7,6 +7,19 @@ const { fixture, outcomeRef, lockRef, describePosix, unknownProjection } =
   createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("merges without a ClawSweeper comment or pre-dispatch comment read", () => {
+    const f = fixture();
+    f.save({ ...f.state(), issueCommentsErrorAt: 1 });
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().issueCommentReads).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(() => f.git(["rev-parse", "--verify", lockRef])).toThrow();
+  });
+
   it("stops before intent when queue removal invalidates the captured squash body", () => {
     const f = fixture();
     f.save({
@@ -537,71 +550,4 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(() => f.record()).toThrow();
     },
   );
-
-  it.each(["ack-only", "removed", "unavailable"])(
-    "rejects %s ClawSweeper review evidence before intent",
-    (fault) => {
-      const f = fixture();
-      const comments = [
-        {
-          id: fault === "ack-only" ? 1 : 2,
-          body: "<!-- clawsweeper-pr-ack:opened item=123 -->",
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ];
-      f.save({
-        ...f.state(),
-        ...(fault === "ack-only"
-          ? { issueComments: comments }
-          : fault === "removed"
-            ? { issueCommentsAfterFirst: comments }
-            : { issueCommentsErrorAt: 2 }),
-      });
-      const run = f.run();
-      expect(run.status, run.output).toBe(1);
-      if (fault === "removed") {
-        expect(run.output).toContain(
-          "ClawSweeper review gate failed: completed review is missing.",
-        );
-        expect(f.state().issueCommentReads).toBe(2);
-      } else if (fault === "unavailable") {
-        expect(run.output).toContain("unable to read current issue comments");
-      }
-      expect(f.state().mutations).toBe(0);
-      expect(() => f.record()).toThrow();
-    },
-  );
-
-  it("retains the newest completion at final admission regardless of review age", () => {
-    const f = fixture();
-    const next = f.state();
-    next.issueComments[0]!.body = next.issueComments[0]!.body.replace(
-      /reviewed_at=\S+/u,
-      "reviewed_at=2000-01-01T00:00:00.000Z",
-    );
-    const reviewedAt = "2000-01-02T00:00:00.000Z";
-    f.save({
-      ...next,
-      issueCommentsAfterFirst: [
-        ...next.issueComments,
-        {
-          id: 2,
-          body: `<!-- clawsweeper-review-version item=123 reviewed_at=${reviewedAt} sha=${f.head} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->
-
-<!-- clawsweeper-review item=123 -->`,
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ],
-    });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(0);
-    expect(f.record().clawsweeperReview).toMatchObject({
-      commentId: 2,
-      reviewedAt,
-      reviewedSha: f.head,
-      sourceRevision: "c".repeat(64),
-    });
-  });
 });

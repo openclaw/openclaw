@@ -86,7 +86,7 @@ scripts/pr review-checkout-pr <pr>
 scripts/pr review-artifacts-init <pr>
 # Complete .local/review.json for this exact head.
 scripts/pr review-validate-artifacts <pr>
-# After local review and a completed ClawSweeper review, submit with enforced GitHub gates.
+# Local review complete → submit with enforced GitHub gates.
 env -u OPENCLAW_TESTBOX OPENCLAW_PR_GATES_REMOTE=github scripts/pr prepare-run <pr>
 scripts/pr merge-run <pr> --auto-merge
 ```
@@ -418,12 +418,8 @@ separate landing gate. Check live rules and review state before claiming a human
 approval is mandatory; bypass ability is not authorization to skip an enforced
 review.
 
-The native ClawSweeper completion gate currently enforces a 12-hour window,
-including on an unchanged head. Reusing local review or CI proof does not waive
-that independent gate. New admission needs an eligible completion; retain other
-still-valid review and CI proof. Do not rewrite timestamps, manufacture proof,
-or change freshness policy to resume a task. An accepted or uncertain merge
-intent still takes the recovery path below before fresh admission.
+ClawSweeper reviews advisory; no completion comment or freshness precondition.
+Accepted/uncertain merge intent → recovery below before fresh admission.
 
 For non-main targets, do not use `prepare-run` or `merge-run`: their base is main.
 Use review artifacts and exact base/head CI, revalidate the remote head, and
@@ -545,7 +541,7 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
 
 Do not pass `--admin-evidence`. The replacement must differ, and the PR must stay
 OPEN and `MERGEABLE/BLOCKED` or `MERGEABLE/BEHIND`. Normal required-check,
-ClawSweeper, review, security, and owner gates still apply. The successor CAS
+review, security, and owner gates still apply. The successor CAS
 records route `auto` plus `recovery.staleHeadRetirement`, preserving ancestry
 and exact regular capture bytes without interpreting them; an empty capture is
 valid. Missing, symlink, extra, or admission-mutated captures, same-head or
