@@ -129,6 +129,36 @@ describe("Codex app-server attempt client cleanup", () => {
     );
   });
 
+  it("does not retry interruption after its requester expires during overload backoff", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    let current = true;
+    try {
+      const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timeoutMs: 5_000,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Requester expired");
+          }
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const first = JSON.parse(harness.writes[0] ?? "{}");
+      harness.send({ id: first.id, error: { code: -32_001, message: "Server overloaded" } });
+      await vi.advanceTimersByTimeAsync(0);
+      current = false;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await completion).toBe(false);
+      expect(harness.writes).toHaveLength(1);
+      expect(harness.client.getCloseError()).toBeUndefined();
+    } finally {
+      harness.client.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("retains the startup interrupt acknowledgement contract", async () => {
     const request = vi.fn(async () => ({}));
 

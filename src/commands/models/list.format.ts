@@ -53,3 +53,15 @@ export const truncate = (value: string, max: number) => {
   }
   return `${truncateToVisibleWidth(sanitized, max - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
 };
+
+export function groupByProvider<T extends { provider: string }>(
+  entries: readonly T[],
+): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const entry of entries) {
+    const group = groups.get(entry.provider) ?? [];
+    group.push(entry);
+    groups.set(entry.provider, group);
+  }
+  return groups;
+}

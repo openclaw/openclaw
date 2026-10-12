@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { captureExecRequestCustody } from "../../infra/exec-request-context.js";
 import {
   getInstallationTarget,
   withInstallationTarget,
@@ -98,6 +99,7 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  const requestCustody = captureExecRequestCustody(attempt);
   // Capture authority by value before any plugin handoff can mutate the attempt.
   const runtimePluginToolGrant = attempt.runtimePluginToolGrant
     ? Object.freeze({
@@ -455,6 +457,10 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    captureRequestCustody: () => {
+      assertActive();
+      return requestCustody;
+    },
     ...(workspaceReadiness.capability ? { workspaceReadiness: workspaceReadiness.capability } : {}),
     get assertNativeSubagentSpawnAllowed() {
       return bindHarnessNativeSpawnAuthority(personalToolParticipants, assertActive);

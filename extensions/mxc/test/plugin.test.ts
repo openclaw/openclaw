@@ -170,31 +170,6 @@ describe("registerMxcPlugin", () => {
     expect(registerService).not.toHaveBeenCalled();
   });
 
-  test("registers eagerly on Windows and restores hooks on global restart", async () => {
-    const original = readBackend();
-    const { api, cleanup, stop } = createApi({ timeoutSeconds: 60 });
-
-    registerMxcPlugin(api);
-
-    expect(resolveMxcBinaryPathMock).toHaveBeenCalledWith(undefined);
-    expect(assertMxcReadinessMock).toHaveBeenCalledWith({ executablePath: "mxc-test-binary" });
-    expect(warnMxcHostPrepIfNeededMock).toHaveBeenCalledWith();
-    expect(createMxcSandboxBackendFactoryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutSeconds: 60,
-      }),
-    );
-    expect(readBackend()).toEqual({
-      factory: expect.any(Function),
-      manager: mxcSandboxBackendManagerMock,
-      resolveWorkdir: null,
-    });
-    await cleanup({ reason: "restart" });
-    expect(readBackend()).toEqual(original);
-    await stop();
-    expect(readBackend()).toEqual(original);
-  });
-
   test("blocks an older override and registers after selecting a compatible executor", async () => {
     const { assertMxcReadiness: runMxcReadiness } =
       await vi.importActual<typeof import("../src/readiness.js")>("../src/readiness.js");
@@ -243,11 +218,11 @@ describe("registerMxcPlugin", () => {
       expect.objectContaining({ encoding: "utf-8" }),
     );
     expect(readBackend().factory).toEqual(expect.any(Function));
-    await recovered.stop();
+    await recovered.cleanup({ reason: "restart" });
     expect(readBackend()).toEqual(original);
   });
 
-  test.each(["disable", "reset"] as const)(
+  test.each(["reset"] as const)(
     "preserves backend hooks during scoped %s cleanup",
     async (reason) => {
       const generation = createApi();

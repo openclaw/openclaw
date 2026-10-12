@@ -3752,7 +3752,6 @@
 ["src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts","../../gateway/session-worker-placement-context.js","bf77a4ee693c9049e9bf11fcdb9b0369db4b5392fd0db01213cfc792d8c416a0",1]
 ["src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts","../../infra/agent-events.js","dc54c47ba8a44cb02047cabf5ecf6bca2325aa2d5949773288798efe63a75beb",1]
 ["src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts","../../infra/outbound/session-binding-service.js","38b1e0cd62e2ee73fc1289ef6552a34d06a405463954b4fbc90e9a544738e8ae",1]
-["src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts","../../logging/diagnostic.js","0b33d44aaa953909b54ce0df7a916f24999ab1bfb21152ae66c59273ef211aa5",1]
 ["src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts","../../plugins/conversation-binding.js","d1816b9281059235d661c989e319691473b516a7f28c1c7f1979d9fc3e75f1dd",1]
 ["src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts","../../plugins/hook-runner-global.js","6e2a373fab1a1a35b3c97cb0905fa9accd38152f7ed52d314441b9d702b20eb2",1]
 ["src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts","../../tts/status-config.js","e2b8a179859bd4c315d78fa4ed7556f428921651fd26c642df1f33012f015dc3",1]

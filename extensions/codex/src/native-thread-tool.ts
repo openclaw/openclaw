@@ -6,10 +6,7 @@ import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-ru
 import type { AnyAgentTool, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  composeSessionEntryCommitGuards,
-  type captureSessionEntryCurrentCheckAsync,
-} from "openclaw/plugin-sdk/session-binding-runtime";
+import type { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   asBoolean,
   asOptionalRecord,
@@ -217,7 +214,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         );
       }
       const run = async (archiveThreadId?: string) => {
-        const { captureSessionEntryCurrentCheckAsync } =
+        const { captureSessionEntryCurrentCheckAsync, composeSessionEntryCommitGuards } =
           await import("openclaw/plugin-sdk/session-binding-runtime");
         prepared =
           sessionKey && agentId

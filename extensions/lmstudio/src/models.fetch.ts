@@ -64,6 +64,7 @@ type FetchLmstudioModelsResult = {
 };
 
 type DiscoverLmstudioModelsParams = {
+  onListedModels?: (models: LmstudioModelWire[]) => void;
   baseUrl: string;
   apiKey: string;
   headers?: Record<string, string>;
@@ -204,6 +205,7 @@ export async function discoverLmstudioModels(
     return [];
   }
 
+  params.onListedModels?.(fetched.models);
   return mapLmstudioWireModels(fetched.models, "runtime");
 }
 
