@@ -9,6 +9,7 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public
 import { QuestionManager } from "../../gateway/question-manager.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -27,6 +28,12 @@ import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
 } from "./delivery-queue.test-helpers.js";
+
+// Question finalization must not depend on destination transcript storage.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 

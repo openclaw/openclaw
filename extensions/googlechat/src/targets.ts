@@ -3,6 +3,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { findGoogleChatDirectMessage, getGoogleChatSpace } from "./api.js";
+import {
+  rememberGoogleChatSpace,
+  resolveCachedGoogleChatSpaceChatType,
+  resolveGoogleChatSpaceChatType,
+} from "./space-cache.js";
 import type { GoogleChatSpace } from "./types.js";
 
 export function normalizeGoogleChatTarget(raw?: string | null): string | undefined {
@@ -35,24 +40,6 @@ export function isGoogleChatSpaceTarget(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(value).startsWith("spaces/");
 }
 
-function resolveGoogleChatSpaceChatType(space: GoogleChatSpace): "direct" | "group" | undefined {
-  const spaceType = (space.spaceType ?? "").toUpperCase();
-  // The current field wins when both current and deprecated fields are present.
-  if (spaceType === "DIRECT_MESSAGE") {
-    return "direct";
-  }
-  if (spaceType === "SPACE" || spaceType === "GROUP_CHAT") {
-    return "group";
-  }
-  if (space.singleUserBotDm === true || (space.type ?? "").toUpperCase() === "DM") {
-    return "direct";
-  }
-  if ((space.type ?? "").toUpperCase() === "ROOM") {
-    return "group";
-  }
-  return undefined;
-}
-
 export function isGoogleChatGroupSpace(space: GoogleChatSpace): boolean {
   // Legacy webhook payloads can omit type metadata. Preserve their historical
   // group default while outbound routing requires an exact API classification.
@@ -67,11 +54,11 @@ function stripMessageSuffix(target: string): string {
   return target.slice(0, index);
 }
 
-async function resolveGoogleChatOutboundSpaceDetails(params: {
+export async function resolveGoogleChatOutboundSpace(params: {
   account: ResolvedGoogleChatAccount;
   target: string;
   assertDirectAdapterHandoff?: () => void;
-}) {
+}): Promise<string> {
   const normalized = normalizeGoogleChatTarget(params.target);
   if (!normalized) {
     throw new Error("Missing Google Chat target.");
@@ -86,15 +73,10 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
     if (!dm?.name) {
       throw new Error(`No Google Chat DM found for ${base}`);
     }
-    return { name: dm.name, resource: dm };
+    rememberGoogleChatSpace(params.account, dm);
+    return dm.name;
   }
-  return { name: base };
-}
-
-export async function resolveGoogleChatOutboundSpace(
-  params: Parameters<typeof resolveGoogleChatOutboundSpaceDetails>[0],
-): Promise<string> {
-  return (await resolveGoogleChatOutboundSpaceDetails(params)).name;
+  return base;
 }
 
 export async function resolveGoogleChatOutboundSessionRoute(params: {
@@ -102,28 +84,24 @@ export async function resolveGoogleChatOutboundSessionRoute(params: {
   agentId: string;
   accountId?: string | null;
   target: string;
+  assertDirectAdapterHandoff?: () => void;
 }) {
   const account = resolveGoogleChatAccount({ cfg: params.cfg, accountId: params.accountId });
-  const resolvedSpace = await resolveGoogleChatOutboundSpaceDetails({
+  const spaceName = await resolveGoogleChatOutboundSpace({
     account,
     target: params.target,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
-  const spaceName = resolvedSpace.name;
   if (!isGoogleChatSpaceTarget(spaceName)) {
     return null;
   }
-  let chatType = resolvedSpace.resource
-    ? resolveGoogleChatSpaceChatType(resolvedSpace.resource)
-    : undefined;
-  if (!chatType) {
-    try {
-      chatType = resolveGoogleChatSpaceChatType(await getGoogleChatSpace({ account, spaceName }));
-    } catch {
-      // Space classification only enriches session routing. Delivery must remain
-      // available when this auxiliary read is unavailable or lacks permission.
-      return null;
-    }
-  }
+  const chatType = await resolveCachedGoogleChatSpaceChatType(account, spaceName, () =>
+    getGoogleChatSpace({
+      account,
+      spaceName,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    }),
+  );
   if (!chatType) {
     return null;
   }

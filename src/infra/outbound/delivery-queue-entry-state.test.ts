@@ -10,6 +10,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
@@ -23,6 +24,12 @@ import {
   installDeliveryQueueTmpDirHooks,
   readQueuedEntries,
 } from "./delivery-queue.test-helpers.js";
+
+// Queue state ownership must not depend on unrelated destination transcript storage.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 describe("delivery queue entry state", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();

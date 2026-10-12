@@ -4,12 +4,8 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import {
-  deleteGoogleChatMessage,
-  GoogleChatApiError,
-  sendGoogleChatMessage,
-  updateGoogleChatMessage,
-} from "./api.js";
+import { GoogleChatApiError } from "./api-error.js";
+import { deleteGoogleChatMessage, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 export type GoogleChatTypingMessage = ReturnType<typeof createGoogleChatTypingMessage>;

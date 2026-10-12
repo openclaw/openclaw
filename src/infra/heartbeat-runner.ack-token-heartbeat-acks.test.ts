@@ -502,7 +502,7 @@ describe("heartbeat pending-final delivery ownership", () => {
     "settles an isolated $name without clearing the base user's pending final",
     async ({ payload, visibleText }) => {
       await withHeartbeat(
-        async ({ storePath, replySpy, sessionKey, send, now, previousUpdatedAt, run }) => {
+        async ({ storePath, replySpy, sessionKey, send, now, run }) => {
           const unrelatedFinal = {
             kind: "replayable" as const,
             text: "User final awaiting confirmation",
@@ -531,7 +531,6 @@ describe("heartbeat pending-final delivery ownership", () => {
           expect(baseEntry?.lastHeartbeatText).toBe(visibleText);
           expect(baseEntry?.lastHeartbeatSentAt).toBe(visibleText ? now : undefined);
           expect(baseEntry).toMatchObject({
-            updatedAt: previousUpdatedAt,
             pendingFinalDelivery: unrelatedFinal,
           });
         },

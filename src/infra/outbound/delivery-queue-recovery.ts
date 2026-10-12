@@ -69,6 +69,7 @@ import { buildRecoveryDeliverParams } from "./delivery-queue-recovery-params.js"
 import {
   canReplayAmbiguousFinalText,
   isPermanentDeliveryError,
+  recoveryPlatformAttemptId,
   resolveMaxRetries,
 } from "./delivery-queue-recovery-policy.js";
 import {
@@ -85,6 +86,7 @@ import {
   restoreDeliveryAttemptBeforeDispatch,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
+import { commitRecoveredVisibleMessages } from "./delivery-queue-transcript.js";
 import type { DeliveryFailureSettlement } from "./delivery-queue-types.js";
 import { createOutboundMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
@@ -459,18 +461,6 @@ async function runReconciledSentCommitHooks(params: {
   }
 }
 
-function recoveryPlatformAttemptId(entry: QueuedDelivery, claimedAttemptId?: string) {
-  return claimedAttemptId !== undefined
-    ? claimedAttemptId
-    : typeof entry.platformSendAttemptId === "string"
-      ? entry.platformSendAttemptId
-      : entry.recoveryState === "producer_claimed" && typeof entry.producerClaimId === "string"
-        ? entry.producerClaimId
-        : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
-          ? null
-          : undefined;
-}
-
 async function resolveCompletedOwnerBeforeRecovery(
   opts: EntryRecoveryOptions & { owner: QueuedDeliveryOwner },
   stateContext: DeliveryQueueStateContext,
@@ -519,6 +509,7 @@ async function resolveCompletedOwnerBeforeRecovery(
     return "failed";
   }
   if (operation.state === "delivered") {
+    await commitRecoveredVisibleMessages(opts, stateContext);
     const messageId = operation.platformMessageId;
     if (messageId) {
       const result: OutboundDeliveryResult = { channel: opts.entry.channel, messageId };
@@ -598,6 +589,7 @@ async function drainQueuedEntry(
           );
         }
         await owner.ack();
+        await commitRecoveredVisibleMessages(opts, stateContext);
         emitRecoveredTerminalEvents(entry, { result });
         await runReconciledSentCommitHooks({
           entry,

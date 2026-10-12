@@ -6,6 +6,7 @@ import type {
   ChannelThreadingAdapter,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as transcript from "../../config/sessions/transcript.js";
 import { isRetryableDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import {
   OutboundDeliveryError,
@@ -510,7 +511,7 @@ describe("routeReply", () => {
   });
 
   it.each([{ sessionKey: "global", expectedAgentId: "finance" }])(
-    "preserves delivery and mirror ownership for $sessionKey",
+    "preserves the producing agent for $sessionKey",
     async ({ sessionKey, expectedAgentId }) => {
       const request = {
         payload: { text: "hi" },
@@ -525,15 +526,44 @@ describe("routeReply", () => {
         groupId: "channel:C123",
       };
       await routeTestReply(request);
-      expect(lastDelivery().session).toMatchObject({ agentId: expectedAgentId });
-      const mirror = lastDelivery().mirror as Record<string, unknown>;
-      expect(mirror.agentId).toBe(expectedAgentId);
-      expect(mirror.sessionKey).toBe(sessionKey);
-      expect(mirror.text).toBe("hi");
-      expect(mirror.isGroup).toBe(true);
-      expect(mirror.groupId).toBe("channel:C123");
+      expect(lastDelivery().session).toMatchObject({ agentId: expectedAgentId, key: sessionKey });
     },
   );
+
+  it("records post-hook delivered content without resending when bookkeeping fails", async () => {
+    const append = vi
+      .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
+      .mockRejectedValueOnce(new Error("transcript unavailable"));
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async ({ onDeliveredPayload }: DeliverOutboundPayloadsParams) => {
+        onDeliveredPayload?.({
+          text: "transport-rendered text",
+          hookContent: "post-hook visible text",
+          mediaUrls: ["https://example.invalid/visible.png"],
+        });
+        return [{ channel: "slack", messageId: "sent-once" }];
+      },
+    );
+    try {
+      const result = await routeTestReply({
+        payload: { text: "original text" },
+        channel: "slack",
+        to: "channel:C123",
+        sessionKey: "agent:main:source",
+      });
+      expect(result).toMatchObject({ ok: true, delivered: true, messageId: "sent-once" });
+      expect(append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:source",
+          text: "post-hook visible text",
+          mediaUrls: ["https://example.invalid/visible.png"],
+        }),
+      );
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+    } finally {
+      append.mockRestore();
+    }
+  });
 
   it.each([
     ["throw", false, undefined, "held"],

@@ -451,6 +451,30 @@ export async function resolveCurrentConversationSessionAsync(
     : undefined;
 }
 
+/** Finds an unambiguous live owner using recorded delivery coordinates, never inferred peer kind. */
+export async function resolveCurrentConversationByDelivery(
+  scope: ConversationRegistryScope,
+  address: { channel: string; accountId: string; target: string; threadId?: string },
+): Promise<{ conversation?: ConversationRecord; ambiguous?: true }> {
+  const conversations = await readConversationsAsync(scope, {
+    channel: address.channel,
+    deliveryAddress: address,
+    currentBindingOnly: true,
+  });
+  const conversation = conversations[0];
+  if (
+    conversations.some(
+      (candidate) =>
+        candidate.sessionKey !== conversation?.sessionKey ||
+        candidate.sessionId !== conversation?.sessionId ||
+        candidate.conversationRef !== conversation?.conversationRef,
+    )
+  ) {
+    return { ambiguous: true };
+  }
+  return { conversation };
+}
+
 /** Reads only the primary address bound to this exact current session window. */
 export async function resolveCurrentSessionPrimaryConversation(
   scope: ConversationRegistryScope & { sessionId: string; sessionKey: string },

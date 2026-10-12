@@ -189,7 +189,7 @@ async function prepareOutboundPlan(
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasModifyingHooks = hasReplyPayloadSendingHooks || hasMessageSendingHooks;
   const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy(params);
-  const sessionKeyForHooks = params.mirror?.sessionKey ?? params.session?.key;
+  const sessionKeyForHooks = params.session?.key;
   const modifiers = [
     {
       changedKey: "replyHookChanged",

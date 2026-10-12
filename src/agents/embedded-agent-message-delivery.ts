@@ -11,7 +11,7 @@ import type { MessagePollResult, MessageSendResult } from "../infra/outbound/mes
 import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
-type EmbeddedMessageDeliveryFact = {
+export type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
   sourceReplyDelivered?: true;
   primaryPlatformMessageId?: string;
@@ -192,6 +192,7 @@ export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SI
 function readPluginDeliveryIdentity(value: unknown) {
   let primaryPlatformMessageId: string | undefined;
   const deliveredTargets = new Set<string>();
+  const createdThreadIds = new Set<string>();
   visitPluginEnvelope(value, (record) => {
     primaryPlatformMessageId ??= [
       record.messageId,
@@ -203,11 +204,28 @@ function readPluginDeliveryIdentity(value: unknown) {
     for (const target of listMessageReceiptSourceTargets(record)) {
       deliveredTargets.add(target);
     }
+    const receipt = asOptionalRecord(record.receipt);
+    const parts = Array.isArray(receipt?.parts) ? receipt.parts : [];
+    for (const id of [
+      record.topicId,
+      record.threadId,
+      record.messageThreadId,
+      asOptionalRecord(record.thread)?.id,
+      receipt?.threadId,
+      ...parts.map((part) => asOptionalRecord(part)?.threadId),
+    ]) {
+      if (hasNonEmptyString(id)) {
+        createdThreadIds.add(id.trim());
+      } else if (typeof id === "number" && Number.isFinite(id)) {
+        createdThreadIds.add(String(id));
+      }
+    }
     return false;
   });
   return {
     ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
     ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
+    createdThreadIds: [...createdThreadIds],
   };
 }
 
@@ -230,9 +248,9 @@ export function projectPluginMessageDeliveryFact(
     return undefined;
   }
   return {
-    status: "settled",
-    ...readPluginDeliveryIdentity(value),
     ...EMPTY_DELIVERY_FACT,
+    ...readPluginDeliveryIdentity(value),
+    status: "settled",
   };
 }
 

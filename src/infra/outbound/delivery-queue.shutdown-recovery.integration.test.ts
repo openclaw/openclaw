@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   boundedCronCompletionRetention,
@@ -14,6 +15,12 @@ import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
 } from "./delivery-queue.test-helpers.js";
+
+// Shutdown recovery exercises queue custody, not destination transcript storage.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 

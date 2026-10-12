@@ -1,5 +1,5 @@
 ---
-summary: "Proposed single owner for transcript entries: every visible message is in its chat's model history once"
+summary: "Single ownership of transcript entries: every visible message is in its chat's model history once"
 read_when:
   - Changing where automation results, message-tool sends, or alerts are written into session transcripts
   - Adding a new path that posts messages into a chat
@@ -9,10 +9,10 @@ title: "Conversation transcript ownership"
 
 # Conversation transcript ownership
 
-**Proposal, partly implemented.** A chat's model-visible transcript is the log of
-what that chat showed. One owner writes that log for every outbound message.
-Scheduled jobs either run inside a chat or run in the background; they never do
-both. Step 1 shipped in [#168996](https://github.com/openclaw/openclaw/pull/168996).
+**Partly implemented.** A chat's model-visible transcript is the log of what that
+chat showed. One owner writes that log for every outbound message. Scheduled jobs
+either run inside a chat or run in the background; they never do both. Steps 1
+and 2 are implemented; the job-mode migration remains.
 
 ## Problem
 
@@ -47,6 +47,8 @@ Allowed exceptions, each recorded as a `warn` run diagnostic:
   agent's transcript gets it.
 - The payload is native-only (for example a Discord embed with no text). The
   message is sent; there is no honest text to write.
+- A recovered receipt cannot prove the final delivered content.
+- Route discovery lost its live lookup authority after delivery was accepted.
 
 ### Rule 2: a job runs in a chat, or in the background
 
@@ -70,7 +72,21 @@ announcements. It skips the write only when the send is the reply of a turn that
 runs in the same conversation, because that turn already wrote it. That skip is
 the reason delivery mirrors became transcript-only in
 [#99470](https://github.com/openclaw/openclaw/issues/99470): without it, replay
-showed every answer twice. Cron keeps no transcript code of its own.
+showed every answer twice. Cron keeps only generation custody and diagnostics;
+the shared writer also owns internal-channel payload and media publication.
+Recovery retains a small adapter because its receipts prove only normalized,
+single-text output, not arbitrary delivered content.
+
+Same-conversation source-reply markers remain transcript-only: the UI and restart
+recovery consume their source-turn and terminal-receipt identities. They do not
+add model-visible conversation content. Dispatch's final-reply bookkeeping also
+remains transcript-only for UI display when the runtime did not persist a final.
+
+Destination lookup uses the carried route, then the producer's matching delivery
+context, then an exact current local binding, and finally the plugin resolver.
+The local query includes account, address, and thread before detecting ambiguous
+owners; conversation-reference lookups and deduplicated listings cannot answer
+that question. It uses existing tables and indexes.
 
 ## Considered options
 
@@ -92,8 +108,12 @@ showed every answer twice. Cron keeps no transcript code of its own.
    results go to the destination chat once, through the canonical writer
    (`src/sessions/background-session-result.ts`), after confirmed delivery.
    Mirrors and awareness notes are removed.
-2. **Move the writer to the outbound send owner.** Cron, the `message` tool,
-   alerts, and subagent announcements use it; remove the cron-specific path.
+2. **Done.** The outbound send owner writes confirmed visible messages through
+   `src/sessions/background-session-result.ts`. Cron, the `message` tool, failure
+   alerts, external heartbeats, and subagent announcements use the same writer.
+   A producing conversation keeps its own turn instead of a second delivery row;
+   cross-conversation sends enter the destination's model history once. External
+   awareness notes and the cron-specific delivery writer are removed.
    Closes #168683 and #168684.
 3. **Two job modes.** Doctor migrates existing jobs. A `session:<key>` job that
    delivers elsewhere becomes a background job with its own session. That job
@@ -102,13 +122,17 @@ showed every answer twice. Cron keeps no transcript code of its own.
    ([#168685](https://github.com/openclaw/openclaw/issues/168685)), so "stop this"
    on a delivered message needs no lookup.
 
-## Risks to check before step 2
+## Limits and risks
 
-- **Repeated assistant turns.** A result appended after the chat's last assistant
-  reply creates two adjacent assistant messages. This has shipped for `current`
-  jobs since #126860 without a known failure, but Hermes broke on the same pattern
-  ([hermes-agent#2221](https://github.com/NousResearch/hermes-agent/issues/2221)).
-  Add a provider replay test for each supported provider family.
+- **Repeated assistant turns.** Canonical results survive replay even when their
+  text matches the previous assistant message. Transcript-only delivery mirrors
+  remain excluded. See [#169369](https://github.com/openclaw/openclaw/pull/169369).
+- **Recovery.** A recovered send enters history only for a single accepted,
+  normalized-text payload. Multi-payload batches and media, presentation, or
+  native batches are skipped with a warning because the queue cannot confirm
+  their final delivered content.
+- **Native projections.** Polls are native-only and are not added to the
+  conversation; see [#169297](https://github.com/openclaw/openclaw/issues/169297).
 - **Session key parity.** The write must land in the exact session that an
   inbound reply uses. X has a known mismatch
   ([#168686](https://github.com/openclaw/openclaw/issues/168686)).

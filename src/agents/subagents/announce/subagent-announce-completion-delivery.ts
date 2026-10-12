@@ -438,6 +438,7 @@ export async function deliverCompletionDirect(params: {
       accountId: params.deliveryTarget.accountId,
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
+      session: { agentId, policyKey: params.requesterSessionKey },
       agentId,
       conversationType: "direct",
       content: content ?? "",
@@ -453,18 +454,13 @@ export async function deliverCompletionDirect(params: {
           return;
         }
         // This single payload must finish every chunk and attachment before settling,
-        // still ahead of potentially blocked transcript mirroring.
+        // still ahead of potentially blocked conversation publication.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
         deliveryResultReported = Promise.resolve(
           params.onDeliveryResult?.(committedDelivery),
         ).catch(() => {
           // Bookkeeping failure cannot make a fully sent result retryable.
         });
-      },
-      mirror: {
-        sessionKey: params.requesterSessionKey,
-        agentId,
-        idempotencyKey,
       },
     });
     if (committedDelivery) {

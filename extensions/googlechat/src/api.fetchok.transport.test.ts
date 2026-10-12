@@ -2,8 +2,11 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { deleteGoogleChatMessage } from "./api.js";
+import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
+import { GoogleChatApiError } from "./api-error.js";
+import { deleteGoogleChatMessage, sendGoogleChatMessage } from "./api.js";
+import { startGoogleChatSpaceCache } from "./space-cache.js";
+import { resolveGoogleChatOutboundSessionRoute } from "./targets.js";
 
 const proofToken = "googlechat-transport-test-token";
 
@@ -160,7 +163,12 @@ describe("Google Chat real guarded transport", () => {
           request.on("end", () => {
             requests.push({ method: request.method, path: request.url, body });
             response.writeHead(200, { "Content-Type": "application/json" });
-            response.end(JSON.stringify({ name: `spaces/AAA/messages/${requests.length}` }));
+            response.end(
+              JSON.stringify({
+                name: `spaces/AAA/messages/${requests.length}`,
+                space: { name: "spaces/AAA", spaceType: "SPACE" },
+              }),
+            );
           });
         });
 
@@ -210,6 +218,66 @@ describe("Google Chat real guarded transport", () => {
         }
       },
     );
+  });
+
+  it("reads a first-contact space once and reuses its exact route for later sends", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            client_email: "first-contact@example.test",
+            private_key: "not-a-real-key",
+          },
+        },
+      },
+    };
+    const sendingAccount = resolveGoogleChatAccount({ cfg });
+    const stopSpaceCache = startGoogleChatSpaceCache(sendingAccount);
+    const requests: Array<{ method?: string; path?: string }> = [];
+    const server = createServer((request, response) => {
+      requests.push({ method: request.method, path: request.url });
+      response.setHeader("Content-Type", "application/json");
+      response.end(
+        JSON.stringify(
+          request.method === "GET"
+            ? { name: "spaces/FIRST", spaceType: "DIRECT_MESSAGE" }
+            : { name: "spaces/FIRST/messages/accepted" },
+        ),
+      );
+    });
+    try {
+      loopback.baseUrl = await listen(server);
+      const destination = { cfg, agentId: "main", target: "spaces/FIRST" };
+      await sendGoogleChatMessage({
+        account: sendingAccount,
+        space: destination.target,
+        text: "first",
+      });
+      const routes = await Promise.all([
+        resolveGoogleChatOutboundSessionRoute(destination),
+        resolveGoogleChatOutboundSessionRoute(destination),
+      ]);
+      for (const route of routes) {
+        expect(route).toMatchObject({
+          peer: { kind: "direct", id: "spaces/FIRST" },
+          recipientSessionExact: true,
+        });
+      }
+      await sendGoogleChatMessage({
+        account: sendingAccount,
+        space: destination.target,
+        text: "second",
+      });
+      expect(await resolveGoogleChatOutboundSessionRoute(destination)).toEqual(routes[0]);
+      expect(requests).toEqual([
+        { method: "POST", path: "/v1/spaces/FIRST/messages" },
+        { method: "GET", path: "/v1/spaces/FIRST" },
+        { method: "POST", path: "/v1/spaces/FIRST/messages" },
+      ]);
+    } finally {
+      stopSpaceCache();
+      await closeServer(server);
+    }
   });
 
   it("cancels a streaming authenticated DELETE before releasing its real dispatcher", async () => {
@@ -296,7 +364,8 @@ describe("Google Chat real guarded transport", () => {
           (error: unknown) => error,
         ),
       );
-      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).toBeInstanceOf(GoogleChatApiError);
+      expect(outcome).toMatchObject({ status: 403 });
       expect(receivedAuthorization).toBe(`Bearer ${proofToken}`);
       expect((outcome as Error).message).toContain("Google Chat API 403");
       expect((outcome as Error).message).toContain("Chat permission denied");

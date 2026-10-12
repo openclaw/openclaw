@@ -20,7 +20,6 @@ import {
   isCronSystemEvent,
   isConversationExecCompletion,
   isExecCompletionSystemEvent,
-  isHeartbeatDeliveryAwarenessEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
@@ -146,7 +145,7 @@ export async function resolveHeartbeatPreflight(params: {
   );
   const pendingEventEntries = peekDeliverableSystemEventEntries(
     resolveSystemEventQueueKey(queue.sessionKey, params.agentId),
-  ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
+  );
   const authoritativeScheduledTick =
     typeof params.scheduledEveryMs === "number" &&
     Number.isSafeInteger(params.scheduledEveryMs) &&

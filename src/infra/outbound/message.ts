@@ -35,7 +35,6 @@ import {
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
 } from "./message-gateway-options.js";
-import type { OutboundMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -67,6 +66,10 @@ type MessageSendParams = Pick<
   | "deps"
   | "preparedMessageId"
   | "deliveryIntentId"
+  | "transcriptRoute"
+  | "transcriptExpectedGeneration"
+  | "onTranscriptDiagnostic"
+  | "assertTranscriptCurrent"
   | "deliveryCompletion"
   | "reusePendingDeliveryIntent"
   | "deliveryRetryOwner"
@@ -94,6 +97,8 @@ type MessageSendParams = Pick<
     content: string;
     /** Originating session key used for requester-scoped outbound media policy. */
     requesterSessionKey?: string;
+    /** Actual producing turn; requester identity may instead scope media access only. */
+    session?: OutboundSessionContext;
     channel?: string;
     mediaUrl?: string;
     mediaUrls?: string[];
@@ -117,7 +122,6 @@ type MessageSendParams = Pick<
     conversationDeliveryTarget?: ConversationDeliveryTarget;
     /** @internal Runs after queue persistence and before platform I/O. */
     onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
-    mirror?: OutboundMirror;
     parseMode?: "HTML";
   };
 
@@ -279,7 +283,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const outboundPlan = createOutboundPayloadPlan(outboundPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
   const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
-  const mirrorText = mirrorProjection.text;
   const mirrorMediaUrls = mirrorProjection.mediaUrls;
   const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
   const baseResult: MessageSendResult = {
@@ -297,17 +300,19 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
     const resolvedTarget = await resolveDirectMessageTarget(params, cfg, channel, plugin);
 
-    const outboundSession = buildOutboundSessionContext({
-      cfg,
-      agentId: params.agentId,
-      sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
-      conversationType: params.conversationType,
-      requesterAccountId: params.requesterAccountId ?? params.accountId,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
-    });
+    const outboundSession =
+      params.session ??
+      buildOutboundSessionContext({
+        cfg,
+        agentId: params.agentId,
+        sessionKey: params.requesterSessionKey,
+        conversationType: params.conversationType,
+        requesterAccountId: params.requesterAccountId ?? params.accountId,
+        requesterSenderId: params.requesterSenderId,
+        requesterSenderName: params.requesterSenderName,
+        requesterSenderUsername: params.requesterSenderUsername,
+        requesterSenderE164: params.requesterSenderE164,
+      });
     // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
     // Lower-level queue-required callers must leave this internal opt-in unset.
     const requireUnknownSendReconciliation =
@@ -361,8 +366,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         mediaAccess: params.mediaAccess,
         formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
         preparedMessageId: params.preparedMessageId,
-        deliveryIntentId: params.deliveryIntentId,
+        deliveryIntentId: params.deliveryIntentId ?? params.idempotencyKey,
         deliveryCompletion: params.deliveryCompletion,
+        transcriptRoute: params.transcriptRoute,
+        transcriptExpectedGeneration: params.transcriptExpectedGeneration,
+        onTranscriptDiagnostic: params.onTranscriptDiagnostic,
+        assertTranscriptCurrent: params.assertTranscriptCurrent,
         reusePendingDeliveryIntent: params.reusePendingDeliveryIntent,
         deliveryRetryOwner: params.deliveryRetryOwner,
         completionRetention: params.completionRetention,
@@ -376,14 +385,6 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         skipQueue: params.skipQueue,
         ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
-        mirror: params.mirror
-          ? {
-              ...params.mirror,
-              text: mirrorText || params.content,
-              mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-              idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
-            }
-          : undefined,
       },
       params.conversationDeliveryTarget,
     );
@@ -455,7 +456,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       forceDocument: params.forceDocument,
       silent: params.silent,
       parseMode: params.parseMode,
-      sessionKey: params.mirror?.sessionKey,
+      sessionKey: params.requesterSessionKey,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },
   });

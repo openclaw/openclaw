@@ -564,7 +564,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/googlechat/src/google-auth.fetchok.transport.test.ts",
   "extensions/googlechat/src/sender-authority.transport.test.ts",
   "extensions/googlechat/src/setup.test.ts",
-  "extensions/googlechat/src/targets.outbound-session.test.ts",
+  "extensions/googlechat/src/targets.test.ts",
   "extensions/imessage/src/approval-native.test.ts",
   "extensions/imessage/src/conversation-route.test.ts",
   "extensions/imessage/src/monitor.behavior.test.ts",

@@ -157,6 +157,10 @@ export function selectSessionActorMemoryConversations(
   for (const [conversationRef, address] of context.conversations.catalog) {
     if (
       (channel && address.identity.channel !== channel) ||
+      (query.deliveryAddress &&
+        (address.identity.accountId !== query.deliveryAddress.accountId ||
+          address.identity.deliveryTarget !== query.deliveryAddress.target ||
+          address.identity.threadId !== query.deliveryAddress.threadId)) ||
       (ref && conversationRef !== ref) ||
       (refs && !refs.has(conversationRef))
     ) {
@@ -175,6 +179,9 @@ export function selectSessionActorMemoryConversations(
         const associationIsCurrent = Boolean(
           entry && window.hot.entry?.sessionId === entry.sessionId,
         );
+        if (query.deliveryAddress && !associationIsCurrent) {
+          continue;
+        }
         if (
           query.currentSession &&
           (sessionKey !== query.currentSession.sessionKey ||
@@ -217,6 +224,7 @@ export function selectSessionActorMemoryConversations(
     }
     if (
       !associated &&
+      !query.deliveryAddress &&
       !query.primarySession &&
       !query.currentSession &&
       !query.currentBindingOnly
@@ -225,11 +233,13 @@ export function selectSessionActorMemoryConversations(
     }
   }
   records.sort((a, b) => b.record.lastSeenAt - a.record.lastSeenAt || b.updatedAt - a.updatedAt);
-  const selected = selectUniqueConversationRows(records, {
-    conversationRef: (row) => row.record.conversationRef,
-    map: (row) => row,
-    limit: query.limit,
-  });
+  const selected = query.deliveryAddress
+    ? records.map(({ record }) => record)
+    : selectUniqueConversationRows(records, {
+        conversationRef: (row) => row.record.conversationRef,
+        map: (row) => row,
+        limit: query.limit,
+      });
   for (const record of selected) {
     if (record.sessionKey) {
       context.get(record.sessionKey);

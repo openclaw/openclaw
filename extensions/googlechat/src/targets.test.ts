@@ -1,13 +1,18 @@
 // Googlechat tests cover targets plugin behavior.
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
-import { isGoogleChatGroupSpace, resolveGoogleChatOutboundSessionRoute } from "./targets.js";
+import { startGoogleChatSpaceCache } from "./space-cache.js";
+import {
+  isGoogleChatGroupSpace,
+  resolveGoogleChatOutboundSessionRoute,
+  resolveGoogleChatOutboundSpace,
+} from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
@@ -167,8 +172,95 @@ describe("target helpers", () => {
 });
 
 describe("outbound session routing", () => {
+  let stopSpaceCache: () => void;
+  beforeEach(() => {
+    stopSpaceCache = startGoogleChatSpaceCache(resolveGoogleChatAccount({ cfg: {} }));
+  });
   afterEach(() => {
+    stopSpaceCache();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("retains delivery's direct-message lookup metadata for later route classification", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return new Response(JSON.stringify({ name: "spaces/DM-AAA", spaceType: "DIRECT_MESSAGE" }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const space = await resolveGoogleChatOutboundSpace({
+      account: resolveGoogleChatAccount({ cfg: {} }),
+      target: "users/alice",
+    });
+
+    const route = await resolveGoogleChatOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: space,
+    });
+
+    expect(route).toMatchObject({
+      peer: { kind: "direct", id: "spaces/DM-AAA" },
+      chatType: "direct",
+      from: "googlechat:spaces/DM-AAA",
+      to: "spaces/DM-AAA",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://chat.googleapis.com/v1/spaces:findDirectMessage?name=users%2Falice",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer token",
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  });
+
+  it("isolates classification by account, credentials, and monitor lifecycle", async () => {
+    let requestCount = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      const spaceType = ++requestCount === 1 ? "DIRECT_MESSAGE" : "SPACE";
+      return new Response(JSON.stringify({ name: "spaces/SHARED", spaceType }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const cfg = {
+      channels: {
+        googlechat: {
+          accounts: {
+            first: {
+              serviceAccount: { client_email: "first@example.test", private_key: "first-key" },
+            },
+            second: {
+              serviceAccount: { client_email: "second@example.test", private_key: "second-key" },
+            },
+          },
+        },
+      },
+    };
+    const destination = { cfg, agentId: "main", target: "spaces/SHARED" };
+    expect(
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "first" }),
+    ).toMatchObject({ chatType: "direct" });
+    expect(
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "second" }),
+    ).toMatchObject({ chatType: "group" });
+    cfg.channels.googlechat.accounts.first.serviceAccount.private_key = "rotated-key";
+    expect(
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "first" }),
+    ).toMatchObject({ chatType: "group" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    const stop = startGoogleChatSpaceCache(resolveGoogleChatAccount({ cfg, accountId: "first" }));
+    try {
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "first" });
+      await resolveGoogleChatOutboundSessionRoute({ ...destination, accountId: "first" });
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    } finally {
+      stop();
+    }
   });
 
   it.each([{ spaceType: "SPACE", chatType: "group", peerKind: "group" }] as const)(
@@ -203,34 +295,76 @@ describe("outbound session routing", () => {
     },
   );
 
-  it("rejects an unclassified space response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
+  it.each([403, 404] as const)(
+    "does not retry a permanent %s space classification on later sends",
+    async (outcome) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const fetchMock = vi.fn().mockImplementation(async () => {
+        return new Response("unavailable", { status: outcome });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const destination = { cfg: {}, agentId: "main", target: "spaces/AAA" };
+      await expect(resolveGoogleChatOutboundSessionRoute(destination)).resolves.toBeNull();
+      vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+      await expect(resolveGoogleChatOutboundSessionRoute(destination)).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["unclassified", "network", "timeout", 429, 500, 503] as const)(
+    "retries a transient %s lookup only on a later send after fifteen minutes",
+    async (failure) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const startedAt = Date.now();
+      const retry = Promise.withResolvers<Response>();
+      const retryStarted = Promise.withResolvers<void>();
+      const fetchMock = vi
         .fn()
-        .mockResolvedValue(new Response(JSON.stringify({ name: "spaces/AAA" }), { status: 200 })),
-    );
+        .mockImplementationOnce(async () => {
+          if (failure === "unclassified") {
+            return new Response(JSON.stringify({ name: "spaces/RETRY" }), { status: 200 });
+          }
+          if (typeof failure === "number") {
+            return new Response("unavailable", { status: failure });
+          }
+          throw failure === "timeout"
+            ? new DOMException("request timed out", "TimeoutError")
+            : new TypeError("fetch failed");
+        })
+        .mockImplementationOnce(() => {
+          retryStarted.resolve();
+          return retry.promise;
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const destination = { cfg: {}, agentId: "main", target: "spaces/RETRY" };
+      await expect(resolveGoogleChatOutboundSessionRoute(destination)).resolves.toBeNull();
+      vi.setSystemTime(startedAt + 15 * 60_000 - 1);
+      await expect(resolveGoogleChatOutboundSessionRoute(destination)).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledOnce();
 
-    await expect(
-      resolveGoogleChatOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        target: "spaces/AAA",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("keeps session-route classification failures non-fatal", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("read unavailable")));
-
-    await expect(
-      resolveGoogleChatOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        target: "spaces/AAA",
-      }),
-    ).resolves.toBeNull();
-  });
+      vi.setSystemTime(startedAt + 15 * 60_000);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const retries = [
+        resolveGoogleChatOutboundSessionRoute(destination),
+        resolveGoogleChatOutboundSessionRoute(destination),
+      ];
+      await retryStarted.promise;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      retry.resolve(
+        new Response(JSON.stringify({ name: destination.target, spaceType: "DIRECT_MESSAGE" }), {
+          status: 200,
+        }),
+      );
+      const routes = await Promise.all(retries);
+      expect(routes[0]).toMatchObject({
+        peer: { kind: "direct", id: destination.target },
+        recipientSessionExact: true,
+      });
+      expect(routes[1]).toEqual(routes[0]);
+      expect(await resolveGoogleChatOutboundSessionRoute(destination)).toEqual(routes[0]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
 });
 
 describe("downloadGoogleChatMedia", () => {
@@ -258,13 +392,17 @@ describe("downloadGoogleChatMedia", () => {
     expect(lastGuardedFetchOptions().timeoutMs).toBe(30_001);
   });
 
-  it("cancels a stalled media error body", async () => {
+  it.each([403, 500])("preserves HTTP %s when a media error body stalls", async (status) => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse(500)));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse(status)));
 
     const result = expect(
       downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-    ).rejects.toThrow("Google Chat API error response stalled after 30000ms");
+    ).rejects.toMatchObject({
+      name: "GoogleChatApiError",
+      status,
+      message: "Google Chat API error response stalled after 30000ms",
+    });
     await vi.advanceTimersByTimeAsync(30_001);
     await result;
   });

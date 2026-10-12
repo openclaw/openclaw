@@ -68,13 +68,3 @@ export function resolveCronDeliverySessionKey(job: {
     ? job.sessionKey.trim()
     : undefined;
 }
-
-/** Returns the notification session key, falling back to a stable per-job failure session. */
-export function resolveCronNotificationSessionKey(params: {
-  jobId: string;
-  sessionKey?: string | null;
-}): string {
-  return typeof params.sessionKey === "string" && params.sessionKey.trim()
-    ? params.sessionKey.trim()
-    : `cron:${params.jobId}:failure`;
-}

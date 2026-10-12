@@ -11,6 +11,7 @@ import {
 import { classifyGatewayStaleInstall } from "../gateway/stale-install.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { preserveReplyPayloadMediaSelectionCore } from "../infra/outbound/reply-media-entries.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
@@ -276,6 +277,21 @@ export const deliverStructuredInboundReplyWithMessageSendContext: ChannelDurable
     return await mod.deliverStructuredInboundReplyWithMessageSendContextCore(...args);
   };
 
+function omitDeprecatedMirror(
+  params: DurableMessageSendContextParams,
+): DurableMessageSendContextParams {
+  if (params.mirror === undefined) {
+    return params;
+  }
+  warnPluginSdkDeprecation({
+    family: "outbound-mirror",
+    method: "durable-send mirror",
+    replacement: "automatic destination transcript recording",
+  });
+  const { mirror: _mirror, ...delivery } = params;
+  return delivery;
+}
+
 /** Sends a durable message batch without eager-loading channel message runtime internals. */
 export async function sendDurableMessageBatch(
   /**
@@ -284,7 +300,7 @@ export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.sendDurableMessageBatchCore(params);
+  return await mod.sendDurableMessageBatchCore(omitDeprecatedMirror(params));
 }
 
 /** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
@@ -299,7 +315,7 @@ export async function withDurableMessageSendContext<T>(
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.withDurableMessageSendContextCore(params, run);
+  return await mod.withDurableMessageSendContextCore(omitDeprecatedMirror(params), run);
 }
 
 export {

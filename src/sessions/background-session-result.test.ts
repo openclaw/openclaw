@@ -12,6 +12,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import * as assistantContent from "../gateway/server-methods/chat-assistant-content.js";
 import { sessionMutationHandlers } from "../gateway/server-methods/sessions-mutations.js";
 import { callGatewayHandler } from "../gateway/server-methods/skills.test-helpers.js";
 import {
@@ -27,6 +28,7 @@ import {
 import { onSessionTranscriptUpdate } from "./transcript-events.js";
 
 describe("commitBackgroundResultToSession", () => {
+  afterEach(() => vi.restoreAllMocks());
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
       for (const root of tempDirs.dirs) {
@@ -183,7 +185,7 @@ describe("commitBackgroundResultToSession", () => {
       const lifecycle = await import("./session-lifecycle-admission.js");
       const releaseSpy = vi.spyOn(lifecycle, "getSessionWorkAdmissionRelease");
       const controller = new AbortController();
-      const prepareDisplayContent = vi.fn(async () => undefined);
+      const prepareDisplayContent = vi.spyOn(assistantContent, "buildAssistantReplyContent");
       const pending: Promise<unknown>[] = [];
       let completionOutcome:
         | PromiseSettledResult<Awaited<ReturnType<typeof commitBackgroundResultToSession>>>
@@ -195,7 +197,7 @@ describe("commitBackgroundResultToSession", () => {
           sessionKey: target.sessionKey,
           expectedGeneration: target.generation,
           text: "Cancelled synthetic background result",
-          prepareDisplayContent,
+          payloads: [{ text: "Cancelled synthetic background result" }],
           idempotencyKey: "background-cancellation-progress",
           provenance: {
             kind: "cron",
@@ -314,19 +316,23 @@ describe("commitBackgroundResultToSession", () => {
         );
       }
       const content = [
-        { type: "text", text: "Example report" },
+        { type: "text" as const, text: "Example report" },
         {
-          type: "image",
-          url: "/api/chat/media/outgoing/source-session/attachment-1/full",
+          type: "image" as const,
+          url: "https://example.test/report.png",
           alt: "report.png",
         },
       ];
+      vi.spyOn(assistantContent, "buildAssistantReplyContent").mockResolvedValueOnce({
+        assistantContent: content,
+        persistedAssistantContent: content,
+      });
       const commit = await commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
         expectedGeneration: target.generation,
         text: "Example report\nreport.png",
-        prepareDisplayContent: async () => content,
+        payloads: [{ text: "Example report", mediaUrl: "report.png" }],
         idempotencyKey: "cron-current-completion:cron:job-media:4000",
         provenance: { kind: "cron", jobId: "job-media", runId: "cron:job-media:4000" },
         config: target.config,
@@ -378,16 +384,17 @@ describe("commitBackgroundResultToSession", () => {
   it("does not commit when cancelled during display preparation", async () => {
     const target = await createTarget();
     const controller = new AbortController();
+    vi.spyOn(assistantContent, "buildAssistantReplyContent").mockImplementationOnce(async () => {
+      controller.abort();
+      return { assistantContent: undefined, persistedAssistantContent: undefined };
+    });
     await expect(
       commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
         expectedGeneration: target.generation,
         text: "Cancelled report",
-        prepareDisplayContent: async () => {
-          controller.abort();
-          return [{ type: "text", text: "Cancelled report" }];
-        },
+        payloads: [{ text: "Cancelled report" }],
         idempotencyKey: "cancelled-completion",
         provenance: { kind: "cron", jobId: "cancelled-job", runId: "cancelled-run" },
         config: target.config,

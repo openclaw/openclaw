@@ -92,8 +92,7 @@ describe("outbound audit projection", () => {
           channel: "matrix",
           to: "!room:target",
           payloads: [{ text: "suppressed" }, { text: "sent" }],
-          session: { conversationKind: "channel" },
-          mirror: { sessionKey: "secret-session", agentId: "mirror-agent", isGroup: true },
+          session: { conversationKind: "channel", key: "secret-session", agentId: "audit-agent" },
         },
         terminals: () =>
           completedOutboundAuditTerminals({
@@ -122,8 +121,8 @@ describe("outbound audit projection", () => {
     expect(events[0]).toMatchObject({
       status: "blocked",
       actorType: "agent",
-      actorId: "mirror-agent",
-      agentId: "mirror-agent",
+      actorId: "audit-agent",
+      agentId: "audit-agent",
       conversationKind: "channel",
       resultCount: 0,
     });
@@ -396,14 +395,14 @@ describe("outbound audit projection", () => {
       conversationKindFor({
         channel: "matrix",
         to: "!room:server",
-        mirror: { sessionKey: "control-session", agentId: "a", isGroup: true },
+        session: { key: "control-session", agentId: "a", conversationType: "group" },
       }),
     ).toBe("group");
     expect(
       conversationKindFor({
         channel: "matrix",
         to: "!room:server",
-        mirror: { sessionKey: "control-session", agentId: "a", isGroup: false },
+        session: { key: "control-session", agentId: "a", conversationType: "direct" },
       }),
     ).toBe("unknown");
   });
