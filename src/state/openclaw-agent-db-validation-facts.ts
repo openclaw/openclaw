@@ -29,6 +29,7 @@ export function readTransferredAgentSchema(
     typeof facts.admissionId !== "string" ||
     typeof facts.revision !== "number" ||
     typeof facts.userVersion !== "number" ||
+    typeof facts.textEncoding !== "string" ||
     typeof facts.schemaVersion !== "number" ||
     !(facts.tables instanceof Set) ||
     ![...facts.tables].every((table) => typeof table === "string") ||
@@ -65,6 +66,7 @@ export function readTransferredAgentSchema(
       admissionId: facts.admissionId,
       revision: facts.revision,
       userVersion: facts.userVersion,
+      textEncoding: facts.textEncoding,
       schemaVersion: facts.schemaVersion,
       tables: facts.tables,
       views: facts.views,

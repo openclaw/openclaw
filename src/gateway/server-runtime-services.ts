@@ -3,6 +3,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { onOutboundDeliveryEnqueued } from "../infra/delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
@@ -237,14 +238,16 @@ function startPendingOutboundDeliveryRecovery(params: {
   const scheduler = params.scheduler.scope();
   const { signal } = scheduler;
   let initialPass = true;
+  let pending = false;
   let inFlight: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
   const recover = (): Promise<void> | undefined => {
-    if (signal.aborted || inFlight || isGatewayWorkAdmissionClosed()) {
+    if (signal.aborted || inFlight) {
       return undefined;
     }
+    pending = false;
     const recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
       if (signal.aborted) {
         return;
@@ -255,7 +258,7 @@ function startPendingOutboundDeliveryRecovery(params: {
       if (signal.aborted) {
         return;
       }
-      const deliverWithCurrentConversationAuthority = async (
+      const deliver = (
         deliveryParams: DeliverOutboundPayloadsParams,
         stateContext?: DeliveryQueueStateContext,
       ) => {
@@ -265,9 +268,9 @@ function startPendingOutboundDeliveryRecovery(params: {
             ? completion
             : deliveryParams.conversationDeliveryAttemptAuthority;
         if (!attemptAuthority) {
-          return await deliverOutboundPayloadsInternal(deliveryParams, stateContext);
+          return deliverOutboundPayloadsInternal(deliveryParams, stateContext);
         }
-        return await deliverOutboundPayloadsInternal(
+        return deliverOutboundPayloadsInternal(
           {
             ...deliveryParams,
             withDirectAdapterHandoff: (initiate) =>
@@ -292,8 +295,14 @@ function startPendingOutboundDeliveryRecovery(params: {
         );
       };
       const recoveryLog = (logRecovery ??= params.log.child("delivery-recovery"));
+      const options = {
+        deliver,
+        log: recoveryLog,
+        cfg: initialPass ? params.cfg : getRuntimeConfig(),
+        shouldContinue: () => !signal.aborted,
+        onPending: schedule,
+      };
       if (initialPass) {
-        const cfg = params.cfg;
         initialPass = false;
         const { countPendingDeliveryQueueEntries } =
           await import("../infra/delivery-queue-sqlite.js");
@@ -318,72 +327,69 @@ function startPendingOutboundDeliveryRecovery(params: {
             );
           }
         };
-        // The diagnostic is independent; both tasks retain admission until they settle.
         const settled = await Promise.allSettled([
           diagnoseLegacy(),
-          recoverPendingDeliveries(
-            {
-              deliver: deliverWithCurrentConversationAuthority,
-              log: recoveryLog,
-              cfg,
-              shouldContinue: () => !signal.aborted,
-            },
-            deliverWithCurrentConversationAuthority,
-            recoveryContext,
-          ),
+          recoverPendingDeliveries(options, deliver, recoveryContext),
         ]);
         for (const result of settled) {
           if (result.status === "rejected") {
+            schedule();
             params.log.error(`Delivery recovery failed: ${String(result.reason)}`);
           }
         }
         return;
       }
-      // Normal retries use fresh config so revoked accounts cannot inherit the
-      // authority captured at gateway startup.
       await drainPendingDeliveriesCore(
         {
+          ...options,
           drainKey: "gateway:outbound",
           logLabel: "Outbound delivery retry",
-          cfg: getRuntimeConfig(),
-          log: recoveryLog,
-          deliver: deliverWithCurrentConversationAuthority,
           selectEntry: () => ({ match: true, bypassBackoff: false }),
-          shouldContinue: () => !signal.aborted,
         },
-        deliverWithCurrentConversationAuthority,
+        deliver,
         recoveryContext,
       );
-    }, "runtime:delivery-recovery").catch((err: unknown) =>
-      params.log.error(`Delivery recovery failed: ${String(err)}`),
-    );
+    }, "runtime:delivery-recovery").catch((err: unknown) => {
+      pending = true;
+      params.log.error(`Delivery recovery failed: ${String(err)}`);
+    });
     const settled: Promise<void> = recovery.finally(() => {
-      if (inFlight === settled) {
-        inFlight = null;
+      inFlight = null;
+      if (pending) {
+        schedule();
       }
     });
     inFlight = settled;
     return settled;
   };
 
-  // Match the queue's first backoff window without holding admission between
-  // ticks; otherwise suspended/restarting gateways retain invisible work.
-  scheduler.schedule({
-    id: "delivery:outbound-recovery",
-    delayMs: computeBackoffMs(1),
-    everyMs: computeBackoffMs(1),
-    run: recover,
+  const schedule = () => {
+    // Keep enqueues arriving during a scan for its successor, even if that scan was empty.
+    pending = true;
+    if (!inFlight) {
+      scheduler.schedule({
+        id: "delivery:outbound-recovery",
+        delayMs: computeBackoffMs(1),
+        mode: "earliest",
+        run: () => (isGatewayWorkAdmissionClosed() ? schedule() : recover()),
+      });
+    }
+  };
+  const unsubscribe = onOutboundDeliveryEnqueued((stateDir) => {
+    if (stateDir === recoveryContext.stateDir) {
+      runInDetachedAsyncContext(schedule);
+    }
   });
-  void recover();
+  void (isGatewayWorkAdmissionClosed() ? schedule() : recover());
   return () => {
     if (stopPromise) {
       return stopPromise;
     }
+    unsubscribe();
     const scheduled = scheduler.stop();
     const recovery = inFlight;
     if (!recovery) {
-      stopPromise = scheduled;
-      return stopPromise;
+      return (stopPromise = scheduled);
     }
     const stillPendingTimer = setTimeout(() => {
       (logRecovery ??= params.log.child("delivery-recovery")).warn(

@@ -455,7 +455,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
         try {
           expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(version);
           expect(tableExists(reader, "committed_sibling")).toBe(version === 2);
-          expect(admission.queries).toHaveLength(3);
+          // One capture reads the schema cookie, user version, encoding, and catalog.
+          expect(admission.queries).toHaveLength(4);
         } finally {
           admission.restore();
         }

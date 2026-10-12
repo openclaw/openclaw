@@ -38,7 +38,7 @@ it("transfers an ordinary patch candidate with its final authority grant", async
           ) {
             transfers.push(publication.kind);
             if (request.stage === "commit") {
-              expect(f.read().label).not.toBe("committed candidate");
+              expect(f.read()).toMatchObject({ label: "initial" });
               expect(publication.transfer).toMatchObject({
                 frames: [{ recordDone: true }, { done: true }],
               });
@@ -53,7 +53,7 @@ it("transfers an ordinary patch candidate with its final authority grant", async
         skipMaintenance: true,
       }),
     ).resolves.toMatchObject({ label: "committed candidate" });
-    expect(f.read().label).toBe("committed candidate");
+    expect(f.read()).toMatchObject({ label: "committed candidate" });
     expect(transfers).toEqual(["session-entry-patch-committed"]);
   });
 });

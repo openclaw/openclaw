@@ -31,6 +31,7 @@ import {
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { historicalV14AgentSchemaSql } from "./state-migrations.media-persistence.historical-schema.test-support.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
@@ -40,7 +41,8 @@ import { repairDoctorSessionWindowsBeforeMigration } from "./state-migrations.se
 const tempDirs: string[] = [];
 
 function seedOrphanSessionWindows(pathname: string, schemaVersion: number) {
-  using database = new NativeDatabaseSync(pathname);
+  using database = nodeSqlite.openNodeSqliteDatabase(pathname);
+  admitSqliteSchema(database);
   database.exec("PRAGMA foreign_keys = OFF;");
   const insertNode = database.prepare(`INSERT INTO session_nodes
     (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`);

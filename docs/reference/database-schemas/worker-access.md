@@ -77,6 +77,13 @@ call them. A worker caller does not make the shared kernel worker-only. The
 inventory retains those calls as migration debt; raw-row removal guarded by
 Doctor's `expectedRawEntryJson` variant is an offline repair exception.
 
+Status presentation prepares bounded usage and terminal-model facts through the
+existing history worker before rendering. Goal mutations with ordinary host
+authority callbacks use the existing writer grant; an opaque native or cross-store
+authority still retains its current effect boundary. Transcript rewrites compare
+the loaded generation, sequence, and mutation timestamp once in their write
+transaction. Compaction uses its append receipt instead of rereading the appended
+rows or version. These paths preserve stored bytes, permissions, and update behavior.
 Durable SessionManager calls from the Gateway must use the asynchronous methods.
 The deprecated synchronous SDK methods retain compatibility until the next SDK
 major; bundled transcript archive and model-context readers use workers. Skill Workshop keeps
@@ -3022,6 +3029,14 @@ replacement requires first admission for the replacement; revoked integrity
 requires recovery through its existing owner. The physical store's schema owner
 is fixed at admission; live session ownership and permissions still use their
 current-row checks.
+
+The same admission records the database's text encoding alongside its version.
+Transcript payload preparation consumes that published encoding, including across
+worker transfer and idle reopen, instead of querying `pragma_encoding` per handle.
+UTF-16 stores retain identity payloads; UTF-8 stores keep the existing compression
+policy. Offline payload migration passes its already-read encoding before schema
+admission is complete. This changes no schema, stored format, or update behavior.
+
 Cloud turns retain the admitted handle through execution and finalization, so
 their existing synchronous transcript-authority checks cannot become cold openers
 after an idle eviction.
@@ -5167,6 +5182,13 @@ caller authority is rechecked after awaited preparation. Contributor inheritance
 joins participant recording and reads the full row from the selected physical
 source; skill-selection commit guards retain their current native read. Incognito
 stores remain process-owned. Schemas, retention, and update behavior are unchanged.
+
+Native child planning reuses the requester entry captured by that worker read for
+sandbox classification, model, thinking, and fast-mode inheritance. Proxied
+completion captures its controller separately; completion routing never supplies
+the controller's policy. A newly minted child is classified with explicit absence,
+without querying its unused key. Preference writes during preparation apply to
+the next spawn; active-turn model and thinking overrides still take precedence.
 
 Startup/topology hydration, internal synchronous keyed and archived reads, and
 process-held incognito stores remain migration debt. Preserve the

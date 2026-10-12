@@ -238,6 +238,10 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
+- SDK Responses replay uses the storage privacy shape and a fixed field order:
+  summaries are empty, cleartext reasoning content is omitted, and completed
+  ciphertext remains unchanged across live continuation and transcript reload.
+  Native ChatGPT Responses retains its upstream Codex payload semantics.
 - Node turns canonicalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
   the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
