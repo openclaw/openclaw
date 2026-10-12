@@ -39,7 +39,7 @@ describe("board data handler loading", () => {
     const authority = {
       useCurrent: async <T>(run: () => T) => await run(),
     } as BoardCapabilityAuthority;
-    const respond = vi.fn();
+    const publish = vi.fn();
     const client = { connId: "board-reader" };
     const invocation = {
       req: { type: "req", id: "board-data", method: "board.data.read" },
@@ -50,22 +50,22 @@ describe("board data handler loading", () => {
     usageStatus.mockImplementation(({ respond }) => respond(true, { providers: [] }));
     cronRun.mockImplementation(({ respond }) => respond(true, { ok: true }));
 
-    await readBoardDataBinding("sessions.list", { limit: 5 }, invocation, authority, respond);
+    await readBoardDataBinding("sessions.list", { limit: 5 }, invocation, authority, publish);
     expect(loaded.mock.calls).toEqual([["sessions"]]);
     expect(sessionsList).toHaveBeenCalledWith(
       expect.objectContaining({ client, params: { limit: 5 } }),
     );
-    expect(respond).toHaveBeenLastCalledWith(true, { sessions: [] });
+    expect(publish).toHaveBeenLastCalledWith(true, { sessions: [] });
 
-    await readBoardDataBinding("usage.status", {}, invocation, authority, respond);
+    await readBoardDataBinding("usage.status", {}, invocation, authority, publish);
     expect(usageStatus).toHaveBeenCalledWith(expect.objectContaining({ client: null }));
-    expect(respond).toHaveBeenLastCalledWith(true, { providers: [] });
+    expect(publish).toHaveBeenLastCalledWith(true, { providers: [] });
 
-    await triggerBoardCronJob("synthetic-job", invocation, authority, respond);
+    await triggerBoardCronJob("synthetic-job", invocation, authority, publish);
     expect(cronRun).toHaveBeenCalledWith(
       expect.objectContaining({ params: { id: "synthetic-job", mode: "force" } }),
     );
-    expect(respond).toHaveBeenLastCalledWith(true, { ok: true });
+    expect(publish).toHaveBeenLastCalledWith(true, { ok: true });
     expect(loaded.mock.calls).toEqual([["sessions"], ["usage"], ["cron"]]);
   });
 });
