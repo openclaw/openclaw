@@ -1,7 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
-import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import {
+  readAgentRunTerminalError,
+  readAgentRunTerminalOutcome,
+} from "../../channels/turn/agent-run-terminal-outcome.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -218,6 +221,43 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it.each(["failed", "completed"] as const)(
+    "carries routed public failure copy only for a %s run",
+    async (outcome) => {
+      const publicText =
+        "Configuration unload was refused. Reconnect this conversation before retrying.";
+      const privateError = new Error("private-provider-diagnostic-canary");
+      const params = createVisibleDispatchParams(async (_ctx, options) => {
+        options?.onAgentRunStart?.("routed-terminal-run");
+        options?.onAgentRunTerminalOutcome?.(outcome);
+        if (outcome === "failed") {
+          options?.replyOperation?.fail("run_failed", privateError);
+        }
+        return [
+          { text: privateError.message, isError: true, isReasoning: true },
+          { text: publicText, isError: true },
+        ];
+      });
+      params.ctx.Provider = "slack";
+      params.ctx.Surface = "slack";
+
+      const result = await dispatchReplyFromConfig(params);
+
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({ text: publicText }),
+          channel: "telegram",
+        }),
+      );
+      expect(params.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(readAgentRunTerminalOutcome(result)).toBe(outcome);
+      expect(readAgentRunTerminalError(result)).toBe(outcome === "failed" ? publicText : undefined);
+      expect(JSON.stringify(mocks.routeReply.mock.calls)).not.toContain(privateError.message);
+      expect(JSON.stringify(result)).not.toContain(publicText);
+      expect(JSON.stringify(result)).not.toContain(privateError.message);
+    },
+  );
+
   it.each([
     ["group", true, true, "allow", "slack", true],
     ["group", false, false, "allow", "slack", false],
@@ -291,6 +331,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         cause: resolverError,
       });
       expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+      expect(readAgentRunTerminalError(result) ?? "").not.toContain(resolverError.message);
       expect(processedOutcome?.outcome).toBe("error");
       if (origin !== surface) {
         expect(mocks.routeReply).toHaveBeenLastCalledWith(

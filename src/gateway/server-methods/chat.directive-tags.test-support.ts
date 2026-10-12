@@ -437,3 +437,31 @@ export function createChatDirectiveUserMessageReader(
           (candidate as { role?: unknown }).role === "user",
       );
 }
+
+export const CHAT_DIRECTIVE_AGENT_RUN_TERMINAL_CASES = [
+  ["error payload before launch", false, "error", undefined, undefined],
+  ["recorded failure with source reply", true, "source", "failed", undefined],
+  ["recorded success with a recoverable warning", true, "warning", "completed", undefined],
+  ["recorded success with only a tool warning", true, "warning-only", "completed", undefined],
+  [
+    "recorded success with source reply plus warning",
+    true,
+    "source-warning",
+    "completed",
+    undefined,
+  ],
+  [
+    "recorded failure with routed public diagnostic",
+    true,
+    "source",
+    "failed",
+    "Configuration unload was refused. Reconnect this conversation before retrying.",
+  ],
+  [
+    "recorded success ignores a terminal diagnostic",
+    true,
+    "warning",
+    "completed",
+    "Configuration unload was refused. Reconnect this conversation before retrying.",
+  ],
+] as const;

@@ -30,16 +30,32 @@ export class CodexIncognitoPolicyChangeError extends AgentHarnessPreflightError 
   }
 }
 
+type CodexPolicyHandoffPhase =
+  | "subscription-release"
+  | "native-unload"
+  | "tool-attestation"
+  | "policy-write"
+  | "binding-commit";
+
+const handoffPhaseMessages: Record<CodexPolicyHandoffPhase, string> = {
+  "subscription-release": "Codex could not confirm releasing this session's subscription",
+  "native-unload": "Codex did not confirm unloading its previous configuration",
+  "tool-attestation": "Codex could not confirm this session's current tool policy",
+  "policy-write": "Codex could not complete this session's policy write",
+  "binding-commit": "Codex could not commit this session's policy binding",
+};
+
 /** Never replay a handoff: native persistence can precede an unsuccessful RPC response. */
 export class CodexThreadPolicyHandoffError extends AgentHarnessPreflightError {
   constructor(
     readonly outcome: "not-written" | "unknown" | "acknowledged",
     cause: unknown,
+    readonly phase: CodexPolicyHandoffPhase = "policy-write",
   ) {
-    super(
-      `Codex session policy handoff failed: ${cause instanceof Error ? cause.message : String(cause)}. The conversation is preserved; reconnect before retrying.`,
-      { cause },
-    );
+    const message = `${handoffPhaseMessages[phase]}. ${
+      outcome === "unknown" ? "The policy write outcome is unknown and will not be replayed. " : ""
+    }The conversation is preserved; reconnect this session before retrying.`;
+    super(message, { cause, userMessage: message });
     this.name = "CodexThreadPolicyHandoffError";
   }
 }

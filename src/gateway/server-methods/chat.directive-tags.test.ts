@@ -80,6 +80,7 @@ import { createChatSendLateReplyFinalizer } from "./chat-send-source-finalizatio
 import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media.suite.js";
 import {
   ChatDirectiveDedupe,
+  CHAT_DIRECTIVE_AGENT_RUN_TERMINAL_CASES,
   createChatDirectiveReplyBackend,
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
@@ -3150,15 +3151,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it.each([
-    ["error payload before launch", false, "error", undefined],
-    ["recorded failure with source reply", true, "source", "failed"],
-    ["recorded success with a recoverable warning", true, "warning", "completed"],
-    ["recorded success with only a tool warning", true, "warning-only", "completed"],
-    ["recorded success with source reply plus warning", true, "source-warning", "completed"],
-  ] as const)(
+  it.each(CHAT_DIRECTIVE_AGENT_RUN_TERMINAL_CASES)(
     "projects agent-run terminal: $0",
-    async (name, agentStarted, presentation, outcome) => {
+    async (name, agentStarted, presentation, outcome, publicDiagnostic) => {
       const fixtureDir = await createSqliteTranscriptFixture("openclaw-chat-send-agent-terminal-");
       const runId = `idem-agent-terminal-${name.replaceAll(" ", "-")}`;
       const failed = outcome === "failed" || presentation === "error";
@@ -3169,7 +3164,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           ? agentStarted
             ? "LLM idle timeout (120s): no response from model"
             : STALE_WORKER_BUILD_REASON
-          : "agent run failed";
+          : (publicDiagnostic ?? "agent run failed");
       const mirrorIdempotencyKey = `${runId}:internal-source-reply:0`;
       const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
       mockState.triggerAgentRunStart = agentStarted;
@@ -3225,7 +3220,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           "default chat dispatch fixture",
         );
         dispatchInboundMessageMock.mockImplementationOnce(async (params: TestDispatchParams) =>
-          recordAgentRunTerminalOutcome(await dispatch(params), outcome),
+          recordAgentRunTerminalOutcome(await dispatch(params), outcome, publicDiagnostic),
         );
       }
       const { context, send } = createChatRequestFixture();
@@ -3259,7 +3254,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       expect(waitRespond).toHaveBeenCalledWith(
         true,
-        expect.objectContaining({ runId, status: failed ? "error" : "ok" }),
+        expect.objectContaining({
+          runId,
+          status: failed ? "error" : "ok",
+          ...(failed ? { error: errorMessage } : {}),
+        }),
       );
       const broadcasts = context.broadcast.mock.calls
         .filter(([event]) => event === "chat")

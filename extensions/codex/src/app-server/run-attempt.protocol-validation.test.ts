@@ -16,14 +16,20 @@ import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
   assistantMessage,
   bindProductionHarnessHostCapabilitiesForTest,
+  createParams,
   createTestParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   setCodexTestModelSupportsTools,
   tempDir,
+  threadStartResult,
 } from "./run-attempt-test-harness.js";
 import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
+import {
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import { resolveCodexUpstreamForkBoundary } from "./upstream-fork-boundary.js";
 import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
@@ -308,6 +314,54 @@ describe("Codex app-server notification bursts", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
     expect(JSON.stringify(result.messagesSnapshot)).toContain('"toolCallId":"cmd-burst"');
+  });
+});
+
+describe("Codex native resume validation", () => {
+  it("rejects a resumed provider mismatch before inference and preserves the binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      historyCoveredThrough: new Date().toISOString(),
+      webSearchThreadConfigFingerprint: JSON.stringify({
+        "features.standalone_web_search": false,
+        web_search: "disabled",
+      }),
+    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return {
+            ...threadStartResult("thread-existing", { cwd: workspaceDir }),
+            model: "gpt-5.4",
+            modelProvider: "local-provider",
+          };
+        }
+        if (method === "turn/start") {
+          return { turn: { id: "turn-1", status: "completed", items: [] } };
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "openai";
+    params.modelId = "gpt-5.5";
+    await expect(runCodexAppServerAttempt(params)).rejects.toHaveProperty(
+      "cause.message",
+      expect.stringContaining("Codex resumed a different model provider"),
+    );
+    expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
+    expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-existing",
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
   });
 });
 

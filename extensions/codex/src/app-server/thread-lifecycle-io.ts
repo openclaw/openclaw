@@ -124,6 +124,7 @@ export async function resumeExistingCodexThread(
   let resumeReservation: { release: () => void } | undefined;
   let ordinaryAppConfigChanged = false;
   let policyOutcome: CodexThreadPolicyHandoffError["outcome"] = "not-written";
+  let handoffPhase: CodexThreadPolicyHandoffError["phase"] = "native-unload";
   const abandonClient =
     params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client));
   try {
@@ -131,7 +132,21 @@ export async function resumeExistingCodexThread(
     const configuration = await context.prepareResume();
     const assertHandoffCurrent = configuration.assertConfigured;
     disposeConfiguration = configuration.dispose;
-    await context.releaseRetainedThread(configuration.assertCurrent);
+    try {
+      await context.releaseRetainedThread(configuration.assertCurrent);
+    } catch (cause) {
+      // Preserve cancellation and authority rejections; only cleanup failure owns this diagnostic.
+      if (params.signal?.aborted || !(cause instanceof CodexAppServerUnsafeSubscriptionError)) {
+        throw cause;
+      }
+      const error = new CodexThreadPolicyHandoffError("not-written", cause, "subscription-release");
+      embeddedAgentLog.warn("codex session policy handoff refused", {
+        runId: params.params.runId,
+        phase: error.phase,
+        policyWriteOutcome: error.outcome,
+      });
+      throw error;
+    }
     configuration.assertCurrent();
     const clientBoundThread =
       ringZeroClientInstanceId !== undefined ||
@@ -215,6 +230,7 @@ export async function resumeExistingCodexThread(
     acceptedConfiguration = configuration;
     assertCodexThreadAcceptsDirectInput(response.thread);
     configuration.assertConfigured();
+    handoffPhase = "tool-attestation";
     if (requestModelProvider && response.modelProvider !== requestModelProvider) {
       throw new Error(
         "Codex resumed a different model provider than the one selected for this turn",
@@ -247,6 +263,7 @@ export async function resumeExistingCodexThread(
       withCurrent: params.authority?.withCurrent,
     });
     throwIfAborted();
+    handoffPhase = "policy-write";
     await refreshCodexThreadPolicy({
       client: params.client,
       threadId: resumeBinding.threadId,
@@ -257,6 +274,7 @@ export async function resumeExistingCodexThread(
       withCurrent: params.authority?.withCurrent,
     });
     policyOutcome = "acknowledged";
+    handoffPhase = "binding-commit";
     assertHandoffCurrent();
     const resumePatch = {
       // Resume moves native subscription ownership to this physical client.
@@ -352,7 +370,14 @@ export async function resumeExistingCodexThread(
         error instanceof CodexThreadPolicyHandoffError ||
         error instanceof CodexAppServerUnsafeSubscriptionError
           ? error
-          : new CodexThreadPolicyHandoffError(policyOutcome, error);
+          : new CodexThreadPolicyHandoffError(policyOutcome, error, handoffPhase);
+      if (handoffError instanceof CodexThreadPolicyHandoffError) {
+        embeddedAgentLog.warn("codex session policy handoff refused", {
+          runId: params.params.runId,
+          phase: handoffError.phase,
+          policyWriteOutcome: handoffError.outcome,
+        });
+      }
       // Resumed threads own native history. Release only this subscription;
       // deleting a rejected thread would also erase its history and descendants.
       const subscriptionReleased = await unsubscribeCodexThreadBestEffort(params.client, {
@@ -383,6 +408,9 @@ export async function resumeExistingCodexThread(
                 [handoffError, cause],
                 "Codex thread/resume client could not be retired",
               ),
+              handoffError instanceof CodexThreadPolicyHandoffError
+                ? handoffError.phase
+                : handoffPhase,
             );
           }
         }

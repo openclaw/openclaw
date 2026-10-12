@@ -43,6 +43,7 @@ import {
 import {
   assertAdoptedCodexThreadResumeAllowed,
   assertCodexSupervisionThreadLineage,
+  CodexThreadPolicyHandoffError,
 } from "./thread-policy.js";
 
 /** All bound preparation follows attach's native-queue-before-binding-lease order. */
@@ -319,9 +320,7 @@ function observeCodexThreadConfiguration(
       // or failed shutdown retains the session. notLoaded proves teardown, not a
       // reservation against native-internal reloads outside OpenClaw's thread queue.
       if (!unloaded) {
-        throw new Error(
-          "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.",
-        );
+        throw new CodexThreadPolicyHandoffError("not-written", undefined, "native-unload");
       }
     },
   };

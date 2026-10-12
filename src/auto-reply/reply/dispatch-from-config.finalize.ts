@@ -545,7 +545,15 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
   });
   if (agentRunTerminalOutcome) {
-    recordAgentRunTerminalOutcome(result, agentRunTerminalOutcome);
+    // Origin-channel delivery bypasses the Gateway's reply collector. Carry the
+    // rendered public failure copy, never the resolver's private exception.
+    const terminalError = replies
+      .find(
+        (reply) =>
+          reply.isError === true && isReplyPayloadTerminalContent(reply) && reply.text?.trim(),
+      )
+      ?.text?.trim();
+    recordAgentRunTerminalOutcome(result, agentRunTerminalOutcome, terminalError);
   }
   return result;
 }
