@@ -81,8 +81,8 @@ export function evaluateWorkflowExpression(
     >;
     jobResults?: Record<string, string>;
     preflightResult?: string;
-    failFastOutputs?: Record<string, string>;
-    failFastResult?: string;
+    failureReportOutputs?: Record<string, string>;
+    failureReportResult?: string;
     pullRequestNumber?: number;
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
@@ -236,9 +236,14 @@ export function evaluateWorkflowExpression(
           ...context.preflightOutputs,
         },
       },
-      "pr-fail-fast": {
-        result: context.failFastResult ?? "success",
-        outputs: { failure_job_id: "", failure_run_attempt: "", ...context.failFastOutputs },
+      "pr-failure-report": {
+        result: context.failureReportResult ?? "success",
+        outputs: {
+          failure_job_id: "",
+          summary_json: "",
+          failures_json: "",
+          ...context.failureReportOutputs,
+        },
       },
     },
     vars: {

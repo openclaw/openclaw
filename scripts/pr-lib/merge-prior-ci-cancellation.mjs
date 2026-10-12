@@ -655,6 +655,7 @@ export function verifyPriorCiCancellation(context) {
     ]);
   } else {
     const owner = jobs.find((job) => job.id === cancellation.jobId);
+    // Retained pre-removal run receipts must match their historical job name exactly.
     requireEvidence(
       [undefined, "pr-fail-fast"].includes(cancellation.kind) &&
         owner?.name === "pr-fail-fast" &&
