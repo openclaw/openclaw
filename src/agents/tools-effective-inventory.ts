@@ -13,10 +13,19 @@ import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
+import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
@@ -25,6 +34,7 @@ import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
+import { retainRuntimePluginWork } from "./runtime-plugin-work.js";
 import { createToolAccessDiagnostics } from "./tool-access-diagnostics.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
@@ -213,6 +223,41 @@ type ToolInventoryRuntimeModelContext = ReturnType<
   typeof resolveStaticToolInventoryRuntimeModelContext
 >;
 
+async function withGatewayToolInventoryScope<T>(
+  config: OpenClawConfig,
+  workspaceDir: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const registry = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
+  const context = getPluginRuntimeLoadContext(registry);
+  const metadata = getGatewayPluginMetadataSnapshot();
+  if (
+    !registry ||
+    !context ||
+    !metadata ||
+    metadata.manifestRegistry !== context.manifestRegistry ||
+    context.controlPlaneFingerprint !==
+      resolvePluginControlPlaneFingerprint({ config, env: context.env, workspaceDir })
+  ) {
+    return run();
+  }
+  // Full tool facts need their own custody; the selected model lease stays narrow.
+  const releaseWork = retainRuntimePluginWork([registry]);
+  try {
+    return await withPluginRuntimeRegistryScope(registry, () =>
+      withPluginMetadataSnapshotScope(metadata, run, {
+        config: context.config,
+        env: context.env,
+        workspaceDir: context.workspaceDir,
+        trustConfigIdentity: true,
+      }),
+    );
+  } finally {
+    releaseWork();
+  }
+}
+
 /** Keeps dynamic model hooks owned and scoped until inventory projection finishes. */
 export async function acquireEffectiveToolInventoryRuntimeModelContext(
   params: Parameters<typeof resolveStaticToolInventoryRuntimeModelContext>[0],
@@ -342,29 +387,31 @@ export async function resolveEffectiveToolInventory(
       agentAccountId: params.accountId,
     });
   const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
-  const effectiveTools = await createOpenClawCodingToolsInternalAsync(
-    {
-      ...params,
-      conversationCapabilityProfile: capabilityProfile,
-      authProfileStoreSource,
-      agentId,
-      workspaceDir,
-      agentDir,
-      config: params.cfg,
-      modelApi: runtimeModelContext.modelApi,
-      modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
-      modelCompat,
-      senderName: params.senderName ?? undefined,
-      senderUsername: params.senderUsername ?? undefined,
-      senderE164: params.senderE164 ?? undefined,
-      agentAccountId: params.accountId ?? undefined,
-      groupId: params.groupId ?? undefined,
-      groupChannel: params.groupChannel ?? undefined,
-      groupSpace: params.groupSpace ?? undefined,
-      allowGatewaySubagentBinding: true,
-    },
-    undefined,
-    diagnostics.onFilter,
+  const effectiveTools = await withGatewayToolInventoryScope(params.cfg, workspaceDir, () =>
+    createOpenClawCodingToolsInternalAsync(
+      {
+        ...params,
+        conversationCapabilityProfile: capabilityProfile,
+        authProfileStoreSource,
+        agentId,
+        workspaceDir,
+        agentDir,
+        config: params.cfg,
+        modelApi: runtimeModelContext.modelApi,
+        modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
+        modelCompat,
+        senderName: params.senderName ?? undefined,
+        senderUsername: params.senderUsername ?? undefined,
+        senderE164: params.senderE164 ?? undefined,
+        agentAccountId: params.accountId ?? undefined,
+        groupId: params.groupId ?? undefined,
+        groupChannel: params.groupChannel ?? undefined,
+        groupSpace: params.groupSpace ?? undefined,
+        allowGatewaySubagentBinding: true,
+      },
+      undefined,
+      diagnostics.onFilter,
+    ),
   );
   const projectedInventory = buildRuntimeCompatibleToolInventory({
     tools: effectiveTools,
