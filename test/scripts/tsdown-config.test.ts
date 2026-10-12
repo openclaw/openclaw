@@ -10,11 +10,13 @@ import {
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { visitJavaScriptStatements } from "../../scripts/lib/javascript-statements.mjs";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { standaloneRuntimeProcessBuildEntries } from "../../scripts/lib/runtime-process-core-build-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -87,6 +89,72 @@ const isWorkerBuildConfig = (config: TsdownConfig) =>
 function findWorkerBuildConfig(target: string) {
   const selected = workerBuildTargets.find(([name]) => name === target);
   return selected && configs.find((config) => hasWorkerEntry(config, selected[1], selected[2]));
+}
+
+function listBindinglessPackageImports(source: string): string[] {
+  const specifiers: string[] = [];
+  visitJavaScriptStatements(source, { sourceType: "module", allowHashBang: true }, (statements) => {
+    for (const statement of statements) {
+      if (
+        statement.type === "ImportDeclaration" &&
+        statement.specifiers.length === 0 &&
+        typeof statement.source.value === "string" &&
+        !statement.source.value.startsWith(".") &&
+        !isBuiltin(statement.source.value)
+      ) {
+        specifiers.push(statement.source.value);
+      }
+    }
+  });
+  return specifiers;
+}
+
+const SQLITE_READONLY_CHILD_ENTRY = "infra/sqlite-readonly-location.worker";
+// Kept only for side effects after tree-shaking removed their consumers; each spawn of the
+// child would otherwise load TypeBox and the AI runtime that nothing in it calls.
+const SQLITE_READONLY_CHILD_UNUSED_IMPORTS = new Set([
+  "@openclaw/fs-safe/output",
+  "@openclaw/fs-safe/secure-file",
+  "@openclaw/fs-safe/walk",
+  "typebox/schema",
+  "typebox/guard",
+  "typebox/compile",
+  "@openclaw/ai/internal/runtime",
+  "@openclaw/ai/internal/shared",
+  "@openclaw/ai/diagnostics",
+]);
+
+async function listStandaloneHelperBindinglessImports(
+  entryName: string,
+  entrySource: string,
+): Promise<string[]> {
+  const childSource = standaloneRuntimeProcessBuildEntries[SQLITE_READONLY_CHILD_ENTRY];
+  const selected =
+    childSource &&
+    configs.find((config) => hasWorkerEntry(config, SQLITE_READONLY_CHILD_ENTRY, childSource));
+  if (!selected) {
+    throw new Error("Missing standalone runtime process build config");
+  }
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { [entryName]: entrySource },
+    outDir: fs.realpathSync(createTempDir("openclaw-standalone-helper-")),
+    logLevel: "silent",
+  });
+  try {
+    const chunk = bundles
+      .flatMap((bundle) => bundle.chunks)
+      .find((output) => output.type === "chunk" && output.fileName === `${entryName}.js`);
+    if (chunk?.type !== "chunk") {
+      throw new Error(`Missing standalone helper chunk: ${entryName}`);
+    }
+    return listBindinglessPackageImports(chunk.code);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
 }
 
 const FS_SAFE_CALLER_PROBE = `
@@ -1217,6 +1285,30 @@ console.log("relocated session card renders with bundled fonts");
           .toSorted(),
       ).toEqual(declarationEntryNames.toSorted());
     }
+  });
+
+  it("keeps unused package imports out of every read-only SQLite child spawn", async () => {
+    const source = standaloneRuntimeProcessBuildEntries[SQLITE_READONLY_CHILD_ENTRY];
+    if (!source) {
+      throw new Error("Missing read-only SQLite child entry");
+    }
+    const imports = await listStandaloneHelperBindinglessImports(
+      SQLITE_READONLY_CHILD_ENTRY,
+      source,
+    );
+    expect(
+      imports.filter((specifier) => SQLITE_READONLY_CHILD_UNUSED_IMPORTS.has(specifier)),
+    ).toEqual([]);
+  });
+
+  it("keeps unaudited package side-effect imports in standalone helpers", async () => {
+    const root = fs.realpathSync(createTempDir("openclaw-standalone-helper-fixture-"));
+    fs.symlinkSync(fs.realpathSync("node_modules"), path.join(root, "node_modules"), "dir");
+    const entry = path.join(root, "helper.ts");
+    fs.writeFileSync(entry, 'import "dotenv/config";\nimport "typebox/schema";\n');
+    expect(await listStandaloneHelperBindinglessImports("helper", entry)).toEqual([
+      "dotenv/config",
+    ]);
   });
 
   it("keeps excluded plugins out of the unified graph without dropping host helpers", () => {
