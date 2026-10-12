@@ -190,36 +190,46 @@ Loop detection hashes the full tool arguments, so a model that re-sends the same
 answer reworded produces a different hash each time and slips past it by design
 (different text is a legitimately different message). To catch that pattern, the
 `message` and `conversations_send` tools keep a per-turn, per-target count of
-successful sends, independent of `tools.loopDetection` and its master switch.
+submitted sends, independent of `tools.loopDetection` and its master switch.
 
-- **Soft reminder (on by default).** From the second successful send to the same
-  target within one turn, the tool result carries a one-line note reminding the
-  model to finalize instead of sending another variant. The first send is never
-  annotated, so ordinary single replies stay noise-free. Broadcast fan-out and
-  dry runs are not counted. Set `tools.message.turnSendNudge` to `false` to
-  suppress only this reminder text; the per-turn counting and the hard cap below
-  keep working. The per-agent override lives at
-  `agents.entries.*.tools.message.turnSendNudge`, and an unset per-agent value
-  inherits the global setting.
+- **What counts as a send.** A send counts once it is handed to delivery: a
+  confirmed delivery, a send the Gateway queued for retry, a send whose outcome
+  is unknown, and a partially failed send all count. The count is conservative,
+  so a queued send keeps its charge even if the delivery later fails. Suppressed
+  and failed sends, dry runs, and broadcast fan-out do not count.
+- **Soft reminder (on by default).** From the second counted send to the same
+  target within one turn, the tool result carries a one-line note that the model
+  has already submitted that many messages (some may still be pending delivery)
+  and should finalize instead of sending another variant. The first send is
+  never annotated, so ordinary single replies stay noise-free. Set
+  `tools.message.turnSendNudge` to `false` to suppress only this reminder text;
+  the per-turn counting and the hard cap below keep working. The per-agent
+  override lives at `agents.entries.*.tools.message.turnSendNudge`, and an unset
+  per-agent value inherits the global setting.
 - **Hard cap (opt-in, default off).** Set
   `tools.message.maxMessagesPerTurnPerTarget` to a positive integer to block
-  sends beyond that many deliveries to the same target in one turn. The block
-  happens before delivery, and the two tools report it in the two different
-  shapes their result schemas allow. The `message` tool returns a suppressed
-  result carrying the structured reason `turn_send_budget_exhausted`.
-  `conversations_send` declares a closed result schema with no reason field, so
-  it returns a suppressed result (status `suppressed`) whose block reason is in
-  the human-readable text instead of a structured field. Media actions
-  (`sendAttachment`, `upload-file`) and broadcast fan-out are exempt so
-  legitimately split messages are never truncated. The per-agent override lives
-  at `agents.entries.*.tools.message.maxMessagesPerTurnPerTarget`.
+  sends beyond that many counted sends to the same target in one turn. The
+  block happens before delivery. The `message` tool returns a suppressed result
+  carrying the structured reason `turn_send_budget_exhausted`.
+  `conversations_send` returns a suppressed result (status `suppressed`) and
+  carries the block explanation in its text and in the `turnSendNotice` field,
+  because its result schema has no reason field. Media actions
+  (`sendAttachment`, `upload-file`) count toward the reminder but are exempt
+  from the cap, and broadcast fan-out is exempt from both, so legitimately split
+  messages are never truncated. The per-agent override lives at
+  `agents.entries.*.tools.message.maxMessagesPerTurnPerTarget`.
 - **What counts as one target.** A target is the channel, the account the send
   leaves through, and the recipient. A send that omits `accountId` counts
   against the account delivery picks (the agent's binding for that recipient,
   else the channel's default account), so it shares a count with explicit-account
-  sends and `conversations_send` to the same recipient. A retry that reuses the
-  same idempotency key or operation counts once, even when both calls are in
-  flight at the same time.
+  sends and `conversations_send` to the same recipient.
+- **Retries.** On routes where the Gateway deduplicates operations
+  (`conversations_send`, and `message` sends on channels the Gateway delivers),
+  a retry that reuses the same idempotency key or operation counts once, even
+  when both calls are in flight at the same time, and is admitted past the cap
+  because the Gateway returns the original result instead of sending again. On
+  directly delivered channels each retry is a separate delivery, so it counts
+  again and the cap can block it.
 
 ```json5
 {
