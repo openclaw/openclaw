@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,11 +19,15 @@ import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
 } from "./device-pairing-node-state.js";
-import { recordPairedNodeHostStats, renamePairedNode } from "./device-pairing-node.js";
+import {
+  recordPairedNodeConnection,
+  recordPairedNodeHostStats,
+  renamePairedNode,
+} from "./device-pairing-node.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { readDevicePairingNodeSnapshot } from "./device-pairing-store-readonly.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
-import { revokeDeviceToken } from "./device-pairing-tokens.js";
+import { revokeDeviceToken, verifyDeviceToken } from "./device-pairing-tokens.js";
 import {
   executeDevicePairingMutation,
   withCurrentDevicePairingSnapshot,
@@ -33,6 +38,8 @@ import {
   listDevicePairing,
   listDevicePairingReadOnly,
   removePairedDevice,
+  updatePairedDeviceMetadata,
+  updatePairedDevicePresence,
 } from "./device-pairing.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -255,11 +262,7 @@ test.each([
       mutation,
       "pairing mutation settled before worker dispatch",
     );
-    if (
-      change === "token revocation" ||
-      change === "rename" ||
-      change === "metadata after a failed read"
-    ) {
+    if (change === "metadata after a failed read") {
       expect(() => getPublishedPairedDeviceBinding("node", baseDir)).toThrow(
         "Device pairing authority requires a current worker publication",
       );
@@ -349,6 +352,100 @@ test.each(["lookup", "pending read", "token revocation"] as const)(
     expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
   },
 );
+
+test.each([
+  "token verification",
+  "connection record",
+  "presence update",
+  "metadata update",
+  "token revocation",
+] as const)("keeps other node authority readable during one device's %s", async (change) => {
+  const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
+  const other = {
+    ...structuredClone(node),
+    deviceId: "other",
+    publicKey: "synthetic-other-key",
+    tokens: {
+      node: { token: "synthetic-other-token", role: "node", scopes: [], createdAtMs: 1 },
+    },
+  };
+  persistDevicePairingStoreState(
+    { pendingById: {}, pairedByDeviceId: { node, other } },
+    baseDir,
+    "paired",
+  );
+  await readDevicePairingNodeSnapshot(baseDir);
+  const nodeBinding = getPublishedPairedDeviceBinding("node", baseDir);
+  const otherBinding = getPublishedPairedDeviceBinding("other", baseDir);
+  expect(nodeBinding).not.toBeNull();
+  expect(otherBinding).not.toBeNull();
+  const generation = expectDefined(
+    await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
+      captureNodePairingGeneration("other"),
+    ),
+    "other generation",
+  );
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const afterCommit: unknown[] = [];
+  const delivery = probe.command(
+    stateWorker,
+    async (command, options, scope) => {
+      entered.resolve();
+      await release.promise;
+      const result = await scope.execute(command, options);
+      afterCommit.push(
+        getPublishedPairedDeviceBinding("other", baseDir),
+        getPublishedPairedDeviceBinding("node", baseDir),
+      );
+      return result;
+    },
+    { once: true },
+  );
+  const mutate = () => {
+    switch (change) {
+      case "token verification":
+        return verifyDeviceToken({
+          deviceId: "other",
+          token: "synthetic-other-token",
+          role: "node",
+          scopes: [],
+          baseDir,
+        });
+      case "connection record":
+        return recordPairedNodeConnection("other", 2, baseDir, generation);
+      case "presence update":
+        return updatePairedDevicePresence(
+          "other",
+          { lastSeenAtMs: 2, lastSeenReason: "node-event" },
+          generation,
+          baseDir,
+        );
+      case "metadata update":
+        return updatePairedDeviceMetadata("other", { displayName: "Other" }, baseDir);
+      case "token revocation":
+        return revokeDeviceToken({ deviceId: "other", role: "node", baseDir });
+    }
+  };
+  const mutation = mutate();
+  try {
+    await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
+    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(nodeBinding);
+    // Until COMMIT, the stored row remains authoritative for the changing device too.
+    expect(getPublishedPairedDeviceBinding("other", baseDir)).toEqual(otherBinding);
+    release.resolve();
+    await mutation;
+    const committedOther = change === "token revocation" ? null : otherBinding;
+    // The first read after COMMIT drains and installs the receipt itself.
+    expect(afterCommit).toEqual([committedOther, nodeBinding]);
+    expect(getPublishedPairedDeviceBinding("other", baseDir)).toEqual(committedOther);
+    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(nodeBinding);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([mutation]);
+    delivery.mockRestore();
+  }
+});
 
 test.each([
   { change: "unrelated operator approval", remainsCurrent: true },
