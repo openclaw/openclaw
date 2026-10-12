@@ -319,7 +319,7 @@ device and platform labels are combined. Architecture labels such as **ARM** app
 when explicitly reported; a browser's `MacIntel` value does not identify an Intel
 CPU because Apple silicon Macs and desktop-mode iPads also report it.
 
-Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K** on Mac or **Ctrl+K** on Windows/Linux. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
+Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K**, **⌘P**, or **⌘Shift+P** on Mac, or **Ctrl+K**, **Ctrl+P**, or **Ctrl+Shift+P** on Windows/Linux. These shortcuts also work while typing and inside embedded widgets; the P shortcuts open the palette instead of browser printing. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
 
 The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
 

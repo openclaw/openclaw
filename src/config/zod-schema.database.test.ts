@@ -13,8 +13,18 @@ describe("experimental database config", () => {
       },
     };
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);
-    expect(buildConfigSchemaCore().uiHints["database.postgres.connection"]?.sensitive).toBe(true);
+    const hints = buildConfigSchemaCore().uiHints;
+    expect(hints["database.postgres.connection"]?.sensitive).toBe(true);
+    expect(hints.database?.label).toContain("Experimental");
+    expect(hints.database?.docsUrl).toBe("https://docs.openclaw.ai/reference/database-engines");
   });
+
+  it.each([{}, { engine: "sqlite" }, { engine: "postgres" }])(
+    "preserves optional database config %j for runtime admission",
+    (database) => {
+      expect(OpenClawSchema.parse({ database }).database).toEqual(database);
+    },
+  );
 
   it.each([
     { engine: "unknown" },

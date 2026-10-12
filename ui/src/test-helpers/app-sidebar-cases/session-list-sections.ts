@@ -8,6 +8,7 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session section visibility", () => {
@@ -40,7 +41,7 @@ describe("AppSidebar session section visibility", () => {
     expect(sidebar.querySelectorAll(".sidebar-session-pagination")).toHaveLength(2);
 
     threads?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
     expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(12);
@@ -190,7 +191,7 @@ describe("AppSidebar session section visibility", () => {
     // Membership changes reveal and hide groups without changing the preference.
     alpha.category = "Empty";
     harness.publish({ groups: ["Empty", "Alpha"] });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(groupNames()).toEqual(["category:Empty"]);
     await chooseEmptyGroups("never");
     expect(groupNames()).toEqual(["category:Empty", "category:Alpha"]);

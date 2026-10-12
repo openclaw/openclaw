@@ -129,7 +129,6 @@ it("publishes history changes only after deletion while fresh reads observe sibl
   const completed: boolean[] = [];
   const reclaim = () =>
     runSqliteSessionReclamation({
-      forceInProcess: false,
       plan,
       onWorkerResult(result) {
         if (result.kind === "history-eviction") {

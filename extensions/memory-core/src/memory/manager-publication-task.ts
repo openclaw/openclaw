@@ -85,19 +85,18 @@ export type MemoryPublicationOperations = {
     output: void;
   };
   "cache.write": {
-    input: { expectedRevision: number };
+    input: undefined;
     output: MemoryPublicationResult<boolean>;
   };
   "cache.write.inline": {
     input: {
       header: MemoryEmbeddingCacheHeader;
       entries: MemoryEmbeddingCacheEntry[];
-      expectedRevision: number;
     };
     output: MemoryPublicationResult<boolean>;
   };
   "cache.clear": {
-    input: { identities: MemoryIndexProviderIdentity[]; expectedRevision: number };
+    input: { identities: MemoryIndexProviderIdentity[] };
     output: MemoryPublicationResult<boolean>;
   };
   "stage.start": {
@@ -112,8 +111,6 @@ export type MemoryPublicationOperations = {
   "source.replace": {
     input: { state: MemoryPublicationState };
     output: MemoryPublicationResult<{
-      beforeRevision: number;
-      databaseRevision: number;
       retainedDrift: boolean;
     }>;
   };

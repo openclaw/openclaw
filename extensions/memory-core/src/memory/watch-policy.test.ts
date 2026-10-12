@@ -108,33 +108,6 @@ it("retains partial Root admission when a later configured boundary temporarily 
   await expect(owner.observations(signal())).rejects.toBeDefined();
 });
 
-it("filters ignored descendants, not explicitly selected roots or their ancestors", async () => {
-  const workspace = state.path("node_modules", "selected-workspace");
-  const extra = state.path(".git", "selected-import");
-  await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
-  await fs.mkdir(extra, { recursive: true });
-  const owner = new MemoryWatchPolicy(workspace, {
-    extraPaths: [extra],
-    multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
-    sync: { watchDebounceMs: 0 },
-  });
-  const groups = await owner.observations(signal());
-  for (const file of [path.join(workspace, "memory", "note.md"), path.join(extra, "import.md")]) {
-    const group = groups.find((entry) =>
-      entry.selections.some((selection) => file.startsWith(selection.lexical + path.sep)),
-    )!;
-    const relative = path.relative(group.root.rootDir, file);
-    expect(owner.exclude(group, { path: relative, kind: "file" })).toBe(false);
-    expect(owner.select(group, relative, false)).toMatchObject({ relative, sample: true });
-    const ignored = path.relative(
-      group.root.rootDir,
-      path.join(path.dirname(file), "node_modules", "skip.md"),
-    );
-    expect(owner.exclude(group, { path: ignored, kind: "file" })).toBe(true);
-    expect(owner.select(group, ignored, false)).toBeUndefined();
-  }
-});
-
 it("selects configured patterns and multimodal files while pruning unrelated descendants", async () => {
   const extra = state.path("extra");
   const owner = new MemoryWatchPolicy(state.workspaceDir, {

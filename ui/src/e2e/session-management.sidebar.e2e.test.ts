@@ -977,7 +977,11 @@ suite.define(() => {
         .locator('[data-session-section="ungrouped"]')
         .getByRole("button", { name: "Show more" });
       for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
+        const visibleRows = await page.locator(".sidebar-recent-session").count();
         await loadMore.click();
+        await expect
+          .poll(() => page.locator(".sidebar-recent-session").count())
+          .toBeGreaterThan(visibleRows);
       }
       await page.locator(".sidebar-shell__body").evaluate((element) => {
         element.scrollTop = 0;

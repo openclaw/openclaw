@@ -9,6 +9,33 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it("does not exempt a kernel through an unregistered worker-named runtime wrapper", () => {
+  const root = tempDirs.make("openclaw-sqlite-entry-ratchet-");
+  const relative = "src/state/openclaw-state-db-maintenance.ts";
+  const sources = {
+    [relative]: `export function writeCurrentStateSchemaMetadata() {
+      return executeSqliteQuerySync(query);
+    }`,
+    "src/unregistered.worker.ts": `
+      import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      export function writeSchema() { return writeCurrentStateSchemaMetadata(); }
+    `,
+    "src/gateway/consumer.ts": `
+      import { writeSchema } from '../unregistered.worker.js';
+      export function handle() { return writeSchema(); }
+    `,
+  };
+  for (const [file, source] of Object.entries(sources)) {
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, source);
+  }
+  expect(inventory(root).find((row) => row.file === relative)).toMatchObject({
+    tier: "T1",
+    calls: [expect.objectContaining({ operation: "writeCurrentStateSchemaMetadata" })],
+  });
+});
+
 it("limits unadmitted mutation classification to its synchronous guarded branch", () => {
   const root = tempDirs.make("openclaw-sqlite-guard-ratchet-");
   const git = (...args: string[]) =>

@@ -16,12 +16,12 @@ import {
   kyselyByDatabase,
   queryErrorHandlerByDatabase,
 } from "./kysely-sync-cache-state.js";
+import { isPostgresSqlConnection, type PostgresSqlConnection } from "./sql-connection.js";
 import {
   OpenClawPostgresDialect,
   sqliteStringSetEntriesFragments,
   sqliteStringSetFragments,
-} from "./postgres-sync/query-compiler.js";
-import { isPostgresSqlConnection, type PostgresSqlConnection } from "./sql-connection.js";
+} from "./sql-query-compiler.js";
 import { captureSqliteReaderOwner, retainSqliteReader } from "./sqlite-reader-lifecycle.js";
 
 // Node 24.20 and 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
