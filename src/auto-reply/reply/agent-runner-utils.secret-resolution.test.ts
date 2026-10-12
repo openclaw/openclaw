@@ -1,6 +1,14 @@
 // Tests queued reply runtime secret resolution for agent and channel scopes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
+} from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshotState,
+} from "../../secrets/runtime-state.js";
 
 const hoisted = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGatewayMock: vi.fn(),
@@ -12,17 +20,28 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
     hoisted.resolveCommandSecretRefsViaGatewayMock(...args),
 }));
 
-vi.mock("../../cli/command-secret-targets.js", () => ({
-  getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries.*.apiKey"]),
-  getAgentRuntimeOptionalCommandSecretPaths: () =>
-    new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
-  getScopedChannelsCommandSecretTargets: (...args: unknown[]) =>
-    hoisted.getScopedChannelsCommandSecretTargetsMock(...args),
-}));
+vi.mock("../../cli/command-secret-targets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../cli/command-secret-targets.js")>();
+  return {
+    ...actual,
+    // The real owner decides whether a prepared snapshot already covers the config;
+    // unprepared configs narrow to one fixture target.
+    getAgentRuntimeCommandSecretTargetIds: (
+      params: Parameters<typeof actual.getAgentRuntimeCommandSecretTargetIds>[0],
+    ) =>
+      actual.getAgentRuntimeCommandSecretTargetIds(params).size === 0
+        ? new Set<string>()
+        : new Set(["skills.entries.*.apiKey"]),
+    getAgentRuntimeOptionalCommandSecretPaths: () =>
+      new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
+    getScopedChannelsCommandSecretTargets: (...args: unknown[]) =>
+      hoisted.getScopedChannelsCommandSecretTargetsMock(...args),
+  };
+});
 
 const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig } =
   await import("./agent-runner-utils.js");
-const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+const { clearRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot, setRuntimeConfigSnapshot } =
   await import("../../config/config.js");
 
 type ResolveCommandSecretRefsCall = {
@@ -61,7 +80,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
   });
 
   afterEach(() => {
-    clearRuntimeConfigSnapshot();
+    clearSecretsRuntimeSnapshotState();
   });
 
   it("resolves base runtime targets, then active channel/account targets from originating context", async () => {
@@ -197,5 +216,130 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
 
     expect(resolveQueuedReplyRuntimeConfig(structuredClone(sourceConfig))).toBe(staleRuntimeConfig);
     expect(resolveQueuedReplyRuntimeConfig(scopedResolvedConfig)).toBe(scopedResolvedConfig);
+  });
+
+  function activateRuntime(sourceConfig: OpenClawConfig, config: OpenClawConfig) {
+    activateSecretsRuntimeSnapshotState({
+      snapshot: {
+        sourceConfig,
+        config,
+        authStores: [],
+        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+        authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
+        warnings: [],
+        webTools: {
+          search: { providerSource: "none", diagnostics: [] },
+          fetch: { providerSource: "none", diagnostics: [] },
+          diagnostics: [],
+        },
+      },
+      // The gateway activation this models prepares config SecretRefs; an
+      // unrecorded activation must not reach the fast path.
+      refreshContext: {
+        env: {},
+        explicitAgentDirs: null,
+        includeConfigRefs: true,
+        includeAuthStoreRefs: false,
+        loadablePluginOrigins: new Map(),
+      },
+      refreshHandler: null,
+    });
+    return resolveQueuedReplyRuntimeConfig(sourceConfig);
+  }
+
+  it("keeps queued replies on the activated SecretRef bytes without command-time resolution", async () => {
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          example: { apiKey: { source: "env", provider: "default", id: "EXAMPLE_API_KEY" } },
+        },
+      },
+    };
+    const runtimeConfig = activateRuntime(sourceConfig, {
+      skills: { entries: { example: { apiKey: "activated-key" } } },
+    });
+    // Mirrors the gateway: refs are materialized only for nonempty target sets.
+    hoisted.resolveCommandSecretRefsViaGatewayMock.mockImplementation(
+      async ({ config, targetIds }: ResolveCommandSecretRefsCall) => ({
+        resolvedConfig:
+          targetIds?.size === 0
+            ? config
+            : { skills: { entries: { example: { apiKey: "command-key" } } } },
+      }),
+    );
+
+    // Healthy activated bytes leave no scoped channel targets to resolve.
+    hoisted.getScopedChannelsCommandSecretTargetsMock.mockReturnValue({ targetIds: new Set() });
+    for (const config of [sourceConfig, runtimeConfig, structuredClone(sourceConfig)]) {
+      const resolved = await resolveQueuedReplyExecutionConfig(config, {
+        originatingChannel: "discord",
+      });
+      expect(resolved).toBe(runtimeConfig);
+      expect(JSON.stringify(resolved)).toBe(JSON.stringify(runtimeConfig));
+    }
+    // The prepared snapshot leaves the shared owner no command targets to resolve.
+    for (const [call] of hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls) {
+      expect((call as ResolveCommandSecretRefsCall).targetIds).toEqual(new Set());
+    }
+  });
+
+  it("keeps cold channel-account resolution for activated configs", async () => {
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          example: { apiKey: { source: "env", provider: "default", id: "EXAMPLE_API_KEY" } },
+        },
+      },
+    };
+    const runtimeConfig = activateRuntime(sourceConfig, {
+      skills: { entries: { example: { apiKey: "activated-key" } } },
+    });
+    // A cold account still carries an unresolved scoped target; the activated
+    // snapshot must not bypass the channel/account-scoped stage that rejects it.
+    const scopedResolved = {
+      ...runtimeConfig,
+      channels: { discord: { accounts: { work: { token: "scoped-token" } } } },
+    };
+    hoisted.resolveCommandSecretRefsViaGatewayMock.mockImplementation(
+      async ({ config, targetIds }: ResolveCommandSecretRefsCall) => ({
+        resolvedConfig: targetIds?.size === 0 ? config : scopedResolved,
+      }),
+    );
+    const resolved = await resolveQueuedReplyExecutionConfig(runtimeConfig, {
+      originatingChannel: "discord",
+      originatingAccountId: "work",
+    });
+    expect(resolved).toBe(scopedResolved);
+    expect(hoisted.resolveCommandSecretRefsViaGatewayMock).toHaveBeenCalledTimes(2);
+    expect(resolveCommandSecretRefsCall(0).targetIds).toEqual(new Set());
+    expect(resolveCommandSecretRefsCall(1).config).toBe(runtimeConfig);
+    expect(resolveCommandSecretRefsCall(1).targetIds).toEqual(new Set(["channels.discord.token"]));
+  });
+
+  it("adopts a new runtime generation for a previously queued config while preserving explicit overrides", async () => {
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          example: { apiKey: { source: "env", provider: "default", id: "EXAMPLE_API_KEY" } },
+        },
+      },
+    };
+    const queuedConfig = activateRuntime(sourceConfig, {
+      skills: { entries: { example: { apiKey: "first-key" } } },
+    });
+    const queuedSource = getRuntimeConfigSourceSnapshot()!;
+    const changedSource: OpenClawConfig = {
+      ...sourceConfig,
+      tools: { updatePlan: true },
+    };
+    const changedRuntime = activateRuntime(changedSource, {
+      skills: { entries: { example: { apiKey: "rotated-key" } } },
+      tools: { updatePlan: true },
+    });
+
+    expect(await resolveQueuedReplyExecutionConfig(queuedConfig)).toBe(changedRuntime);
+    expect(await resolveQueuedReplyExecutionConfig(queuedSource)).toBe(changedRuntime);
+    const override = { ...queuedConfig, tools: { updatePlan: false } };
+    expect(resolveQueuedReplyRuntimeConfig(override)).toBe(override);
   });
 });
