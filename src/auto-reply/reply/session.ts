@@ -14,20 +14,17 @@ import { resolveSessionParentSessionKey } from "../../channels/plugins/session-c
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
 import {
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  isRestartRecoveryTombstone,
-  resolveSessionWorkStartError,
-} from "../../config/sessions/lifecycle.js";
+  hasTerminalMainSessionTranscriptNewerThanRegistryAsync,
+  resolveSessionLifecycleTimestampsAsync,
+} from "../../config/sessions/lifecycle-read.js";
+import { isRestartRecoveryTombstone } from "../../config/sessions/lifecycle.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import {
-  evaluateSessionFreshness,
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveThreadFlag,
-  type SessionFreshness,
 } from "../../config/sessions/reset.js";
 import {
   commitReplySessionInitialization,
@@ -127,6 +124,7 @@ import {
 } from "./session-init-conflict-retry.js";
 import type { SessionInitResult } from "./session-init.types.js";
 import {
+  assertReplySessionInitializationAllowed,
   prepareReplySessionInitialization,
   resolveInitSessionStateAttemptContext,
   resolveInitializationSessionReader,
@@ -143,7 +141,10 @@ import {
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
-import { resolveReplySessionRolloverState } from "./session-rollover-state.js";
+import {
+  resolveReplySessionFreshness,
+  resolveReplySessionRolloverState,
+} from "./session-rollover-state.js";
 import { withoutThreadDelivery } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
@@ -430,13 +431,10 @@ async function initSessionStateAttemptLocked(
     nativeCommandTarget: resolveCommandTurnTargetSessionKey(ctx),
     sessionKey,
   });
-  const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
+  assertReplySessionInitializationAllowed(sessionKey, entry, {
     allowRestartTombstoneReplacement: restartTombstoneReset || restartTombstoneParentFork,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
   });
-  if (archivedSessionError) {
-    throw new Error(archivedSessionError);
-  }
   // Locked model selection is coupled to the current native session id. Reject before
   // lifecycle cleanup so a reset cannot detach the durable harness binding.
   const lockedModelSelection = isModelSelectionLocked(entry);
@@ -496,25 +494,22 @@ async function initSessionStateAttemptLocked(
       ...sessionTarget,
       signal: params.signal,
     }));
-  const entryFreshness = entry
-    ? skipImplicitExpiry
-      ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({
-          updatedAt: entry.updatedAt,
-          sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
-          lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
-          now,
-          policy: resetPolicy,
-        })
-    : undefined;
+  const entryFreshness = resolveReplySessionFreshness({
+    entry,
+    skipImplicitExpiry,
+    lifecycleTimestamps,
+    now,
+    resetPolicy,
+  });
   const terminalMainTranscriptNewerThanRegistry =
     !isSystemEvent &&
-    hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+    (await hasTerminalMainSessionTranscriptNewerThanRegistryAsync({
       entry,
       sessionScope,
       ...sessionTarget,
       mainKey,
-    });
+      signal: params.signal,
+    }));
   const recoverTerminalVisibleEntry =
     canReuseExistingEntry &&
     !isSystemEvent &&

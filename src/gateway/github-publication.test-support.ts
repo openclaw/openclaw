@@ -237,6 +237,7 @@ export function createTestGitHubPublicationRuntime({
   ...params
 }: PublicationFixtureOptions<Parameters<typeof createRuntime>[0]>) {
   const runtime = createRuntime({ ...params, getCommittedRuntimeConfig });
+  onTestFinished(() => runtime.close());
   return { ...runtime, coordinator: withSystemRequesterFixture(runtime.coordinator) };
 }
 

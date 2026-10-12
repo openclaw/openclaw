@@ -25,6 +25,7 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./app-sidebar.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 
@@ -68,7 +69,7 @@ function summary(ownerSessionCounts = COUNTS): SessionsListResult {
 
 async function settle(sidebar: SidebarLifecycleState) {
   await vi.advanceTimersByTimeAsync(0);
-  await sidebar.updateComplete;
+  await settleLitElement(sidebar);
 }
 
 function createWorkloadGateway(readSummary: () => Promise<SessionsListResult>, includeRaw = false) {

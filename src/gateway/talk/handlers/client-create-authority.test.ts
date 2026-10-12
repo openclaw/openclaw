@@ -12,7 +12,6 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   loadSessionEntry,
-  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
@@ -38,6 +37,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import { readVoiceSessionRecordInTransaction } from "../../../talk/client-voice-session-store.js";
 import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceKernel from "../../../talk/client-voice-session-write.kernel.js";
@@ -189,9 +189,11 @@ describe("voice creation authority", () => {
     ownedVoiceSessionKey = sessionKey;
     tempDir = tempDirs.make("openclaw-voice-authority-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    await replaceSessionEntry(
+    const seedEntry = { sessionId, updatedAt: Date.now() };
+    await applySessionEntryOperation(
       { agentId: "main", sessionKey },
-      { sessionId, updatedAt: Date.now() },
+      { kind: "fields", patch: seedEntry },
+      { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
     );
   });
   it("releases transport authority after a same-session replacement closes", async () => {
@@ -533,11 +535,16 @@ describe("voice creation authority", () => {
       const key = kind === "incognito" ? "agent:main:dashboard:incognito-voice-source" : sessionKey;
       ownedVoiceSessionKey = key;
       const scope = { agentId: "main", sessionKey: key, storePath: config.session?.store };
-      await replaceSessionEntry(scope, {
+      const seedEntry = {
         sessionId,
         updatedAt: Date.now(),
-        ...(kind === "incognito" ? { incognito: true } : {}),
-      });
+        ...(kind === "incognito" ? { incognito: true as const } : {}),
+      };
+      await applySessionEntryOperation(
+        scope,
+        { kind: "fields", patch: seedEntry },
+        { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
+      );
       const respond = vi.fn();
       const create = (voiceChangeId?: string) =>
         invokeCreate({
@@ -760,6 +767,7 @@ describe("voice creation authority", () => {
   it.each(["startup-copy", "active-copy", "healthy"] as const)(
     "keeps browser provider writes on their creator source (%s)",
     async (phase) => {
+      const persistence = prepareClientVoiceSessionClose();
       let providerRequest: BrowserRequest | undefined;
       const fixture = configureDelegatedBrowserProvider(async (request) => {
         providerRequest = request;
@@ -819,6 +827,7 @@ describe("voice creation authority", () => {
           });
         }
         expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
+        await persistence.drain();
         await closeOpenClawAgentDatabasesAsync(tempDir);
         if (replacementBytes) {
           expect(readFileSync(sourcePath)).toEqual(replacementBytes);
@@ -829,7 +838,11 @@ describe("voice creation authority", () => {
           });
         }
       } finally {
-        intercepted.mockRestore();
+        try {
+          await persistence.drain();
+        } finally {
+          intercepted.mockRestore();
+        }
       }
     },
   );

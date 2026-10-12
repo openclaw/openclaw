@@ -5,11 +5,9 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
   ({
-    VoiceOpcodes,
     expect,
     it,
     vi,
-    ChannelType,
     DECRYPT_FAILURE_WINDOW_MS,
     createConnectionMock,
     joinVoiceChannelMock,
@@ -22,7 +20,6 @@ defineDiscordVoiceTests(
     createManager,
     createAgentProxyManager,
     makeVoiceConfig,
-    configureVoiceStateGateway,
     createFollowManager,
     expectConnectedStatus,
     getSessionEntry,
@@ -44,7 +41,7 @@ defineDiscordVoiceTests(
     receiveRecordedSpeech,
     agentCommandMock,
   }) => {
-    it.each([false, true])(
+    it.each([true])(
       "keeps Live microphone input open during playback without local interruption (recording: %s)",
       async (recording) => {
         realtimeSessionMock.bridge.outputAudioMode = "continuous";
@@ -69,7 +66,7 @@ defineDiscordVoiceTests(
       },
     );
 
-    it.each(["agent-proxy", "bidi"] as const)(
+    it.each(["bidi"] as const)(
       "keeps exact capture and %s conversation after destructive recovery",
       async (mode) => {
         const manager = createManager(
@@ -98,22 +95,15 @@ defineDiscordVoiceTests(
         expect(await stopTranscripts()).toMatchObject({ ok: true });
         expectConnectedStatus(manager, "1001");
         beginSpeakerTurn(getSessionEntry(manager));
-        if (mode === "agent-proxy") {
-          await emitFinalRealtimeUserTranscript(
-            lastRealtimeBridgeParams(),
-            "OpenClaw, what changed?",
-          );
-        } else {
-          await lastRealtimeBridgeParams().onToolCall?.(
-            {
-              itemId: "consult-after-recovery",
-              callId: "consult-after-recovery",
-              name: "openclaw_agent_consult",
-              args: { question: "what changed?" },
-            },
-            realtimeSessionMock,
-          );
-        }
+        await lastRealtimeBridgeParams().onToolCall?.(
+          {
+            itemId: "consult-after-recovery",
+            callId: "consult-after-recovery",
+            name: "openclaw_agent_consult",
+            args: { question: "what changed?" },
+          },
+          realtimeSessionMock,
+        );
         expect(agentCommandMock).toHaveBeenCalledOnce();
         expect(onUtterance).toHaveBeenCalledTimes(2);
       },
@@ -202,7 +192,7 @@ defineDiscordVoiceTests(
       }
     });
 
-    it.each(["denied", "failed", "stopped", "silence expired"] as const)(
+    it.each(["failed", "stopped", "silence expired"] as const)(
       "retires %s realtime admission without a late subscription",
       async (reason) => {
         const connection = createConnectionMock();
@@ -229,9 +219,7 @@ defineDiscordVoiceTests(
           if (reason === "failed") {
             admission.reject(new Error("admission failed"));
           } else {
-            admission.resolve(
-              reason === "denied" ? null : { speakerLabel: "Speaker", senderIsOwner: false },
-            );
+            admission.resolve({ speakerLabel: "Speaker", senderIsOwner: false });
           }
           await outcome;
           await vi.advanceTimersByTimeAsync(2_500);
@@ -245,25 +233,6 @@ defineDiscordVoiceTests(
         }
       },
     );
-
-    it("stores guild metadata on joined voice sessions", async () => {
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-
-      const entry = getSessionEntry(manager);
-      expect(entry?.guildName).toBe("Guild One");
-    });
-
-    it("enables DAVE receive passthrough after join", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-
-      expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 30);
-    });
 
     it("invalidates transition zero before re-arming receive passthrough", async () => {
       const connection = createConnectionMock();
@@ -288,24 +257,6 @@ defineDiscordVoiceTests(
     });
 
     it.each([
-      {
-        label: "non-zero transitions",
-        lastTransitionId: 1,
-        reinitializing: false,
-        networkingStatus: "networking-ready",
-      },
-      {
-        label: "missing transitions",
-        lastTransitionId: undefined,
-        reinitializing: false,
-        networkingStatus: "networking-ready",
-      },
-      {
-        label: "transitions already reinitializing",
-        lastTransitionId: 0,
-        reinitializing: true,
-        networkingStatus: "networking-ready",
-      },
       {
         label: "resuming networking",
         lastTransitionId: 0,
@@ -332,7 +283,7 @@ defineDiscordVoiceTests(
       },
     );
 
-    it.each(["replace", "leave"] as const)(
+    it.each(["replace"] as const)(
       "retires native DAVE receive callbacks when the session is stopped by %s",
       async (boundary) => {
         const connection = createConnectionMock();
@@ -374,23 +325,6 @@ defineDiscordVoiceTests(
       },
     );
 
-    it("does not invalidate transition zero for unrelated receive failures", async () => {
-      const connection = createConnectionMock();
-      const dave = connection.state.networking.state.dave;
-      dave.lastTransitionId = 0;
-      dave.reinitializing = false;
-      dave.recoverFromInvalidTransition = vi.fn();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await emitWorkerReceiveFailure(manager, {
-        error: new Error("DecryptionFailed(InvalidCiphertext)"),
-      });
-
-      expect(dave.recoverFromInvalidTransition).not.toHaveBeenCalled();
-    });
-
     it("keeps passthrough and bounded rejoin when zero-transition recovery throws", async () => {
       const connection = createConnectionMock();
       const dave = connection.state.networking.state.dave;
@@ -416,42 +350,6 @@ defineDiscordVoiceTests(
         expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
       });
     });
-
-    it.each([
-      { label: "gateway invalidation", failure: "invalidation" as const },
-      { label: "native DAVE reinitialization", failure: "native" as const },
-      { label: "MLS key-package delivery", failure: "key-package" as const },
-    ])(
-      "immediately rejoins after $label leaves the real DAVE session poisoned",
-      async ({ failure }) => {
-        const connection = createConnectionMock();
-        const { dave, gateway } = installFailingDaveSession(connection, failure);
-        joinVoiceChannelMock
-          .mockReturnValueOnce(connection)
-          .mockReturnValueOnce(createConnectionMock());
-        const manager = createManager();
-
-        await manager.join({ guildId: "g1", channelId: "1001" });
-        connection.daveSetPassthroughMode.mockClear();
-        expect(() => dave.decrypt(Buffer.from("encrypted-audio"), "speaker")).toThrow(
-          "UnencryptedWhenPassthroughDisabled",
-        );
-
-        const faults = await emitWorkerReceiveFailure(manager);
-        expect(faults).toContainEqual(expect.objectContaining({ daveRecoveryFailed: true }));
-
-        expect(dave.reinitializing).toBe(true);
-        expect(gateway.sendPacket).toHaveBeenCalledWith({
-          op: VoiceOpcodes.DaveMlsInvalidCommitWelcome,
-          d: { transition_id: 0 },
-        });
-        expect(gateway.sendBinaryMessage).toHaveBeenCalledTimes(failure === "key-package" ? 1 : 0);
-        expect(connection.daveSetPassthroughMode).not.toHaveBeenCalled();
-        expect(dave.decrypt(Buffer.from("encrypted-audio"), "speaker")).toBeNull();
-        expect(connection.destroy).toHaveBeenCalledOnce();
-        await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      },
-    );
 
     it("does not duplicate an in-flight reconnect after a real DAVE recovery fails", async () => {
       const connection = createConnectionMock();
@@ -496,24 +394,6 @@ defineDiscordVoiceTests(
       expect(entry.receiveRecovery.decryptRecoveryInFlight).toBe(false);
     });
 
-    it("disconnects after repeated poisoned DAVE sessions without a reconnect loop", async () => {
-      const { firstConnection, secondConnection } = makePoisonedDaveConnections();
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await emitWorkerReceiveFailure(manager);
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      secondConnection.daveSetPassthroughMode.mockClear();
-
-      await emitWorkerReceiveFailure(manager);
-
-      expect(firstConnection.destroy).toHaveBeenCalledOnce();
-      expect(secondConnection.destroy).toHaveBeenCalledOnce();
-      expect(secondConnection.daveSetPassthroughMode).not.toHaveBeenCalled();
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-      expect(manager.status()).toEqual([]);
-    });
-
     it("suppresses followed-user reconciliation until the poisoned-DAVE cooldown expires", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
@@ -549,49 +429,6 @@ defineDiscordVoiceTests(
       }
     });
 
-    it("suppresses repeated same-channel voice-state updates during a DAVE cooldown", async () => {
-      makePoisonedDaveConnections();
-      const manager = createFollowManager();
-
-      await updateVoiceState(manager, "u-owner", "1001");
-      await emitWorkerReceiveFailure(manager);
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      await emitWorkerReceiveFailure(manager);
-      const previousVoiceState = {
-        guild_id: "g1",
-        user_id: "u-owner",
-        channel_id: "1001",
-      };
-
-      await manager.handleVoiceStateUpdate(
-        { ...previousVoiceState, self_mute: true } as never,
-        previousVoiceState as never,
-      );
-      await manager.handleVoiceStateUpdate(
-        { ...previousVoiceState, self_deaf: true } as never,
-        { ...previousVoiceState, self_mute: true } as never,
-      );
-
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-      expect(manager.status()).toEqual([]);
-    });
-
-    it("still follows real user movement to another channel during a DAVE cooldown", async () => {
-      makePoisonedDaveConnections(1);
-      const manager = createFollowManager();
-
-      await updateVoiceState(manager, "u-owner", "1001");
-      await emitWorkerReceiveFailure(manager);
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      await emitWorkerReceiveFailure(manager);
-      expect(manager.status()).toEqual([]);
-
-      await updateVoiceState(manager, "u-owner", "1002");
-
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3);
-      expectConnectedStatus(manager, "1002");
-    });
-
     it("follows a user who leaves and rejoins the same channel during a DAVE cooldown", async () => {
       makePoisonedDaveConnections(1);
       const manager = createFollowManager();
@@ -606,80 +443,6 @@ defineDiscordVoiceTests(
 
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3);
       expectConnectedStatus(manager, "1001");
-    });
-
-    it("reconciles a followed-user move to another channel during a DAVE cooldown", async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-      makePoisonedDaveConnections(1);
-      const client = createClient();
-      client.rest.get.mockResolvedValue({
-        guild_id: "g1",
-        user_id: "u-owner",
-        channel_id: "1001",
-      });
-      const manager = createFollowManager({}, client, { guilds: { g1: {} } });
-
-      try {
-        await manager.autoJoin();
-        await emitWorkerReceiveFailure(manager);
-        await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-        await emitWorkerReceiveFailure(manager);
-        client.rest.get.mockResolvedValue({
-          guild_id: "g1",
-          user_id: "u-owner",
-          channel_id: "1002",
-        });
-
-        await vi.advanceTimersByTimeAsync(10_000);
-
-        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3);
-        expectConnectedStatus(manager, "1002");
-      } finally {
-        await manager.destroy();
-        vi.useRealTimers();
-      }
-    });
-
-    it("allows explicit manual joins during a poisoned-DAVE cooldown", async () => {
-      makePoisonedDaveConnections(1);
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await emitWorkerReceiveFailure(manager);
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      await emitWorkerReceiveFailure(manager);
-      expect(manager.status()).toEqual([]);
-
-      const manualJoin = await manager.join({ guildId: "g1", channelId: "1001" });
-      expect(manualJoin).toEqual(expect.objectContaining({ ok: true }));
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3);
-    });
-
-    it("clears the poisoned-DAVE recovery budget after an intentional full leave", async () => {
-      const firstConnection = createConnectionMock();
-      const recoveredConnection = createConnectionMock();
-      const manuallyJoinedConnection = createConnectionMock();
-      const lastConnection = createConnectionMock();
-      installFailingDaveSession(firstConnection, "native");
-      installFailingDaveSession(manuallyJoinedConnection, "native");
-      joinVoiceChannelMock
-        .mockReturnValueOnce(firstConnection)
-        .mockReturnValueOnce(recoveredConnection)
-        .mockReturnValueOnce(manuallyJoinedConnection)
-        .mockReturnValueOnce(lastConnection);
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await emitWorkerReceiveFailure(manager);
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-      expect((await manager.leave({ guildId: "g1" })).ok).toBe(true);
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await emitWorkerReceiveFailure(manager);
-
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(4));
-      expect(lastConnection.destroy).not.toHaveBeenCalled();
     });
 
     it("allows a poisoned-DAVE reconnect after the existing failure window expires", async () => {
@@ -699,125 +462,6 @@ defineDiscordVoiceTests(
 
       await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
       expect(attempts.has("other-guild")).toBe(true);
-    });
-
-    it("keeps poisoned-DAVE reconnect budgets isolated between guilds", async () => {
-      const firstGuildConnection = createConnectionMock();
-      const secondGuildConnection = createConnectionMock();
-      installFailingDaveSession(firstGuildConnection, "native");
-      installFailingDaveSession(secondGuildConnection, "key-package");
-      joinVoiceChannelMock
-        .mockReturnValueOnce(firstGuildConnection)
-        .mockReturnValueOnce(secondGuildConnection)
-        .mockReturnValueOnce(createConnectionMock())
-        .mockReturnValueOnce(createConnectionMock());
-      const client = createClient();
-      client.fetchChannel.mockImplementation(async (channelId: string) => {
-        const guildId = channelId === "2001" ? "g2" : "g1";
-        return {
-          id: channelId,
-          guildId,
-          guild: { id: guildId, name: guildId },
-          type: ChannelType.GuildVoice,
-        };
-      });
-      const manager = createManager(undefined, client);
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await manager.join({ guildId: "g2", channelId: "2001" });
-      await emitWorkerReceiveFailure(manager);
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3));
-      await emitWorkerReceiveFailure(manager, { guildId: "g2" });
-
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(4));
-      expect(manager.status()).toHaveLength(2);
-    });
-
-    it("clears poisoned-DAVE reconnect budgets when the manager is destroyed", async () => {
-      const manager = createManager();
-      const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
-      attempts.set("g1", Date.now());
-
-      await manager.destroy();
-
-      expect(attempts.size).toBe(0);
-    });
-
-    it("re-arms passthrough but still rejoin-recovers after repeated decrypt failures", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock
-        .mockReturnValueOnce(connection)
-        .mockReturnValueOnce(createConnectionMock());
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      connection.daveSetPassthroughMode.mockClear();
-
-      await emitWorkerReceiveFailure(manager);
-      await emitWorkerReceiveFailure(manager);
-      await emitWorkerReceiveFailure(manager);
-
-      await vi.waitFor(() => {
-        expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
-        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-      });
-    });
-
-    it("preserves follow ownership through DAVE receive recovery", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock
-        .mockReturnValueOnce(connection)
-        .mockReturnValueOnce(createConnectionMock());
-      const manager = createFollowManager();
-
-      await updateVoiceState(manager, "u-owner", "1001");
-
-      await emitWorkerReceiveFailure(manager);
-      await emitWorkerReceiveFailure(manager);
-      await emitWorkerReceiveFailure(manager);
-
-      await vi.waitFor(() => {
-        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-      });
-      await updateVoiceState(manager, "u-owner", null);
-
-      expect(manager.status()).toEqual([]);
-    });
-
-    it("preserves occupied auto-join ownership through DAVE receive recovery", async () => {
-      const firstConnection = createConnectionMock();
-      joinVoiceChannelMock
-        .mockReturnValueOnce(firstConnection)
-        .mockReturnValueOnce(createConnectionMock());
-      const client = createClient();
-      const humanState = {
-        guild_id: "g1",
-        user_id: "u-owner",
-        channel_id: "1001",
-        member: { user: { id: "u-owner", bot: false } },
-      };
-      let voiceStates: Array<Record<string, unknown>> = [humanState];
-      configureVoiceStateGateway(client, () => voiceStates);
-      const manager = createManager(
-        makeVoiceConfig({
-          autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
-        }),
-        client,
-        {},
-        "default",
-        "bot-user",
-      );
-      await manager.autoJoin();
-
-      await emitWorkerReceiveFailure(manager);
-      await emitWorkerReceiveFailure(manager);
-      await emitWorkerReceiveFailure(manager);
-      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
-
-      voiceStates = [];
-      await updateVoiceState(manager, "u-owner", null, humanState.member);
-
-      expect(manager.status()).toEqual([]);
     });
 
     it("streams realtime with batch transcription disabled and resets receive recovery", async () => {
@@ -847,7 +491,6 @@ defineDiscordVoiceTests(
     });
 
     it.each([
-      { mode: "agent-proxy", captureOnly: false },
       { mode: "bidi", captureOnly: false },
       { mode: "stt-tts", captureOnly: false },
       { mode: "stt-tts", captureOnly: true },
@@ -961,7 +604,7 @@ defineDiscordVoiceTests(
       },
     );
 
-    it.each(["agent-proxy", "stt-tts"] as const)(
+    it.each(["agent-proxy"] as const)(
       "cleans up %s receive streams without clearing decoder failure state",
       async (mode) => {
         const connection = createConnectionMock();

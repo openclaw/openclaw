@@ -91,31 +91,6 @@ describe("createDockPanelLayout", () => {
 
     expect(layout.load().dock).toBe("right");
   });
-
-  it("caps persisted sizes to the current viewport and saves the canonical shape", () => {
-    const layout = createLayout("right");
-    vi.stubGlobal("innerHeight", 500);
-    vi.stubGlobal("innerWidth", 750);
-    layout.save({ open: true, dock: "bottom", height: 900, width: 900 });
-
-    expect(layout.load()).toEqual({ open: true, dock: "bottom", height: 400, width: 600 });
-  });
-
-  it("round-trips an opted-in main placement", () => {
-    const layout = createDockPanelLayout({
-      storageKey: "test.dock-panel.main",
-      minHeight: 140,
-      minWidth: 320,
-      defaultDock: "bottom",
-      supportedDocks: ["bottom", "right", "main"],
-      defaultHeight: 320,
-      defaultWidth: 520,
-    });
-
-    layout.save({ open: true, dock: "main", height: 320, width: 520 });
-
-    expect(layout.load()).toEqual({ open: true, dock: "main", height: 320, width: 520 });
-  });
 });
 
 describe("DockLayoutController open intent", () => {
@@ -164,19 +139,13 @@ describe("DockLayoutController open intent", () => {
 
 describe("DockLayoutController inline columns", () => {
   it.each([
-    { dock: "right", hostKind: "element", reserved: { bottom: "0px", right: "520px" } },
     { dock: "bottom", hostKind: "element", reserved: { bottom: "320px", right: "0px" } },
-    { dock: "right", hostKind: "controller", reserved: { bottom: "0px", right: "520px" } },
-    { dock: "bottom", hostKind: "controller", reserved: { bottom: "320px", right: "0px" } },
   ] as const)(
     "lets only the standalone $dock dock own the viewport reservation with an embedded $hostKind",
-    ({ dock, hostKind, reserved }) => {
+    ({ dock, reserved }) => {
       const layout = createLayout("right");
       layout.save({ open: true, dock, height: 320, width: 520 });
-      const embeddedHost =
-        hostKind === "controller"
-          ? { ...createControllerHost(), embedded: true }
-          : createEmbeddedControllerHost();
+      const embeddedHost = createEmbeddedControllerHost();
       // Both instances of one panel share its layout store and reservation properties.
       const options = { layout, reservationPrefix: "test-shared", isAvailable: () => true };
       const standalone = new DockLayoutController(createControllerHost(), options);

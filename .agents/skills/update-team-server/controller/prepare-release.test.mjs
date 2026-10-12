@@ -65,6 +65,7 @@ freeze_origin_main() { [[ ${quote(scenario)} != origin ]] || fail 'foreign origi
 bounded_build() { event "git $*"; ${scenario === "foreign" ? "return 1" : ":"}; }
 publish_release() ( set -e; [[ ${quote(scenario)} != publisher ]]; event "publish $*"; printf '%s\\n' '{"sealed":true}'; )
 proof() { event "proof $*"; [[ "$1" == validate-release ]]; printf '%s\\n' '{"sealed":true}'; }
+prewarm_release() { event "prewarm $*"; }
 ${operation}
 prepare_release
 `;
@@ -86,7 +87,26 @@ test("reuses a validated sealed release without rebuilding or resealing it", t =
   const { result, log } = prepare(t, "published");
   assert.equal(result.status, 0, result.stderr);
   assert.match(log, /proof validate-release/);
+  assert.match(log, /prewarm/);
   assert.doesNotMatch(log, /publish|seal-tree/);
+});
+
+test("prewarms as the runtime user at the published path and keeps failure advisory", t => {
+  const root = mkdtempSync(join(tmpdir(), "team-prewarm-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "dist"));
+  writeFileSync(join(root, "dist", "gateway-prewarm.js"), "");
+  const prewarm = source.match(/^prewarm_release\(\) \{[\s\S]*?^\}/m)?.[0];
+  assert.ok(prewarm);
+  const result = spawnSync("bash", ["-c", `set -euo pipefail
+runuser_bin=runuser; runtime_home=/home/runtime; gateway_runtime_bin=/usr/bin/node
+bounded() { printf '%s\\n' "$*"; return 1; }
+${prewarm}
+prewarm_release ${quote(root)}
+`], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, new RegExp(`120 runuser -u openclaw -- env -i HOME=/home/runtime PATH=/usr/bin:/bin /usr/bin/node ${root}/gateway-prewarm.mjs`));
+  assert.match(result.stderr, /WARNING compile-cache prewarm failed/);
 });
 for (const scenario of ["journal", "timer", "foreign", "origin", "publisher"]) {
   test(`refuses ${scenario} before publication`, t => {

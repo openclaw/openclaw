@@ -12,8 +12,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
+import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { McpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
@@ -294,12 +294,7 @@ export class BoardWidgetFrameLifecycle {
         }
       >
         <div class="board-widget__frame-pane">
-          <LitContent
-            render={() => {
-              revision();
-              return this.confirmation.render();
-            }}
-          />
+          <McpAppConfirmation confirmation={this.confirmation} revision={revision()} />
           <Show when={!view().visible && !view().covered}>
             <Show
               when={view().stalled}

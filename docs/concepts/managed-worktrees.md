@@ -10,6 +10,28 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) can purge unsaved data when a snapshot cannot be made.
 
+When a new chat starts a managed worktree, OpenClaw can begin the first model
+turn while the checkout finishes. It first prepares the project instructions,
+workspace skills, and other prompt files from the selected Git commit in the
+final worktree directory. The initial prompt therefore uses the same paths and
+contents as a completed checkout. Workspace tools, including PDF analysis,
+local message attachments, and generation tools reading local references, wait for checkout and the session's
+initial diff baseline. Tools that do not use the workspace can run immediately,
+including generation with inline or remote references. Completion also waits
+for preparation, and a preparation failure ends the turn with a retryable error.
+
+Repositories with setup scripts, included files, unsupported checkout transforms,
+or project configuration that needs additional files finish preparation before
+the first turn starts. Active bootstrap hooks, including `bootstrap-extra-files`,
+also retain complete preparation so configured instructions remain available.
+Sandboxed projections require a fully published worktree before startup, as do
+required remote-worker placements. Codex configurations without native tool-hook
+admission and plugins that read workspace files while constructing tools wait for
+preparation before starting their model turn. An explicitly
+requested worktree name or existing session title can name the checkout.
+Otherwise, allocation chooses a short generated name while display-title
+generation runs in the background.
+
 Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
 checkouts keep their index unchanged.
@@ -128,7 +150,7 @@ Sandboxed source-only sessions also reuse templates. Template creation, validati
 
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
-Private Git index copies for template checkouts and safety snapshots prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Snapshot indexes retain the source index's timestamp boundary so Git still detects edits made within the filesystem's timestamp resolution.
+Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 
 On Btrfs, OpenClaw compares the first warm template checkout against a measured Git checkout and records its selection in the logs. If the template is slower by more than 250 ms, subsequent creates use Git for that repository, destination root, commit, and source policy until the process restarts or the commit changes. A cold template build supplies the Git measurement. When reusing a template after restart, one requested checkout supplies that measurement instead; OpenClaw does not create an extra benchmark checkout. Cold template preparation is excluded from the comparison.
 
@@ -363,7 +385,7 @@ If **New session** reports `git worktree add failed`, read the termination reaso
 
 `timed out after 300 seconds` means a worktree checkout reached its five-minute limit. Other Git commands report `timed out after 120 seconds` at their two-minute limit. Check repository access and available disk space on the Gateway host. A signal or nonzero exit status alone does not establish a timeout; use any accompanying `fatal:` or `error:` detail to investigate. An output-limit error means the command exceeded its output capture limit.
 
-If allocation ownership is lost while fetching objects before checkout files are written, OpenClaw reacquires cleanup custody and removes its unchanged, unprepared checkout and branch so the same session can retry. Changed or materialized checkouts remain preserved. Before another creation attempt after a cleanup failure, inspect `git -C <repo-root> worktree list` and `git -C <repo-root> branch --list 'openclaw/*'` for partial state. A failed creation does not guarantee that its checkout and branch were removed. Do not delete a checkout or branch without checking whether it contains work you need.
+If allocation ownership is lost during creation, cleanup is best effort. Without cleanup authority, OpenClaw preserves the checkout and branch; manual cleanup or another worktree name may be required. Before another creation attempt after a cleanup failure, inspect `git -C <repo-root> worktree list` and `git -C <repo-root> branch --list 'openclaw/*'` for partial state. A failed creation does not guarantee that its checkout and branch were removed. Do not delete a checkout or branch without checking whether it contains work you need.
 
 If a checkout's `.git` link points to missing administrative files, OpenClaw preserves its files and refuses to reuse it. Restore the original repository metadata before using `git worktree repair` from that repository. A different clone with the same remote URL does not recover the missing index or unpushed history; do not replace the link or rebuild the index without verifying the original metadata.
 
@@ -414,6 +436,8 @@ A missing checkout or gitdir with a local workspace projection remains registere
 An orphan retired without a snapshot no longer appears in `worktrees list` and cannot use `worktrees restore`. GC verifies the recorded repository identity and reports every preserved checkout path for manual recovery in `retiredCheckoutPaths`, independently of the bounded issue details. These cases are deferred cleanup: the CLI exits 0, and the Gateway's existing deferred-cleanup response includes all recovery details without changing its success-response contract. The text summary preserves every recovery path too. Keep those files and the retained source branch; recover work into a separate checkout instead of deleting or overwriting the preserved files. Retirement does not reconstruct missing Git metadata or create a replacement snapshot.
 
 Run-end cleanup records its outcome on the worktree record: lossless removal, retention because the checkout is busy, dirty, unpushed, or has provisioned-file drift, or failure with an error reason. Inspect the recorded outcome with `openclaw worktrees list --json` or `worktrees.list`.
+
+Ordinary forced checkout removal first renames the captured file tree, then lets Git remove the original registration. File deletion runs serially in the background, so cleanup can release the checkout name without waiting for every file to be unlinked. A deletion failure logs the retained directory for manual cleanup; a crash before background deletion starts can leave a sibling `.openclaw-removing-*` directory for inspection. Non-force lossless removal and explicit interrupted-removal recovery keep Git's final check and joined file deletion.
 
 If checkout deletion fails or is interrupted, OpenClaw preserves the completed capture at `refs/openclaw/removals/<id>`. A later removal refuses to replace that capture with files from a possibly partial checkout. Preserve the remaining files, recorded branch, snapshot refs, and shared-state database for recovery. Inspect the original removal error and Git worktree registration before attempting cleanup; do not repeatedly force removal or prune registrations. A normal completed removal, successful restore, or snapshot expiry clears this recovery ref. A failure after checkout removal can leave its branch retained and require operator reconciliation before restore can recreate that branch.
 

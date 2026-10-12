@@ -10,6 +10,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
@@ -265,6 +266,7 @@ describe("POST /tools/invoke request cancellation", () => {
       };
       setRuntimeConfigSnapshot(cfg);
       const person = ensureProfileForEmail("http-tool-operator@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const context = createGatewayRequestContext(makeContextParams());
       resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;

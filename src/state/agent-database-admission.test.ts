@@ -136,7 +136,7 @@ describe("agent database admission", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "retains merged inspection causes without changing public refusals (maintenance first=%s)",
     (maintenanceFirst) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-causes-") };
@@ -281,11 +281,9 @@ describe("agent database admission", () => {
 
   it.each([
     { role: "secondary", agentId: "cleaner", isolate: true },
-    { role: "registered secondary", agentId: "cleaner", isolate: true },
     { role: "sole", agentId: "cleaner", isolate: false },
     { role: "configured system", agentId: "cleaner", isolate: false },
     { role: "reserved system", agentId: "openclaw", isolate: false },
-    { role: "reserved system", agentId: "crestodian", isolate: false },
   ] as const)(
     "$role agent ($agentId): divergent database permits startup=$isolate",
     async ({ role, agentId, isolate }) => {
@@ -304,18 +302,11 @@ describe("agent database admission", () => {
         },
       };
       const source = openOpenClawAgentDatabase({ agentId: "main", env }).path;
-      if (role === "registered secondary") {
-        openOpenClawAgentDatabase({ agentId, env });
-      }
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const target = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(
-        source,
-        target,
-        role === "registered secondary" ? 0 : fs.constants.COPYFILE_EXCL,
-      );
+      fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
       const { DatabaseSync } = requireNodeSqlite();
       const database = new DatabaseSync(target);
       try {

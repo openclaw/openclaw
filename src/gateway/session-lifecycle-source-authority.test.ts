@@ -2,7 +2,10 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { createHarnessCompletionSourceAssertion } from "../agents/agent-harness-completion-recovery.js";
 import {
@@ -229,7 +232,7 @@ it("refuses a changed same-store recovery source before lifecycle commit with th
   }
 });
 
-it("keeps cross-store patches native and refuses a source revoked before submission", async () => {
+it("writes cross-store patches in the worker and refuses a source revoked before submission", async () => {
   expect(isMainThread).toBe(true);
   const fixture = await recoveryFixture("cross-store");
   const target = {
@@ -246,17 +249,19 @@ it("keeps cross-store patches native and refuses a source revoked before submiss
     const sql = observeHostDataSql();
     try {
       await expect(
-        patchSessionEntryCore(target, () => ({ label: "native cross-store write" }), {
+        patchSessionEntryCore(target, () => ({ label: "worker cross-store write" }), {
           workerGuard: { source: fixture.source },
         }),
-      ).resolves.toMatchObject({ label: "native cross-store write" });
-      expect(sql.queries).toContainEqual(expect.stringMatching(/^insert into "session_nodes" /i));
-      // The statement execution observer distinguishes native work from worker-only writes.
-      expect(sql.calls[4]).toHaveBeenCalled();
+      ).resolves.toMatchObject({ label: "worker cross-store write" });
+      expect(
+        sql.queries.filter(
+          (query) => /^(?:insert|update|delete)\b/i.test(query) && isSessionEntryDataSql(query),
+        ),
+      ).toEqual([]);
     } finally {
       sql.restore();
     }
-    expect(loadSessionEntry(target)?.label).toBe("native cross-store write");
+    expect(loadSessionEntry(target)?.label).toBe("worker cross-store write");
     const prepare = expectDefined(fixture.source.prepareSessionSource, "Prepared recovery source");
     fixture.source.prepareSessionSource = async () => {
       const prepared = await prepare();
@@ -276,7 +281,7 @@ it("keeps cross-store patches native and refuses a source revoked before submiss
         workerGuard: { source: fixture.source },
       }),
     ).rejects.toBeInstanceOf(SessionWorkStartChangedError);
-    expect(loadSessionEntry(target)?.label).toBe("native cross-store write");
+    expect(loadSessionEntry(target)?.label).toBe("worker cross-store write");
   } finally {
     await fixture.close();
   }

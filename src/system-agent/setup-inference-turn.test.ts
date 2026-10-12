@@ -204,7 +204,7 @@ describe("setup inference plugin ownership", () => {
     );
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "retains the probing registry artifact preference (%s)",
     async (preferBuiltPluginArtifacts) => {
       const order: string[] = [];

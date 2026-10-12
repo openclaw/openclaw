@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @Suite(.serialized)
 struct NixModeStableSuiteTests {
@@ -28,19 +29,26 @@ struct NixModeStableSuiteTests {
         let stable = try #require(UserDefaults(suiteName: stableName))
         defer { stable.removePersistentDomain(forName: stableName) }
         let key = "openclaw.nixMode"
-        let cases: [(environment: String?, standard: Bool, stable: Bool?, isApp: Bool, expected: Bool)] = [
-            (nil, false, nil, true, false),
-            (nil, false, false, true, false),
-            (nil, false, true, true, true),
-            (nil, false, true, false, false),
-            (nil, true, false, true, true),
-            (nil, true, true, false, true),
-            ("1", false, false, true, true),
-            ("1", false, nil, false, true),
-            ("0", false, false, true, false),
-            ("0", true, false, false, true),
-            ("0", false, true, true, true),
-            ("true", false, false, true, false),
+        struct Scenario {
+            let environment: String?
+            let standard: Bool
+            let stable: Bool?
+            let isApp: Bool
+            let expected: Bool
+        }
+        let cases: [Scenario] = [
+            .init(environment: nil, standard: false, stable: nil, isApp: true, expected: false),
+            .init(environment: nil, standard: false, stable: false, isApp: true, expected: false),
+            .init(environment: nil, standard: false, stable: true, isApp: true, expected: true),
+            .init(environment: nil, standard: false, stable: true, isApp: false, expected: false),
+            .init(environment: nil, standard: true, stable: false, isApp: true, expected: true),
+            .init(environment: nil, standard: true, stable: true, isApp: false, expected: true),
+            .init(environment: "1", standard: false, stable: false, isApp: true, expected: true),
+            .init(environment: "1", standard: false, stable: nil, isApp: false, expected: true),
+            .init(environment: "0", standard: false, stable: false, isApp: true, expected: false),
+            .init(environment: "0", standard: true, stable: false, isApp: false, expected: true),
+            .init(environment: "0", standard: false, stable: true, isApp: true, expected: true),
+            .init(environment: "true", standard: false, stable: false, isApp: true, expected: false),
         ]
         for input in cases {
             standard.set(input.standard, forKey: key)
@@ -65,34 +73,34 @@ struct NixModeStableSuiteTests {
     }
 
     @Test func `detects SwiftPM and XCTest runners`() {
-        #expect(ProcessInfo.resolveIsRunningTests(
+        #expect(OpenClawProcessInfo.resolveIsRunningTests(
             environment: [:],
             processName: "swiftpm-testing-helper",
             arguments: [],
             bundleURLs: []))
-        #expect(ProcessInfo.resolveIsRunningTests(
+        #expect(OpenClawProcessInfo.resolveIsRunningTests(
             environment: [:],
             processName: "swiftpm-xctest-helper",
             arguments: [],
             bundleURLs: []))
         for helper in ["swiftpm-testing-helper", "swiftpm-xctest-helper"] {
-            #expect(ProcessInfo.resolveIsRunningTests(
+            #expect(OpenClawProcessInfo.resolveIsRunningTests(
                 environment: [:],
                 processName: "OpenClawTests",
                 arguments: ["/Library/Developer/Toolchains/usr/libexec/swift/pm/\(helper)"],
                 bundleURLs: []))
         }
-        #expect(ProcessInfo.resolveIsRunningTests(
+        #expect(OpenClawProcessInfo.resolveIsRunningTests(
             environment: ["XCTestSessionIdentifier": "session"],
             processName: "OpenClawTests",
             arguments: [],
             bundleURLs: []))
-        #expect(ProcessInfo.resolveIsRunningTests(
+        #expect(OpenClawProcessInfo.resolveIsRunningTests(
             environment: [:],
             processName: "OpenClawTests",
             arguments: [],
             bundleURLs: [URL(fileURLWithPath: "/tmp/OpenClawTests.xctest")]))
-        #expect(!ProcessInfo.resolveIsRunningTests(
+        #expect(!OpenClawProcessInfo.resolveIsRunningTests(
             environment: [:],
             processName: "OpenClaw",
             arguments: [],

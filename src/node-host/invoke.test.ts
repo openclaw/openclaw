@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -207,6 +208,15 @@ describe("node host invoke", () => {
   it("passes the owning agent session to plugin node commands", async () => {
     const handle = vi.fn(async () => '{"ok":true}');
     const registry = createEmptyPluginRegistry();
+    registry.plugins = [
+      createPluginRecord({
+        id: "canvas",
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+    ];
     registry.nodeHostCommands = [
       {
         pluginId: "canvas",

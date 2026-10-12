@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { streamAzureOpenAIResponses } from "../providers/azure-openai-responses.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
@@ -31,6 +32,11 @@ const azureModel = {
   api: "azure-openai-responses",
   provider: "azure-openai-responses",
   baseUrl: "https://project.services.ai.azure.com/openai/v1",
+} satisfies Model<"azure-openai-responses">;
+
+const traditionalAzureModel = {
+  ...azureModel,
+  baseUrl: "https://resource.openai.azure.com/openai/v1",
 } satisfies Model<"azure-openai-responses">;
 
 const chatGptModel = {
@@ -165,6 +171,30 @@ const fixtures = {
     installResponse: installSdkResponse,
     createStream: (options?: BaseOpenAIStreamOptions) =>
       createManagedFixtureStream(managedAzureStream, azureModel, options),
+  },
+  traditionalAzure: {
+    name: "traditional SDK Azure",
+    model: traditionalAzureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      createManagedFixtureStream(managedAzureStream, traditionalAzureModel, options),
+  },
+  sharedAzure: {
+    name: "package Azure Responses",
+    model: azureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      streamAzureOpenAIResponses(azureModel, context, { apiKey: "fixture-token", ...options }),
+  },
+  sharedTraditionalAzure: {
+    name: "package traditional Azure Responses",
+    model: traditionalAzureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      streamAzureOpenAIResponses(traditionalAzureModel, context, {
+        apiKey: "fixture-token",
+        ...options,
+      }),
   },
   shared: {
     name: "shared Responses provider",
@@ -471,30 +501,49 @@ describe("managed ChatGPT OAuth response model", () => {
   });
 });
 
-describe("native ChatGPT SSE non-success response hooks", () => {
-  it("runs the hook for the failing response and surfaces the error without retrying", async () => {
+describe.each(Object.values(fixtures))("$name non-success response hooks", ({ createStream }) => {
+  it("reports the rejection before body consumption while another request completes", async () => {
     // The embedded runner owns transient retries; the transport must expose
     // the first non-success response to the hook and then fail the stream.
+    const response = new Response("overloaded", {
+      status: 503,
+      headers: { "retry-after-ms": "0" },
+    });
+    const readBody = vi.spyOn(response, "text");
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response("overloaded", { status: 503, headers: { "retry-after-ms": "0" } }),
-      )
+      .mockResolvedValueOnce(response)
       .mockResolvedValueOnce(completedResponse());
+    configureAiTransportHost({ buildModelFetch: () => fetchMock });
     vi.stubGlobal("fetch", fetchMock);
-    const onResponse = vi.fn();
+    const parallelOnResponse = vi.fn<NonNullable<BaseOpenAIStreamOptions["onResponse"]>>();
+    const bodyReadsDuringHook: number[] = [];
+    let requestsBeforeParallel: number | undefined;
+    let parallelStopReason: string | undefined;
+    const onResponse = vi.fn<NonNullable<BaseOpenAIStreamOptions["onResponse"]>>(async () => {
+      bodyReadsDuringHook.push(readBody.mock.calls.length);
+      requestsBeforeParallel = fetchMock.mock.calls.length;
+      const parallel = await createStream({
+        sessionId: "response-hook-overlap",
+        onResponse: parallelOnResponse,
+      }).result();
+      parallelStopReason = parallel.stopReason;
+      bodyReadsDuringHook.push(readBody.mock.calls.length);
+    });
 
-    const result = await streamOpenAICodexResponses(chatGptModel, context, {
-      apiKey: chatGptToken,
-      transport: "sse",
-      onResponse,
-    }).result();
+    const result = await createStream({ sessionId: "response-hook-overlap", onResponse }).result();
 
     expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503]);
+    expect(onResponse.mock.calls.map(([metadata]) => metadata.status)).toEqual([503]);
+    expect(parallelOnResponse.mock.calls.map(([metadata]) => metadata.status)).toEqual([202]);
+    expect(parallelStopReason).toBe("stop");
+    expect(bodyReadsDuringHook).toEqual([0, 0]);
+    expect(requestsBeforeParallel).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+});
 
+describe("native ChatGPT SSE non-success response hooks", () => {
   it("times out a stalled non-success hook and cancels its body", async () => {
     const bodyCancelled = vi.fn();
     const body = new ReadableStream<Uint8Array>({

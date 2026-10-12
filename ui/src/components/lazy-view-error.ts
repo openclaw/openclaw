@@ -1,15 +1,16 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { solidContent } from "../lit/solid-content.tsx";
 import { icon } from "./icons.ts";
 import { renderLoadingState } from "./loading-state.ts";
+import {
+  AgentStartupState,
+  LazyViewError,
+  LegacyPanelErrorState,
+} from "./solid/lazy-view-error.tsx";
 
 export function renderAgentStartupState() {
-  return html`<section class="agent-startup-state" role="status" aria-live="polite">
-    <span class="btn__spinner" aria-hidden="true"></span>
-    <div>${t("agentStartup.title")}</div>
-    <div>${t("agentStartup.description")}</div>
-  </section>`;
+  return html`${solidContent(AgentStartupState, {})}`;
 }
 
 type LazyElementState =
@@ -78,15 +79,7 @@ export function renderLazyElementModal(controller: {
   </openclaw-modal-dialog>`;
 }
 
-export function renderLazyViewError({
-  actionLabel,
-  error,
-  onClose,
-  onRetry,
-  render,
-  stale = false,
-  subtitle,
-}: {
+export function renderLazyViewError(params: {
   actionLabel?: string;
   error: unknown;
   onClose?: (event: Event) => void;
@@ -95,41 +88,17 @@ export function renderLazyViewError({
   stale?: boolean;
   subtitle?: string;
 }) {
-  const detail = formatUiError(error);
+  const { render, ...props } = params;
   return html`
     ${render?.() ?? nothing}
-    ${renderPanelErrorState({
-      title: stale ? t("lazyView.staleTitle") : t("lazyView.errorTitle"),
-      subtitle: subtitle ?? (stale ? t("lazyView.staleSubtitle") : t("lazyView.genericSubtitle")),
-      actions: html`
-        <button class="btn lazy-view-error__action" @click=${onRetry}>
-          ${actionLabel ?? (stale ? t("common.reload") : t("lazyView.retry"))}
-        </button>
-        ${
-          onClose
-            ? html`<button class="btn" type="button" @click=${onClose}>
-                ${t("common.close")}
-              </button>`
-            : nothing
-        }
-      `,
-      detail,
+    ${solidContent(LazyViewError, {
+      ...props,
       inline: Boolean(render),
-      stale,
     })}
   `;
 }
 
-export function renderPanelErrorState({
-  actions,
-  className,
-  detail,
-  inline = false,
-  role = "alert",
-  stale = false,
-  subtitle,
-  title,
-}: {
+export function renderPanelErrorState(params: {
   actions?: TemplateResult;
   className?: string;
   detail?: string;
@@ -139,23 +108,5 @@ export function renderPanelErrorState({
   subtitle: string;
   title: string;
 }) {
-  const errorClasses = `lazy-view-error${inline ? " lazy-view-error--inline" : ""}${stale ? " lazy-view-error--stale" : ""}${className ? ` ${className}` : ""}`;
-  return html`
-    <div class=${errorClasses} role=${role}>
-      <div class="lazy-view-error__icon" aria-hidden="true">
-        ${icon(stale ? "refresh" : "alertTriangle")}
-      </div>
-      <div class="lazy-view-error__title">${title}</div>
-      <div class="lazy-view-error__subtitle">${subtitle}</div>
-      ${actions ? html`<div class="lazy-view-error__actions">${actions}</div>` : nothing}
-      ${
-        detail
-          ? html`<details class="lazy-view-error__details">
-              <summary>${t("chat.details")}</summary>
-              <code class="lazy-view-error__detail">${detail}</code>
-            </details>`
-          : nothing
-      }
-    </div>
-  `;
+  return html`${solidContent(LegacyPanelErrorState, params)}`;
 }

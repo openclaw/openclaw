@@ -232,7 +232,7 @@ process.stdin.pipe(child.stdin);
                 listEnvironments: store.list,
                 getTransport: () => adapter,
                 workspaceTransfer: transfer,
-                validateWorkerTurn: placements.validateTurnClaim,
+                validateWorkerTurn: (claim) => placements.validateTurnClaim(claim),
                 launchNodeWorker: async () => {
                   throw new Error("No model turn belongs in destination proof");
                 },
@@ -297,7 +297,7 @@ process.stdin.pipe(child.stdin);
                 node: await adapter.getCurrentNode(deviceId),
               }));
               const runtime = createGatewayWorkerPlacementRuntime({
-                initialPlacements: placements.list(),
+                initialPlacements: await placements.listAsync(),
                 scheduler,
                 environments,
                 placements,

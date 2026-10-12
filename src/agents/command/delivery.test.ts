@@ -72,6 +72,32 @@ function createResult(overrides: Partial<RunResult> = {}): RunResult {
   return { ...overrides, meta: { durationMs: 1, ...overrides.meta } };
 }
 
+it.each([false, true])("reports a thinking clamp through local output (json=%s)", async (json) => {
+  const thinkingClamp =
+    "Thinking level clamped to off for ollama/llama3.2 (requested high; preference retained).";
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const delivered = await deliverAgentCommandResultForTest({
+    runtime,
+    opts: { deliver: false, json },
+    payloads: [{ text: "hello" }],
+    result: createResult({
+      meta: { durationMs: 1, requestShaping: { thinking: "off", thinkingClamp } },
+    }),
+  });
+
+  expect(delivered.meta.requestShaping).toEqual({ thinking: "off", thinkingClamp });
+  expect(delivered.payloads).toEqual([{ text: "hello", mediaUrl: null }]);
+  if (json) {
+    expect(runtime.log).not.toHaveBeenCalledWith(thinkingClamp);
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+      meta: { requestShaping: { thinking: "off", thinkingClamp } },
+    });
+  } else {
+    expect(runtime.log).toHaveBeenCalledWith(thinkingClamp);
+    expect(runtime.log).toHaveBeenCalledWith("hello");
+  }
+});
+
 type MessagingToolSentTarget = NonNullable<RunResult["messagingToolSentTargets"]>[number];
 
 type DeliveryFixture = Omit<Partial<DeliverParams>, "opts" | "payloads" | "result"> & {

@@ -237,26 +237,22 @@ export async function resolveRuntimeConversationBindingRouteAsync(
   > = params.resolveRoute ? { resolveRoute: params.resolveRoute } : { route: { ...params.route } };
   const conversation = resolveConfiguredBindingConversationRef(params);
   const service = getSessionBindingService();
-  const inspect = async () => {
-    const inspection = await service.inspectByConversationAsync(conversation);
-    const route = routeInput.resolveRoute
-      ? await routeInput.resolveRoute(
-          selectRuntimeConversationBindingRoute(inspection).routeSelection,
-        )
-      : routeInput.route;
-    return inspectRuntimeConversationBindingRoute({ route, inspection });
-  };
-  const result = await inspect();
-  if (!result.bindingRecord || params.touchBinding === false) {
-    return result;
+  const inspection = await service.inspectByConversationAsync(conversation);
+  const route = routeInput.resolveRoute
+    ? await routeInput.resolveRoute(
+        selectRuntimeConversationBindingRoute(inspection).routeSelection,
+      )
+    : routeInput.route;
+  const result = inspectRuntimeConversationBindingRoute({ route, inspection });
+  if (result.bindingRecord && params.touchBinding !== false) {
+    await service.touchAsync(
+      result.bindingRecord.bindingId,
+      undefined,
+      result.bindingRecord.conversation,
+    );
   }
-  await service.touchAsync(
-    result.bindingRecord.bindingId,
-    undefined,
-    result.bindingRecord.conversation,
-  );
-  // Activity is best effort if an operator rebinds during the write; routing still uses a fresh read.
-  return inspect();
+  // A concurrent rebind may leave one activity stamp on its successor; delivery checks live ownership.
+  return result;
 }
 
 /** @deprecated Use resolveRuntimeConversationBindingRouteAsync; removed in the next Plugin SDK major. */

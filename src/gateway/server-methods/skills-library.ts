@@ -21,6 +21,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { importSkillLibrary, uploadSkillLibrary } from "../../skills/library/import.js";
 import {
   assertPreparedSkillLibrarySelection,
@@ -196,7 +197,7 @@ async function selectedSession(options: SkillLibraryRequestOwner, sessionKey: st
     ? captureSessionActorMutationFacts(memory, sessionKey, true)
     : binding && captureIncognitoSessionMutationFacts(binding, sessionKey, true);
   const assertRouting = captureSessionMutationRouting(sourceCfg);
-  const resolve = (): SessionSharingTarget => {
+  const resolve = (authorize = true): SessionSharingTarget => {
     const cfg = options.context.getRuntimeConfig();
     assertRouting(cfg);
     const target = actorFacts
@@ -205,9 +206,11 @@ async function selectedSession(options: SkillLibraryRequestOwner, sessionKey: st
     if (!target) {
       throw new SkillLibraryError("NOT_FOUND", "Session not found.");
     }
-    const error = authorizeSessionSharingTarget({ cfg, client: options.client, target });
-    if (error) {
-      throw new SessionMutationAuthorizationChangedError(error);
+    if (authorize) {
+      const error = authorizeSessionSharingTarget({ cfg, client: options.client, target });
+      if (error) {
+        throw new SessionMutationAuthorizationChangedError(error);
+      }
     }
     if (!binding) {
       return target;
@@ -225,7 +228,7 @@ async function selectedSession(options: SkillLibraryRequestOwner, sessionKey: st
       },
     };
   };
-  let target = resolve();
+  let target = resolve(Boolean(memory || binding || isIncognitoSessionKey(sessionKey)));
   const held =
     binding &&
     (await prepareSessionSharingSource(target, () => {
@@ -396,6 +399,7 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
             selection.skillId === params.skillId && selection.revision === params.revision,
         );
         if (!pin) {
+          session.assertCurrent();
           throw new SkillLibraryError(
             "FORBIDDEN",
             "Session reads require an exact selected skillId and revision.",

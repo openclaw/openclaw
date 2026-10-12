@@ -8,9 +8,9 @@ import {
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
   nextWakeAtMs,
-  recomputeNextRunsForMaintenance,
   recomputeSingleJobForMaintenance,
 } from "./service/jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-support.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
@@ -565,7 +565,7 @@ function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {})
 }
 
 describe("cron maintenance ownership", () => {
-  it("clears an orphaned queued marker from before a clock rollback", () => {
+  it("leaves a queued marker from before a clock rollback for startup recovery", () => {
     const now = Date.now();
     const futureQueuedAt = now + 3 * 60 * 60_000;
 
@@ -584,7 +584,8 @@ describe("cron maintenance ownership", () => {
       { reservations: new Map(), isJobActive: () => false },
     );
 
-    expect(job.state.queuedAtMs).toBeUndefined();
+    expect(job.state.queuedAtMs).toBe(futureQueuedAt);
+    expect(job.state.nextRunAtMs).toBe(now + 60_000);
   });
 
   it("preserves a future running marker owned by a live execution", () => {
@@ -632,7 +633,7 @@ describe("cron maintenance ownership", () => {
     expect(malformedJob.state.lastError).toMatch(/^schedule error:/);
   });
 
-  it("advances overdue already-executed jobs when stale running marker is cleared", () => {
+  it("leaves an overdue running marker and its deadline for startup recovery", () => {
     const now = Date.now();
     const pastDue = now - 60_000;
     const staleRunningAt = now - 3 * 60 * 60_000;
@@ -653,7 +654,7 @@ describe("cron maintenance ownership", () => {
       { reservations: new Map(), isJobActive: () => false },
     );
 
-    expect(job.state.runningAtMs).toBeUndefined();
-    expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
+    expect(job.state.runningAtMs).toBe(staleRunningAt);
+    expect(job.state.nextRunAtMs).toBe(pastDue);
   });
 });

@@ -4,6 +4,7 @@ import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
+import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
@@ -14,10 +15,7 @@ const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 type OutputRuntime = typeof import("./subagent-announce.runtime.js");
 type SubagentAnnounceResultDeps = Pick<
   OutputRuntime,
-  | "getRuntimeConfig"
-  | "readSubagentSessionEntry"
-  | "resolveAgentIdFromSessionKey"
-  | "resolveSessionStorePathCore"
+  "getRuntimeConfig" | "readSubagentSessionEntry" | "resolveSessionStorePathCore"
 > & {
   readSubagentRun: (runId: string) => SubagentRunRecord | undefined;
   findTranscriptEvent: typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent;
@@ -86,8 +84,12 @@ export async function readSubagentRunAnnounceResultUsing(
   }
   const runId = child.runId;
   const childSessionKey = child.childSessionKey;
+  const childAgentId = resolveSubagentChildAgentId(child);
+  if (!childAgentId) {
+    return { text: capturedResult, isCurrent };
+  }
   const target = child.execution.transcriptTarget;
-  const agentId = target?.agentId ?? deps.resolveAgentIdFromSessionKey(childSessionKey);
+  const agentId = target?.agentId ?? childAgentId;
   const storePath =
     target?.storePath ??
     deps.resolveSessionStorePathCore(deps.getRuntimeConfig().session?.store, { agentId });

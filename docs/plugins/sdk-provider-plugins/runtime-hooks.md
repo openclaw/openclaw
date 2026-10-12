@@ -296,6 +296,12 @@ entrypoint. Adapters that already bound and redact their diagnostics can constru
 its message so status and retry metadata survive; search tools use those fields
 for safe authentication and quota guidance without exposing response bodies.
 
+The same entrypoint exposes `runHttpTlsPreflight(url, options)` for a
+non-redirecting reachability probe. It distinguishes certificate failures from
+other network failures, accepts cancellation and a current-authority callback,
+and requests best-effort cancellation of unread response bodies. Any HTTP status
+means the endpoint is reachable; this is not a credential or account check.
+
 Bundled and trusted official provider policies can use
 `resolveEffortThinkingProfile(compat?.supportedReasoningEfforts)` from the
 private `openclaw/plugin-sdk/provider-thinking-runtime` helper. It accepts

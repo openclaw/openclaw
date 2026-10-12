@@ -18,6 +18,7 @@ import {
   listUserProfileAuthLinks,
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
@@ -714,6 +715,7 @@ describe("chat metadata ownership", () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       const { owner, authProfileId, metadata, readChatMetadata, request } =
         createPersonalMetadataFixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
       const before = readUserModelAuthProfile(authProfileId);
 

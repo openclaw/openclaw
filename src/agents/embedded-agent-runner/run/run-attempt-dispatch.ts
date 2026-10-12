@@ -247,6 +247,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   });
   const assertActiveRun = requireActiveAssertion(attemptAbortController.signal);
   assertActiveRun();
+  if (runtime.pluginHarnessOwnsTransport) {
+    await params.awaitSessionDiffBaseline?.();
+    assertActiveRun();
+  }
   using placement = runtime.pluginHarnessOwnsTransport
     ? await preparePluginHarnessWorkspace({
         ...params,
@@ -385,6 +389,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentHarnessId: string;
   } = {
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
+    awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {

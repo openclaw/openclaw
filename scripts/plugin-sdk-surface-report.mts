@@ -191,7 +191,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "security-runtime": 1,
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
-  "session-store-runtime": 7,
+  // +2: released synchronous transcript event/stat reads during the worker cutover.
+  "session-store-runtime": 9,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
@@ -202,6 +203,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "command-auth-native": 3,
   "native-command-registry": 1,
   "skill-commands-runtime": 2,
+  // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
+  "control-ui": 1,
 } satisfies Record<string, number>);
 
 export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env) {
@@ -209,7 +212,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: the shared state-owner boundary for plugin CLIs.
-      152,
+      // +2: shared database-engine host and worker adapters.
+      154,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -239,7 +243,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: approved async session, command-menu, model-override, TTS-path, and list replacements.
       // +1: preview adapters strip only normalization-owned response decoration.
       // +1: shared stale-read cache replaces board, preview, search, and credential cache policies.
-      3696,
+      // +2: approved async transcript event/stat read replacements.
+      // +1: approved PreparedAgentRunStart contract.
+      // +1: deprecated createSessionHeaderLink retained from shipped 2026.10.1.
+      // +10: shared database-engine contracts and operations after the SQLite export cutover.
+      3710,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -264,7 +272,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: the same session, command-menu, model-override, TTS-path, and list replacements.
       // +1: stripReplyPayloadResponsePrefix preserves durable text while assembling previews.
       // +1: the same bounded stale-read cache factory on collection-runtime.
-      2157,
+      // +2: the same transcript read replacement pairs.
+      // +1: the same deprecated createSessionHeaderLink.
+      // +5: shared database-engine host and worker operations.
+      2165,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -277,7 +288,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: released synchronous skill-command list helpers during async migration.
       // +15: retained synchronous auth, model, and TTS compatibility exports.
       // +7: retained synchronous session, command-menu, model-override, TTS-path, and list exports.
-      183,
+      // +2: retained synchronous transcript event/stat reads until the next SDK major.
+      // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
+      186,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

@@ -168,6 +168,70 @@ describe("memory transcript reports and edits", () => {
     expect((await hydrate()).eventJson?.at(-1)).toBe(bytes);
   });
 
+  it("preserves admission for identical replay text but revokes it for projection or content edits", async () => {
+    const { storage, binding, hydrate } = await fixture();
+    const user = {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: "2026-10-11T00:00:00.000Z",
+      message: { role: "user", content: "question", timestamp: 1 },
+    };
+    readSessionActorStorageResult(
+      await storage.mutate(
+        {
+          type: "session.metadata.append",
+          input: {
+            scope,
+            options: {},
+            event: { ...user, type: "message" },
+            message: {
+              messageJson: JSON.stringify(user.message),
+              cwd: "/synthetic",
+              validateTurn: false,
+            },
+          },
+        },
+        authority,
+      ),
+    );
+    const projected = {
+      ...user.message,
+      __openclaw: {
+        steerTargetRunId: "running-turn",
+        modelPromptProjection: { version: 1, text: "question" },
+      },
+    };
+    const changedProjection = {
+      ...projected,
+      __openclaw: {
+        ...projected["__openclaw"],
+        modelPromptProjection: { version: 1, text: "changed" },
+      },
+    };
+    for (const [index, message] of [
+      projected,
+      changedProjection,
+      { ...changedProjection, content: "edited" },
+    ].entries()) {
+      const before = await hydrate();
+      const replacement = { ...user, message };
+      await runWithSessionActorStorage(binding, () =>
+        withPreparedTranscriptCorrection(scope, async (correction) => {
+          const events = await correction.readEvents();
+          await correction.replaceEvents([...events.slice(0, -1), replacement]);
+        }),
+      );
+      const after = await hydrate();
+      expect(after.eventJson?.at(-1)).toBe(JSON.stringify(replacement));
+      if (index === 0) {
+        expect(after.version.generation).toBe(before.version.generation);
+      } else {
+        expect(after.version.generation).not.toBe(before.version.generation);
+      }
+    }
+  });
+
   it("rejects a prepared correction after a concurrent edit without losing the appended row", async () => {
     const { binding, hydrate, custom } = await fixture();
     await custom("status-1", "first");

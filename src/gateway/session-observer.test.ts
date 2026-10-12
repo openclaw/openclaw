@@ -155,7 +155,7 @@ describe("session observer", () => {
     });
   });
 
-  it("never includes tool results or command output and redacts tool arguments", async () => {
+  it("omits tool result bodies while preserving summarized tool arguments", async () => {
     const harness = createHarness();
     const runtimeDetail = "runtime-detail-that-must-not-leave";
     const commandOutput = "command-output-that-must-not-leave";
@@ -187,8 +187,7 @@ describe("session observer", () => {
     expect(prompt).not.toContain("test-token");
     expect(prompt).not.toContain(runtimeDetail);
     expect(prompt).not.toContain(commandOutput);
-    expect(prompt).not.toContain(toolCommand);
-    expect(prompt).toContain("***");
+    expect(prompt).toContain(toolCommand);
   });
 
   it("coalesces live completions and cancels in-flight work for the terminal digest", async () => {

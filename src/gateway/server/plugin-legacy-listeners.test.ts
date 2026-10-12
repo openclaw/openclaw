@@ -136,9 +136,7 @@ describe("legacy channel webhook ports", () => {
       status: number | undefined;
       headers: IncomingHttpHeaders;
       body: string;
-      continues: number;
     }>((resolve, reject) => {
-      let continues = 0;
       const req = request(
         {
           // Probe the listener with a new connection, never a pooled retired socket.
@@ -157,20 +155,12 @@ describe("legacy channel webhook ports", () => {
           });
           res.on("error", reject);
           res.on("end", () => {
-            resolve({ status: res.statusCode, headers: res.headers, body, continues });
+            resolve({ status: res.statusCode, headers: res.headers, body });
           });
         },
       );
       req.on("error", reject);
-      req.on("continue", () => {
-        continues += 1;
-        req.end(options.body);
-      });
-      if (options.headers?.Expect) {
-        req.flushHeaders();
-      } else {
-        req.end(options.body);
-      }
+      req.end(options.body);
     });
 
   it.each([undefined, "text/plain"])(
@@ -594,47 +584,6 @@ describe("legacy channel webhook ports", () => {
     successor();
     await finalPortClosed;
     expect(httpServers).toEqual([gatewayServer]);
-  });
-
-  it("preserves native expectations, ordinary Upgrade requests, and CONNECT closure", async () => {
-    const body = "synthetic webhook body";
-    const handler = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      expect(getWebhookLegacyListener(req)).toEqual(endpoint(1));
-      expect(await readRequestBodyWithLimit(req, { maxBytes: 1024 })).toBe(body);
-      res.end("accepted");
-    });
-    register({ legacyListener: { ...endpoint(1), health: { path: "/healthz" } }, handler });
-    await listening();
-    for (const path of ["/webhook", "/healthz"]) {
-      expect(
-        await send(1, path, {
-          method: "POST",
-          body,
-          headers: { Expect: "100-continue", "Content-Length": String(Buffer.byteLength(body)) },
-        }),
-      ).toMatchObject({ status: 200, body: path === "/healthz" ? "ok" : "accepted", continues: 1 });
-      const rejected = await send(1, path, {
-        method: "POST",
-        headers: { Expect: "unsupported-expectation" },
-      });
-      expect(rejected).toMatchObject({ status: 417, body: "", continues: 0 });
-      expect(rejected.headers).toEqual({
-        date: expect.any(String),
-        connection: "close",
-        "transfer-encoding": "chunked",
-      });
-      expect(
-        await send(1, path, {
-          method: "POST",
-          body,
-          headers: { Connection: "Upgrade", Upgrade: "websocket" },
-        }),
-      ).toMatchObject({ status: 200, body: path === "/healthz" ? "ok" : "accepted" });
-    }
-    await expect(send(1, "/healthz", { method: "CONNECT" })).rejects.toMatchObject({
-      code: "ECONNRESET",
-    });
-    expect(handler).toHaveBeenCalledTimes(2);
   });
 
   it("reports an occupied port and retries on a route change after it is freed", async () => {

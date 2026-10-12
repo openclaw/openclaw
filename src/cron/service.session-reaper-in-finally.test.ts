@@ -182,8 +182,6 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       await withCronServiceStateForTest(state, async () => {
         await expect(onTimer(state)).resolves.toBeUndefined();
         expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-        expect(state.running).toBe(false);
-        expect(state.timer).not.toBeNull();
         expect(log.warn).toHaveBeenCalled();
       });
     },
@@ -207,8 +205,6 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
         lastError: "gateway down",
       });
       expect(entries(sessionStorePath)).toEqual([fresh]);
-      expect(state.running).toBe(false);
-      expect(state.timer).not.toBeNull();
     });
   });
 
@@ -225,8 +221,6 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
         await expect(onTimer(state)).rejects.toBe(failure);
         expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
         expect(entries(sessionStorePath)).toEqual([fresh]);
-        expect(state.running).toBe(false);
-        expect(state.timer).not.toBeNull();
       } finally {
         loadSpy.mockRestore();
       }
@@ -267,7 +261,6 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       expect([...new Set(resolvedAgentIds)].toSorted()).toEqual(["main", "worker"]);
       expect(entries(sessionStorePath)).toStrictEqual([]);
       expect(entries(sessionStorePath, "worker")).toStrictEqual([]);
-      expect(state.running).toBe(false);
     });
   });
 

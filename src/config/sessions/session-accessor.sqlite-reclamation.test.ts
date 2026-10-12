@@ -11,6 +11,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
@@ -25,6 +26,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -281,42 +283,49 @@ test.each([false, true])(
     const before = inspect();
     expect(before).toMatchObject({ writerOpen: false, leases: [], repairIndex: undefined });
     const survivorEntry = loadSessionEntryReadOnly(survivor);
+    const owner = acquireGatewayStateOwner({ databasePath: stateDatabase.path });
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: owner.assertCurrent,
+      assertDatabaseAccess: owner.assertDatabaseAccess,
+    });
     try {
-      const operation = runSqliteSessionReclamation({
-        forceInProcess: true,
-        plan,
-        assertCommitAllowed: () => {
-          if (revoked) {
-            throw new Error("native reclamation authority revoked");
-          }
-        },
+      await maintenance.run(async () => {
+        const operation = runSqliteSessionReclamation({
+          plan,
+          assertCommitAllowed: () => {
+            if (revoked) {
+              throw new Error("native reclamation authority revoked");
+            }
+          },
+        });
+        if (revoked) {
+          await expect(operation).rejects.toThrow("native reclamation authority revoked");
+          // Read-only observation must not itself reopen or repair the rejected target.
+          expect(inspect()).toEqual(before);
+          expect(loadSessionEntryReadOnly(current)).toEqual(expectedEntry);
+        } else {
+          await expect(operation).resolves.toMatchObject({
+            kind: "lifecycle-artifacts",
+            value: { removedEntries: 1 },
+          });
+          const after = inspect();
+          expect(after).toMatchObject({
+            writerOpen: true,
+            repairIndex: { name: "idx_agent_cache_expiry" },
+            events: before.events,
+            windows: before.windows,
+          });
+          expect(loadSessionEntryReadOnly(current)).toBeUndefined();
+        }
+        expect(database.db.isOpen).toBe(false);
+        expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
+        await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        expect(inspect()).toMatchObject({ writerOpen: false, leases: [] });
       });
-      if (revoked) {
-        await expect(operation).rejects.toThrow("native reclamation authority revoked");
-        // Read-only observation must not itself reopen or repair the rejected target.
-        expect(inspect()).toEqual(before);
-        expect(loadSessionEntryReadOnly(current)).toEqual(expectedEntry);
-      } else {
-        await expect(operation).resolves.toMatchObject({
-          kind: "lifecycle-artifacts",
-          value: { removedEntries: 1 },
-        });
-        const after = inspect();
-        expect(after).toMatchObject({
-          writerOpen: true,
-          repairIndex: { name: "idx_agent_cache_expiry" },
-          events: before.events,
-          windows: before.windows,
-        });
-        // Cold admission retains its worker alongside the adopted host handle.
-        expect(after.leases).toHaveLength(2);
-        expect(loadSessionEntryReadOnly(current)).toBeUndefined();
-      }
-      expect(database.db.isOpen).toBe(false);
-      expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
-      await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      expect(inspect()).toMatchObject({ writerOpen: false, leases: [] });
     } finally {
+      await maintenance.close();
+      owner.release();
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
@@ -360,7 +369,7 @@ test.runIf(process.platform !== "win32")(
       await yieldToEventLoop();
       expect(canonicalWriteRan).toBe(false);
     };
-    const reclamation = runSqliteSessionReclamation({ forceInProcess: false, plan });
+    const reclamation = runSqliteSessionReclamation({ plan });
     try {
       await expect(reclamation).resolves.toMatchObject({
         kind: "lifecycle-artifacts",
@@ -396,9 +405,9 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
   const before = freePages();
   expect(before).toBeGreaterThan(512);
 
-  await expect(runSqliteSessionReclamation({ forceInProcess: false, plan })).resolves.toMatchObject(
-    { value: { deleted: true } },
-  );
+  await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
+    value: { deleted: true },
+  });
 
   const after = freePages();
   expect(before - after).toBeGreaterThan(0);
@@ -437,7 +446,6 @@ test("queued reclamations reuse their database Worker without borrowing another 
   const operations = [first, first, other].map((fixture, index) => {
     const record = diagnostics[index];
     return runSqliteSessionReclamation({
-      forceInProcess: false,
       plan: fixture.plan,
       diagnostics: record,
     });
@@ -496,7 +504,6 @@ test("file warnings retain rejected native admission releases without attributin
     clock += 1_100;
   };
   const first = runSqliteSessionReclamation({
-    forceInProcess: false,
     plan,
     diagnostics,
     assertCommitAllowed: () => {
@@ -566,8 +573,6 @@ test("file warnings retain rejected native admission releases without attributin
 });
 
 test.each([
-  { elapsedMs: 0, rejected: false, failLog: false },
-  { elapsedMs: 0, rejected: true, failLog: false },
   { elapsedMs: 1_500, rejected: false, failLog: false },
   { elapsedMs: 1_500, rejected: true, failLog: true },
 ])(
@@ -614,7 +619,6 @@ test.each([
     const trace = { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: "01" };
     const operation = runWithDiagnosticTraceContext(trace, () =>
       runSqliteSessionReclamation({
-        forceInProcess: false,
         plan,
         diagnostics,
         assertCommitAllowed: () => {

@@ -115,6 +115,8 @@ it("keeps source-only clones away from an inherited external Git index", async (
 });
 
 it("reuses and refreshes source-only templates without running host filters", async () => {
+  // Cache invalidation does not depend on Btrfs checkout timing selection.
+  vi.spyOn(performance, "now").mockReturnValue(0);
   await configure("repository", "smudge", repo);
   const first = await createSourceOnly("template-first");
   const [original] = await listTemplatesAsync(process.env);

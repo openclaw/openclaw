@@ -2,7 +2,7 @@ import path from "node:path";
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   listSessionEntries,
-  loadTranscriptEventsSync,
+  loadTranscriptEvents,
   resolveStorePath,
   type SessionEntry,
   upsertSessionEntry,
@@ -442,7 +442,7 @@ async function readQaSessionTranscriptEvents(
     }
     throw new Error(`session transcript entry not found for ${normalizedSessionKey}`);
   }
-  const events = loadTranscriptEventsSync({
+  const events = await loadTranscriptEvents({
     agentId: "qa",
     env: qaSessionRuntimeEnv(env.gateway.tempRoot),
     sessionId,

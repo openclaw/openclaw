@@ -1,5 +1,5 @@
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import { html, nothing, render } from "lit";
+import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -16,7 +16,6 @@ import "../../../styles/chat/split-view.css";
 import { openSlot, setSidebarOpen } from "../sidebar-layout.ts";
 import type { ChatDetails } from "./chat-details.tsx";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
-import { renderChatPaneHeader } from "./chat-pane-header.ts";
 import "./chat-details.tsx";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
 
@@ -109,14 +108,14 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             open: menu.hasAttribute("open"),
             focused: document.activeElement === trigger,
           });
-          fixture.props.sidebarLayout = setSidebarOpen(
-            fixture.props.sidebarLayout!,
-            !fixture.props.sidebarLayout!.open,
-          );
-          render(renderChatPaneHeader(fixture.props), fixture.container);
+          fixture.update({
+            sidebarLayout: setSidebarOpen(
+              fixture.props.sidebarLayout!,
+              !fixture.props.sidebarLayout!.open,
+            ),
+          });
         },
       });
-      render(renderChatPaneHeader(fixture.props), fixture.container);
       const trigger = fixture.container.querySelector<HTMLButtonElement>(
         ".chat-pane__layout-trigger",
       )!;
@@ -208,7 +207,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         const editor = state === "editor";
         const onOpenEditor = vi.fn();
         const reason = "Branch switch is unavailable while the agent is working.";
-        const { container, props } = mountChatPaneHeader(containers, {
+        const { container, props, unmount } = mountChatPaneHeader(containers, {
           branchSwitchDisabledReason: busy ? reason : null,
           onClosePane: state === "idle" ? vi.fn() : undefined,
           branches: [
@@ -217,7 +216,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           ],
         });
         if (editor) {
-          render(nothing, container);
+          unmount();
           mountSolid(
             () => (
               <ChatSidebarEditorMenu

@@ -1,5 +1,5 @@
 // Timer producers and detached runs retain separate Gateway roots.
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -18,7 +18,8 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { start, stop } from "./service/ops-lifecycle.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
-import { onTimer } from "./service/timer.test-support.js";
+import { startCronScheduler } from "./service/scheduler-actor.js";
+import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
 import type { CronJob } from "./types.js";
@@ -90,9 +91,9 @@ describe("cron service cross-tick admission", () => {
     const t0 = Date.now();
     const clock = createGatewaySchedulerClock(t0);
     const scheduler = createTestGatewayScheduler(clock.clock);
-    const jobA = dueJob("timer-a", t0);
+    const jobA = dueJob("timer-a", t0, t0 + 1_000);
     jobA.payload = { kind: "agentTurn", message: jobA.id, timeoutSeconds: 0 };
-    const jobB = dueJob("timer-b", t0, t0 + 500);
+    const jobB = dueJob("timer-b", t0, t0 + 1_500);
     const store = await seedJobs([jobA, jobB]);
 
     const blocked = blockedRuns([jobA, jobB]);
@@ -104,32 +105,33 @@ describe("cron service cross-tick admission", () => {
       runIsolatedAgentJob,
     });
 
-    const tickA = onTimer(state);
-    let tickB: ReturnType<typeof clock.advanceTo> = undefined;
+    const { wake } = await captureCronSchedulerWakeForTest(() =>
+      startCronScheduler(state, new Set()),
+    );
+    clock.setTime(t0 + 1_000);
+    const tickA = wake(state);
+    let tickB: Promise<void> | undefined;
     try {
       await blocked.started(jobA);
-      const nextWakeAtMs = scheduler.nextWakeAtMs;
-      assert.isNotNull(nextWakeAtMs);
-      expect(nextWakeAtMs).toBeGreaterThanOrEqual(t0 + 500);
-      tickB = clock.advanceTo(nextWakeAtMs);
+      await tickA;
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      expect(store.receipt(jobB)).toBeUndefined();
+      clock.setTime(t0 + 1_500);
+      tickB = wake(state);
       await blocked.started(jobB);
+      await tickB;
 
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
       expect(blocked.peakActive).toBe(2);
       expect(store.receipt(jobB)).toBeDefined();
-      expect(getActiveGatewayRootWorkHolders().toSorted()).toEqual([
-        "cron:run (2)",
-        "cron:timer-tick (2)",
-      ]);
+      expect(getActiveGatewayRootWorkHolders()).toEqual(["cron:run (2)"]);
 
       blocked.release(jobA);
       await tickA;
-      expect(state.activeTimerTicks).toBe(1);
       blocked.release(jobB);
       await tickB;
       await waitForCronRunQueue(state);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(state.activeTimerTicks).toBe(0);
     } finally {
       blocked.release(jobA);
       blocked.release(jobB);
@@ -149,23 +151,21 @@ describe("cron service cross-tick admission", () => {
       nowMs: () => nowMs,
       runIsolatedAgentJob,
     });
-    await start(state);
+    const { wake } = await captureCronSchedulerWakeForTest(() => start(state));
     const restartSignal = beginGatewayRestartSignalAdmission();
     expect(restartSignal).not.toBeNull();
-    const retiredTimer = onTimer(state);
+    const retiredTimer = wake(state);
 
     try {
       stop(state);
       await retiredTimer;
       await start(state);
-      const restartedTimer = state.timer;
       nowMs += 1_000;
 
       expect(restartSignal?.rollback()).toBe(true);
       await retiredTimer;
 
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(state.timer).toBe(restartedTimer);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       const persisted = await loadCronStore(store.storePath);
       expect(persisted.jobs[0]?.state).toMatchObject({ nextRunAtMs: nowMs });

@@ -687,6 +687,8 @@ const uiWebkitOwners = [
   "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*}.{ts,tsx}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
+  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
+  "ui/src/lit/presentation-binding.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
   "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
@@ -947,6 +949,25 @@ const runSqliteSessionLifecycle =
   supportsSqliteSessionLifecycleProof &&
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
+const postgresConformancePaths = [
+  "src/infra/database-engine/**",
+  "src/infra/postgres-sync/**",
+  "src/infra/sql-connection.ts",
+  "src/infra/sql-query-compiler.ts",
+  "src/infra/kysely-sync*.ts",
+  "src/infra/sqlite-transaction.ts",
+  "extensions/workboard/**",
+  "src/config/zod-schema.database.ts",
+  "scripts/test-database-conformance*.mjs",
+];
+const runPostgresConformance =
+  existsSync("scripts/test-database-conformance.mjs") &&
+  (eventName === "schedule" ||
+    ((eventName === "pull_request" || releaseGate) &&
+      (changedPaths === null ||
+        changedPaths.some((file) =>
+          postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+        ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
   (runNodeFull &&
@@ -1199,6 +1220,7 @@ const nodeTestShards = targetNodeTestShards
           "src/agents/sessions/tools/grep.byte-path.test.ts",
           "src/agents/filesystem-tools-output-contract.test.ts",
           "test/scripts/check-database-worker-ratchet.test.ts",
+          "test/scripts/pr-baseline-successor.test.ts",
         ],
         (plan) =>
           ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
@@ -1454,6 +1476,7 @@ const manifest = {
   ),
   run_prompt_snapshots: runNodeFull && !releaseFastLane && changedScopeHasPromptSnapshotImpact,
   run_sqlite_session_lifecycle: runSqliteSessionLifecycle,
+  run_postgres_conformance: runPostgresConformance,
   checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
   run_plugin_contracts_shards: pluginContractShards.length > 0,
   plugin_contracts_matrix: createContractMatrix(pluginContractShards, "contracts-plugins"),
@@ -1522,15 +1545,16 @@ const manifest = {
   ui_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.ui) : "",
   ui_e2e_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.e2e) : "",
   ui_real_gateway_matrix: createMatrix(
-    uiRealGatewayShards.map(({ groups, ...row }) => ({
-      ...row,
-      run_tests:
-        !groups ||
-        groups.some(
-          (group) => group.includePatterns === undefined || group.includePatterns.length > 0,
-        ),
-      test_groups_gzip_base64: groups ? encodeNodeTestGroups(groups) : "",
-    })),
+    uiRealGatewayShards.map(({ groups, ...row }) =>
+      Object.assign(row, {
+        run_tests:
+          !groups ||
+          groups.some(
+            (group) => group.includePatterns === undefined || group.includePatterns.length > 0,
+          ),
+        test_groups_gzip_base64: groups ? encodeNodeTestGroups(groups) : "",
+      }),
+    ),
   ),
   run_control_ui_performance: runControlUiPerformance,
   run_ui_e2e: runUiE2e,
@@ -1667,9 +1691,8 @@ if (hybridHostedEligible) {
   hybridHostedBaseRows = Object.values({
     preflight: count(ciQualification),
     "check-plan": count(hostedPlanner && runCheckPlan),
-    "pr-fail-fast": count(
+    "pr-failure-report": count(
       workflowEventName === "pull_request" &&
-        manifest.run_checks_node_core_nondist &&
         process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
@@ -1704,6 +1727,7 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
+    "postgres-conformance": count(manifest.run_postgres_conformance),
     "skills-python": count(manifest.run_skills_python_job),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
@@ -1808,69 +1832,6 @@ if (hybridHostedEligible) {
     `Hybrid hosted rows: ${manifest.hybrid_hosted_base_rows} base, ${manifest.hybrid_hosted_total_rows} total; optional offload ${hybridHostedOffload ? "admitted" : "retained on Blacksmith"}; measured checks ${hybridHostedChecks ? "admitted" : "retained on Blacksmith"}; main checks ${hybridHostedMainChecks ? "admitted" : "retained on Blacksmith"}`,
   );
 }
-
-// The PR monitor must see the whole selected graph before declaring it
-// complete; an early jobs response can omit not-yet-expanded matrices.
-const countPrJobs = (selected, rows = 1) => (selected ? rows : 0);
-manifest.pr_check_job_count =
-  workflowEventName !== "pull_request"
-    ? 0
-    : countPrJobs(manifest.run_check, manifest.check_matrix.include.length) +
-      countPrJobs(
-        manifest.run_check && manifest.run_lint_core && usesHostedRunnerProfile,
-        manifest.lint_core_matrix.include.length,
-      ) +
-      countPrJobs(
-        manifest.run_check && manifest.run_lint_extensions && runnerProfile === "hybrid",
-        manifest.lint_extension_matrix.include.length,
-      ) +
-      countPrJobs(
-        manifest.run_check &&
-          usesHostedRunnerProfile &&
-          (!manifest.narrow_check_paths_json || manifest.run_changed_core_type_stripes),
-        manifest.core_type_matrix.include.length,
-      );
-manifest.pr_job_count =
-  workflowEventName !== "pull_request"
-    ? 0
-    : 2 +
-      countPrJobs(sharedSdkDeclarations) +
-      countPrJobs(manifest.run_check_plan) +
-      manifest.pr_check_job_count +
-      [
-        "run_build_artifacts",
-        "run_control_ui_performance",
-        "run_native_i18n",
-        "run_control_ui_i18n",
-        "run_baseline_ratchets",
-        "run_check_docs",
-        "run_skills_python_job",
-        "run_docker_seed_e2e",
-        "run_published_driver_update",
-      ].reduce((sum, key) => sum + countPrJobs(manifest[key]), 0) +
-      [
-        ["run_checks_fast_core", "checks_fast_core_matrix"],
-        ["run_plugin_contracts_shards", "plugin_contracts_matrix"],
-        ["run_channel_contracts_shards", "channel_contracts_matrix"],
-        ["run_checks_node_core_nondist", "checks_node_core_nondist_matrix"],
-        ["run_check_additional", "check_additional_matrix"],
-        ["run_checks_windows", "checks_windows_matrix"],
-        ["run_macos_node", "macos_node_matrix"],
-        ["run_android_job", "android_matrix"],
-        ["run_qa_smoke_ci", "qa_smoke_ci_matrix"],
-        ["run_ui_e2e", "ui_e2e_matrix"],
-      ].reduce(
-        (sum, [selected, matrix]) =>
-          sum + countPrJobs(manifest[selected], manifest[matrix].include.length),
-        0,
-      ) +
-      countPrJobs(manifest.run_ui_tests, uiTestShardCount) +
-      countPrJobs(manifest.run_macos_swift, 2) +
-      countPrJobs(manifest.run_ios_build) +
-      (manifest.run_ui_real_gateway ? uiRealGatewayShards.length : 0) +
-      countPrJobs(manifest.run_android_access_native, 2) +
-      countPrJobs(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 3) +
-      countPrJobs(manifest.run_android_screenshots);
 
 for (const [key, value] of Object.entries(manifest)) {
   appendFileSync(

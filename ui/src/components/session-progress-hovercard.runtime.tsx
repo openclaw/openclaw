@@ -85,7 +85,6 @@ class SessionProgressHovercardController {
     CLOSE_DELAY_MS,
     () => this.close(),
   );
-  private loadGeneration = 0;
   private readonly activeTargetObserver = new MutationObserver(() => {
     if (
       this.activeTarget &&
@@ -304,8 +303,7 @@ class SessionProgressHovercardController {
           this.showCurrent();
         } else {
           this.animateNextOpen = animateEntry;
-          const generation = ++this.loadGeneration;
-          this.hovercard.scheduleOpen(delay, () => void this.loadAndShow(sessionKey, generation));
+          this.hovercard.scheduleOpen(delay, () => void this.loadAndShow(sessionKey));
         }
       }
       return;
@@ -325,11 +323,10 @@ class SessionProgressHovercardController {
       childList: true,
       subtree: true,
     });
-    const generation = ++this.loadGeneration;
-    this.hovercard.scheduleOpen(delay, () => void this.loadAndShow(sessionKey, generation));
+    this.hovercard.scheduleOpen(delay, () => void this.loadAndShow(sessionKey));
   }
 
-  private async loadAndShow(sessionKey: string, generation: number): Promise<void> {
+  private async loadAndShow(sessionKey: string): Promise<void> {
     const target = this.activeTarget;
     const artifactKey = this.activeArtifactKey;
     const session = this.activeSession;
@@ -337,7 +334,6 @@ class SessionProgressHovercardController {
       void this.sessionLinkTitler.decorate(target, true);
     }
     if (
-      generation !== this.loadGeneration ||
       session?.sessionKey !== sessionKey ||
       !artifactKey ||
       !session ||
@@ -357,11 +353,7 @@ class SessionProgressHovercardController {
     } catch {
       // Session facts and the last successful card remain useful when refresh fails.
     }
-    if (
-      generation === this.loadGeneration &&
-      this.activeSession?.sessionKey === sessionKey &&
-      this.hovercard.held
-    ) {
+    if (this.activeSession?.sessionKey === sessionKey && this.hovercard.held) {
       this.showCurrent();
     }
   }
@@ -579,7 +571,6 @@ class SessionProgressHovercardController {
   private close(animateExit = false): void {
     const wasOpen = this.open;
     this.hovercard.reset(animateExit ? EXIT_DURATION_MS : 0);
-    this.loadGeneration += 1;
     this.open = false;
     this.animateNextOpen = true;
     this.lastProgressCard = null;

@@ -1,8 +1,8 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { CLI_HISTORY_CHANGED_BEFORE_PREPARATION } from "./cli-history-boundary.js";
-import { readActivePathEntryRelationFromProjection } from "./session-accessor.sqlite-active-events.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
+import { readActivePathEntryRelationFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import type {
   SessionEntryPatchCommitted,

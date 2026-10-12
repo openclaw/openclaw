@@ -273,6 +273,7 @@ describe("subagents command snapshots", () => {
     seedSubagentRunForReadTest({
       runId: parentRunId,
       childSessionKey: parentSessionKey,
+      childSessionIdentity: { sessionId: "snapshot-parent-session" },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       requesterDisplayKey: "main",

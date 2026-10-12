@@ -12,6 +12,15 @@ export type ChatSessionEmbeddedAbortOutcome = {
   aborted: boolean;
 };
 
+export type ChatAbortLifecycle = {
+  onAuthorizedBeforeEmbeddedAbort?: () => boolean;
+  onAuthorizedAfterQueuedAbort?: (embedded: ChatSessionEmbeddedAbortOutcome) => boolean;
+  onDescendantsCancelled?: (
+    result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
+  ) => void;
+  cascadeDescendants?: true;
+};
+
 export type ChatSessionAbortParams = {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
@@ -28,6 +37,8 @@ export type ChatSessionAbortParams = {
   stopReason?: string;
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
+  /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
+  beforeAbort?: () => Promise<void>;
   /**
    * Session Stop owners also stop admitted or embedded controller-less producers
    * and record their cancellation. They must supply their live authority as assertCurrent.

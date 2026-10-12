@@ -237,7 +237,10 @@ async function cronTranscriptExists(params: {
 }
 
 function projectCronOwnershipFields(entry: SessionEntry): Partial<SessionEntry> {
-  const projected: Partial<SessionEntry> = { ...entry };
+  // SQL omits absent fields; published snapshots can retain them as undefined.
+  const projected: Partial<SessionEntry> = Object.fromEntries(
+    Object.entries(entry).filter(([, value]) => value !== undefined),
+  );
   delete projected.label;
   delete projected.pinnedAt;
   delete projected.updatedAt;

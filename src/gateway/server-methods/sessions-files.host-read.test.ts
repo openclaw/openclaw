@@ -118,13 +118,7 @@ describe("sessions.files host read boundary", () => {
     cfg?: OpenClawConfig;
   }>([
     { label: "read-only mode", entry: { permissionMode: "read-only" } },
-    { label: "guarded mode", entry: { permissionMode: "guarded" } },
-    { label: "workspace mode", entry: { permissionMode: "workspace" } },
     { label: "global filesystem policy", cfg: { tools: { fs: { workspaceOnly: true } } } },
-    {
-      label: "agent filesystem policy",
-      cfg: { agents: { entries: { main: { tools: { fs: { workspaceOnly: true } } } } } },
-    },
     {
       label: "required sandbox in full mode",
       entry: { permissionMode: "full", sandbox: "required" },

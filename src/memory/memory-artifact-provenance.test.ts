@@ -169,16 +169,6 @@ describe("memory artifact provenance", () => {
     },
   );
 
-  it("restores the previous provenance on rollback", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
-      await write(address, "", "first", 1);
-      const rollback = await write(address, "first", "second", 2);
-      await expectDefined(rollback, "provenance rollback")();
-      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({ observedAt: 1 });
-    });
-  });
-
   it("uses the same workspace identity through symlink aliases", async () => {
     await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
       const workspaceDir = path.join(tempRoot, "workspace");

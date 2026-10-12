@@ -19,15 +19,25 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerQueuedCollectorLaunchSettlementTest({
   getRegistry,
+  mocks,
 }: {
   getRegistry: () => SubagentRegistryHarness;
+  mocks: Pick<ReturnType<typeof createSubagentRegistryMockState>, "entries">;
 }): void {
   it("keeps an in-flight queued collector pending until launch cleanup settles", async () => {
     const mod = getRegistry();
     const runId = "run-collector-launch-kill";
+    mocks.entries["agent:main:subagent:launch-kill"] = createSessionEntry({
+      sessionId: "session-launch-kill",
+      lifecycleRevision: "revision-launch-kill",
+    });
     await mod.addSubagentRunForTests({
       runId,
       childSessionKey: "agent:main:subagent:launch-kill",
+      childSessionIdentity: {
+        sessionId: "session-launch-kill",
+        lifecycleRevision: "revision-launch-kill",
+      },
       task: "cancel while gateway launch is unresolved",
       createdAt: Date.now(),
       collect: true,
@@ -87,6 +97,10 @@ export function registerRestartDrainCompletionSettlementTest({
     await mod.addSubagentRunForTests({
       runId,
       childSessionKey: "agent:main:subagent:terminal-restart-retry",
+      childSessionIdentity: {
+        sessionId: "session-terminal-restart-retry",
+        lifecycleRevision: "revision-terminal-restart-retry",
+      },
       task: "deliver terminal completion after restart",
       expectsCompletionMessage: true,
       createdAt: now - 10_000,

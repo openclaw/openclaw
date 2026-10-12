@@ -34,7 +34,6 @@ import {
 import {
   clearNativeHookRelayPermissionsForTests,
   permissionRequestContentFingerprintForTests,
-  permissionRequestToolInputKeyFingerprintForTests,
   pruneNativeHookRelayPermissionAllowAlways,
   removeNativeHookRelayPermissionState,
   detachNativeHookRelayApprovalState,
@@ -221,6 +220,7 @@ function registerNativeHookRelayInternal(
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(approvalHost ? { approvalHost } : {}),
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
+      ...(params.assertActiveAsync ? { assertActiveAsync: params.assertActiveAsync } : {}),
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
       // SAFETY: the literal supplies the complete mutable internal registration contract.
     } as ActiveNativeHookRelayRegistration;
@@ -519,6 +519,7 @@ export async function invokeNativeHookRelay(
   // Policy and approval callbacks may yield while their admitted run closes.
   // Never let a late allow cross back into the native runtime.
   if (event === "pre_tool_use" || event === "permission_request") {
+    await effectiveRegistration.assertActiveAsync?.();
     effectiveRegistration.assertActive?.();
   }
   if (
@@ -653,13 +654,6 @@ export const testing = {
   getNativeHookRelayRegistrationForTests(relayId: string): NativeHookRelayRegistration | undefined {
     return relays.get(relayId);
   },
-  getNativeHookRelayBridgeDirForTests(): string {
-    throw new Error("native hook relay bridge files were retired");
-  },
-  getNativeHookRelayBridgeRegistryPathForTests(relayId: string): string {
-    void relayId;
-    throw new Error("native hook relay bridge files were retired");
-  },
   async getNativeHookRelayBridgeRecordForTests(
     relayId: string,
   ): Promise<Record<string, unknown> | undefined> {
@@ -671,7 +665,6 @@ export const testing = {
   },
   formatPermissionApprovalDescriptionForTests,
   permissionRequestContentFingerprintForTests,
-  permissionRequestToolInputKeyFingerprintForTests,
   setNativeHookRelayPermissionApprovalRequesterForTests,
   setNativeHookRelayDeferredToolApprovalRequesterForTests,
 } as const;

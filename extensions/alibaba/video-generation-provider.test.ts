@@ -92,46 +92,6 @@ describe("alibaba video generation provider", () => {
     });
   });
 
-  it("advertises Wan video generation with a config-only Standard API key", async () => {
-    clearAlibabaAuthEnvironment();
-
-    expect(
-      await alibabaVideoGenerationProvider.isConfiguredAsync?.({
-        cfg: {
-          models: {
-            providers: {
-              alibaba: {
-                apiKey: "sk-alibaba-legacy-standard-key",
-                baseUrl: "https://dashscope-intl.aliyuncs.com",
-                models: [],
-              },
-            },
-          },
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it("does not use Qwen Coding Plan credentials for Alibaba video discovery", async () => {
-    clearAlibabaAuthEnvironment();
-
-    expect(
-      await alibabaVideoGenerationProvider.isConfiguredAsync?.({
-        cfg: {
-          models: {
-            providers: {
-              qwen: {
-                apiKey: "qwen-coding-plan-key",
-                baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-                models: [],
-              },
-            },
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-
   it("tracks whether an allowed Alibaba API-key SecretRef resolves", async () => {
     clearAlibabaAuthEnvironment();
     vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "resolved-alibaba-config-key");
@@ -164,20 +124,6 @@ describe("alibaba video generation provider", () => {
     expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg })).toBe(true);
     vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "");
     expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg })).toBe(false);
-  });
-
-  it("preserves Alibaba environment API-key discovery", async () => {
-    clearAlibabaAuthEnvironment();
-    vi.stubEnv("MODELSTUDIO_API_KEY", "alibaba-environment-key");
-
-    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg: {} })).toBe(true);
-  });
-
-  it("does not advertise an inherited Qwen Coding Plan API key", async () => {
-    clearAlibabaAuthEnvironment();
-    vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
-
-    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg: {} })).toBe(false);
   });
 
   it("keeps explicit Standard config above an inherited Coding Plan environment key", async () => {

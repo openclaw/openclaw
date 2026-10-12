@@ -11,6 +11,7 @@ import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-log
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
@@ -34,13 +35,14 @@ type PersonalNavigationHost = {
 export class SidebarPinnedSessions implements ReactiveController {
   private source?: ApplicationContext["sessions"];
   private scope: SessionConnectionScope | null = null;
-  private readonly requested = new Set<string>();
+  private readonly requested = new Map<string, "pending" | "settled">();
   private readonly rows = new Map<string, GatewaySessionRow>();
 
   constructor(
     private readonly host: ReactiveControllerHost & {
       readonly isConnected: boolean;
       readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
+      readonly sessionData: Pick<SessionDataController, "requestSessionDataUpdate">;
     },
   ) {
     host.addController(this);
@@ -51,46 +53,74 @@ export class SidebarPinnedSessions implements ReactiveController {
   }
 
   hostUpdate(): void {
-    if (
-      this.scope &&
-      (!this.source?.isConnectionScopeCurrent(this.scope) ||
-        this.source !== this.host.sessionDataContext?.sessions)
-    ) {
-      this.clear();
-    }
+    this.synchronize();
   }
 
-  get(key: string): GatewaySessionRow | undefined {
+  private synchronize() {
     const source = this.host.sessionDataContext?.sessions;
     if (source !== this.source || !this.scope || !source?.isConnectionScopeCurrent(this.scope)) {
       this.clear();
       this.source = source;
       this.scope = source?.captureConnectionScope() ?? null;
     }
+    return source;
+  }
+
+  seed(rows: SidebarSnapshotModel["pinnedSessions"]): void {
+    this.synchronize();
+    if (!this.scope) {
+      return;
+    }
+    for (const row of rows) {
+      if (!this.rows.has(row.key) && this.requested.get(row.key) !== "settled") {
+        this.rows.set(row.key, {
+          key: row.key,
+          kind: "direct",
+          updatedAt: null,
+          agentId: row.agentId,
+          label: row.label,
+          icon: row.icon,
+          color: row.color,
+          pinned: row.pinned,
+          archived: row.archived,
+          boardFace: row.boardFace,
+        });
+      }
+    }
+  }
+
+  get(key: string): GatewaySessionRow | undefined {
+    const source = this.synchronize();
     const scope = this.scope;
     if (!this.host.isConnected || !source || !scope) {
       return undefined;
     }
     if (!this.requested.has(key)) {
-      this.requested.add(key);
+      this.requested.set(key, "pending");
+      const current = () =>
+        this.source === source &&
+        this.host.sessionDataContext?.sessions === source &&
+        this.scope === scope &&
+        source.isConnectionScopeCurrent(scope);
+      const publish = (row?: GatewaySessionRow | null) => {
+        if (!current()) {
+          return;
+        }
+        this.requested.set(key, "settled");
+        if (row) {
+          this.rows.set(key, row);
+        } else if (!this.rows.delete(key)) {
+          return;
+        }
+        if (this.host.isConnected) {
+          this.host.sessionData.requestSessionDataUpdate();
+        }
+      };
       void source.describe({ key }).then(
-        (result) => {
-          if (
-            result.session &&
-            this.source === source &&
-            this.host.sessionDataContext?.sessions === source &&
-            this.scope === scope &&
-            source.isConnectionScopeCurrent(scope)
-          ) {
-            // A title/icon may be stale until the row loads or the connection changes.
-            this.rows.set(key, result.session);
-            if (this.host.isConnected) {
-              this.host.requestUpdate();
-            }
-          }
-        },
+        (result) => publish(result.session),
         () => {
           /* Missing or failed pins stay saved, invisible, and silent. */
+          publish();
         },
       );
     }
@@ -106,7 +136,7 @@ export class SidebarPinnedSessions implements ReactiveController {
 }
 
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
-  const pins = host.sidebarEntries.flatMap((value) => {
+  const pins = (host.sidebarSnapshot ? [] : host.sidebarEntries).flatMap((value) => {
     const entry = parseSidebarEntry(value);
     if (entry?.type !== "session") {
       return [];

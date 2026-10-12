@@ -62,6 +62,10 @@ OpenClaw classifies loaded plugins by their registration behavior:
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
+Managed agent-database schema extension belongs to private worker backends, not
+the typed public Plugin SDK. Bundled backend authors should follow the
+[private worker schema-extension contract](/reference/database-schemas/worker-access#private-worker-schema-extensions).
+
 ## Related
 
 - [Plugin SDK overview](/plugins/sdk-overview) - registration API and subpath reference

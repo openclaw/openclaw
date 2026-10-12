@@ -231,7 +231,7 @@ async function finalizeChatSendAgentReplyPayloads(
   const hasSourceReplyTranscriptMirror = agentRunReplyPayloads.some(
     isSourceReplyTranscriptMirrorPayload,
   );
-  const mediaScope = captureMediaScope();
+  const mediaScope = await captureMediaScope();
   const { storePath: latestStorePath, entry: latestEntry } =
     await loadGatewaySessionEntryReadOnlyInWorker({
       cfg: context.getRuntimeConfig(),

@@ -2,7 +2,6 @@ import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
@@ -23,7 +22,11 @@ import {
   type BrokerRequest,
   type BrokerResponse,
 } from "./protocol.js";
-import type { BrokerResourceRequest, BrokerResourceResponse } from "./resource-protocol.js";
+import type {
+  BrokerBootstrap,
+  BrokerResourceRequest,
+  BrokerResourceResponse,
+} from "./resource-protocol.js";
 import { createBrokerNativeResourceServer } from "./resource-server.js";
 import { createWorkerSender } from "./worker-sender.js";
 
@@ -488,7 +491,8 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
   }
   if (startup === "waiting") {
     startup = "initializing";
-    initialization = initialize(raw);
+    // SAFETY: The version-matched spawning host owns this private bootstrap channel.
+    initialization = initialize(raw as BrokerBootstrap);
     void initialization.catch(shutdown);
     return;
   }
@@ -597,27 +601,12 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
     }
   }
 });
-async function initialize(raw: unknown): Promise<void> {
-  if (!isRecord(raw) || raw.type !== "bootstrap") {
-    throw new Error("Invalid spawn broker bootstrap");
-  }
+async function initialize(bootstrap: BrokerBootstrap): Promise<void> {
   if (stopping || !process.connected) {
     return;
   }
-  if (raw.nativeResource !== undefined) {
-    const authority = raw.nativeResource;
-    if (
-      !isRecord(authority) ||
-      typeof authority.endpoint !== "string" ||
-      !authority.endpoint ||
-      typeof authority.secret !== "string" ||
-      !authority.secret ||
-      typeof authority.generation !== "number" ||
-      !Number.isSafeInteger(authority.generation) ||
-      authority.generation < 0
-    ) {
-      throw new Error("Invalid native resource bootstrap authority");
-    }
+  if (bootstrap.nativeResource) {
+    const authority = bootstrap.nativeResource;
     resources = await createBrokerNativeResourceServer({
       endpoint: authority.endpoint,
       secret: authority.secret,
