@@ -33,7 +33,7 @@ Gateway status dots follow each open Dashboard’s live connection, including sa
 
 Gateway health checks run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, or **checking…** before the first result. After a failure they show **unreachable** with the last successful contact time. Closing the menu cancels its checks and disconnects saved Gateways used for those checks with no open Web or Native windows. The primary connection stays connected, and cached facts remain available until the app quits.
 
-The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
+The Devices and Automations summaries refresh when the menu opens. While it stays open, Automations follows Gateway job and configuration events, resyncs after reconnects or missed events, and retries failed reads after 30 seconds. Devices continues polling while the menu is open. Closing the menu stops these subscriptions and refreshes. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
 
 The Automations summary shows the full enabled-job count and previews up to eight jobs, ordered by next run.
 

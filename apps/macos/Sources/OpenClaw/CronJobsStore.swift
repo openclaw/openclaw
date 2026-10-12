@@ -28,10 +28,8 @@ final class CronJobsStore {
     private let logger = Logger(subsystem: "ai.openclaw", category: "cron.ui")
     private var refreshTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
-    private var pollTask: Task<Void, Never>?
     private var jobsGeneration: UInt64 = 0
     private let gateway: GatewayConnection
-    private let interval: TimeInterval = 30
     private let isPreview: Bool
 
     init(gateway: GatewayConnection = .shared, isPreview: Bool = ProcessInfo.processInfo.isPreview) {
@@ -47,16 +45,13 @@ final class CronJobsStore {
                 self.handle(delivery: delivery)
             }
         }
-        SimpleTaskSupport.startDetachedLoop(task: &self.pollTask, interval: self.interval) { [weak self] in
-            await self?.refreshJobs()
-        }
+        self.scheduleRefresh(delayMs: 0)
     }
 
     func stop() {
         self.jobsGeneration &+= 1
         SimpleTaskSupport.stop(task: &self.refreshTask)
         SimpleTaskSupport.stop(task: &self.eventTask)
-        SimpleTaskSupport.stop(task: &self.pollTask)
     }
 
     func refreshJobs() async {
@@ -91,6 +86,9 @@ final class CronJobsStore {
                   (self.gateway.selectedEndpointRevision == sourceRevision)
             else { return }
             self.logger.error("cron.list failed \(error.localizedDescription, privacy: .public)")
+            if self.eventTask != nil {
+                self.scheduleRefresh(delayMs: 30_000)
+            }
         }
     }
 
@@ -109,7 +107,7 @@ final class CronJobsStore {
             self.scheduleRefresh(delayMs: 0)
         }
         switch push {
-        case let .event(event) where event.event == "cron":
+        case let .event(event) where event.event == "cron" || event.event == "config.changed":
             self.scheduleRefresh()
         case .seqGap:
             self.scheduleRefresh()
