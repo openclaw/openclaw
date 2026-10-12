@@ -113,7 +113,7 @@ export function commitSessionEntryPatch(
     );
     if (!predicate.matches) {
       // A false predicate precedes CAS and the throwing guard, including for a null patch.
-      result = { kind: "session-entry-patch", entry: null };
+      result = { kind: "session-entry-patch", entry: null, applied: false };
     } else {
       const publishRetention =
         "operation" in input || input.next
@@ -127,7 +127,7 @@ export function commitSessionEntryPatch(
           const validation = readSessionSourceValidation(database, input.sources);
           const { refusedSource } = validation;
           if (refusedSource) {
-            result = { kind: "session-entry-patch", entry: null, refusedSource };
+            result = { kind: "session-entry-patch", entry: null, applied: false, refusedSource };
             transferSessionEntryWorkerCandidate(database, admit, result);
             throw new Error("Session source refusal was not rejected");
           }
@@ -174,6 +174,7 @@ export function commitSessionEntryPatch(
           result = {
             kind: "session-entry-patch",
             entry: null,
+            applied: false,
           };
           return transferSessionEntryWorkerCandidate(database, admit, result);
         }
@@ -216,6 +217,7 @@ export function commitSessionEntryPatch(
       result = {
         kind: "session-entry-patch",
         entry: mutation.entry,
+        applied: mutation.applied,
         publication,
         transcriptPredicate:
           mutation.entry.sessionId === predicate.transcriptPredicate?.sessionId

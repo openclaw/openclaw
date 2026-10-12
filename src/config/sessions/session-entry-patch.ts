@@ -174,22 +174,24 @@ export async function patchSessionEntryInWorker(params: {
     },
     async onCommitted(committed, published, identity, _context, fileIdentity) {
       try {
-        if (committed.publication && committed.entry) {
+        if (committed.applied && committed.entry) {
           const entry = structuredClone(committed.entry);
           if (committed.transcriptPredicate) {
             params.onCommitted?.(entry, committed.transcriptPredicate);
           } else {
             params.onCommitted?.(entry);
           }
-          params.onCommittedSource?.(
-            {
-              agentId: params.database.agentId,
-              path: params.database.path,
-              databaseIdentity: fileIdentity.physicalIdentity,
-              databaseBirthtime: fileIdentity.birthtime,
-            },
-            structuredClone(committed.entry),
-          );
+          if (committed.publication) {
+            params.onCommittedSource?.(
+              {
+                agentId: params.database.agentId,
+                path: params.database.path,
+                databaseIdentity: fileIdentity.physicalIdentity,
+                databaseBirthtime: fileIdentity.birthtime,
+              },
+              structuredClone(committed.entry),
+            );
+          }
         }
       } finally {
         if (published) {
