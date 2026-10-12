@@ -21,22 +21,6 @@ const excluded =
   /(?:^|\/)(?:__tests__|__fixtures__|test|tests|test-utils|test-helpers|test-support|test-fixtures|test-harness|fixtures|e2e)(?:\/|$)|(?:^|[/.-])(?:test|spec|e2e|test-support|test-helpers|test-fixtures|test-harness|test-runtime)(?:[.-])/;
 const reviewed = new Map([
   [
-    "src/gateway/mention-inbox-store.ts",
-    {
-      priority: 3,
-      evidence:
-        "Worker-backed bundled callers; deprecated 2026.9.8 synchronous Mention Inbox SDK kernel until next SDK major",
-    },
-  ],
-  [
-    "src/gateway/mention-inbox.native.ts",
-    {
-      priority: 3,
-      evidence:
-        "Deprecated 2026.9.8 synchronous Mention Inbox SDK transaction; removal at next SDK major",
-    },
-  ],
-  [
     "src/state/user-profiles.ts",
     { priority: 1, evidence: "Profile creation; write-coordination cutover owned separately" },
   ],
@@ -145,8 +129,13 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/gateway/operator-approval-store.ts",
-    { priority: 7, evidence: "Pending-list events, resolution, expiry and pruning" },
+    "src/gateway/operator-approval-store.boot.ts",
+    {
+      tier: "T2",
+      priority: 99,
+      evidence:
+        "Only server-aux-handlers.ts calls orphan closure and terminal pruning during Gateway boot admission; ordinary approval operations use the worker.",
+    },
   ],
   [
     "src/gateway/worker-environments/store.ts",
@@ -476,16 +465,13 @@ const reviewedOperations = new Map([
           "createPlacementTurnClaimOps.cancelWorkspaceResultAndReleaseTurn",
         ],
         evidence:
-          "placement-store.ts:102 selects only native restart/wait/validation; claim/release/cancel mutations run in placement-turn-claims.worker.ts:102,117,191,200,287,355,360",
+          "Claim/release/cancel mutations run only through placement-turn-claims.worker.ts; host wait and validation consume async reads and published claim facts.",
       },
       {
-        tier: "T1",
-        operations: [
-          "createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart",
-          "clearLocalTurnClaimsInDatabase",
-        ],
+        tier: "W",
+        operations: ["clearLocalTurnClaimsInDatabase"],
         evidence:
-          "The released placement-store.ts clearLocalTurnClaimsAfterRestart facade retains synchronous native access until the next Plugin SDK major; bundled startup awaits the placement-lifecycle.worker.ts clearLocalTurnClaims operation. The shared kernel remains native compatibility debt.",
+          "Only placement-lifecycle.worker.ts clears local claims after restart; the released synchronous SDK method now rejects with async migration guidance.",
       },
     ],
   ],
@@ -520,22 +506,25 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["recordStagedWorkerWorkspaceResult"],
         evidence:
-          "Only placement-turn-claims.worker.ts:313 publishes staged results; native compatibility readers and pending-result transition guards stay T1",
+          "Only placement-turn-claims.worker.ts publishes staged results; host callers use async readers and published result facts.",
       },
       {
         tier: "W",
         operations: [
           "hasCurrentWorkspaceResultClaim",
           "clearWorkerWorkspacePendingResult",
+          "readWorkerWorkspaceReconciliationFacts",
+          "hasWorkerWorkspacePendingResult",
           "hasAcceptedWorkerWorkspacePendingResult",
           "insertWorkerWorkspacePendingResult",
+          "listPendingWorkerWorkspaceResultsInDatabase",
           "createPlacementWorkspaceResultOps.acceptWorkspaceResult",
           "assertPendingClaim",
           "createPlacementWorkspaceResultOps.handoffWorkspaceResultRecovery",
           "createPlacementWorkspaceResultOps.abandonWorkspaceResult",
         ],
         evidence:
-          "Mutation factory/helpers run only through placement-turn-claims.worker.ts:102,117,125,132,140,147,157,191,200,278,299,313,326,346; claim read also in placement-read-projection.ts:101 via state-read.worker.ts:666",
+          "Mutation helpers run through placement turn/lifecycle workers; reconciliation and pending-result reads run in the state read worker. GitHub deferral selection also runs only in state/github-publication.worker.ts. Host exports are async readers or pure row/claim helpers.",
       },
     ],
   ],
@@ -573,11 +562,13 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
+          "find",
+          "readWorkerPlacementsForReconcileInDatabase",
           "readWorkerPlacementChangeSnapshotInDatabase",
           "readWorkerPlacementsInDatabase",
         ],
         evidence:
-          "Snapshots use openclaw-state-read.worker.ts; placement-lifecycle.worker.ts serves point lookups on the existing placement actor. Native reconciliation guards remain T1.",
+          "State read and placement workers own all row queries; GitHub deferral selection runs only in state/github-publication.worker.ts. Host consumers use pure row codecs or async/receipt-backed readers.",
       },
       {
         tier: "W",
@@ -589,7 +580,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["ensureLocal"],
         evidence:
-          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods that do not claim.",
+          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers; placement-store.ts uses the async worker facade.",
       },
     ],
   ],
@@ -635,43 +626,6 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "Only state/github-publication.worker.ts repositoryMutation report/retire calls these kernels. Native stale-request and reporting adapters retain their separate SQL and T1 classification.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/operator-approval-store.kernel.ts",
-    [
-      {
-        tier: "W",
-        operations: ["listTerminalOperatorApprovalsInDatabase"],
-        evidence:
-          "Only openclaw-state-read.worker.ts:489 serves approval history; the native compatibility operation map has no history operation",
-      },
-      {
-        tier: "W",
-        operations: ["insertOperatorApprovalInDatabase", "listPendingOperatorApprovalsInDatabase"],
-        evidence:
-          "exec-approval-manager.ts:125 insert and operator-approval-session-events.ts:194 pending supply no native guard; operator-approval-store.ts:138,173 selects worker dispatch to operator-approval-store.operations.ts:57,65 via state/openclaw-state-worker-registry.ts:119. Other approval operations retain native compatibility.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/operator-approval-store.transitions.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["closeOrphanedOperatorApprovals", "pruneTerminalOperatorApprovals"],
-        evidence:
-          "Boot calls only in server-aux-handlers.ts:105,109; remaining transitions retain native SDK compatibility",
-      },
-      {
-        tier: "W",
-        operations: [
-          "expireDueOperatorApprovalsInDatabase",
-          "consumeOperatorApprovalAllowOnceInDatabase",
-        ],
-        evidence:
-          "operator-approval-session-events.ts:178 expiry and exec-approval-manager.ts:644 consume supply no native guard; operator-approval-store.ts:173 -> operator-approval-store.operations.ts:85,89 worker dispatch. Expiry also runs from worker-only pending kernel at operator-approval-store.kernel.ts:233.",
       },
     ],
   ],
@@ -1144,34 +1098,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/gateway/operator-approval-standing-grants.ts",
-    [
-      {
-        tier: "W",
-        operations: ["lookupCronStandingGrantInDatabase", "consumeCronStandingGrantInDatabase"],
-        evidence:
-          "Only openclaw-state-read.worker.ts validates and operator-approval-store.operations.ts consumes through the existing workers; bash-tools.exec-cron-grant.ts awaits operator-approval-store.ts while retaining the Gateway authority interval. No native lookup/consume facade remains.",
-      },
-      {
-        tier: "W",
-        operations: ["listCronStandingGrantsInDatabase"],
-        evidence:
-          "Only state/openclaw-state-read.worker.ts:495; server-methods/exec-approval.ts:462 -> operator-approval-store.ts:273 uses readApprovalStore -> executeExistingOpenClawStateRead at :248 even when a guard exists.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/operator-approval-store.rows.ts",
-    [
-      {
-        tier: "W",
-        operations: ["hasApprovalLocatorNamespaceConflict"],
-        evidence:
-          "Only operator-approval-store.kernel.ts:98 insert calls it. Sole facade caller exec-approval-manager.ts:125 passes assertCurrent but no native guard, so operator-approval-store.ts:173 dispatches the registered worker operation.",
-      },
-    ],
-  ],
-  [
     "src/gateway/worker-environments/placement-drain.ts",
     [
       {
@@ -1183,19 +1109,24 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/gateway/worker-environments/placement-workspace-reservation.kernel.ts",
+    "src/gateway/worker-environments/placement-retirement.ts",
     [
       {
-        tier: "T1",
-        operations: ["readWorkspaceReservationAuthority"],
+        tier: "W",
+        operations: ["retireWorkerSessionPlacement"],
         evidence:
-          "Native workspace reservation preparation and final publication guard share one current query. Native/SDK and foreign writers prevent cached authority; retirement requires complete revocation publications and foreign-writer custody at the next Plugin SDK major.",
+          "Only placement-lifecycle.worker.ts retires placement rows; host placement APIs dispatch through the lifecycle worker.",
       },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-workspace-reservation.kernel.ts",
+    [
       {
         tier: "W",
         operations: ["assertSessionWorkspaceUnreserved"],
         evidence:
-          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods.",
+          "Only placement-lifecycle.worker.ts and worker-owned claim kernels check the reservation before the effect; host preparation uses worker reads.",
       },
     ],
   ],
@@ -2733,7 +2664,7 @@ function render(rows) {
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
-    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks or initialization rollback require native transactions. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads and native approval SDK compatibility retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
+    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks or initialization rollback require native transactions. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",
     "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `rg` (respecting ignore rules). It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
     "",

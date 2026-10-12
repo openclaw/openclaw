@@ -37,6 +37,27 @@ describe("worker session placement store", () => {
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
 
+  it("directs retired synchronous inventory and mutation APIs to their async replacements", () => {
+    expect(() => store.list()).toThrow("Await listAsync");
+    expect(() => store.listForReconcile()).toThrow("Await listForReconcileAsync");
+    expect(() => store.listPendingWorkspaceResults()).toThrow(
+      "Await listPendingWorkspaceResultsAsync",
+    );
+    expect(() => store.getWorkspaceResultReconcilingSessionIds([])).toThrow(
+      "Await getWorkspaceResultReconcilingSessionIdsAsync",
+    );
+    expect(() => store.clearLocalTurnClaimsAfterRestart()).toThrow(
+      "Await clearLocalTurnClaimsAfterRestartAsync",
+    );
+    expect(() =>
+      store.retireSessionPlacement({
+        sessionId: SESSION.sessionId,
+        expectedState: "local",
+        expectedGeneration: 0,
+      }),
+    ).toThrow("Await retireSessionPlacementAsync");
+  });
+
   function advanceToActive(
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
@@ -152,11 +173,18 @@ describe("worker session placement store", () => {
     await expect(store.releaseTurn(firstClaim)).rejects.toThrow(
       "turn claim changed before release",
     );
-    expect(store.validateTurnClaim(secondClaim)).toBe(true);
-    expect(store.get(SESSION.sessionId)?.turnClaim).toMatchObject({
-      claimId: secondClaim.claimId,
-      runId: secondClaim.runId,
-    });
+    const queries = observeHostDataSql();
+    try {
+      expect(store.validateTurnClaim(firstClaim)).toBe(false);
+      expect(store.validateTurnClaim(secondClaim)).toBe(true);
+      expect(store.get(SESSION.sessionId)?.turnClaim).toMatchObject({
+        claimId: secondClaim.claimId,
+        runId: secondClaim.runId,
+      });
+      expect(queries.queries).toEqual([]);
+    } finally {
+      queries.restore();
+    }
   });
 
   it("admits exactly the active placement owner and fences stale worker epochs", async () => {
@@ -289,6 +317,7 @@ describe("worker session placement store", () => {
       queries.restore();
     }
     expect(store.get(localIdentity.sessionId)?.turnClaim).toBeNull();
+    await store.getAsync(workerClaim.sessionId);
     expect(store.validateTurnClaim(workerClaim)).toBe(true);
     expect(
       await store.adoptActive({
@@ -298,8 +327,10 @@ describe("worker session placement store", () => {
         expectedGeneration: active.generation,
       }),
     ).toMatchObject({ state: "active", turnClaim: { owner: "worker" } });
-    expect(store.listForReconcile().map((record) => record.sessionId)).toEqual([SESSION.sessionId]);
-    expect(store.list().map((record) => record.sessionId)).toEqual([
+    expect((await store.listForReconcileAsync()).map((record) => record.sessionId)).toEqual([
+      SESSION.sessionId,
+    ]);
+    expect((await store.listAsync()).map((record) => record.sessionId)).toEqual([
       localIdentity.sessionId,
       SESSION.sessionId,
     ]);
@@ -557,13 +588,10 @@ describe("worker session placement store", () => {
     });
     await store.markWorkspaceResultPending(claim);
 
-    expect(store.listPendingWorkspaceResults(SESSION.sessionId)).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync(SESSION.sessionId)).toMatchObject([
       { sessionId: SESSION.sessionId, claimId: claim.claimId, workspaceAcceptedAtMs: null },
     ]);
-    expect(store.listPendingWorkspaceResults("other-session")).toEqual([]);
-    expect(store.getWorkspaceResultReconcilingSessionIds([SESSION.sessionId])).toEqual(
-      new Set([SESSION.sessionId]),
-    );
+    expect(await store.listPendingWorkspaceResultsAsync("other-session")).toEqual([]);
     expect(await store.getWorkspaceResultReconcilingSessionIdsAsync([SESSION.sessionId])).toEqual(
       new Set([SESSION.sessionId]),
     );
@@ -641,8 +669,10 @@ describe("worker session placement store", () => {
     expect(store.get(SESSION.sessionId)).not.toHaveProperty("workspaceResultConflict");
     await store.acceptWorkspaceResult(laterClaim);
     await store.completeWorkspaceResultAndReleaseTurn(laterClaim);
-    expect(store.listPendingWorkspaceResults(SESSION.sessionId)).toEqual([]);
-    expect(store.getWorkspaceResultReconcilingSessionIds([SESSION.sessionId])).toEqual(new Set());
+    expect(await store.listPendingWorkspaceResultsAsync(SESSION.sessionId)).toEqual([]);
+    expect(await store.getWorkspaceResultReconcilingSessionIdsAsync([SESSION.sessionId])).toEqual(
+      new Set(),
+    );
     expect(await store.getWorkspaceResultReconcilingSessionIdsAsync([SESSION.sessionId])).toEqual(
       new Set(),
     );
@@ -834,14 +864,17 @@ describe("worker session placement store", () => {
     await store.fail({ sessionId: "failed", recoveryError: "dispatch failed" });
 
     expect(
-      store.listForReconcile(SESSION.sessionKey).map(({ sessionId, state }) => [sessionId, state]),
+      (await store.listForReconcileAsync(SESSION.sessionKey)).map(({ sessionId, state }) => [
+        sessionId,
+        state,
+      ]),
     ).toEqual([
       ["cross-agent", "active"],
       ["requested-a", "requested"],
       ["requested-z", "requested"],
       ["failed", "failed"],
     ]);
-    expect(store.listForReconcile().map((record) => record.sessionId)).toEqual([
+    expect((await store.listForReconcileAsync()).map((record) => record.sessionId)).toEqual([
       "unrelated-case",
       "unrelated-child",
       "cross-agent",
@@ -850,7 +883,7 @@ describe("worker session placement store", () => {
       "failed",
     ]);
     for (const sessionKey of ["agent:main:absent", "", ` ${SESSION.sessionKey} `]) {
-      expect(store.listForReconcile(sessionKey)).toEqual([]);
+      expect(await store.listForReconcileAsync(sessionKey)).toEqual([]);
     }
   });
 });

@@ -294,7 +294,7 @@ describe("worker placement idle suspension", () => {
         });
         if (kind === "pending-result") {
           await placements.markWorkspaceResultPending(claim);
-          placements.clearLocalTurnClaimsAfterRestart();
+          await placements.clearLocalTurnClaimsAfterRestartAsync();
           expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
           expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }

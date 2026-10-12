@@ -874,11 +874,11 @@ it("shares claim revocation across facades while restart clearing leaves worker 
   });
   const inventory = await store.prepareMaintenancePlacements();
   try {
-    expect(facade.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    expect(await facade.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
     expect(localAuthority.isCurrent()).toBe(false);
     expect(workerAuthority.isCurrent()).toBe(true);
     inventory.assertCurrent();
-    facade.retireSessionPlacement({
+    await facade.retireSessionPlacementAsync({
       sessionId: local.sessionId,
       expectedState: "local",
       expectedGeneration: local.placementGeneration,

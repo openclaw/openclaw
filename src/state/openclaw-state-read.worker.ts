@@ -30,12 +30,12 @@ import {
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.js";
 import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.js";
-import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
-} from "../gateway/operator-approval-standing-grants.js";
-import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
+} from "../gateway/operator-approval-standing-grants.worker.js";
+import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.worker.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {

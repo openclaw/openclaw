@@ -49,7 +49,7 @@ import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type {
   PlacementGrantReadInput,
   PlacementGrantRows,
-} from "../gateway/operator-approval-placement-grants.read.js";
+} from "../gateway/operator-approval-placement-grants.read.worker.js";
 import type {
   CronStandingGrantListing,
   CronStandingGrantLookupInput,

@@ -72,6 +72,7 @@ function closeOwner(owner: PlacementAuthorityOwner): void {
     notifyRevoked(claim);
   }
   owner.claims.clear();
+  owner.placements.clear();
   owner.observations.clear();
   owner.placementReaders.clear();
   owner.projections.clear();
@@ -98,6 +99,7 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
     identity,
     active: true,
     claims: new Map(),
+    placements: new Map(),
     observations: new Map(),
     placementReaders: new Map(),
     pending: new Set(),
@@ -153,6 +155,18 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   owner.pending.delete(change);
   if (!owner.active) {
     return;
+  }
+  const newerPlacement = (owner.placements.get(change.sessionId)?.sequence ?? -1) > sequence;
+  if (!newerPlacement && change.kind === "claim") {
+    if (change.indeterminate) {
+      owner.placements.set(change.sessionId, { placement: undefined, sequence });
+    } else if (change.retired) {
+      owner.placements.set(change.sessionId, { placement: undefined, sequence });
+    } else if (change.workspacePlacement) {
+      owner.placements.set(change.sessionId, { placement: change.workspacePlacement, sequence });
+    }
+  } else if (!newerPlacement && change.kind === "workspace-result" && change.facts) {
+    owner.placements.set(change.sessionId, { placement: change.facts.placement, sequence });
   }
   applyPlacementReadPublication(owner, change, sequence);
   if (affectsPlacementObservation(change)) {
@@ -438,6 +452,54 @@ export function stagePlacementRetirementWorkerPublication(
     localOnly: previousState === "local",
     retired: true,
   });
+}
+
+/** A read can fill a cold replica but never overwrite a newer committed postimage. */
+export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
+  const owner = ownerFor(identity);
+  const sequence = owner.sequence;
+  return (records: Iterable<WorkerSessionPlacementRecord>, requestedIds?: readonly string[]) => {
+    if (!owner.active) {
+      return;
+    }
+    const byId = new Map(Array.from(records, (record) => [record.sessionId, record]));
+    for (const sessionId of requestedIds ?? byId.keys()) {
+      if ((owner.placements.get(sessionId)?.sequence ?? -1) <= sequence) {
+        owner.placements.set(sessionId, {
+          placement: freezeJsonSnapshot(byId.get(sessionId)),
+          sequence,
+        });
+      }
+    }
+  };
+}
+
+/** Synchronous SDK reads consume committed writer receipts; cold reads use the async API. */
+export function readPlacementReplica(identity: DatabasePathIdentity, sessionId: string) {
+  const owner = owners.get(identity.key);
+  if (
+    !owner?.active ||
+    !owner.placements.has(sessionId) ||
+    hasPendingPublication(owner, sessionId)
+  ) {
+    return undefined;
+  }
+  return { placement: owner.placements.get(sessionId)!.placement };
+}
+
+/** Claim effects consult the single writer's postimage without reopening SQLite. */
+export function isPublishedPlacementTurnClaimCurrent(
+  identity: DatabasePathIdentity,
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  const owner = owners.get(identity.key);
+  const placement = owner?.placements.get(claim.sessionId)?.placement;
+  return Boolean(
+    owner?.active &&
+    placement &&
+    isCurrentPlacementTurnClaim(placement, claim) &&
+    [...owner.pending].every((change) => allows(change, claim)),
+  );
 }
 
 /** Current result custody is published by its writer; discovery snapshots grant no authority. */

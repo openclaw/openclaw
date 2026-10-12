@@ -60,7 +60,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-10-02",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Await getManyAsync, retireSessionPlacementAsync, listPendingWorkspaceResultsAsync, getWorkspaceResultReconcilingSessionIdsAsync, getAdmittedDeviceSessionCountsAsync, and deferOrphanedRequestsAsync on the Gateway context. For placement standing-grant preparation, await resolveBindingAsync, retainAsync, and validateAsync; keep consume synchronous at final transport authorization. Released synchronous methods retain their signatures, return values, and completion timing until the next Plugin SDK major and explicit breaking-release approval.",
+      "Await getManyAsync, retireSessionPlacementAsync, listPendingWorkspaceResultsAsync, getWorkspaceResultReconcilingSessionIdsAsync, getAdmittedDeviceSessionCountsAsync, and deferOrphanedRequestsAsync on the Gateway context. For placement standing-grant preparation, await resolveBindingAsync, retainAsync, and validateAsync. Placement get/getMany read committed in-process receipts only; cold reads require getAsync/getManyAsync. Synchronous placement inventories and writes retain their deprecated signatures but fail with migration guidance; use listAsync, listForReconcileAsync, clearLocalTurnClaimsAfterRestartAsync, retireSessionPlacementAsync, and the result-reader replacements. Other listed surfaces follow their owner-specific migration contracts.",
     docsPath:
       "/plugins/sdk-migration/compatibility-policy#gateway-placement-and-publication-readers",
     surfaces: [

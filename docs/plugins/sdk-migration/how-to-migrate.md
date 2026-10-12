@@ -186,10 +186,13 @@ There is no schema, stored-byte, retention, or update migration.
 Use host-bound `api.runtime.gateway.request` for approval requests, reads,
 history, grant operations, resolution, and waiting. Reads that expire rows are
 worker operations too. The host's method classification does not enlarge the
-internal principal's allowed methods. A released opaque approval commit guard
-selects its native compatibility adapter before execution, preserving its
-transaction-local visibility; worker failure never selects that adapter.
-The adapter remains deprecated until the next Plugin SDK major.
+internal principal's allowed methods. Released opaque approval commit guards
+retain their synchronous callback signature and run at the worker precommit
+boundary. A thrown callback rejects and rolls back the write. It can inspect
+current host authority, but cannot query tentative worker rows through the host
+connection or depend on the former host transaction view. The native
+SQLite adapter is removed; callbacks remain deprecated until the next Plugin SDK
+major.
 
 The shared warning budget is per plugin and capability family, on legacy use.
 Current effect-time authority checks remain synchronous. Schemas, stored bytes,
@@ -343,15 +346,18 @@ depending on refreshed connected views. Recording also awaits the collaboration
 writer's session involvement update before saving Inbox items. Both writes retain
 their existing owners and settle before Gateway worker shutdown.
 
-The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
-remain synchronous third-party adapters until the next Plugin SDK major and
-explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
-deprecation warning once per plugin and capability family per process; calls outside a
-plugin invocation warn once per method. Existing return values and completion
-timing stay intact, including recording before an immediate synchronous list.
-Notifications publish after the enclosing transaction commits and are discarded
-on rollback. This migration changes no schema, retained data, retention, or
-update behavior.
+The shipped synchronous signatures remain deprecated until the next Plugin SDK
+major, but their native persistence adapters have been retired. `list` and
+`dismiss` return `UNAVAILABLE` with the awaited replacement in the message;
+`recordCommittedInput` and `invalidate` throw migration-directed errors. Each
+emits a `DEP_SESSION_PERSISTENCE` warning once per plugin and capability family
+per process; unscoped calls share one SDK-level family warning. Rejected calls do
+not schedule work in the background.
+
+Move recording outside any synchronous SQLite transaction and await it after
+the source message commits. The awaited Inbox writer owns its own transaction
+and publishes notifications only after that write commits. This migration
+changes no schema, retained data, retention, or update behavior.
 
 ## Await personal model-account operations
 
@@ -400,34 +406,55 @@ Command names, filtering, stored selections, and update behavior are unchanged.
 
 ## Await placement preparation
 
-Gateway contexts provide `workerSessionPlacementService.getAsync`, `getManyAsync`,
-`listAsync`, `listForReconcileAsync`, and `retireSessionPlacementAsync`.
-Await their results before using placement facts,
-starting dependent work, or releasing request resources. Their synchronous
-counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
-compatibility methods until the next Plugin SDK major.
+Await placement reads and mutations before using their result, starting dependent
+work, or releasing request resources. The Gateway's native synchronous adapters
+are retired; the deprecated signatures remain until the next Plugin SDK major.
+
+| Deprecated `workerSessionPlacementService` method | Awaited replacement                            |
+| ------------------------------------------------- | ---------------------------------------------- |
+| `get`                                             | `getAsync`                                     |
+| `getMany`                                         | `getManyAsync`                                 |
+| `list`                                            | `listAsync`                                    |
+| `listForReconcile`                                | `listForReconcileAsync`                        |
+| `listPendingWorkspaceResults`                     | `listPendingWorkspaceResultsAsync`             |
+| `getWorkspaceResultReconcilingSessionIds`         | `getWorkspaceResultReconcilingSessionIdsAsync` |
+| `retireSessionPlacement`                          | `retireSessionPlacementAsync`                  |
+| `clearLocalTurnClaimsAfterRestart`                | `clearLocalTurnClaimsAfterRestartAsync`        |
+
+`get` and `getMany` only consume committed in-process receipts. Cold or invalidated
+entries throw with migration guidance; an owner-published absence remains a valid
+result. The synchronous inventory and mutation methods always throw and never
+schedule work. Calls emit a warning once per plugin and capability family.
 
 Placement activation callbacks receive the committed active placement directly.
-Use that result for maintenance scheduling instead of reading it again. Native
-readers remain available for final synchronous execution or disclosure guards;
-prepared placement facts do not replace those checks. Legacy placement reads
-warn once per plugin and capability family.
+Use that result for maintenance scheduling instead of reading it again. For final
+execution or disclosure guards, prepare authority with the placement owner, then
+check its live in-process facts immediately before the effect.
 
-Startup also awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
-state-directory lock, before admitting turns. The placement worker clears stale
-local claims and publishes the returned records after success. An uncertain result
-fails startup; the next boot can safely repeat the cleanup. Legacy synchronous retirement and
-restart cleanup warn once per plugin and capability family. Bundled reset and
-deletion paths await retirement; released custom Gateway contexts retain a
-separately selected synchronous adapter through the compatibility window.
+Startup awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
+state-directory lock, before admitting turns. The worker clears stale local claims
+and publishes returned records after success. An uncertain result fails startup;
+the next boot can safely repeat cleanup. Bundled reset and deletion paths await
+`retireSessionPlacementAsync`.
 
-Use `placementStandingGrants.resolveBindingAsync`, `validateAsync`, and
-`retainAsync` for node-grant preparation. `resolveAsync` combines binding and
-retained-parent validation in one request. These additions are optional on the
-released interface so existing custom service implementations remain compatible;
-the native Gateway supplies them. Keep `consume` at the final synchronous
-transport authorization boundary: earlier prepared facts do not replace current
-placement, pairing, or parent-approval authority.
+The built-in `placementStandingGrants` service has these replacements:
+
+| Deprecated method | Awaited replacement   |
+| ----------------- | --------------------- |
+| `resolveBinding`  | `resolveBindingAsync` |
+| `retain`          | `retainAsync`         |
+| `validate`        | `validateAsync`       |
+
+The synchronous methods throw migration-directed errors. `resolveAsync` combines
+binding and retained-parent validation in one request. Await `consumeAsync` just
+before transport handoff, then call `consume` synchronously at the effect. The
+final call checks the prepared write receipt, expiry, node, pairing, and placement
+binding without SQLite; a changed receipt rejects the grant. Do not treat an older
+preparation as permission for a later effect.
+
+The async additions remain optional on the released interface for custom service
+implementations. The built-in Gateway supplies them and never chooses a native
+fallback after a worker failure.
 
 Device-placement demand also has an awaited
 `workerPlacementDispatchService.getAdmittedDeviceSessionCountsAsync` companion.

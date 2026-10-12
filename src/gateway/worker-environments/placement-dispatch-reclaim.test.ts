@@ -594,7 +594,7 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it.each(["retireSessionPlacement", "retireSessionPlacementAsync"] as const)(
+  it.each(["retireSessionPlacementAsync"] as const)(
     "%s retires only the exact unclaimed safe placement generation",
     async (method) => {
       const retire = async (input: Parameters<PlacementStore[typeof method]>[0]) =>
@@ -620,15 +620,7 @@ describe("worker placement dispatch reclaim", () => {
       };
       await retire(retirement);
       expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
-      if (method === "retireSessionPlacement") {
-        expect(() => placementStore.retireSessionPlacement(retirement)).toThrow(
-          "changed before retirement",
-        );
-      } else {
-        await expect(
-          placementStore.retireSessionPlacementAsync(retirement),
-        ).resolves.toBeUndefined();
-      }
+      await expect(placementStore.retireSessionPlacementAsync(retirement)).resolves.toBeUndefined();
 
       const requested = await placementStore.startDispatch(REQUEST);
       const failed = await placementStore.fail({
@@ -651,7 +643,7 @@ describe("worker placement dispatch reclaim", () => {
     },
   );
 
-  it.each(["sync", "worker-after-peer"] as const)(
+  it.each(["worker", "worker-after-peer"] as const)(
     "retires a reclaimed placement with child rows and clears %s conflict projection",
     async (mode) => {
       const harness = createHarness(database, placementStore);
@@ -728,7 +720,7 @@ describe("worker placement dispatch reclaim", () => {
         await peer.retireSessionPlacementAsync(retirement);
         await placementStore.retireSessionPlacementAsync(retirement);
       } else {
-        placementStore.retireSessionPlacement(retirement);
+        await placementStore.retireSessionPlacementAsync(retirement);
       }
 
       expect(placementStore.get(active.sessionId)).toBeUndefined();
@@ -847,7 +839,7 @@ describe("worker placement dispatch reclaim", () => {
       const peer = createHarness(database, placementStore);
       peer.markEnvironmentOwnerEpoch(2);
       const reclaimed = await peer.service.reclaim(REQUEST);
-      placementStore.retireSessionPlacement({
+      await placementStore.retireSessionPlacementAsync({
         sessionId: reclaimed.sessionId,
         expectedState: "reclaimed",
         expectedGeneration: reclaimed.generation,

@@ -9,7 +9,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as userProfiles from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { readMentionStoreSnapshot } from "./mention-inbox-store.js";
+import { readMentionStoreSnapshot } from "./mention-inbox-store.worker.js";
 import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 

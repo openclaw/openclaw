@@ -32,6 +32,7 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
 import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-row-scope.js";
@@ -390,6 +391,16 @@ export function readResidentSessionRow(
 }
 
 export function readSessionRowEntry(row: records.Row) {
+  if (!isIncognitoSessionKey(row.key)) {
+    const facts = row.pendingDatabaseFacts ?? row.retainedDatabaseFacts;
+    if (facts) {
+      return facts.entry;
+    }
+    // Durable reads reenter the existing worker preparation owner after invalidation.
+    throw new SessionRowFactsPending([
+      { key: row.key, agentId: row.agentId, storePath: row.storeTarget.storePath },
+    ]);
+  }
   const memory = captureSessionActorStorageOwner({ ...row.storeTarget, sessionKey: row.key });
   if (memory && isIncognitoSessionKey(row.key)) {
     return memory.owner?.readSession(row.key, memory.authority)?.entry;

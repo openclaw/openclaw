@@ -84,8 +84,7 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
     const environments = await createWorkerEnvironmentStore({ database });
     const expected = ["active", "pending", "terminal"];
     expect(
-      store
-        .list()
+      (await store.listAsync())
         .filter(
           (row) =>
             readWorkerPlacementIdentity(
@@ -212,7 +211,7 @@ it.each(["cached", "fresh"] as const)(
       } finally {
         vi.restoreAllMocks();
       }
-      store.retireSessionPlacement({
+      await store.retireSessionPlacementAsync({
         sessionId: "a",
         expectedState: "failed",
         expectedGeneration: failed.generation,
@@ -263,7 +262,7 @@ it("reports committed placement changes inside an inspection snapshot", async ()
       await withOpenClawStateDatabaseReadSnapshot(async () => {
         await expect(
           publishChanges(async () => {
-            store.retireSessionPlacement({
+            await store.retireSessionPlacementAsync({
               sessionId: "a",
               expectedState: "failed",
               expectedGeneration: failed.generation,
@@ -279,7 +278,7 @@ it("reports committed placement changes inside an inspection snapshot", async ()
           expect.any(Object),
         );
       });
-      expect(store.list()).toEqual([]);
+      expect(await store.listAsync()).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
     } finally {
       await flushPendingSessionsChangedEvents(context);

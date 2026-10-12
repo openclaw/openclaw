@@ -613,7 +613,7 @@ describe("worker turn launcher local placement", () => {
     });
     await firstStarted.promise;
     const firstClaimId = placements.get(SESSION_ID)?.turnClaim?.claimId;
-    expect(placements.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    expect(await placements.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
 
     const second = localProvider.executeLocalTurn(claim, async () => {
       secondStarted.resolve();

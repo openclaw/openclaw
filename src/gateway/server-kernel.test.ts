@@ -285,9 +285,11 @@ describe("createGatewayKernel", () => {
             updatedAt: 1,
           },
         } satisfies GatewayClient;
-        expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
-          ok: true,
-          value: { gatewayInstanceId: bootId, items: [] },
+        await kernel.gatewayRequestContext.mentionInbox?.listAsync(reader, (result) => {
+          expect(result).toMatchObject({
+            ok: true,
+            value: { gatewayInstanceId: bootId, items: [] },
+          });
         });
         const boundHost = kernel.gatewayRequestContext.hostLifecycle!;
         // Handoff consumption compares the private owner, not a copied predicate.
@@ -328,9 +330,8 @@ describe("createGatewayKernel", () => {
 
         expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
         expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
-        expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
-          ok: false,
-          error: { code: "UNAVAILABLE" },
+        await kernel.gatewayRequestContext.mentionInbox?.listAsync(reader, (result) => {
+          expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
         });
         nativePreparation.resolve();
         await pendingStop;

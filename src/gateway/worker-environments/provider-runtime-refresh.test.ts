@@ -179,7 +179,7 @@ describe("worker environment runtime upgrades", () => {
           now: () => support.testState.nowMs,
         });
         await restarted.recoverWorkerSessionToolOperationsAfterRestart();
-        restarted.clearLocalTurnClaimsAfterRestart();
+        await restarted.clearLocalTurnClaimsAfterRestartAsync();
         return { placements: restarted, ...bindService(restarted, true) };
       },
     };

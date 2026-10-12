@@ -257,12 +257,13 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         timeoutMs?: number;
         signal?: AbortSignal;
         idempotencyKey?: string;
+        authorizeDispatch?: () => Promise<boolean>;
         isDispatchAuthorized: () => boolean;
         onDispatchReady?: (invokeId: string) => void;
       },
     ): Promise<InvokeResult> => {
       const isCurrent = () => resourceBindingIsCurrent() && params.isDispatchAuthorized();
-      if (!isCurrent()) {
+      if (!resourceBindingIsCurrent()) {
         throw new Error("Session computer authority closed before dispatch");
       }
       const command = input.operation === "snapshot" ? "screen.snapshot" : "computer.act";
@@ -422,6 +423,9 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
                 timeoutMs: params.timeoutMs,
                 signal: params.signal,
                 idempotencyKey: params.idempotencyKey,
+                ...(params.authorizeDispatch
+                  ? { authorizeDispatch: params.authorizeDispatch }
+                  : {}),
                 isDispatchAuthorized: () => isCurrent() && params.isDispatchAuthorized(),
                 onDispatchReady: params.onDispatchReady,
               });

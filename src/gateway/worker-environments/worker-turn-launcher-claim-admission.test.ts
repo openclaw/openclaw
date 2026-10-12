@@ -227,7 +227,7 @@ describe("worker turn launcher claim admission", () => {
         priorClaim,
         "refs/openclaw/worker-results/missing",
       );
-      placements.clearLocalTurnClaimsAfterRestart();
+      await placements.clearLocalTurnClaimsAfterRestartAsync();
       const pending = await placements.listPendingWorkspaceResultsAsync();
       expect(pending).toMatchObject([
         { stagedResultRef: "refs/openclaw/worker-results/missing", workspaceAcceptedAtMs: null },

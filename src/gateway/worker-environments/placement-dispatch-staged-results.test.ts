@@ -305,7 +305,7 @@ describe("worker placement result recovery", () => {
           ),
         ).toMatchObject({ code: 0 });
         const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-        restartedStore.clearLocalTurnClaimsAfterRestart();
+        await restartedStore.clearLocalTurnClaimsAfterRestartAsync();
         recovery = createHarness(database, restartedStore, {
           workspacePath,
           publishAcceptedWorkspace,
@@ -562,7 +562,7 @@ describe("worker placement result recovery", () => {
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-      expect(restartedStore.clearLocalTurnClaimsAfterRestart()).toBe(1);
+      expect(await restartedStore.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
       expect(restartedStore.get(active.sessionId)).toMatchObject({
         state: placementState === "active" || preservesNode ? "active" : "draining",
         turnClaim: null,
