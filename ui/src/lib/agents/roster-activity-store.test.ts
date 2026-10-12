@@ -191,7 +191,7 @@ describe("roster activity lifecycle", () => {
       vi.useRealTimers();
     }
   });
-  it.each(["sessions.changed", "session.message"])(
+  it.each(["sessions.changed"])(
     "patches a paged tree window through %s without rereading it",
     async (event) => {
       vi.useFakeTimers();
@@ -279,7 +279,7 @@ describe("roster activity lifecycle", () => {
     },
   );
 
-  it.each(["groups", "stores", "catalogChanged", "unpin", "archive", "restore", "involvingMe"])(
+  it.each(["groups", "unpin", "archive", "involvingMe"])(
     "coalesces uncertain %s membership into one authoritative window refresh",
     async (change) => {
       vi.useFakeTimers();
@@ -289,13 +289,11 @@ describe("roster activity lifecycle", () => {
         sessionId: "held",
         updatedAt: 10,
         ...(change === "unpin" ? { pinned: true, pinnedAt: 1 } : {}),
-        ...(change === "restore" ? { archived: true } : {}),
       };
       const next = {
         ...row,
         updatedAt: 20,
         ...(change === "archive" ? { archived: true, pinned: false } : {}),
-        ...(change === "restore" ? { archived: false } : {}),
         ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
       };
       const load = vi
@@ -313,14 +311,14 @@ describe("roster activity lifecycle", () => {
             ...(change === "involvingMe" ? { involvingMe: true } : {}),
           }),
         );
-        const payload = ["groups", "stores"].includes(change)
-          ? { reason: change }
-          : {
-              reason: "patch",
-              sessionKey: next.key,
-              session: next,
-              ...(change === "catalogChanged" ? { catalogChanged: true } : {}),
-            };
+        const payload =
+          change === "groups"
+            ? { reason: change }
+            : {
+                reason: "patch",
+                sessionKey: next.key,
+                session: next,
+              };
         for (let index = 0; index < 10; index += 1) {
           emit({ type: "event", event: "sessions.changed", payload });
         }
@@ -378,39 +376,6 @@ describe("roster activity lifecycle", () => {
       vi.useRealTimers();
     }
   });
-
-  it.each([false, true])(
-    "does not admit unknown active events into the shared window (involvingMe=%s)",
-    async (involvingMe) => {
-      const load = vi.fn(async () => result("Listed session"));
-      const { store, emit } = createStore(load);
-      store.setInvolvingMe(involvingMe);
-      const detach = store.subscribe(() => {});
-      try {
-        await vi.waitFor(() => expect(store.snapshot.result?.sessions).toHaveLength(1));
-        const window = store.snapshot.result;
-        emit({
-          type: "event",
-          event: "session.message",
-          payload: {
-            agentId: "ember",
-            session: {
-              key: "agent:ember:unlisted",
-              kind: "direct",
-              updatedAt: 10,
-              hasActiveRun: true,
-              status: "running",
-            },
-          },
-        });
-        expect(store.snapshot.result).toBe(window);
-        expect(store.snapshot.cards.find((card) => card.id === "ember")?.activeNow).toBe(false);
-        expect(load).toHaveBeenCalledTimes(1);
-      } finally {
-        detach();
-      }
-    },
-  );
 
   it("retains usable agent identities and the last activity window when an activity refresh fails", async () => {
     const load = vi

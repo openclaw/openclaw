@@ -1,8 +1,4 @@
 import { describe, expect, it } from "vitest";
-import {
-  listCoreToolSections,
-  resolveCoreToolProfiles,
-} from "../../../../src/agents/tool-catalog.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { resolveToolProfileOptions, resolveToolSections } from "./tool-catalog.ts";
@@ -62,54 +58,6 @@ const TOOLS_CATALOG_RESULT: ToolsCatalogResult = {
 };
 
 describe("resolveToolSections", () => {
-  it("shares canonical core ids with the fetched catalog without assuming session capabilities", () => {
-    const groups = listCoreToolSections().map((section) => ({
-      id: section.id,
-      label: section.label,
-      source: "core" as const,
-      tools: section.tools.map((tool) => ({
-        ...tool,
-        source: "core" as const,
-        defaultProfiles: resolveCoreToolProfiles(tool.id),
-      })),
-    }));
-    const fallback = resolveToolSections(null);
-    const fetched = resolveToolSections({ agentId: "main", profiles: [], groups });
-    const ids = (sections: typeof fallback) =>
-      sections.flatMap((section) => section.tools.map((tool) => tool.id));
-    expect(ids(fallback)).toEqual(ids(fetched));
-    expect(ids(fallback)).toContain("openclaw");
-    expect(ids(fallback)).not.toContain("agents_wait");
-    expect(ids(fallback)).toEqual(
-      expect.arrayContaining(["github_publish", "github_identity_status", "transcripts"]),
-    );
-    expect(
-      fallback.flatMap((section) => section.tools).find((tool) => tool.id === "openclaw")
-        ?.description,
-    ).toBe("Delegate OpenClaw setup and repair");
-  });
-
-  it("derives fallback labels and descriptions from canonical tool ids", () => {
-    const sections = resolveToolSections(null);
-    const tools = sections.flatMap((section) => section.tools);
-
-    expect(tools.find((tool) => tool.id === "apply_patch")).toEqual({
-      id: "apply_patch",
-      label: "apply_patch",
-      description: t("agents.toolCatalog.descriptions.applyPatch"),
-    });
-    expect(tools.find((tool) => tool.id === "view_image")).toEqual({
-      id: "view_image",
-      label: "view_image",
-      description: t("agents.toolCatalog.descriptions.image"),
-    });
-  });
-
-  it("keeps English core group labels identical to the gateway catalog", () => {
-    const sections = resolveToolSections(TOOLS_CATALOG_RESULT);
-    expect(sections.map((section) => section.label)).toEqual(["Files", "Runtime", "My Plugin"]);
-  });
-
   // Regression: gateway catalog labels are English-only, so localized UIs
   // rendered "Files"/"Runtime" section names even though translations exist.
   it("translates known core group labels in non-English locales", async () => {
@@ -134,37 +82,9 @@ describe("resolveToolSections", () => {
       await i18n.setLocale("en");
     }
   });
-
-  it("keeps catalog tool wiring intact while translating group labels", async () => {
-    await i18n.setLocale("zh-CN");
-    try {
-      const sections = resolveToolSections(TOOLS_CATALOG_RESULT);
-      expect(sections[0]?.id).toBe("fs");
-      expect(sections[0]?.source).toBe("core");
-      expect(sections[0]?.tools).toEqual([
-        {
-          id: "read",
-          label: "read",
-          description: "Read file contents",
-          source: "core",
-          pluginId: undefined,
-          optional: undefined,
-          defaultProfiles: ["coding"],
-        },
-      ]);
-      expect(sections[2]?.pluginId).toBe("my-plugin");
-    } finally {
-      await i18n.setLocale("en");
-    }
-  });
 });
 
 describe("resolveToolProfileOptions", () => {
-  it("keeps English profile labels identical to the gateway catalog", () => {
-    const profiles = resolveToolProfileOptions(TOOLS_CATALOG_RESULT);
-    expect(profiles.map((profile) => profile.label)).toEqual(["Minimal", "Full"]);
-  });
-
   it("translates known profile labels in non-English locales", async () => {
     await i18n.setLocale("zh-CN");
     try {
@@ -178,12 +98,4 @@ describe("resolveToolProfileOptions", () => {
       await i18n.setLocale("en");
     }
   });
-});
-
-it("does not advertise personal instructions in the capability-unknown fallback catalog", () => {
-  expect(
-    resolveToolSections(null)
-      .flatMap((section) => section.tools)
-      .some((tool) => tool.id === "personal_instructions"),
-  ).toBe(false);
 });

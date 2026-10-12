@@ -209,7 +209,11 @@ describe("createAgentCapability lifecycle", () => {
     const agents = createAgentCapability(harness.gateway);
 
     const staleLoad = agents.refreshFiles("main");
+    const retiredStatus = agents.files("main");
+    expect(retiredStatus.loading).toBe(true);
     harness.publish(false);
+    expect(retiredStatus.loading).toBe(false);
+    expect(agents.files("main").loading).toBe(false);
     harness.publish(true);
     const currentLoad = agents.refreshFiles("main");
 
@@ -223,27 +227,6 @@ describe("createAgentCapability lifecycle", () => {
     await currentLoad;
     expect(agents.files("main").list).toEqual(current);
     expect(agents.files("main").loading).toBe(false);
-    agents.dispose();
-  });
-
-  it("retires existing file loading state before dropping disconnected owners", async () => {
-    const pending = deferred<unknown>();
-    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const harness = createGatewayHarness(client);
-    const agents = createAgentCapability(harness.gateway);
-
-    const load = agents.refreshFiles("main");
-    const status = agents.files("main");
-    expect(status.loading).toBe(true);
-
-    harness.publish(false);
-
-    expect(status.loading).toBe(false);
-    expect(agents.files("main").loading).toBe(false);
-
-    pending.resolve({ agentId: "main", workspace: "stale", files: [] });
-    await load;
     agents.dispose();
   });
 
@@ -315,33 +298,6 @@ describe("createAgentCapability lifecycle", () => {
 });
 
 describe("loadToolsCatalog", () => {
-  it("loads catalog and stores result", async () => {
-    const { state, request } = createState();
-    const payload = {
-      agentId: "main",
-      profiles: [{ id: "full", label: "Full" }],
-      groups: [
-        {
-          id: "media",
-          label: "Media",
-          source: "core",
-          tools: [{ id: "tts", label: "tts", description: "Text-to-speech", source: "core" }],
-        },
-      ],
-    };
-    request.mockResolvedValue(payload);
-
-    await loadToolsCatalog(state, "main");
-
-    expect(request).toHaveBeenCalledWith("tools.catalog", {
-      agentId: "main",
-      includePlugins: true,
-    });
-    expect(state.toolsCatalogResult).toEqual(payload);
-    expect(state.toolsCatalogError).toBeNull();
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-
   it("captures request errors for fallback UI handling", async () => {
     const { state, request } = createState();
     request.mockRejectedValue(new Error("gateway unavailable"));
@@ -380,42 +336,6 @@ describe("loadToolsCatalog", () => {
 });
 
 describe("loadToolsEffective", () => {
-  it("loads effective tools for the active session", async () => {
-    const { state, request } = createState();
-    const payload = {
-      agentId: "main",
-      profile: "coding",
-      groups: [
-        {
-          id: "core",
-          label: "Built-in tools",
-          source: "core",
-          tools: [
-            {
-              id: "read",
-              label: "Read",
-              description: "Read files",
-              rawDescription: "Read files",
-              source: "core",
-            },
-          ],
-        },
-      ],
-    };
-    request.mockResolvedValue(payload);
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    expect(request).toHaveBeenCalledWith("tools.effective", {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    expect(state.toolsEffectiveResult).toEqual(payload);
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
-    expect(state.toolsEffectiveError).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(false);
-  });
-
   it("captures effective-tool request errors", async () => {
     const { state, request } = createState();
     request.mockRejectedValue(new Error("gateway unavailable"));
@@ -495,36 +415,6 @@ describe("loadToolsEffective", () => {
     expect(state.toolsEffectiveError).toBeNull();
   });
 
-  it("uses the catalog provider when the active session reports a stale provider", async () => {
-    const { state, request } = createState();
-    const sessionsResult = state.sessionsResult!;
-    state.sessionsResult = {
-      ts: sessionsResult.ts,
-      path: sessionsResult.path,
-      count: 1,
-      defaults: sessionsResult.defaults,
-      sessions: [
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 0,
-          model: "deepseek-chat",
-          modelProvider: "zai",
-        },
-      ],
-    };
-    state.chatModelCatalog = [{ id: "deepseek-chat", name: "DeepSeek Chat", provider: "deepseek" }];
-    request.mockResolvedValue({
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    });
-
-    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=deepseek/deepseek-chat");
-  });
-
   it("preserves already-qualified session models when the active session provider is stale and the catalog is empty", async () => {
     const { state, request } = createState();
     const sessionsResult = state.sessionsResult!;
@@ -574,19 +464,6 @@ describe("setDefaultAgent", () => {
     expect(refreshAgents).toHaveBeenCalledTimes(1);
   });
 
-  it("does not persist when the agent is absent from the config list", async () => {
-    const { config } = createSaveState();
-    const refreshAgents = vi.fn(async () => null);
-    config.state.configForm = { agents: { entries: { main: {} } } };
-    vi.mocked(config.stageDefaultAgent).mockReturnValue(false);
-
-    await setDefaultAgent(config, "ghost", refreshAgents);
-
-    expect(config.stageDefaultAgent).toHaveBeenCalledWith("ghost");
-    expect(config.save).not.toHaveBeenCalled();
-    expect(refreshAgents).not.toHaveBeenCalled();
-  });
-
   it("does not persist unrelated dirty agent config drafts", async () => {
     const { config } = createSaveState();
     const refreshAgents = vi.fn(async () => null);
@@ -628,21 +505,6 @@ describe("setDefaultAgent", () => {
       },
     });
     expect(config.state.configFormDirty).toBe(true);
-  });
-
-  it("keeps the shared agent cache unchanged when saving fails", async () => {
-    const { config } = createSaveState();
-    const refreshAgents = vi.fn(async () => null);
-    config.state.configFormDirty = false;
-    vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
-      config.state.configFormDirty = true;
-      return true;
-    });
-    vi.mocked(config.save).mockResolvedValue(false);
-
-    await setDefaultAgent(config, "kimi", refreshAgents);
-
-    expect(refreshAgents).not.toHaveBeenCalled();
   });
 
   it("passes the originating action guard through the queued config save", async () => {

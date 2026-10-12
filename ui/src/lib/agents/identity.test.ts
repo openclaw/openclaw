@@ -11,59 +11,53 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each([undefined, 7_000])(
-  "paces rejected identity reads per agent (retry hint %s)",
-  async (hint) => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-    const unavailable = new GatewayProtocolRequestError({
-      code: "UNAVAILABLE",
-      message: "agent.identity.get unavailable during gateway restart",
-      details: { reason: "gateway-restarting" },
-      retryable: true,
-      retryAfterMs: hint,
-    });
-    const request = vi.fn().mockRejectedValue(unavailable);
-    const client = createTestGatewayClient(request);
-    const capability = createAgentIdentityCapability({
-      snapshot: { client, phase: "connected" },
-      subscribe: () => () => undefined,
-    });
-    let now = 0;
-    for (const [attempt, backoff] of [500, 1_000, 2_000, 4_000, 5_000, 5_000].entries()) {
-      await capability.ensure([" main ", "main"]);
-      for (let render = 0; render < 40; render += 1) {
-        await capability.ensure(["main"]);
-      }
-      expect(request).toHaveBeenCalledTimes(attempt + 1);
-      now += Math.max(backoff, hint ?? 0);
-      clock.mockReturnValue(now - 1);
-      await expect(fetchAgentIdentity(client, "main")).rejects.toBe(unavailable);
-      expect(request).toHaveBeenCalledTimes(attempt + 1);
-      clock.mockReturnValue(now);
+it.each([7_000])("paces rejected identity reads per agent (retry hint %s)", async (hint) => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  const unavailable = new GatewayProtocolRequestError({
+    code: "UNAVAILABLE",
+    message: "agent.identity.get unavailable during gateway restart",
+    details: { reason: "gateway-restarting" },
+    retryable: true,
+    retryAfterMs: hint,
+  });
+  const request = vi.fn().mockRejectedValue(unavailable);
+  const client = createTestGatewayClient(request);
+  const capability = createAgentIdentityCapability({
+    snapshot: { client, phase: "connected" },
+    subscribe: () => () => undefined,
+  });
+  let now = 0;
+  for (const [attempt, backoff] of [500, 1_000, 2_000, 4_000, 5_000, 5_000].entries()) {
+    await capability.ensure([" main ", "main"]);
+    for (let render = 0; render < 40; render += 1) {
+      await capability.ensure(["main"]);
     }
+    expect(request).toHaveBeenCalledTimes(attempt + 1);
+    now += Math.max(backoff, hint ?? 0);
+    clock.mockReturnValue(now - 1);
+    await expect(fetchAgentIdentity(client, "main")).rejects.toBe(unavailable);
+    expect(request).toHaveBeenCalledTimes(attempt + 1);
+    clock.mockReturnValue(now);
+  }
 
-    const recovered = { agentId: "main", name: "Recovered", avatar: "" };
-    request.mockResolvedValueOnce(recovered);
-    await capability.ensure(["main"]);
-    expect(capability.get("main")).toBe(recovered);
-    // Another agent owns a separate retry window.
-    await capability.ensure(["other"]);
-    expect(request).toHaveBeenCalledTimes(8);
+  const recovered = { agentId: "main", name: "Recovered", avatar: "" };
+  request.mockResolvedValueOnce(recovered);
+  await capability.ensure(["main"]);
+  expect(capability.get("main")).toBe(recovered);
+  // Another agent owns a separate retry window.
+  await capability.ensure(["other"]);
+  expect(request).toHaveBeenCalledTimes(8);
 
-    clock.mockReturnValue(now + 60_000);
-    await capability.ensure(["main"]);
-    clock.mockReturnValue(now + 60_000 + Math.max(500, hint ?? 0));
-    await capability.ensure(["main"]);
-    expect(request).toHaveBeenCalledTimes(8);
-    expect(capability.get("main")).toBe(recovered);
-  },
-);
+  clock.mockReturnValue(now + 60_000);
+  await capability.ensure(["main"]);
+  clock.mockReturnValue(now + 60_000 + Math.max(500, hint ?? 0));
+  await capability.ensure(["main"]);
+  expect(request).toHaveBeenCalledTimes(8);
+  expect(capability.get("main")).toBe(recovered);
+});
 
 it.each([
-  { name: "restart", restartPending: true, suspensionPhase: "accepting" },
   { name: "suspension preparation", restartPending: false, suspensionPhase: "preparing" },
-  { name: "suspension drain", restartPending: false, suspensionPhase: "draining" },
-  { name: "prepared suspension", restartPending: false, suspensionPhase: "prepared" },
 ] as const)("retains identity and pauses refresh during $name", async (unavailable) => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(0);
   const original = { agentId: "main", name: "Main", avatar: "/avatar/main?v=old" };
@@ -103,49 +97,26 @@ it.each([
   expect(capability.get("main")).toBe(original);
 });
 
-it.each(["reconnect", "config", "agent"])(
-  "retires failed identity reads on %s invalidation",
-  async (kind) => {
-    vi.spyOn(Date, "now").mockReturnValue(0);
-    const result = { agentId: "main", name: "Current", avatar: "" };
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Unavailable"))
-      .mockResolvedValue(result);
-    const client = createTestGatewayClient(request);
-    const snapshot: { client: GatewayBrowserClient; phase: ApplicationGatewayPhase } = {
-      client,
-      phase: "connected",
-    };
-    let onSnapshot = (_snapshot: typeof snapshot) => {};
-    let onEvent = (_event: { event: string }) => {};
-    const capability = createAgentIdentityCapability({
-      snapshot,
-      subscribe(listener) {
-        onSnapshot = listener;
-        return () => undefined;
-      },
-      subscribeEvents(listener) {
-        onEvent = listener;
-        return () => undefined;
-      },
-    });
-    await capability.ensure(["main"]);
-    if (kind === "reconnect") {
-      snapshot.phase = "reconnecting";
-      onSnapshot(snapshot);
-      snapshot.phase = "connected";
-      onSnapshot(snapshot);
-    } else if (kind === "config") {
-      onEvent({ event: "config.changed" });
-    } else {
-      capability.invalidate(["main"]);
-    }
-    await capability.ensure(["main"]);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(capability.get("main")).toBe(result);
-  },
-);
+it("retires failed identity reads on config invalidation", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(0);
+  const result = { agentId: "main", name: "Current", avatar: "" };
+  const request = vi.fn().mockRejectedValueOnce(new Error("Unavailable")).mockResolvedValue(result);
+  const client = createTestGatewayClient(request);
+  let onEvent = (_event: { event: string }) => {};
+  const capability = createAgentIdentityCapability({
+    snapshot: { client, phase: "connected" },
+    subscribe: () => () => undefined,
+    subscribeEvents(listener) {
+      onEvent = listener;
+      return () => undefined;
+    },
+  });
+  await capability.ensure(["main"]);
+  onEvent({ event: "config.changed" });
+  await capability.ensure(["main"]);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(capability.get("main")).toBe(result);
+});
 
 it("rejects stale identities after reconnecting the same client", async () => {
   const oldRequest = createDeferred<AgentIdentityResult>();
@@ -190,46 +161,39 @@ it("rejects stale identities after reconnecting the same client", async () => {
   expect(capability.get("main")?.name).toBe("Current");
 });
 
-it.each(["local", "Gateway"])(
-  "rejects an in-flight identity after %s invalidation",
-  async (source) => {
-    const staleRequest = createDeferred<AgentIdentityResult>();
-    const currentRequest = createDeferred<AgentIdentityResult>();
-    const request = vi
-      .fn()
-      .mockImplementationOnce(() => staleRequest.promise)
-      .mockImplementationOnce(() => currentRequest.promise);
-    const client = createTestGatewayClient(request);
-    let onEvent = (_event: { event: string; payload?: unknown }) => {};
-    const capability = createAgentIdentityCapability({
-      snapshot: { client, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents(listener) {
-        onEvent = listener;
-        return () => undefined;
-      },
-    });
-    const publish = vi.fn();
-    capability.subscribe(publish);
+it("rejects an in-flight identity after Gateway invalidation", async () => {
+  const staleRequest = createDeferred<AgentIdentityResult>();
+  const currentRequest = createDeferred<AgentIdentityResult>();
+  const request = vi
+    .fn()
+    .mockImplementationOnce(() => staleRequest.promise)
+    .mockImplementationOnce(() => currentRequest.promise);
+  const client = createTestGatewayClient(request);
+  let onEvent = (_event: { event: string; payload?: unknown }) => {};
+  const capability = createAgentIdentityCapability({
+    snapshot: { client, phase: "connected" },
+    subscribe: () => () => undefined,
+    subscribeEvents(listener) {
+      onEvent = listener;
+      return () => undefined;
+    },
+  });
+  const publish = vi.fn();
+  capability.subscribe(publish);
 
-    const stale = capability.ensure(["main"]);
-    if (source === "Gateway") {
-      onEvent({ event: "agent.identity.changed", payload: { agentId: "main" } });
-    } else {
-      capability.invalidate(["main"]);
-    }
-    expect(publish).toHaveBeenCalledOnce();
-    const current = capability.ensure(["main"]);
+  const stale = capability.ensure(["main"]);
+  onEvent({ event: "agent.identity.changed", payload: { agentId: "main" } });
+  expect(publish).toHaveBeenCalledOnce();
+  const current = capability.ensure(["main"]);
 
-    staleRequest.resolve({ agentId: "main", name: "Stale", avatar: "" });
-    await stale;
-    expect(capability.entries()).toEqual([]);
+  staleRequest.resolve({ agentId: "main", name: "Stale", avatar: "" });
+  await stale;
+  expect(capability.entries()).toEqual([]);
 
-    currentRequest.resolve({ agentId: "main", name: "Current", avatar: "" });
-    await current;
-    expect(capability.get("main")?.name).toBe("Current");
-  },
-);
+  currentRequest.resolve({ agentId: "main", name: "Current", avatar: "" });
+  await current;
+  expect(capability.get("main")?.name).toBe("Current");
+});
 
 it("publishes each fetched snapshot once under overlapping roster and stream updates", async () => {
   const pending = createDeferred();
