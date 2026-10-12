@@ -1,4 +1,5 @@
 // Private runtime helpers for active registered session catalogs.
+export { createAcpSessionCatalogAdoption } from "../plugins/session-catalog-acp-adoption.js";
 export {
   buildControlUiCatalogSharePath,
   isControlUiCatalogShareId,
