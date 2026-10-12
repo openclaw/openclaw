@@ -706,13 +706,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
-  const sendPostReply = (text: string, infoKind?: string, firstChunkMentions?: MentionTarget[]) =>
-    sendChunkedTextReply({
-      text,
-      useCard: false,
-      infoKind,
-      firstChunkMentions,
-    });
+  const sendTextReply = (
+    text: string,
+    infoKind?: string,
+    firstChunkMentions?: MentionTarget[],
+    useCard = false,
+  ) => sendChunkedTextReply({ text, useCard, infoKind, firstChunkMentions });
 
   const sendMediaReplies = async (
     payload: ReplyPayload,
@@ -758,11 +757,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   mediaUrl,
                 });
                 sentFallbackText = true;
-                results.push(await sendPostReply(fallbackText, "final"));
+                results.push(await sendTextReply(fallbackText, "final"));
               },
       });
       if (degradedVoiceFallbackText && !sentFallbackText) {
-        results.push(await sendPostReply(degradedVoiceFallbackText, "final"));
+        results.push(await sendTextReply(degradedVoiceFallbackText, "final"));
       }
     } catch (error: unknown) {
       const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
@@ -1253,7 +1252,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               info?.kind === "final" || (info?.kind === "block" && !sentIndependentBlockText)
                 ? mentionTargets
                 : undefined;
-            await collectDelivery(sendPostReply(text, info?.kind, firstChunkMentions));
+            // Explicit card mode renders completed blocks like non-streaming finals.
+            const useCard = !hasPresentationFallback && renderMode === "card" && useStaticCard;
+            await collectDelivery(sendTextReply(text, info?.kind, firstChunkMentions, useCard));
             if (info?.kind === "block") {
               sentIndependentBlockText = true;
             }
@@ -1325,7 +1326,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         } else {
           const firstChunkMentions =
             info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;
-          deliveredResults.push(await sendPostReply(text, info?.kind, firstChunkMentions));
+          deliveredResults.push(await sendTextReply(text, info?.kind, firstChunkMentions));
         }
       }
 
