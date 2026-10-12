@@ -1,10 +1,14 @@
 import { WebClient, type WebClientOptions } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
 import * as slackClient from "./client.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("Slack channel-create", () => {
   it("creates a public channel and returns its reusable target", async () => {
@@ -107,68 +111,57 @@ describe("Slack channel-create", () => {
   });
 
   it("does not invite the requester after caller authority closes during creation", async () => {
-    const requests: string[] = [];
     let active = true;
     const assertDirectAdapterHandoff = () => {
       if (!active) {
         throw new Error("direct delivery is no longer active");
       }
     };
-    const fetch: NonNullable<WebClientOptions["fetch"]> = async (input, init) => {
-      assertDirectAdapterHandoff();
-      const method = new URL(String(input)).pathname.split("/").at(-1) ?? "";
-      requests.push(method);
-      if (method === "conversations.create") {
-        active = false;
-        return new Response(
-          JSON.stringify({
-            ok: true,
-            channel: { id: "C01234567", name: "proj-launch-pixel-peak" },
-          }),
-          { headers: { "content-type": "application/json" } },
-        );
-      }
-      const body = typeof init?.body === "string" ? init.body : "<non-string body>";
-      throw new Error(`unexpected Slack request: ${method} (${body})`);
-    };
-    vi.spyOn(slackClient, "createSlackWriteClient").mockImplementation(
-      (token, options, assert) =>
-        new WebClient(token, {
-          ...options,
-          fetch,
-          retryConfig: { retries: 0 },
-          ...(assert
-            ? {
-                fetch: async (input, init) => {
-                  assert();
-                  return await fetch(input, init);
-                },
-              }
-            : {}),
-        }),
-    );
-    const adapter = createSlackActions("slack");
-
-    const result = await adapter.handleAction!({
-      channel: "slack",
-      action: "channel-create",
-      cfg: { channels: { slack: { botToken: "xoxb-test", actions: { channels: true } } } },
-      params: { name: "proj-launch-pixel-peak" },
-      accountId: "default",
-      requesterAccountId: "default",
-      requesterSenderId: "U22222222",
-      assertDirectAdapterHandoff,
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "team:T11111111:channel:C09999999",
+    const paths: string[] = [];
+    for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("NO_PROXY", "*");
+    await withServer(
+      (request, response) => {
+        const path = request.url ?? "";
+        paths.push(path);
+        request.resume();
+        if (path === "/api/conversations.create") {
+          active = false;
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              ok: true,
+              channel: { id: "C01234567", name: "proj-launch-pixel-peak" },
+            }),
+          );
+        }
       },
-    });
-    expect(result.details).toMatchObject({
-      ok: true,
-      channelId: "C01234567",
-      inviteWarning:
-        "Slack rejected the invitation; the requesting user can join the returned public channel, or an operator can reauthorize the Slack app and retry.",
-    });
-    expect(requests).toEqual(["conversations.create"]);
+      async (baseUrl) => {
+        vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
+        const result = await createSlackActions("slack").handleAction!({
+          channel: "slack",
+          action: "channel-create",
+          cfg: { channels: { slack: { botToken: "xoxb-test", actions: { channels: true } } } },
+          params: { name: "proj-launch-pixel-peak" },
+          accountId: "default",
+          requesterAccountId: "default",
+          requesterSenderId: "U22222222",
+          assertDirectAdapterHandoff,
+          toolContext: {
+            currentChannelProvider: "slack",
+            currentChannelId: "team:T11111111:channel:C09999999",
+          },
+        });
+        expect(result.details).toMatchObject({
+          ok: true,
+          channelId: "C01234567",
+          inviteWarning:
+            "Slack rejected the invitation; the requesting user can join the returned public channel, or an operator can reauthorize the Slack app and retry.",
+        });
+      },
+    );
+    expect(paths).toEqual(["/api/conversations.create"]);
   });
 });
