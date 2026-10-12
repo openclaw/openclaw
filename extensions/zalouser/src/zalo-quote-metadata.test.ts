@@ -283,6 +283,62 @@ describe("Zalo inbound normalization", () => {
       1_700_000_000_000, 1_700_000_000_000, 1_700_000_000_000,
     ]);
   });
+
+  it("surfaces shared files, photos, and videos as downloadable attachments", async () => {
+    const messages = await captureInbound([
+      createInboundMessage({
+        msgType: "share.file",
+        content: {
+          title: "Contract-2026.pdf",
+          href: "https://file-stal-19.dlfl.vn/gr/abc/Contract-2026.pdf",
+          params: '{"fileSize":"12345","fileExt":"pdf"}',
+        },
+      }),
+      createInboundMessage({
+        msgType: "chat.photo",
+        content: { title: "", href: "https://photo-stal-7.zdn.vn/gr/jpg/abc.jpg" },
+      }),
+      createInboundMessage({
+        msgType: "chat.video.msg",
+        content: { href: "https://video-stal-3.dlmd.me/gr/abc.mp4" },
+      }),
+    ]);
+
+    expect(messages.map((message) => message.attachment)).toEqual([
+      {
+        kind: "document",
+        url: "https://file-stal-19.dlfl.vn/gr/abc/Contract-2026.pdf",
+        fileName: "Contract-2026.pdf",
+      },
+      { kind: "image", url: "https://photo-stal-7.zdn.vn/gr/jpg/abc.jpg", fileName: undefined },
+      { kind: "video", url: "https://video-stal-3.dlmd.me/gr/abc.mp4", fileName: undefined },
+    ]);
+    expect(messages[0]?.content).toBe(
+      "Contract-2026.pdf\nhttps://file-stal-19.dlfl.vn/gr/abc/Contract-2026.pdf",
+    );
+  });
+
+  it("ignores link previews, plain text, and non-https attachment urls", async () => {
+    const messages = await captureInbound([
+      createInboundMessage({
+        msgType: "chat.recommended",
+        content: { title: "Docs", href: "https://example.com/page", thumb: "https://x/t.jpg" },
+      }),
+      createInboundMessage({ msgType: "webchat", content: "https://example.com/file.pdf" }),
+      createInboundMessage({
+        msgType: "share.file",
+        content: { title: "a.pdf", href: "http://file-stal-1.dlfl.vn/gr/a.pdf" },
+      }),
+      createInboundMessage({ msgType: "chat.photo", content: { href: "not a url" } }),
+    ]);
+
+    expect(messages.map((message) => message.attachment)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
 });
 
 describe("Zalo group context cache", () => {
