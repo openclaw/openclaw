@@ -737,9 +737,11 @@ describe("session event target custody", () => {
     Promise.allSettled(
       continuation.mock.results.flatMap((r) => (r.type === "return" ? [r.value] : [])),
     );
-  type EnqueueExtras = Omit<
-    Parameters<typeof enqueueSessionEventForHost>[1],
-    "agentId" | "sessionKey" | "expectedTarget"
+  type EnqueueExtras = Partial<
+    Omit<
+      Parameters<typeof enqueueSessionEventForHost>[1],
+      "agentId" | "sessionKey" | "expectedTarget"
+    >
   >;
   // One deferred-adoption fixture per case: captured target, collecting dispatch
   // mock, retry gate, and a reply-owner registry reset on exit.
