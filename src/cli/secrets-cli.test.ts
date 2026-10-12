@@ -404,6 +404,53 @@ describe("secrets CLI", () => {
     }
   });
 
+  it.each([{ bytes: [0xff] }, { bytes: [0xe2, 0x82] }])(
+    "rejects malformed UTF-8 secrets plans (%j)",
+    async ({ bytes: bad }) => {
+      runSecretsApply.mockResolvedValue(createSecretsApplyResult());
+      await withPlanFile(async (planPath) => {
+        const plan = {
+          ...createManualSecretsPlan(),
+          providerUpserts: { proof: { source: "file", path: "/tmp/SENTINEL.json", mode: "json" } },
+        };
+        const raw = JSON.stringify(plan);
+        const at = raw.indexOf("SENTINEL");
+        await fs.writeFile(
+          planPath,
+          Buffer.concat([
+            Buffer.from(raw.slice(0, at)),
+            Buffer.from(bad),
+            Buffer.from(raw.slice(at + "SENTINEL".length)),
+          ]),
+        );
+        await expect(runSecrets(["secrets", "apply", "--from", planPath])).rejects.toThrow(
+          "__exit__:1",
+        );
+        expect(runtimeErrors.join("\n")).toContain("must be valid UTF-8");
+        expect(runSecretsApply).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("preserves valid UTF-8 secrets plans with literal replacement characters", async () => {
+    runSecretsApply.mockResolvedValue(createSecretsApplyResult());
+    const plan = {
+      ...createManualSecretsPlan(),
+      providerUpserts: { proof: { source: "file", path: "/tmp/合法 � 😀.json", mode: "json" } },
+    };
+    await withPlanFile(
+      async (planPath) => {
+        await runSecrets(["secrets", "apply", "--from", planPath]);
+        expect(runSecretsApply).toHaveBeenCalledExactlyOnceWith({
+          plan,
+          write: true,
+          allowExec: false,
+        });
+      },
+      JSON.stringify(plan) + "\r\n",
+    );
+  });
+
   it("rejects oversized secrets plan files before parsing", async () => {
     await withPlanFile(async (planPath) => {
       await fs.truncate(planPath, 16 * 1024 * 1024 + 1);

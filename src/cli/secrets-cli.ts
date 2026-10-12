@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
@@ -81,7 +82,11 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
         `Secrets plan file exceeds ${SECRETS_PLAN_MAX_BYTES} bytes: ${pathname}`,
       );
     }
-    raw = (await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES)).toString("utf8");
+    const bytes = await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES);
+    if (!isUtf8(bytes)) {
+      throw new Error(`Secrets plan file must be valid UTF-8: ${pathname}`);
+    }
+    raw = bytes.toString("utf8");
   } finally {
     await file.close();
   }
