@@ -3,6 +3,7 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import type { preserveDoctorOriginalState } from "./doctor-original-capture.js";
+import { assertDoctorStateMigrationSupported } from "./doctor-state-admission.js";
 
 /** The admitted owner checks deferred schemas before original capture or repair effects. */
 export function createDoctorOriginalCaptureHook(
@@ -15,6 +16,7 @@ export function createDoctorOriginalCaptureHook(
   },
 ): NonNullable<DoctorMaintenanceParams["beforeStateMutation"]> {
   return async ({ env, signal }) => {
+    await assertDoctorStateMigrationSupported(env);
     const [{ preserveDoctorOriginalState }, { getOpenClawDatabaseMaintenanceScope }] =
       await Promise.all([
         import("./doctor-original-capture.js"),

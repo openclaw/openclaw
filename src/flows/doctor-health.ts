@@ -42,7 +42,6 @@ import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusa
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import { exitDoctorHealthFlow, showDoctorIntro, showDoctorOutro } from "./doctor-health-startup.js";
 
-/** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(
   runtime?: RuntimeEnv,
   options: DoctorOptions = {},
@@ -138,9 +137,7 @@ async function runDoctorHealthFlowWithResult(
     if (!ctx.configWriteRefusal) {
       return false;
     }
-    // Config fixes were computed but refused by the writer; the warning above
-    // already lists the manual work. This failure outranks a recoverable
-    // post-install advisory because the run did not converge.
+    // A refused config write outranks an advisory because repair did not converge.
     showDoctorOutro(
       ctx.configResultWriteCommitted === true
         ? "Doctor finished, but some config fixes were not applied."
@@ -331,6 +328,7 @@ async function runDoctorHealthFlowWithResult(
           agentDatabaseTargets: databaseTargets,
           pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
           verifiedSnapshots,
+          onBackup: maintenance.recordMigrationBackup,
         });
         for (const message of [...backups.changes, ...backups.warnings]) {
           effectiveRuntime.log(message);

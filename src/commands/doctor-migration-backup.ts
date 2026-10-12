@@ -31,6 +31,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import type { DoctorMigrationBackup } from "./doctor-migration-restore.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -42,6 +43,7 @@ export async function backupDoctorMigrationDatabases(params: {
   /** Complete discovery keeps the retry group stable after some migrations finish. */
   databasePaths: readonly string[];
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
+  onBackup?: (backup: DoctorMigrationBackup) => void;
 }): Promise<MigrationMessages> {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   const pending = new Set(params.pendingDatabasePaths);
@@ -95,6 +97,7 @@ export async function backupDoctorSqliteDatabases(params: {
   authority: DoctorSqliteMaintenanceAuthority;
   repair?: { key: string; validate: (database: DatabaseSync) => void };
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
+  onBackup?: (backup: DoctorMigrationBackup) => void;
 }): Promise<MigrationMessages> {
   const pending = new Set(params.pendingDatabasePaths);
   if (pending.size === 0) {
@@ -180,6 +183,7 @@ export async function backupDoctorSqliteDatabases(params: {
     }
   };
   const changes: string[] = [];
+  const snapshots: NonNullable<DoctorMigrationBackup["snapshots"]> = [];
   const targetFor = (sourcePath: string) => `${sourcePath}.pre-startup-migration-${backupId}.bak`;
   const anchor = existsSync(sharedPath) ? realpathSync.native(sharedPath) : inventory[0]!.path;
   // This backup artifact is durably removed before migration can start. A missing
@@ -287,6 +291,12 @@ export async function backupDoctorSqliteDatabases(params: {
       validate: params.repair?.validate,
     });
     assertCapture();
+    snapshots.push({
+      path: sourcePath,
+      snapshotPath: backup.path,
+      sha256: backup.sha256,
+      sizeBytes: backup.sizeBytes,
+    });
     changes.push(`Saved pre-migration SQLite backup: ${backup.path}`);
   }
   assertCapture();
@@ -302,6 +312,16 @@ export async function backupDoctorSqliteDatabases(params: {
       { kind: "data-at-risk", reason: "incomplete-migration" },
     );
   }
+  params.onBackup?.({
+    id: backupId,
+    sourceFiles: inventory.flatMap(({ path: sourcePath }) =>
+      ["", "-wal", "-journal"].map((suffix) => ({
+        path: `${sourcePath}${suffix}`,
+        identity: lstatSync(`${sourcePath}${suffix}`, { bigint: true, throwIfNoEntry: false }),
+      })),
+    ),
+    ...(capture ? { snapshots } : {}),
+  });
   const warnings: string[] = [];
   try {
     recordDoctorMigrationBackups(params.env, backupId, inventory);

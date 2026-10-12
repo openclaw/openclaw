@@ -142,9 +142,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       try {
         assertCustody?.();
         if (!retainStoppedInstallation) {
-          await settle(async () => {
-            await recovery?.restore(true);
-          });
+          await settle(() => recovery?.restore(true) ?? Promise.resolve());
         }
       } finally {
         if (!cleanupFailure) {
@@ -627,6 +625,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     },
     run: <T>(operation: () => T) => state.run(operation),
     releaseState: async () => throwSettledFailure(await settle(releaseState)),
+    recordMigrationBackup: state.recordMigrationBackup,
     async repairSqliteNoCow(paths: readonly string[]) {
       assertHeld(this, "SQLite NOCOW repair");
       const result = await settle(() => state.repairSqliteNoCow(paths));
@@ -680,11 +679,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       custody = "restoring";
       let failed = failure !== undefined;
       try {
-        if (!cfg && !stopped?.stopped) {
-          await release(assertCustody);
-          return;
-        }
-        if (!cfg) {
+        if (!cfg && stopped?.stopped) {
           try {
             // Readiness may be the operation that failed. Reversing Doctor's own
             // stop must not re-enter that gate; the previous Gateway remains the
@@ -699,6 +694,16 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
               { cause: error },
             );
           }
+        }
+        try {
+          await settle(() => state.restoreMigrationBackup(failure));
+        } catch (error) {
+          retainStoppedInstallation = true;
+          throw error;
+        }
+        if (!cfg) {
+          await release(assertCustody);
+          return;
         }
         await finish(cfg, assertCustody, writeConfig);
       } catch (restoreError) {

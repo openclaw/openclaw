@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
+import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import {
   createUpdateDoctorDatabaseWriteCapture,
   DoctorMaintenanceRefusalError,
@@ -20,6 +22,7 @@ import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-st
 import { assertDoctorAgentLeaseAdmission } from "./doctor-agent-lease-refusal.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "./doctor-maintenance-foreground.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
+import type { DoctorMigrationBackup } from "./doctor-migration-restore.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
 /** Database custody can change paths while stopped-service custody remains with Doctor. */
@@ -50,6 +53,7 @@ export async function createDoctorMaintenanceState(options: {
     : env;
   let captureAdmitted = false;
   let liveAuthorityReadsAdmitted = false;
+  let migrationBackup: DoctorMigrationBackup | undefined;
   const capture = createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
     env: selectedEnv,
     root: params.root ?? undefined,
@@ -195,6 +199,35 @@ export async function createDoctorMaintenanceState(options: {
     },
     get receipt() {
       return owner ? undefined : capture?.receipt;
+    },
+    recordMigrationBackup: (backup: DoctorMigrationBackup) => {
+      migrationBackup ??= backup;
+    },
+    async restoreMigrationBackup(failure: unknown) {
+      // Later migration refusals can follow archived sources or config writes;
+      // rewinding only their databases would undo one side of that cutover.
+      if (
+        !migrationBackup ||
+        !collectNestedErrorCandidates(failure).some(
+          (error) => error instanceof RetiredStateFormatError,
+        )
+      ) {
+        return;
+      }
+      const { doctorMigrationDatabasesChanged, restoreDoctorMigrationDatabases } =
+        await import("./doctor-migration-restore.js");
+      if (!doctorMigrationDatabasesChanged(migrationBackup)) {
+        return;
+      }
+      assertOwnerCurrent();
+      await closeResources();
+      const backup = migrationBackup;
+      const retained = await owner!.run(() =>
+        restoreDoctorMigrationDatabases(backup, assertOwnerCurrent),
+      );
+      options.warn(
+        `Restored this Doctor run's pre-migration SQLite backups after migration refusal. Resolve the reported refusal before retrying Doctor. Refused-state snapshots retained at: ${retained.join(", ")}`,
+      );
     },
     run<T>(operation: () => T): T {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.

@@ -8,6 +8,11 @@ import * as directoryDurability from "../infra/directory-durability.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
+import {
+  doctorMigrationDatabasesChanged,
+  restoreDoctorMigrationDatabases,
+  type DoctorMigrationBackup,
+} from "./doctor-migration-restore.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -56,6 +61,7 @@ async function backup(
   fixture: ReturnType<typeof createFixture>,
   pendingDatabasePaths = [fixture.agent],
   databasePaths = [fixture.agent],
+  onBackup?: (backup: DoctorMigrationBackup) => void,
 ) {
   const maintenance = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
@@ -63,7 +69,12 @@ async function backup(
   });
   try {
     return await maintenance.run(() =>
-      backupDoctorMigrationDatabases({ env: fixture.env, pendingDatabasePaths, databasePaths }),
+      backupDoctorMigrationDatabases({
+        env: fixture.env,
+        pendingDatabasePaths,
+        databasePaths,
+        onBackup,
+      }),
     );
   } finally {
     await maintenance.close();
@@ -71,6 +82,68 @@ async function backup(
 }
 
 describe("Doctor migration backup retries", () => {
+  it("restores only this run's verified group while retaining refused databases and backup bytes", async () => {
+    const fixture = createFixture();
+    let captured: DoctorMigrationBackup | undefined;
+    await backup(fixture, [fixture.agent], [fixture.agent], (group) => {
+      captured = group;
+    });
+    expect(doctorMigrationDatabasesChanged(captured!)).toBe(false);
+    const identities = [fixture.shared, fixture.agent].map((source) => fs.statSync(source).ino);
+    const originals = captured!.snapshots!.map(({ snapshotPath }) => fs.readFileSync(snapshotPath));
+    for (const source of [fixture.shared, fixture.agent]) {
+      const database = new DatabaseSync(source);
+      database.exec("PRAGMA user_version = 2; UPDATE preserved SET value = 'refused migration';");
+      database.close();
+    }
+    expect(doctorMigrationDatabasesChanged(captured!)).toBe(true);
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    let displaced: string[];
+    try {
+      displaced = await maintenance.run(() => restoreDoctorMigrationDatabases(captured!, () => {}));
+    } finally {
+      await maintenance.close();
+    }
+    expect([fixture.shared, fixture.agent].map((source) => fs.statSync(source).ino)).toEqual(
+      identities,
+    );
+    expect(readPreservedValue(fixture.shared)).toBe("shared before migration");
+    expect(readPreservedValue(fixture.agent)).toBe("agent before migration");
+    for (const source of [fixture.shared, fixture.agent]) {
+      const refused = `${source}.doctor-refused-${captured!.id}.bak`;
+      expect(displaced).toContain(refused);
+      expect(readPreservedValue(refused)).toBe("refused migration");
+      const restored = new DatabaseSync(source, { readOnly: true });
+      expect(restored.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
+      restored.close();
+    }
+    expect(captured!.snapshots!.map(({ snapshotPath }) => fs.readFileSync(snapshotPath))).toEqual(
+      originals,
+    );
+  });
+
+  it("refuses to rewind a reused backup group after later writes", async () => {
+    const fixture = createFixture();
+    await backup(fixture);
+    let reused: DoctorMigrationBackup | undefined;
+    await backup(fixture, [fixture.agent], [fixture.agent], (group) => {
+      reused = group;
+    });
+    expect(reused!.snapshots).toBeUndefined();
+    expect(doctorMigrationDatabasesChanged(reused!)).toBe(false);
+    const database = new DatabaseSync(fixture.agent);
+    database.exec("UPDATE preserved SET value = 'later writes';");
+    database.close();
+    expect(doctorMigrationDatabasesChanged(reused!)).toBe(true);
+    await expect(restoreDoctorMigrationDatabases(reused!, () => {})).rejects.toThrow(
+      "reused pre-migration backup",
+    );
+    expect(readPreservedValue(fixture.agent)).toBe("later writes");
+  });
+
   it("backs up the full inventory when only the shared database has a pending migration", async () => {
     const fixture = createFixture();
     await backup(fixture, [fixture.shared]);

@@ -54,6 +54,7 @@ const maintenance = vi.hoisted(() => ({
   failureFacts: [],
   databaseWrites: undefined,
   run: <T>(operation: () => T): T => operation(),
+  recordMigrationBackup: vi.fn(),
   finish: vi.fn(),
   releaseState: vi.fn(),
   repairSqliteNoCow: vi.fn(),

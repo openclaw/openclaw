@@ -338,6 +338,12 @@ directories outside its scan might still use them. The supported `auth.json`,
 `auth-profiles.json`, SQLite credential, and migration-recovery contracts
 remain unchanged.
 
+Doctor checks these retired sources before schema repair, so a refusal leaves
+the existing database schemas usable by the previous OpenClaw version. Follow
+the intermediate upgrade instructions before retrying. If the intermediate
+Doctor retains a file after verifying its import, keep a backup and move that
+file out of the active state directory before continuing the upgrade.
+
 ## Cron ownership before roster migration
 
 Before retiring a legacy agent roster's default marker, Doctor pins ownerless

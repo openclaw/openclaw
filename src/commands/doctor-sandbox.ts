@@ -394,15 +394,20 @@ function legacySandboxRegistryUpgradeHint(): string {
   return `Upgrade through OpenClaw 2026.9.7 and run ${formatCliCommand("openclaw doctor --fix")} on the original host before retrying. The retired files are left unchanged.`;
 }
 
-export async function detectLegacySandboxRegistryFileIssues(): Promise<
-  readonly LegacySandboxRegistryInspection[]
-> {
+export async function detectLegacySandboxRegistryFileIssues(
+  stateDir?: string,
+): Promise<readonly LegacySandboxRegistryInspection[]> {
   const targets: LegacySandboxRegistryInspection[] = [
     { kind: "containers", path: SANDBOX_REGISTRY_PATH, source: "monolithic" },
     { kind: "containers", path: SANDBOX_CONTAINERS_DIR, source: "sharded" },
     { kind: "browsers", path: SANDBOX_BROWSER_REGISTRY_PATH, source: "monolithic" },
     { kind: "browsers", path: SANDBOX_BROWSERS_DIR, source: "sharded" },
   ];
+  if (stateDir) {
+    for (const target of targets) {
+      target.path = path.join(stateDir, "sandbox", path.basename(target.path));
+    }
+  }
   return targets.filter((target) => {
     try {
       // Even broken links retain operator state; inspect names without opening retired contents.
