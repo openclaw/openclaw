@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { AgentsListResult } from "../../api/types.ts";
 import type { SetupAutoResult } from "./custodian-auto-setup.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -27,7 +28,7 @@ const methods = [
   "openclaw.setup.activate",
   "openclaw.setup.auth.start",
 ];
-const agentsList = {
+const agentsList: AgentsListResult = {
   defaultId: "main",
   mainKey: "main",
   scope: "global",

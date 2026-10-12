@@ -82,7 +82,7 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup }) {
 type Props = { store: CustodianSessionStore };
 type SetupCardElement = SolidBridgeElement<Props>;
 
-export const CustodianSetupCard = defineSolidBridge<Props>(
+defineSolidBridge<Props>(
   "openclaw-custodian-setup-card",
   (props) => {
     const context = useApplication();
