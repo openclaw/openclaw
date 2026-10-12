@@ -1,7 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 
-export const SESSION_VISIBILITY_VALUES = ["shared", "read-only", "suggest", "draft"] as const;
+export { SESSION_VISIBILITY_VALUES } from "./sessions-sharing-constants.js";
 
 export const SessionVisibilitySchema = Type.Union([
   Type.Literal("shared"),

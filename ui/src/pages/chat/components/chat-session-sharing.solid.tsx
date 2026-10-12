@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type {
   GatewaySessionRow,
   SessionMembersListEvidenceResult,
@@ -76,8 +77,12 @@ export function selectChatSessionSharingItem(
   }
   const members = new Set(props.state?.result?.members.map((member) => member.identityId) ?? []);
   if (value?.startsWith("visibility:")) {
-    const visibility = value.slice("visibility:".length) as SessionVisibility;
-    if (!props.visibilityDisabledReason && visibility !== (props.session?.visibility ?? "shared")) {
+    const visibility = SESSION_VISIBILITY_VALUES.find((option) => value === `visibility:${option}`);
+    if (
+      visibility &&
+      !props.visibilityDisabledReason &&
+      visibility !== (props.session?.visibility ?? "shared")
+    ) {
       props.onVisibilityChange(visibility);
     }
     return;

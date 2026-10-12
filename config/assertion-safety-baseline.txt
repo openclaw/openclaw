@@ -2732,11 +2732,8 @@ ui/src/pages/chat/chat-send-timing.ts	1
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	2
 ui/src/pages/chat/chat-thread-items.ts	1
-ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
-ui/src/pages/chat/components/chat-pane-header.ts	2
 ui/src/pages/chat/components/chat-selection-popup.ts	1
-ui/src/pages/chat/components/chat-session-sharing.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
 ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
