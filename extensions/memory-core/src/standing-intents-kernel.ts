@@ -33,7 +33,10 @@ type StandingIntentMatchDatabase = StandingIntentDatabase & {
   };
 };
 
-const lifecycleDeadlines = new WeakMap<DatabaseSync, { observedAt: number; nextDueAt: number }>();
+const lifecycleDeadlines = new WeakMap<
+  DatabaseSync,
+  { observedAt: number; nextDueAt: number; hasActiveIntents: boolean }
+>();
 
 export function invalidateStandingIntentLifecycle(db: DatabaseSync): void {
   lifecycleDeadlines.delete(db);
@@ -106,7 +109,11 @@ export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number)
       }
     }
   }
-  lifecycleDeadlines.set(db, { observedAt: nowMs, nextDueAt });
+  lifecycleDeadlines.set(db, {
+    observedAt: nowMs,
+    nextDueAt,
+    hasActiveIntents: expiry?.next_expiry != null,
+  });
 }
 
 export function createStandingIntentInDatabase(
@@ -179,6 +186,10 @@ export function matchStandingIntentsInDatabase(
   const storedSenderScope = params.senderScope;
   const nowMs = params.nowMs ?? Date.now();
   maintainStandingIntentLifecycle(db, nowMs);
+  // The lifecycle owner invalidates this absence fact on every write and rollback.
+  if (lifecycleDeadlines.get(db)?.hasActiveIntents === false) {
+    return [];
+  }
   const kysely = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);
   let candidatesQuery = kysely
     .selectFrom("standing_intents as intent")

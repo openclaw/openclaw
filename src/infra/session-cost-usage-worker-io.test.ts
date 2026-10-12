@@ -524,7 +524,6 @@ if (!isMainThread) {
           ({ db }) =>
             writeSessionCostUsageRollupInDatabase(db, {
               rollupId: path.join(sessionsDir, "unrequested.jsonl"),
-              previousValueJson: null,
               valueJson: unrelatedValue,
               blob: null,
               updatedAt: selectedRow.updatedAt,

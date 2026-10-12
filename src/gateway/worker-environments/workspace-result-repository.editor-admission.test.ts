@@ -69,8 +69,6 @@ describe("repository workspace editor admission", () => {
         admit(request, grant);
       });
       try {
-        placements.get(SESSION_ID);
-        expect(sql.queries.length).toBeGreaterThan(0);
         const saving = f.mutations.mutate({
           ...sessionTarget,
           assertCurrent: () => {

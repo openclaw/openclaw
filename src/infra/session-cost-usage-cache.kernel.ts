@@ -105,7 +105,6 @@ export function writeSessionCostUsageRollupInDatabase(
   db: DatabaseSync,
   params: {
     rollupId: string;
-    previousValueJson: Uint8Array | null;
     valueJson: Uint8Array;
     blob: Uint8Array | null;
     updatedAt: number;
@@ -121,38 +120,13 @@ export function writeSessionCostUsageRollupInDatabase(
     expires_at: null,
     updated_at: params.updatedAt,
   };
-  const writeCheckpoint = () => {
-    if (params.previousValueJson === null) {
-      return (
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .insertInto("cache_entries")
-            .values({ scope: ROLLUP_SCOPE, key: params.rollupId, ...values })
-            .onConflict((conflict) =>
-              conflict
-                .columns(["scope", "key"])
-                .doUpdateSet(values)
-                .where("value_json", "is", null),
-            ),
-        ).numAffectedRows === 1n
-      );
-    }
-    return (
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("cache_entries")
-          .set(values)
-          .where("scope", "=", ROLLUP_SCOPE)
-          .where("key", "=", params.rollupId)
-          .where("value_json", "=", cacheJsonText(params.previousValueJson)),
-      ).numAffectedRows === 1n
-    );
-  };
-  if (!writeCheckpoint()) {
-    return false;
-  }
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto("cache_entries")
+      .values({ scope: ROLLUP_SCOPE, key: params.rollupId, ...values })
+      .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
+  );
   if (params.partitions || params.removedDates || params.replacePartitions) {
     writeSessionCostUsagePartitionsInDatabase(db, params);
   }

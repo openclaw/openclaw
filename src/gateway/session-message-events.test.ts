@@ -1786,9 +1786,11 @@ describe("session.message websocket events", () => {
         messageId: "msg-work-global",
       });
 
-      const workMessage = await workMessagePromise;
-      await mainMessagePromise;
-      const bareMessage = await bareMessagePromise;
+      const [workMessage, , bareMessage] = await Promise.all([
+        workMessagePromise,
+        mainMessagePromise,
+        bareMessagePromise,
+      ]);
       expectRecordFields(workMessage.payload, {
         sessionKey: "global",
         agentId: "work",

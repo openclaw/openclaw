@@ -94,7 +94,7 @@ describe("tsgo core test shards", () => {
       ["src/cli/cron-cli.test.ts", "services-cron"],
       ["src/cli/cron-output.process.test.ts", "services-cron"],
       ["src/cli/cron-cli/register.cron-edit.test.ts", "services-cron"],
-      ["src/cron/service/run-recovery.observation.test.ts", "services-cron"],
+      ["src/cron/service/run-receipt-observation.test.ts", "services-cron"],
       ["src/cli/program/command-registry.test.ts", "commands"],
       ["src/cli/update-cli.test.ts", "cli-update"],
       ["src/cli/update-cli/update-command-config-fence.test.ts", "cli-update"],
