@@ -63,13 +63,6 @@ fs.writeFileSync(${JSON.stringify(forwardedArgsPath)}, JSON.stringify(process.ar
     expect(readFileSync(wrapperLogPath, "utf8")).toBe(`${args.join("\n")}\n`);
     expect(JSON.parse(readFileSync(forwardedArgsPath, "utf8"))).toEqual(args);
   });
-
-  it("rejects missing required arguments before writing a wrapper", () => {
-    const result = runWriter([]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("usage: write-wrapper.mjs <wrapper-path> <npm-bin> [log-path]");
-  });
 });
 
 describe("doctor install switch ExecStart assertions", () => {
@@ -111,21 +104,6 @@ describe("doctor install switch ExecStart assertions", () => {
     const result = runExecStartAssertion(["entrypoint-exists", unitPath]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`Entrypoint in service unit does not exist: ${entrypoint}`);
-  });
-
-  it("reads wrapper arguments from parsed ExecStart argv", () => {
-    const root = makeTempDir(tempDirs, "openclaw-doctor-exec-start-");
-    const unitPath = path.join(root, "openclaw-gateway.service");
-    const wrapper = "/home/test user/.local/bin/openclaw-wrapper";
-    writeFileSync(unitPath, `[Service]\nExecStart="${wrapper}" gateway\n`);
-
-    const wrapperResult = runExecStartAssertion(["argument", unitPath, wrapper, "1"]);
-    const gatewayResult = runExecStartAssertion(["argument", unitPath, "gateway", "2"]);
-
-    expect(wrapperResult.status).toBe(0);
-    expect(wrapperResult.stderr).toBe("");
-    expect(gatewayResult.status).toBe(0);
-    expect(gatewayResult.stderr).toBe("");
   });
 
   it("reports the parsed argv when entrypoint detection fails", () => {

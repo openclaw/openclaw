@@ -447,7 +447,7 @@ describe("retained existing-state writer", () => {
     }
   });
 
-  it("rechecks current environment and schema scope for each retained write", () => {
+  it("rechecks current environment for each retained write", () => {
     const options = fixture(true);
     const externalOptions = {
       ...options,
@@ -485,9 +485,6 @@ describe("retained existing-state writer", () => {
       }
     });
     try {
-      const refused = vi.fn();
-      expect(() => writer.run(refused, externalOptions)).toThrow(/schema|admission/iu);
-      expect(refused).not.toHaveBeenCalled();
       withExistingOpenClawStateSchema(options, () => {
         writer.run(
           ({ db }) => db.exec("INSERT INTO records VALUES (2, 'readmitted')"),

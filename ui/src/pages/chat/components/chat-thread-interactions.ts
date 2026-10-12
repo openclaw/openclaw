@@ -124,6 +124,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     selectedSession: GatewaySessionRow | undefined;
     transcriptMetadata?: ChatTranscriptMetadata;
     boardProvider?: BoardProvider;
+    widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
     announceTranscript?: boolean;
     loading: boolean;
     routeLoadingSkeleton?: boolean;
