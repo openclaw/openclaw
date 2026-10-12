@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import {
@@ -19,8 +20,6 @@ type WorkerSessionToolOperationIdentity = {
   requestDigest: string;
 };
 
-export const MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS = 4;
-
 function runningOperations(db: DatabaseSync, identity: WorkerTurnToolStateIdentity) {
   return query(db)
     .selectFrom("worker_session_tool_operations")
@@ -30,13 +29,15 @@ function runningOperations(db: DatabaseSync, identity: WorkerTurnToolStateIdenti
     .where("status", "=", "running");
 }
 
-export function assertNoRunningWorkerSessionToolOperations(
+/** Removes idle authority and replay data in the transaction that revokes the turn claim. */
+export function clearWorkerTurnToolState(
   db: DatabaseSync,
   identity: WorkerTurnToolStateIdentity,
 ): void {
   if (executeSqliteQuerySync(db, runningOperations(db, identity).limit(1)).rows.length) {
     throw new Error(`Session ${identity.sessionId} has a running worker session operation`);
   }
+  deleteWorkerTurnToolState(db, identity);
 }
 
 function closeWorkerTurnToolAdmission(
@@ -52,11 +53,7 @@ function closeWorkerTurnToolAdmission(
   );
 }
 
-/** Removes authority and replay data in the same transaction that revokes the turn claim. */
-export function clearWorkerTurnToolState(
-  db: DatabaseSync,
-  identity: WorkerTurnToolStateIdentity,
-): void {
+function deleteWorkerTurnToolState(db: DatabaseSync, identity: WorkerTurnToolStateIdentity): void {
   closeWorkerTurnToolAdmission(db, identity);
   publishPlacementTurnToolState(db, identity);
   executeSqliteQuerySync(
@@ -178,7 +175,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
       if (executeSqliteQuerySync(db, runningOperations(db, claim).limit(1)).rows.length) {
         return false;
       }
-      clearWorkerTurnToolState(db, claim);
+      deleteWorkerTurnToolState(db, claim);
       return true;
     },
 
@@ -224,7 +221,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
       }
       const runningCount = executeSqliteQuerySync(db, runningOperations(db, params.claim)).rows
         .length;
-      if (runningCount >= MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS) {
+      if (runningCount >= WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS) {
         return { kind: "capacity" };
       }
       const timestamp = now();

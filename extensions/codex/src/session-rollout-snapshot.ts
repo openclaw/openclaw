@@ -30,10 +30,10 @@ export async function readCodexRolloutSnapshot(params: {
   threadId: string;
   assertCurrent: () => void;
 }) {
-  const deadline = Date.now() + DEADLINE_MS;
+  const deadline = performance.now() + DEADLINE_MS;
   const check = () => {
     params.assertCurrent();
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new Error("Codex rollout metadata observation timed out");
     }
   };
@@ -98,7 +98,7 @@ export async function readCodexRolloutSnapshot(params: {
     const reader = decoder ?? input;
     const timer = setTimeout(
       () => reader.destroy(new Error("Codex rollout metadata observation timed out")),
-      Math.max(1, deadline - Date.now()),
+      Math.floor(Math.max(1, deadline - performance.now())),
     );
     let metadata: Record<string, unknown> | undefined;
     const chunks: Buffer[] = [];

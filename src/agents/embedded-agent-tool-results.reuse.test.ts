@@ -8,7 +8,7 @@ import { redactTranscriptMessage } from "./transcript-redact.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("deep-redacts one result once across persistence, trajectory and both lifecycle schedulers", async () => {
+it("shares one redaction per tool event across trajectory, delivery, and nested persistence", async () => {
   const deepRedact = vi.spyOn(redaction, "redactModelVisibleSecrets");
   const secret = "sk-or-v1-abcdef0123456789";
   const output = `OPENROUTER_API_KEY=${secret}\n${"src/example.ts: build completed successfully\n".repeat(7_200)}`;
@@ -55,9 +55,10 @@ it("deep-redacts one result once across persistence, trajectory and both lifecyc
         return result;
       },
       onTerminal: (terminal) => {
-        exposed.push(sanitizeToolResult(terminal.result));
+        exposed.push(terminal.readSanitizedResult());
       },
     });
+    expect(deepRedact).toHaveBeenCalledOnce();
     emit({
       type: "tool_execution_end",
       toolName: "exec",
@@ -69,6 +70,7 @@ it("deep-redacts one result once across persistence, trajectory and both lifecyc
     expect(exposed.length).toBeGreaterThanOrEqual(5);
     expect(JSON.stringify(exposed)).not.toContain(secret);
     expect(JSON.stringify(sm.getEntries())).not.toContain(secret);
+    expect(deepRedact).toHaveBeenCalledTimes(2);
     expect(sanitizeToolResult(result)).toMatchObject({
       content: [{ type: "text" }, { type: "image", bytes: 5, omitted: true }],
       details: { credentials: { apiKey: expect.not.stringContaining(secret) } },
@@ -76,5 +78,5 @@ it("deep-redacts one result once across persistence, trajectory and both lifecyc
   } finally {
     subscription.unsubscribe();
   }
-  expect(deepRedact).toHaveBeenCalledOnce();
+  expect(deepRedact).toHaveBeenCalledTimes(3);
 });

@@ -5,7 +5,7 @@ import path from "node:path";
 import type { DtsOptions, TsdownPlugin, UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
-  collectChannelConfigDoctorBuildEntries,
+  collectRetainedDoctorBuildEntries,
   collectPluginDeclarationSourceEntries,
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
@@ -33,6 +33,7 @@ import {
 } from "./scripts/lib/state-schema-inline-plugin.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
@@ -375,8 +376,9 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
-    // Its native loader resolves optional platform packages from the package scope.
+    // Native loaders resolve optional platform packages from their package scopes.
     "@openclaw/fs-safe",
+    "@openclaw/proc-safe",
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
@@ -416,6 +418,8 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
+    id === "@openclaw/worker-runtime" ||
+    id.startsWith("@openclaw/worker-runtime/") ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
     [
@@ -475,8 +479,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
-    "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
-    "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
     ...runtimeProcessBuildEntries,
@@ -681,6 +683,11 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ]),
     ),
     ...Object.fromEntries(
+      Object.entries(buildPackageDistEntriesFromExports("worker-runtime")).map(
+        ([entry, source]) => [`worker-runtime/${entry}`, source],
+      ),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildPackageDistEntriesFromExports("media-core")).map(([entry, source]) => [
         `media-core/${entry}`,
         source,
@@ -716,37 +723,12 @@ function buildUnifiedDistEntries(): Record<string, string> {
   };
 }
 
-type UnifiedEntry = [name: string, source: string];
-
-function partitionUnifiedEntryGroups(
-  entryGroups: UnifiedEntry[][],
-  partitionCount: number,
-): UnifiedEntry[][] {
-  const partitions = Array.from({ length: partitionCount }, () => [] as UnifiedEntry[]);
-  for (const entryGroup of entryGroups) {
-    let targetIndex = 0;
-    for (let index = 1; index < partitions.length; index += 1) {
-      const candidate = partitions[index];
-      const target = partitions[targetIndex];
-      if (candidate && target && candidate.length < target.length) {
-        targetIndex = index;
-      }
-    }
-    const target = partitions[targetIndex];
-    if (!target) {
-      throw new Error("unified declaration partition count must be positive");
-    }
-    target.push(...entryGroup);
-  }
-  return partitions;
-}
-
 function normalizeDeclarationEntrySource(source: string): string {
   const relativeSource = path.isAbsolute(source) ? path.relative(process.cwd(), source) : source;
   return relativeSource.replaceAll(path.sep, "/");
 }
 
-function buildUnifiedDeclarationPartitions(
+function buildUnifiedDeclarationGroups(
   entries: Record<string, string>,
 ): Array<{ name: string; sources: string[] }> {
   const publicPluginSdkEntryNames = new Set(
@@ -770,47 +752,21 @@ function buildUnifiedDeclarationPartitions(
         : name === "index" || Object.hasOwn(pluginContracts, name),
     )
     .toSorted(([left], [right]) => left.localeCompare(right));
-  const baseEntries = sortedEntries.filter(([name]) => name === "index");
-  const pluginSdkEntries = sortedEntries.filter(([name]) => name.startsWith("plugin-sdk/"));
-  const extensionEntriesById = new Map<string, UnifiedEntry[]>();
-  for (const entry of sortedEntries) {
-    const [name] = entry;
-    if (!name.startsWith("extensions/")) {
-      continue;
-    }
-    const extensionId = name.split("/", 3)[1];
-    if (!extensionId) {
-      continue;
-    }
-    const extensionEntries = extensionEntriesById.get(extensionId) ?? [];
-    extensionEntries.push(entry);
-    extensionEntriesById.set(extensionId, extensionEntries);
-  }
-
-  // Keep memory-bounded partitions. Outside private QA the private SDK partition
-  // has no emit roots, so the declaration plugin performs no compiler work for it.
-  const pluginSdkPartitions = [
-    pluginSdkEntries.filter(([name]) => publicPluginSdkEntryNames.has(name)),
-    pluginSdkEntries.filter(([name]) => !publicPluginSdkEntryNames.has(name)),
+  // These entrypoints share most of their compiler inputs. Partitioning them
+  // repeats whole-program checking and emission, even when bundles are small.
+  const groups = [
+    { name: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0], entries: sortedEntries },
+    {
+      name: TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS[0],
+      entries: sortedEntries.filter(([name]) => name.startsWith("plugin-sdk/")),
+    },
   ];
-  const extensionPartitions = partitionUnifiedEntryGroups(
-    [...extensionEntriesById.entries()]
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([, extensionEntries]) => extensionEntries),
-    5,
-  );
-  const partitions = [baseEntries, ...pluginSdkPartitions, ...extensionPartitions];
-
-  return TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.map((name, index) => {
-    const partition = partitions[index];
-    if (!partition) {
-      throw new Error(`missing unified declaration partition for ${name}`);
-    }
+  return groups.map(({ name, entries: declarationEntries }) => {
     return {
       name,
       // The compiler's TypeScript-only policy leaves JavaScript runtime assets
       // without declarations; they remain in the unified runtime entry graph.
-      sources: partition
+      sources: declarationEntries
         .filter(([, source]) => /\.[cm]?tsx?$/u.test(source))
         .map(([, source]) => normalizeDeclarationEntrySource(source)),
     };
@@ -863,6 +819,7 @@ const configs: UserConfig[] = [
   }),
   nodeWorkspacePackageBuildConfig("normalization-core"),
   nodeWorkspacePackageBuildConfig("retry"),
+  nodeWorkspacePackageBuildConfig("worker-runtime"),
   nodeWorkspacePackageBuildConfig("sdk", {
     deps: withExternalPackageSubpaths({
       neverBundle: [
@@ -987,7 +944,13 @@ const configs: UserConfig[] = [
     true,
   ),
   workerDeployBuildConfig({
+    "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/file-tool-read.worker": "src/worker/worker-deploy-file-tool-read.ts",
   }),
   workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
@@ -995,19 +958,30 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),
+  workerDeployBuildConfig({
+    "worker/sqlite-source-revision.worker": "src/worker/worker-deploy-sqlite-source-revision.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",
+  }),
   ...createManagedHandoffBuildConfigs().map((config) =>
     Object.assign(config, { name: TSDOWN_UNIFIED_CONFIG_GROUP, env }),
   ),
-  nodeBuildConfig(
-    {
-      name: TSDOWN_UNIFIED_CONFIG_GROUP,
-      // Keep retained config repairs in their own graph: shared public SDK chunks
-      // otherwise pull state-migration exports into these pre-install artifacts.
-      entry: collectChannelConfigDoctorBuildEntries(bundledPluginBuildInventory),
-      outDir: "dist/config-doctor",
-      deps: unifiedDeps,
-    },
-    false,
+  ...["config-doctor", "state-retention"].map((surface) =>
+    nodeBuildConfig(
+      {
+        name: TSDOWN_UNIFIED_CONFIG_GROUP,
+        // Keep retained config repairs in their own graph: shared public SDK chunks
+        // otherwise pull state-migration exports into these pre-install artifacts.
+        entry: collectRetainedDoctorBuildEntries({ ...bundledPluginBuildInventory, surface }),
+        outDir: `dist/${surface}`,
+        deps: unifiedDeps,
+      },
+      false,
+    ),
   ),
   workerHelperBuildConfig({
     "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
@@ -1019,8 +993,9 @@ const configs: UserConfig[] = [
       { WORKER_DEPLOY_BUILD: "true", SEALED_RUNTIME_BUILD: "true" },
     ),
   ),
+  // The build wrapper must select exactly one of the full and SDK-only declaration groups.
   ...(TSDOWN_DECLARATIONS
-    ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>
+    ? buildUnifiedDeclarationGroups(unifiedDistEntries).map(({ name, sources }) =>
         nodeBuildConfig(
           {
             name,

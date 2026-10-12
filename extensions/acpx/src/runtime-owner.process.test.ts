@@ -15,18 +15,34 @@ import {
 } from "openclaw/plugin-sdk/acp-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { expect, it } from "vitest";
+import { afterEach, beforeAll, expect, it, type TestContext } from "vitest";
 import { AcpxRuntime } from "./runtime.js";
 
 const harness = "owner-fixture";
 const script = fileURLToPath(
   new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
 );
+const fixtureRuns = new WeakMap<TestContext, Promise<void>>();
 
-it.each(["global", "shared-project"])(
+beforeAll(async () => {
+  // Load the lazy host-test runtime before any case registers its ACP backend.
+  const admission = await createAdmittedHostCapabilityTestFixture({ runId: "acpx-owner-setup" });
+  admission.closeHost();
+  admission.closeAdmission();
+});
+
+afterEach(async (context) => {
+  // Join timed-out cases before shared afterEach hooks reset plugin state.
+  // The test body reports failures; let the remaining cleanup hooks run.
+  const run = fixtureRuns.get(context);
+  fixtureRuns.delete(context);
+  await run?.catch(() => {});
+});
+
+it.for(["global", "shared-project"])(
   "isolates real ACPX histories for two owners of %s across restart and controls",
-  async (sessionKey) => {
-    await withOpenClawTestState({ label: "acpx-owner-process" }, async (state) => {
+  async (sessionKey, context) => {
+    const run = withOpenClawTestState({ label: "acpx-owner-process" }, async (state) => {
       const directory = state.root;
       const cfg = {
         agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
@@ -65,7 +81,7 @@ it.each(["global", "shared-project"])(
       registerAcpRuntimeBackend({ id: "acpx", runtime });
       testing.resetAcpSessionManagerForTests();
       let manager = getAcpSessionManager();
-      const handles = [];
+      const handles: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>[] = [];
       const target = (agentId?: string) => ({ cfg, sessionKey, agentId });
       const turn = async (
         handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>,
@@ -77,7 +93,7 @@ it.each(["global", "shared-project"])(
           runId: text,
           agentId: handle.agentId,
           sessionId: `${handle.agentId}-session`,
-          sessionKey,
+          sessionKey: handle.sessionKey,
           workspaceDir: state.workspaceDir,
           abortSignal: new AbortController().signal,
         });
@@ -109,7 +125,9 @@ it.each(["global", "shared-project"])(
             mode: "persistent",
           });
           handles.push(handle);
-          expect(handle.sessionKey).toBe(sessionKey);
+          const expectedSessionKey =
+            sessionKey === "global" ? sessionKey : `agent:${agentId}:${sessionKey}`;
+          expect(handle.sessionKey).toBe(expectedSessionKey);
           expect(handle.agentId).toBe(agentId);
           expect(decodeAcpxRuntimeHandleState(handle.runtimeSessionName)?.name).toBe(
             handle.acpxRecordId,
@@ -121,7 +139,7 @@ it.each(["global", "shared-project"])(
               name,
               command: process.execPath,
               args: ["server.mjs", "--openclaw-agent-id", agentId],
-              env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: sessionKey }],
+              env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: expectedSessionKey }],
             })),
             { name: "user-server", command: process.execPath, args: ["server.mjs"], env: [] },
           ]);
@@ -136,19 +154,30 @@ it.each(["global", "shared-project"])(
         }
         expect(handles[0]!.acpxRecordId).not.toBe(handles[1]!.acpxRecordId);
         expect(handles[0]!.backendSessionId).not.toBe(handles[1]!.backendSessionId);
+        await runtime.shutdown();
         runtime = await createRuntime();
         registerAcpRuntimeBackend({ id: "acpx", runtime });
         testing.resetAcpSessionManagerForTests();
         manager = getAcpSessionManager();
+        const readWorkState = async (): Promise<unknown> =>
+          JSON.parse(
+            await fs.readFile(
+              path.join(peerDirectory, `${handles[1]!.backendSessionId}.json`),
+              "utf8",
+            ),
+          );
+        const workState = await readWorkState();
         for (const previous of handles) {
           const resumed = await manager.getSessionStatus(target(previous.agentId));
           expect(resumed).toMatchObject({
             agentId: previous.agentId,
-            sessionKey,
+            sessionKey: previous.sessionKey,
             identity: { acpxRecordId: previous.acpxRecordId },
           });
           const handle = previous;
-          expect(readAcpSessionEntry(target(handle.agentId))?.storeSessionKey).toBe(sessionKey);
+          expect(readAcpSessionEntry(target(handle.agentId))?.storeSessionKey).toBe(
+            handle.sessionKey,
+          );
           const result = await turn(handle, `${handle.agentId}-second`);
           expect(result).toMatchObject({
             history: [`${handle.agentId}-first`, `${handle.agentId}-second`],
@@ -156,6 +185,9 @@ it.each(["global", "shared-project"])(
             mode: "review",
           });
           expect((await store.load(handle.acpxRecordId!))?.messages.length).toBeGreaterThan(0);
+          if (handle.agentId === "main") {
+            expect(await readWorkState()).toEqual(workState);
+          }
           await manager.closeSession({
             ...target(handle.agentId),
             reason: "reset",
@@ -169,6 +201,9 @@ it.each(["global", "shared-project"])(
           });
           expect(await turn(fresh, "fresh")).toMatchObject({ history: ["fresh"] });
           await manager.closeSession({ ...target(fresh.agentId), reason: "test-complete" });
+          if (handle.agentId === "main") {
+            expect(await readWorkState()).toEqual(workState);
+          }
         }
       } finally {
         for (const handle of handles) {
@@ -182,13 +217,16 @@ it.each(["global", "shared-project"])(
         }
         testing.resetAcpSessionManagerForTests();
         unregisterAcpRuntimeBackend("acpx");
+        await runtime.shutdown();
       }
     });
+    fixtureRuns.set(context, run);
+    await run;
   },
 );
 
-it("closes a completed oneshot without mixing its replacement record identity", async () => {
-  await withOpenClawTestState({ label: "acpx-oneshot-owner-process" }, async (state) => {
+it("closes a completed oneshot without mixing its replacement record identity", async (context) => {
+  const run = withOpenClawTestState({ label: "acpx-oneshot-owner-process" }, async (state) => {
     const cfg = {
       agents: { ownership: "explicit" as const, entries: { main: {} } },
       acp: { backend: "acpx" },
@@ -265,4 +303,6 @@ it("closes a completed oneshot without mixing its replacement record identity", 
       await runtime.shutdown();
     }
   });
+  fixtureRuns.set(context, run);
+  await run;
 });

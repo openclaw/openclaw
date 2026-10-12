@@ -91,7 +91,9 @@ describe("Side chat with a published Gateway runtime", () => {
         scheduler: createTestGatewayScheduler(),
         getConfig: () => cfg,
         contextReader: defaultSessionCompanionContextReader,
-        sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+        sessionObserver: {
+          getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
+        },
       });
       const observedTools: string[][] = [];
       const observedModels: Array<{

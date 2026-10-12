@@ -1,12 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expect } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import type { GatewayClient } from "../../src/gateway/client.js";
 import { buildCodexHarnessAppServerArgs } from "../../src/gateway/gateway-codex-harness.live-helpers.js";
 import type { AgentEventPayload } from "../../src/infra/agent-events.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../../src/secrets/provider-env-vars.js";
 import { extractFirstTextBlock } from "../../src/shared/chat-message-content.js";
 // Native live fixture setup and capture shared with its offline boundary regressions.
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
+
+export async function readCodexHarnessSessionId(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<string> {
+  // The live reset proof must distinguish logical generation rollover from
+  // physical session-id rotation, so read the persisted row through Gateway.
+  const result: {
+    sessions?: Array<{ key?: string; sessionId?: string }>;
+  } = await params.client.request("sessions.list", {
+    includeGlobal: true,
+    limit: 200,
+  });
+  const sessionId = result.sessions?.find((entry) => entry.key === params.sessionKey)?.sessionId;
+  expect(sessionId, `expected sessionId for ${params.sessionKey}`).toBeTypeOf("string");
+  return sessionId as string;
+}
 
 export function createCodexHarnessLiveInstance(
   token: string,

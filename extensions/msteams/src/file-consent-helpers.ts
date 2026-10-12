@@ -1,45 +1,18 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
-import { storePendingUpload } from "./pending-uploads.js";
+import { storePendingUpload, type PendingUpload } from "./pending-uploads.js";
 
 export const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
-type FileConsentMedia = {
-  buffer: Buffer;
-  filename: string;
-  contentType?: string;
-};
-
-type FileConsentActivityResult = {
-  activity: Record<string, unknown>;
-  uploadId: string;
-};
-
-function buildConsentActivity(params: {
-  media: FileConsentMedia;
-  description?: string;
-  uploadId: string;
-}): Record<string, unknown> {
-  const { media, description, uploadId } = params;
-  const consentCard = buildFileConsentCard({
-    filename: media.filename,
-    description: description || `File: ${media.filename}`,
-    sizeInBytes: media.buffer.length,
-    context: { uploadId },
-  });
-  return {
-    type: "message",
-    attachments: [consentCard],
-  };
-}
+type FileConsentMedia = Pick<PendingUpload, "buffer" | "filename" | "contentType">;
 
 /** In-process replies keep consent bytes in memory; CLI sends use the persisted variant below. */
 export function prepareFileConsentActivity(params: {
   media: FileConsentMedia;
   conversationId: string;
   description?: string;
-}): FileConsentActivityResult {
+}) {
   const { media, conversationId, description } = params;
 
   const uploadId = storePendingUpload({
@@ -49,13 +22,23 @@ export function prepareFileConsentActivity(params: {
     conversationId,
   });
 
-  return { activity: buildConsentActivity({ media, description, uploadId }), uploadId };
+  const consentCard = buildFileConsentCard({
+    filename: media.filename,
+    description: description || `File: ${media.filename}`,
+    sizeInBytes: media.buffer.length,
+    context: { uploadId },
+  });
+  const activity: Record<string, unknown> = {
+    type: "message",
+    attachments: [consentCard],
+  };
+  return { activity, uploadId };
 }
 
 /** Persist consent bytes for callbacks received by another process after the CLI exits. */
 export async function prepareFileConsentActivityFs(
   params: Parameters<typeof prepareFileConsentActivity>[0],
-): Promise<FileConsentActivityResult> {
+) {
   const result = prepareFileConsentActivity(params);
   await storePendingUploadFs({
     id: result.uploadId,

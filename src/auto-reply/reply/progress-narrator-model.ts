@@ -7,9 +7,6 @@ import { compactProgressText } from "../../shared/text-truncate.js";
 const NARRATION_TIMEOUT_MS = 10_000;
 const NOTES_IN_PROMPT = 15;
 const USER_MESSAGE_PROMPT_CHARS = 500;
-// Reasoning-capable utility models spend output tokens before the short
-// visible text; a tiny cap can leave no text (same budget as label generation).
-const NARRATION_MAX_TOKENS = 4_096;
 
 const NARRATION_SYSTEM_PROMPT = [
   "You write the live status line for an AI assistant that is working on a chat request.",
@@ -67,15 +64,14 @@ export async function generateNarrationWithUtilityModel(params: {
     signal.throwIfAborted();
     const result = await runIsolatedCompletion({
       ...params.prepared,
+      purpose: "progress-narration",
       config: params.cfg,
       systemPrompt: NARRATION_SYSTEM_PROMPT,
       prompt: buildNarrationUserPrompt(params.input),
       timeoutMs: NARRATION_TIMEOUT_MS,
       abortSignal: signal,
-      streamParams: {
-        maxTokens: NARRATION_MAX_TOKENS,
-        temperature: 0.3,
-      },
+      answerTokenBudget: 4_096,
+      streamParams: { temperature: 0.3 },
     });
     const text = result.text.trim();
     return { text: text || null };

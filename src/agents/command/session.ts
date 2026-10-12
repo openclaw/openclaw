@@ -10,10 +10,8 @@ import {
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import {
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveSessionLifecycleTimestamps,
-} from "../../config/sessions/lifecycle.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
+import { hasTerminalMainSessionTranscriptNewerThanRegistrySync } from "../../config/sessions/lifecycle.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -30,6 +28,8 @@ import {
   loadExactSessionEntryReadOnly,
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -104,6 +104,7 @@ export function clearRotatedSessionMetadata(entry: InternalSessionEntry): Intern
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryOperatorSource: undefined,
     restartRecoveryBeforeAgentReplyState: undefined,
     restartRecoveryDeliveryReceiptState: undefined,
     restartRecoveryDeliveryToolCallId: undefined,
@@ -391,7 +392,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
 }
 
 function resolveSessionKeyForRequestInternal(
-  opts: SessionRequest & { createMissingSessionId: boolean },
+  opts: SessionRequest & { createMissingSessionId: boolean; prepareBoundEntry?: boolean },
 ): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -493,7 +494,16 @@ function resolveSessionKeyForRequestInternal(
   // Exclusion and lookup share the persisted locator; routing keeps the request key.
   const storeSessionKey = sessionKey ? normalizeStoreSessionKey(sessionKey) : undefined;
   const sessionEntry =
-    storeSessionKey && !isInternalSessionEffectsKey(storeSessionKey)
+    storeSessionKey &&
+    !isInternalSessionEffectsKey(storeSessionKey) &&
+    !(
+      opts.prepareBoundEntry &&
+      captureIncognitoSessionSource({
+        agentId: storeAgentId,
+        storePath,
+        sessionKey: storeSessionKey,
+      })
+    )
       ? loadExactSessionEntryReadOnly({
           agentId: storeAgentId,
           storePath,
@@ -573,14 +583,31 @@ export function resolveSessionKeyForRequestCore(opts: SessionRequest): SessionKe
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
 }
 
-export function resolveSession(opts: SessionRequest): SessionResolution {
+export async function resolveSession(
+  opts: SessionRequest & { signal?: AbortSignal; assertCurrent?: () => void },
+): Promise<SessionResolution> {
   const sessionCfg = opts.cfg.session;
   const {
     agentId: resolvedAgentId,
     sessionKey,
-    sessionEntry,
+    sessionEntry: routedEntry,
     storePath,
-  } = resolveSessionKeyForRequestCore(opts);
+  } = resolveSessionKeyForRequestInternal({
+    ...opts,
+    createMissingSessionId: true,
+    prepareBoundEntry: true,
+  });
+  const scope = { agentId: resolvedAgentId, sessionKey: sessionKey ?? "", storePath };
+  const sessionEntry =
+    sessionKey && !isInternalSessionEffectsKey(sessionKey) && captureIncognitoSessionSource(scope)
+      ? await readSessionEntryReadOnlyInWorker(
+          { ...scope, sessionKey: normalizeStoreSessionKey(sessionKey) },
+          () => {
+            opts.signal?.throwIfAborted();
+            opts.assertCurrent?.();
+          },
+        )
+      : routedEntry;
   const now = Date.now();
 
   const sessionAgentId =
@@ -624,16 +651,21 @@ export function resolveSession(opts: SessionRequest): SessionResolution {
         (skipImplicitExpiry ||
           evaluateSessionFreshness({
             updatedAt: sessionEntry.updatedAt,
-            ...resolveSessionLifecycleTimestamps({
-              entry: sessionEntry,
-              agentId: sessionAgentId,
-              sessionKey,
-              storePath,
-            }),
+            ...(sessionKey
+              ? await resolveSessionLifecycleTimestampsAsync({
+                  entry: sessionEntry,
+                  agentId: sessionAgentId,
+                  sessionKey,
+                  storePath,
+                  signal: opts.signal,
+                })
+              : {}),
             now,
             policy: resetPolicy,
           }).fresh))
     : false;
+  opts.signal?.throwIfAborted();
+  opts.assertCurrent?.();
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;

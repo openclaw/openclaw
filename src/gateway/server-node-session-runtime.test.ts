@@ -311,6 +311,7 @@ describe("gateway node session runtime", () => {
     }
     const terminals: Promise<void>[] = [];
     broadcastChatTerminal({
+      terminalEntry: undefined,
       context: {
         broadcast: vi.fn(),
         agentRunSeq: new Map(),
@@ -399,14 +400,14 @@ describe("gateway node session runtime", () => {
           projectSessionLifecycle: false,
           verboseLevel: "full",
         };
-        handler(event);
+        return handler(event);
       };
       try {
-        emit(1, "assistant", { text: "A", delta: "A" });
+        await emit(1, "assistant", { text: "A", delta: "A" });
         await Promise.all(sends);
         delayed = true;
-        emit(2, "assistant", { text: "AB", delta: "B" });
-        emit(
+        await emit(2, "assistant", { text: "AB", delta: "B" });
+        await emit(
           4,
           stream,
           stream === "tool"
@@ -436,7 +437,7 @@ describe("gateway node session runtime", () => {
         ).toBeGreaterThan(tailIndex);
       } finally {
         pairing.resolve("generation-a");
-        handler.dispose();
+        await handler.dispose();
         chatRunState.clear();
         vi.useRealTimers();
       }
@@ -500,12 +501,7 @@ describe("gateway node session runtime", () => {
       { nodeId: "node-a" },
       { dropIfSlow: true },
     );
-    expect(broadcast).toHaveBeenNthCalledWith(
-      2,
-      "sessions.changed",
-      { reason: "runner-availability" },
-      { dropIfSlow: true },
-    );
+    expect(broadcast).toHaveBeenCalledOnce();
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(true);
     expect(onRunnerStateChanged).toHaveBeenLastCalledWith("node-a", {
       inventoryChanged: true,
@@ -515,31 +511,23 @@ describe("gateway node session runtime", () => {
       "availability",
       "inventory",
       `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
-      "broadcast:sessions.changed",
     ]);
 
     registerNode(runtime, "conn-replacement", "generation-a", []);
 
-    expect(broadcast).toHaveBeenCalledTimes(4);
+    expect(broadcast).toHaveBeenCalledTimes(2);
     expect(onRunnerStateChanged).toHaveBeenCalledTimes(2);
     expect(broadcast).toHaveBeenNthCalledWith(
-      3,
+      2,
       GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
       { nodeId: "node-a" },
       { dropIfSlow: true },
     );
-    expect(broadcast).toHaveBeenNthCalledWith(
-      4,
-      "sessions.changed",
-      { reason: "runner-availability" },
-      { dropIfSlow: true },
-    );
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(false);
-    expect(order.slice(4)).toEqual([
+    expect(order.slice(3)).toEqual([
       "availability",
       "inventory",
       `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
-      "broadcast:sessions.changed",
     ]);
   });
 

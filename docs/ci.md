@@ -12,6 +12,10 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The existing `live-cache` release job has a 30-minute budget for three sequential
+eight-minute checks on one runner: stored cache floors, transport prefixes, and
+agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
@@ -43,9 +47,9 @@ budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
 self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at
 most two concurrently. It allows 210 minutes for three waves of six source versions,
 the survivor, and setup.
-Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
-budget, and a lane-specific 1,500-second command timeout. Its OpenAI/recovery chunk
-allows 160 minutes for the npm-serialized lanes plus setup; see
+Authenticated update restart uses a 3,420-second container budget, a 62-minute lane
+budget, and a lane-specific 1,500-second command timeout. Its dedicated recovery
+chunk allows 75 minutes; the remaining OpenAI package chunk allows 60 minutes. See
 [release-path chunks](/ci/release-validation/install-smoke-and-docker-e2e#release-path-chunks).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
@@ -58,7 +62,16 @@ Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focu
 
 Current iOS builds restore three independent input caches: verified Mermaid assets, SwiftPM source packages and binary artifacts, and the Watch RTC Cargo registry and compiled simulator library. Only trusted `main` push and scheduled runs save them; PRs restore only. Frozen targets retain their original cold path. Mermaid validates source and output hashes before copying resources. Its key covers the renderer's complete locked dependency graph, including workspace sources and optional build dependencies, so unrelated root dependency upgrades reuse the assets. SwiftPM keys cover Xcode, package manifests, and available `Package.resolved` files; automatic resolution remains enabled (the generated iOS project currently has no tracked lockfile). Watch keys cover Xcode, architecture, target mappings, the pinned Rust toolchain, lockfile, crate sources, and iOS build settings; the build phase verifies the library checksum and input fingerprint before reuse, and otherwise runs the locked Cargo build. Caching the finished slice avoids rebuilding the Rust standard library when a fresh runner installs `rust-src` with new timestamps. The hourly Watch engine test shares registry downloads, while its host Debug products stay out of the simulator Release cache.
 
+Current iOS Debug builds log CPU count, memory, machine model, booted simulators, and timestamps immediately around Xcode execution. The read-only hardware and simulator checks each have a five-second limit; unavailable diagnostics do not block the build. These markers distinguish simulator-query delays from Xcode startup, package resolution, and compilation.
+
+Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries published by trusted main CI, without saving caches. Both Apple consumers build their complete index in a separate timed step with streamed output retained as `build.log` in the consumer artifact. iOS uses a fresh run-owned index; Periphery analyzes that exact index without rebuilding. Scan scope and the shared dead-code intersection stay unchanged. Cache misses retain the locked Cargo build.
+
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+
+Android screenshot-input PRs and ordinary full manual CI run the existing phone
+and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
+capture to succeed; unit-test-only and documentation changes omit it. See
+[the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
 
@@ -69,9 +82,14 @@ output contract. Missing or invalid inputs still reject current PR Node planning
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 16-class for routine dispatched proof, with a 60-minute total-job deadline including hydration. The explicit high-memory 32-class workflow retains 240 minutes for memory-heavy full-suite gates. The outer GitHub deadline can terminate active SSH commands; the separate 15-minute idle limit does not extend it. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
 
+All five lease workflows allow up to 60 minutes from dispatch to admission and
+runner startup, then reject expired requests before checkout and hydration. This
+queue allowance does not extend running-job or idle deadlines; see
+[Testbox spending limits](/ci/runners#testbox-spending-limits).
+
 Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
-Additional checks and narrow-PR guards and dependency scans start directly after preflight. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
 Changed compiler planning reads every selected program from one native compiler snapshot. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, this avoids serial compiler discovery without changing graph membership or full fallback. Cold Linux replays reduced compiler planning from 77–91 seconds to 17–21 seconds on four available CPUs; the complete materializer reached 14.8 GiB peak RSS. Canonical first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect. Set `OPENCLAW_CI_TYPE_PLAN_SERIAL` to `true` or `1` to restore serial queries.
 
@@ -91,6 +109,22 @@ Core lint discovers separate source and UI TypeScript projects, retaining shared
 
 Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proof#local-equivalents), with caller overrides and the full architecture check sequence retained.
 
+Full Release Validation's Docker seed child uses the 16-class Blacksmith runner
+when no release runner group is configured, prepares the existing smoke package,
+and retains serial weighted lane admission. Hosted outage overrides and retries
+keep their recovery route. Ordinary manual dispatches retain hosted
+serial execution. All six lanes remain selected. The three long, unfitted hosted
+test rows (`core-runtime-config`, `agentic-cli-process`, and
+`agentic-control-plane-agent-chat`) have a 90-minute job cap until complete timing
+observations allow the release planner to split them. The targeted
+`update-restart-auth` lane has a 62-minute budget and a 75-minute job cap.
+Release-path migration matrices isolate channel switching and each published
+baseline on separate runners when multiple baselines are selected; per-host
+weighted resource limits and exact-candidate artifact checks remain unchanged.
+Package Acceptance admits its long standalone upgrade lanes before expanded
+scenario jobs and orders pinned baseline cohorts newest first, without changing
+its matrix cap or scenario coverage.
+
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
 Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Canonical Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. All test and lint tasks remain selected.
@@ -107,7 +141,13 @@ Windows keeps its complete explicit test inventory in five [measured project-ali
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
 
-Control UI CI installs the Chromium revision pinned by Playwright even when the browser cache misses. Current targets use the installer's `--require-playwright-chromium` mode; historical targets retain their existing installer. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+Control UI, repo E2E, and native live browser CI restore the Chromium revision pinned by the selected target's installed Playwright package, with separate OS/architecture cache keys and no fallback prefixes. The protected-main Vitest cache warmer publishes the browser cache in its short dependency job for both Linux backends; PR and release jobs remain restore-only. A cache miss still installs the managed browser, and current targets use the installer's `--require-playwright-chromium` mode rather than substituting system Chrome. Historical targets retain their Playwright installer and Linux dependency setup. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+
+The first `checks-ui` shard also runs a curated WebKit overlay and composer-focus project when changed paths touch its interaction owners, their styles, or the subset in `ui/vitest.config.ts`. The manifest owns that selection. WebKit runs sequentially after the existing UI tests, with the same three-worker limit and no additional runner or matrix row. Scheduled runs without changed paths and frozen targets omit it. The selected row installs the pinned Playwright WebKit browser and Linux dependencies. Run the same project explicitly with `OPENCLAW_UI_WEBKIT=1 pnpm --dir ui test --project=webkit --maxWorkers=3`; ordinary UI test runs remain Chromium-only. CDP-dependent modal media and accessibility-tree suites stay on Chromium until their browser-neutral replacements land.
+
+The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
+
+Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 14.1.1 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
 
@@ -119,6 +159,10 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 canonical configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Known indivisible-file costs remain a floor when selected subsets are priced;
+older complete-group measurements cannot cap those costs. Process-heavy worktree
+and updater suites carry explicit case-cost weights so they do not share a row
+on the default per-file estimate.
 
 Plugin-sensitive PRs select their owner tests, transitive import consumers,
 protected regressions, and policy watches. The existing Plugin Prerelease workflow retains complete
@@ -150,6 +194,11 @@ coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
+Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)
+to preserve memory headroom across the three native shards.
+Main runs UI on Node, so a PR changing the runtime owner
+(`scripts/lib/ci-test-runtime.mts`) selects the three existing UI unit shards on
+Bun; see [scope selection](/ci/scope-and-routing/selection).
 
 Frozen-target CI loads its Node shard planner, planning helpers, and measured
 costs from the pinned `workflow_sha` checkout. Test discovery and execution still
@@ -184,6 +233,10 @@ The generator records successful hosted job walls, including setup, in the exist
 spans and survive the daily refit. The hosted full planner splits measured rows
 above 12 minutes after file bundling, retaining exact coverage and worker settings.
 Complete split generations keep subsequent plans from recombining expensive work.
+The whole Gateway-methods owner retains its completed hosted cost when files are
+added or removed, until a complete observation covers the new inventory. Partial
+generations never supply that floor. Its full-validation rows use the existing
+`-hosted-N` split, while compact main and PR routing retain their existing policy.
 An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.
 
@@ -199,7 +252,8 @@ concurrency limits. Missing group capacity queues jobs. Shared workflows receive
 an optional `runner_group` from their release caller, including `docker-release.yml`
 and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
 ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
-Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker,
+and GitHub App-backed release dispatch)
 keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
 only when Release Publish dispatches it.
 The runner count, matrix caps, and default labels do not change.
@@ -277,7 +331,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="measured-shard-weights" />[Measured shard weights](/ci/capacity#measured-shard-weights)
 - <a id="clawsweeper-activity-forwarding" />[ClawSweeper activity forwarding](/ci/scheduled-workflows#clawsweeper-activity-forwarding)
 - <a id="manual-dispatches" />[Manual dispatches](/ci/scope-and-routing#manual-dispatches)
-- <a id="windows-testbox-probe" />[Windows Testbox Probe](/ci/scope-and-routing#windows-testbox-probe)
+- <a id="windows-testbox-probe" />[Windows Testbox Check](/ci/scope-and-routing#windows-testbox-probe)
 - <a id="runners" />[Runners](/ci/runners#runners)
 - <a id="blacksmith-runner-capacity" />[Blacksmith runner capacity](/ci/runners#blacksmith-runner-capacity)
 - <a id="runner-backend-modes" />[Runner backend modes](/ci/runners#runner-backend-modes)

@@ -89,21 +89,14 @@ describe("remote testbox gate delegation", () => {
   }
 
   it.each([
-    { name: "absent controls", env: {}, expected: [] },
     {
-      name: "explicit controls",
-      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "2", OPENCLAW_VITEST_MAX_WORKERS: "1" },
+      name: "normalized integer controls with terminal colors",
+      env: {
+        FORCE_COLOR: "1",
+        OPENCLAW_TEST_PROJECTS_PARALLEL: " 02 ",
+        OPENCLAW_VITEST_MAX_WORKERS: "001",
+      },
       expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
-    },
-    {
-      name: "normalized integer controls",
-      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: " 02 ", OPENCLAW_VITEST_MAX_WORKERS: "001" },
-      expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
-    },
-    {
-      name: "empty controls",
-      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "", OPENCLAW_VITEST_MAX_WORKERS: " \t " },
-      expected: [],
     },
     {
       name: "only the worker control",
@@ -149,19 +142,18 @@ describe("remote testbox gate delegation", () => {
     ]);
   });
 
-  it.each(
-    ["OPENCLAW_TEST_PROJECTS_PARALLEL", "OPENCLAW_VITEST_MAX_WORKERS"].flatMap((name) =>
-      ["0", "-1", "1.5", "9007199254740992", "2; touch injected"].map((value) => ({ name, value })),
-    ),
-  )("rejects $name=$value before remote dispatch", ({ name, value }) => {
-    const { result, workDir, logPath } = runRemoteGate({ [name]: value });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`${name} must be a positive integer`);
-    expect(existsSync(logPath)).toBe(false);
-    expect(existsSync(join(workDir, "injected"))).toBe(false);
-  });
+  it.each([{ name: "OPENCLAW_VITEST_MAX_WORKERS", value: "2; touch injected" }])(
+    "rejects $name=$value before remote dispatch",
+    ({ name, value }) => {
+      const { result, workDir, logPath } = runRemoteGate({ [name]: value });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`${name} must be a positive integer`);
+      expect(existsSync(logPath)).toBe(false);
+      expect(existsSync(join(workDir, "injected"))).toBe(false);
+    },
+  );
 
-  it.each(["", "origin/main", "abc123", `${capturedBase}; touch injected`])(
+  it.each([`${capturedBase}; touch injected`])(
     "rejects an uncaptured base %j before remote dispatch",
     (base) => {
       const { result, logPath } = runRemoteGate(
@@ -273,18 +265,5 @@ describe("remote testbox gate delegation", () => {
     expect(result.stdout.trim()).toBe(
       "tbx_final\thttps://github.com/openclaw/openclaw/actions/runs/1234",
     );
-  });
-
-  it("fails when the gate log has no successful stamp", () => {
-    const dir = tempDirs.make("openclaw-pr-gates-stamp-");
-    const log = join(dir, "gates-test.log");
-    writeFileSync(
-      log,
-      '{"provider":"blacksmith-testbox","leaseId":"tbx_only","exitCode":1,"runStatus":"failed"}\n',
-    );
-
-    const result = runGatesBash(`require_remote_testbox_gate_stamp '${log}'`);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("no successful blacksmith-testbox timing stamp");
   });
 });

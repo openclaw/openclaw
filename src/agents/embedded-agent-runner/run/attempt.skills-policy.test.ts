@@ -15,6 +15,7 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
@@ -38,6 +39,10 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 
 const reviewRunEmbeddedAgent = vi.hoisted(() => vi.fn());
 vi.mock("../../embedded-agent.js", () => ({ runEmbeddedAgent: reviewRunEmbeddedAgent }));
+vi.mock("../../../skills/workshop/library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../skills/workshop/library.js")>()),
+  listWorkshopChanges: async () => [],
+}));
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
 const skillsPrompt = [
@@ -214,7 +219,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       { workspaceDir, modelId: "gpt-test" },
     );
     candidate.ctx.foregroundPromptContext = foregroundPromptContext;
-    candidate.config = { skills: { workshop: { autonomous: { mode: "propose" } } } };
+    candidate.config = { skills: { workshop: { autonomous: { mode: "auto" } } } };
     await runSkillExperienceReview(candidate);
     expect(foreground.toolNames).toContain("transcripts");
     expect(review).toEqual(foreground);
@@ -257,6 +262,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         },
         attemptOverrides: {
           disableTools: false,
+          disableToolSearch: true,
           disableMessageTool: false,
           reasoningLevel: "on",
           sessionId: session.sessionId,
@@ -268,7 +274,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
             ? {
                 sessionPersistence: "detached" as const,
                 toolExecutionAllow: ["skill_workshop"],
-                skillWorkshopProposalOnly: true,
+                skillWorkshopReviewOf: "agent:main:main",
                 disableTrajectory: true,
                 verboseLevel: "off" as const,
                 trigger: "user" as const,
@@ -284,10 +290,9 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     }
     expect(reviewReadOutcomes).toMatchObject([
       {
-        status: "rejected",
-        reason: {
-          message:
-            "Unavailable in this run. Continue with the tools permitted by the run's instructions.",
+        status: "fulfilled",
+        value: {
+          content: [{ text: formatToolExecutionGatedMessage("read", ["skill_workshop"]) }],
         },
       },
     ]);
@@ -297,7 +302,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(await fs.readFile(storeFile, "utf8")).toBe(store);
   });
 
-  it("exposes Code Mode skills only when read is available and executable", async () => {
+  it("keeps admitted Code Mode skill descriptions while enforcing execution restrictions", async () => {
     const cases: Array<{
       label: string;
       toolsAllow?: string[];
@@ -319,7 +324,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         label: "skill read denied",
         toolExecutionAllow: ["read"],
         skillsPrompt,
-        available: false,
+        available: true,
       },
       {
         label: "read denied",
@@ -329,6 +334,8 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
       { label: "execution denied", toolExecutionAllow: [], skillsPrompt: "", available: false },
     ];
+    let foregroundDescription: string | undefined;
+    let restrictedListResult: unknown;
     for (const testCase of cases) {
       resetEmbeddedAttemptHarness();
       enableSkills();
@@ -337,6 +344,14 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       );
       await run({
         sessionKey: `agent:main:${testCase.label.replace(" ", "-")}`,
+        sessionPrompt: async () => {
+          if (testCase.label === "skill read denied") {
+            restrictedListResult = await sessionTool("exec").execute("denied-skills", {
+              title: "Check installed skill access",
+              code: "return await skills.list();",
+            });
+          }
+        },
         attemptOverrides: {
           disableTools: false,
           toolsAllow: testCase.toolsAllow,
@@ -347,10 +362,20 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       expect(hoisted.embeddedSystemPromptInputs.at(-1)).toMatchObject({
         skillsPrompt: testCase.skillsPrompt,
       });
-      expect(sessionTool("exec").description.includes("await skills.list()")).toBe(
-        testCase.available,
-      );
+      const description = sessionTool("exec").description;
+      expect(description.includes("await skills.list()")).toBe(testCase.available);
+      if (testCase.label === "unrestricted") {
+        foregroundDescription = description;
+      } else if (testCase.label === "skill read denied") {
+        expect(description).toBe(foregroundDescription);
+      }
     }
+    expect(restrictedListResult).toMatchObject({
+      details: {
+        status: "failed",
+        error: expect.stringContaining(formatToolExecutionGatedMessage("skills_search", ["read"])),
+      },
+    });
   });
 
   it("gates catalog-hidden tools during review while skill_workshop stays callable", async () => {
@@ -396,11 +421,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
     });
     expect(executed).toEqual(["skill_workshop"]);
-    expect(outcomes.map((outcome) => outcome.status)).toEqual(["rejected", "fulfilled"]);
-    expect(outcomes[0]).toMatchObject({
-      status: "rejected",
-      reason: { message: expect.stringContaining("Unavailable in this run") },
-    });
+    const denial = formatToolExecutionGatedMessage("read", ["skill_workshop"]);
+    expect(outcomes).toMatchObject([
+      { status: "fulfilled", value: { content: [{ text: expect.stringContaining(denial) }] } },
+      { status: "fulfilled" },
+    ]);
     const activities = sessionManager.getEntries().flatMap((entry) => {
       const activity = entry.type === "message" && readNestedToolActivity(entry.message);
       return activity ? [activity.details] : [];
@@ -408,10 +433,8 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(activities).toHaveLength(2);
     expect(activities.find((activity) => activity.toolName === "read")).toMatchObject({
       parentToolCallId: "call-read",
-      isError: true,
-      result: {
-        details: { status: "error", error: expect.stringContaining("Unavailable in this run") },
-      },
+      isError: false,
+      result: { content: [{ type: "text", text: denial }] },
     });
     expect(activities.find((activity) => activity.toolName === "skill_workshop")).toMatchObject({
       parentToolCallId: "call-workshop",

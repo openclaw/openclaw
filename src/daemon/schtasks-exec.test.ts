@@ -44,9 +44,15 @@ describe("execSchtasks", () => {
   });
 
   it.each([
-    { termination: "timeout", detail: "schtasks timed out after 15000ms" },
-    { termination: "no-output-timeout", detail: "schtasks produced no output for 30000ms" },
-    { termination: "signal", detail: "schtasks command terminated before confirmed completion" },
+    { termination: "timeout", detail: "schtasks /Change /DISABLE timed out after 15000ms" },
+    {
+      termination: "no-output-timeout",
+      detail: "schtasks /Change /DISABLE produced no output for 30000ms",
+    },
+    {
+      termination: "signal",
+      detail: "schtasks /Change /DISABLE terminated before confirmed completion",
+    },
   ] as const)(
     "maps $termination into a non-zero lifecycle result",
     async ({ termination, detail }) => {
@@ -59,7 +65,9 @@ describe("execSchtasks", () => {
         termination,
       });
 
-      await expect(execSchtasks(["/Create"])).resolves.toEqual({
+      await expect(
+        execSchtasks(["/Change", "/TN", "OpenClaw Gateway", "/DISABLE"]),
+      ).resolves.toEqual({
         stdout: "",
         stderr: detail,
         code: 124,

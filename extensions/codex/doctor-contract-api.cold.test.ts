@@ -46,7 +46,7 @@ it("detects Codex legacy state without loading session storage", async () => {
     throw new Error("detection must not open plugin state");
   });
   const params = {
-    config: { agents: { list: [{ id: "main" }] } },
+    config: { agents: { entries: { main: {} } } },
     env,
     stateDir,
     oauthDir: path.join(stateDir, "oauth"),

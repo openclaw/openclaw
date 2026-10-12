@@ -1,7 +1,6 @@
 // Register shared transport mocks before production publication owners load.
 // oxfmt-ignore
 import {
-  createGitHubPublicationRequesterFixture,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
@@ -9,6 +8,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import * as userProfileList from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -20,14 +20,13 @@ import {
   setDisplayName,
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
-import * as userProfiles from "../state/user-profiles.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
-  captureGitHubPublicationRequester,
+  prepareGitHubPublicationRequesterV2,
   restoreGitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import {
+  createGitHubPublicationRequesterFixture,
   createRequesterPolicyFixture,
   createRequesterPublicationFixture,
   guestScopes,
@@ -100,13 +99,10 @@ describe("shared GitHub publication requester alias bindings", () => {
         }
         const resume = policy.resume;
         const observed = vi.spyOn(policy, "resume");
-        const protocolProfile = vi.spyOn(userProfiles, "getUserProfileListItem");
         const native = vi.spyOn(f.database.db, "prepare");
         const assertWithoutProfileSql = () => {
-          protocolProfile.mockClear();
           native.mockClear();
           restored.assertCurrent();
-          expect(protocolProfile).not.toHaveBeenCalled();
           expect(
             native.mock.calls.filter(([sql]) =>
               /user_profiles|user_profile_emails|user_profile_identities/u.test(sql),
@@ -184,6 +180,7 @@ describe("shared GitHub publication requester alias bindings", () => {
         expect(JSON.stringify(f.readRequester(queued.requestId))).not.toContain(email);
         if (change === "captured alias") {
           await linkCanonicalUserProfileEmail(email, other.id);
+          expect(original.requester.signal.aborted).toBe(true);
           expect(original.requester.assertCurrent).toThrow(
             GitHubPublicationRequesterUnavailableError,
           );
@@ -283,7 +280,7 @@ describe("shared GitHub publication requester alias bindings", () => {
 
         await linkCanonicalUserProfileEmail(later, f.guestProfile);
         const controller = new AbortController();
-        const retry = await captureGitHubPublicationRequester(
+        const retry = await prepareGitHubPublicationRequesterV2(
           {
             client: original.client,
             context: original.context,

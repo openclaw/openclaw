@@ -13,12 +13,22 @@ export default {
     statusQueued: "Queued",
   },
   workboard: {
+    pageLoadFailed: "Workboard could not load. Check your connection and reload this page.",
+    pinBoard: "Pin to sidebar",
+    unpinBoard: "Unpin from sidebar",
+    deleteBoard: "Delete board…",
+    deleteBoardTitle: "Delete “{name}”?",
+    deleteBoardConfirm: "Delete board",
+    deleteBoardHelp:
+      "This permanently deletes the board and its saved session placements. Sessions are kept. Boards with cards must be emptied first.",
+    deleteBoardUnavailable: "Connect with write access to delete this board.",
     discardCardTitle: "Discard this card?",
     discardChangesTitle: "Discard changes?",
     discardDraftHelp: "Your unsaved changes will be lost.",
     keepEditing: "Keep editing",
     discardDraft: "Discard",
     viewBoard: "Columns",
+    boardColor: "Color",
     clearFilters: "Clear filters",
     activeFilters: "Active filters",
     removeFilter: "Remove filter: {filter}",
@@ -110,7 +120,6 @@ export default {
       writeUnavailable:
         "Board appearance was saved. Reconnect with write access to save the session columns.",
       loading: "Loading sessions…",
-      classifying: "Classifying sessions…",
       empty: "No sessions in this column",
       columns: "Columns",
       columnLabel: "Column label",
@@ -122,10 +131,8 @@ export default {
       newColumn: "New column",
       moveUp: "Move up",
       moveDown: "Move down",
-      instructions: "Classification instructions",
-      instructionsHelp:
-        "Descriptions guide the utility model. Instructions can refine placement across every column. The Board agent can also edit deterministic rules and session scope.",
-      source: { state: "by rule", model: "by model", operator: "pinned" },
+      rulesHelp: "The Board agent can edit column rules and session scope.",
+      source: { state: "by rule", operator: "pinned" },
       run: { active: "Working", idle: "Idle", failed: "Failed" },
       pullRequest: { open: "Open", draft: "Draft", merged: "Merged", closed: "Closed" },
       color: {

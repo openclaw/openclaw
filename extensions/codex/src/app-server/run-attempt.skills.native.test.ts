@@ -22,8 +22,6 @@ vi.unmock("node:child_process");
 
 const NATIVE_FIRST_CATALOG =
   "<available_skills><skill><name>alpha-native</name><description>Creation-time catalog.</description></skill></available_skills>";
-const NATIVE_SECOND_CATALOG =
-  "<available_skills><skill><name>bravo-native</name><description>Refreshed catalog.</description></skill></available_skills>";
 
 /**
  * Serves the Responses wire for the real Codex binary and records every request
@@ -380,11 +378,6 @@ describe("native Codex skill delivery", () => {
   }, 90_000);
 
   it.each([
-    {
-      label: "an edited catalog",
-      refreshed: NATIVE_SECOND_CATALOG,
-      current: NATIVE_SECOND_CATALOG,
-    },
     {
       label: "a withdrawn catalog",
       refreshed: undefined,

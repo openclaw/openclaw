@@ -17,6 +17,7 @@ import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-a
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
@@ -70,6 +71,7 @@ export type ExecToolDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;
+  continuesConversation?: boolean;
   node?: string;
   /** Default working directory for node-host execution only. */
   nodeCwd?: string;
@@ -83,6 +85,8 @@ export type ExecToolDefaults = {
   config?: OpenClawConfig;
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
+  /** An explicit snapshot, including an empty one, replaces local store access. */
+  preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
   autoReviewer?: ExecAutoReviewer;
   /** Reads current attempt context only when a command needs review. */
   reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
@@ -138,6 +142,44 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+};
+
+/** Request and approval context shared by Gateway and node execution hosts. */
+export type ExecHostCommandParams = {
+  command: string;
+  env: Record<string, string>;
+  requestedEnv?: Record<string, string>;
+  timeoutSec?: number;
+  defaultTimeoutSec: number;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
+  autoReview?: boolean;
+  autoReviewer?: ExecAutoReviewer;
+  signal?: AbortSignal;
+  strictInlineEval?: boolean;
+  commandHighlighting?: boolean;
+  trigger?: string;
+  agentId?: string;
+  sessionKey?: string;
+  toolCallId?: string;
+  /** Session UUID active when the approval was requested; pins the followup. */
+  sessionId?: string;
+  /** Session-store template, so the direct/denied followup can detect a rebind. */
+  sessionStore?: string;
+  bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
+  nonInteractiveApproval?: boolean;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+  approvalFollowupMode?: "agent" | "direct";
+  warnings: string[];
+  notifySessionKey?: string;
+  approvalRunningNoticeMs: number;
+  processContinuationAvailable?: boolean;
+  trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
 /** Outcome passed to approval follow-up factories after approved async exec. */

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { Value } from "typebox/value";
 import type { RawData } from "ws";
 import { GatewayWebSocketTlsPinError } from "../../packages/gateway-client/src/websocket-transport.js";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
+import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   WorkerAdmissionResponseFrameSchema,
   type WorkerConnectParams,
@@ -26,10 +26,8 @@ import {
 } from "./worker-connection-endpoint.js";
 import { closeInvalidWorkerFrame } from "./worker-connection-frames.js";
 
-const RETRYABLE_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
-  "gateway-shutdown",
-  "gateway-unavailable",
-]);
+const validateAdmissionResponse = lazyCompile(WorkerAdmissionResponseFrameSchema);
+const validateCloseReason = lazyCompile(WorkerProtocolCloseReasonSchema);
 
 type WorkerConnectionAttemptOptions = {
   attemptTimeoutMs: number;
@@ -54,7 +52,7 @@ function parseFrame(data: RawData): { ok: true; frame: unknown } | { ok: false }
 
 function parseCloseReason(data: Buffer): WorkerProtocolCloseReason | undefined {
   const reason = rawDataToString(data);
-  return Value.Check(WorkerProtocolCloseReasonSchema, reason) ? reason : undefined;
+  return validateCloseReason(reason) ? reason : undefined;
 }
 
 function matchesAdmission(connectParams: WorkerConnectParams, hello: WorkerHelloOk): boolean {
@@ -70,7 +68,7 @@ function matchesAdmission(connectParams: WorkerConnectParams, hello: WorkerHello
 }
 
 export function isRetryableWorkerCloseReason(reason: WorkerProtocolCloseReason): boolean {
-  return RETRYABLE_CLOSE_REASONS.has(reason);
+  return reason === "gateway-shutdown" || reason === "gateway-unavailable";
 }
 
 export function connectWorkerConnectionAttempt(
@@ -168,7 +166,7 @@ export function connectWorkerConnectionAttempt(
       }
       const frame = parsed.frame;
       if (admission === "pending") {
-        if (!Value.Check(WorkerAdmissionResponseFrameSchema, frame) || frame.id !== admissionId) {
+        if (!validateAdmissionResponse(frame) || frame.id !== admissionId) {
           closeInvalidWorkerFrame(socket);
           rejectAttempt(new WorkerAdmissionError("invalid-handshake", false));
           return;

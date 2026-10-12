@@ -1,24 +1,10 @@
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   extractQaContentText,
-  readQaMessageFunctionCalls,
+  readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 import { projectQaToolActivity } from "./tool-activity.js";
-
-type QaRuntimeToolFixtureTranscriptToolCall = {
-  id?: string;
-  tool: string;
-  args: unknown;
-};
-
-type QaRuntimeToolFixtureTranscriptToolResult = {
-  id?: string;
-  tool?: string;
-  text: string;
-  failure: boolean;
-  hardFailure: boolean;
-};
 
 const RUNTIME_PATCH_WORKSPACE_DENIAL_RE =
   /(?:path\s+escapes\s+(?:the\s+)?(?:sandbox|workspace)(?:\s+root)?|outside(?:\s+of)?\s+(?:the\s+)?(?:project|sandbox|workspace|allowed\s+(?:sandbox|workspace|root)|writable\s+roots?)(?:\s+root)?|workspace[- ]only|permission\s+denied|operation\s+not\s+permitted|\bos\s+error\s+1\b|\b(?:EACCES|EPERM)\b)/iu;
@@ -65,40 +51,22 @@ function extractTranscriptText(value: unknown): string {
 
 function extractTranscriptToolCalls(message: Record<string, unknown>): Record<string, unknown>[] {
   const calls: Record<string, unknown>[] = [];
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isRecord(block)) {
-        continue;
-      }
-      const type = normalizeOptionalString(block.type)?.toLowerCase();
-      if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
-        continue;
-      }
-      const tool = normalizeOptionalString(block.name);
-      if (!tool) {
-        continue;
-      }
-      calls.push({
-        ...block,
-        type: "toolCall",
-        id:
-          normalizeOptionalString(block.id) ??
-          normalizeOptionalString(block.toolCallId) ??
-          normalizeOptionalString(block.toolUseId),
-        name: tool,
-        // OpenClaw mirrors provider arguments separately; a placeholder input
-        // can be empty even though arguments contains the executed patch.
-        arguments: block.arguments ?? block.input ?? block.args ?? block.payload ?? null,
-      });
+  // OpenClaw mirrors provider arguments separately; a placeholder input can be empty.
+  for (const { block, id, tool, args } of readQaMessageToolCalls(message, {
+    preferArguments: true,
+  })) {
+    if (!tool) {
+      continue;
     }
+    calls.push({
+      ...block,
+      type: "toolCall",
+      id,
+      name: tool,
+      arguments: args,
+    });
   }
 
-  for (const call of readQaMessageFunctionCalls(message)) {
-    if (call.tool) {
-      calls.push({ type: "toolCall", id: call.id, name: call.tool, arguments: call.args });
-    }
-  }
   return calls;
 }
 
@@ -131,44 +99,31 @@ export function classifyToolResultFailure(params: {
 
 function extractTranscriptToolResults(message: Record<string, unknown>): Record<string, unknown>[] {
   const results: Record<string, unknown>[] = [];
-  const tool =
-    normalizeOptionalString(message.toolName) ??
-    normalizeOptionalString(message.tool_name) ??
-    normalizeOptionalString(message.name) ??
-    normalizeOptionalString(message.tool);
-  if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
-    const text = extractTranscriptText(message.content);
-    results.push({
-      ...message,
-      role: "toolResult",
-      toolCallId:
-        normalizeOptionalString(message.tool_call_id) ??
-        normalizeOptionalString(message.toolCallId) ??
-        normalizeOptionalString(message.toolUseId) ??
-        normalizeOptionalString(message.id),
-      toolName: tool,
-      content: text,
-      isError: message.isError === true || message.is_error === true,
-    });
-    // The tool envelope owns its result; nested display blocks are its payload.
-    return results;
-  }
-
-  const rawContent = message.content;
-  if (!Array.isArray(rawContent)) {
-    return results;
-  }
-  for (const block of rawContent) {
+  const isToolEnvelope =
+    (message.role === "tool" || message.role === "toolResult") && message.content !== undefined;
+  // The tool envelope owns its result; nested display blocks are its payload.
+  const blocks = isToolEnvelope ? [message] : Array.isArray(message.content) ? message.content : [];
+  const idFields = isToolEnvelope
+    ? ["tool_call_id", "toolCallId", "toolUseId", "id"]
+    : ["tool_use_id", "toolUseId", "tool_call_id", "toolCallId", "id"];
+  for (const block of blocks) {
     if (!isRecord(block)) {
       continue;
     }
     const type = normalizeOptionalString(block.type)?.toLowerCase();
-    if (type !== "tool_result" && type !== "toolresult" && type !== "tool_result_error") {
+    if (
+      !isToolEnvelope &&
+      type !== "tool_result" &&
+      type !== "toolresult" &&
+      type !== "tool_result_error"
+    ) {
       continue;
     }
-    const text = stringifyTranscriptToolResult(
-      block.content ?? block.text ?? block.result ?? block.error ?? block.message,
-    );
+    const text = isToolEnvelope
+      ? extractTranscriptText(block.content)
+      : stringifyTranscriptToolResult(
+          block.content ?? block.text ?? block.result ?? block.error ?? block.message,
+        );
     const blockTool =
       normalizeOptionalString(block.toolName) ??
       normalizeOptionalString(block.tool_name) ??
@@ -177,15 +132,13 @@ function extractTranscriptToolResults(message: Record<string, unknown>): Record<
     results.push({
       ...block,
       role: "toolResult",
-      toolCallId:
-        normalizeOptionalString(block.tool_use_id) ??
-        normalizeOptionalString(block.toolUseId) ??
-        normalizeOptionalString(block.tool_call_id) ??
-        normalizeOptionalString(block.toolCallId) ??
-        normalizeOptionalString(block.id),
+      toolCallId: idFields.map((field) => normalizeOptionalString(block[field])).find(Boolean),
       toolName: blockTool,
       content: text,
-      isError: type === "tool_result_error" || block.isError === true || block.is_error === true,
+      isError:
+        (!isToolEnvelope && type === "tool_result_error") ||
+        block.isError === true ||
+        block.is_error === true,
     });
   }
   return results;
@@ -213,13 +166,13 @@ export function readTranscriptToolEvidence(transcriptBytes: string, toolName: st
   const evidence = projectQaToolActivity(messages)
     .filter((activity) => activity.kind === "tool" && activity.toolName === toolName)
     .map((activity) => {
-      const call: QaRuntimeToolFixtureTranscriptToolCall = {
+      const call = {
         id: activity.toolCallId,
         tool: activity.toolName,
         args: activity.input,
       };
       const text = extractTranscriptText(activity.result?.content);
-      const result: QaRuntimeToolFixtureTranscriptToolResult | undefined =
+      const result =
         activity.completed && text
           ? {
               id: activity.toolCallId,

@@ -1,7 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
   persistSessionTranscriptTurn,
@@ -9,6 +8,11 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { isTerminalSessionStatus } from "../../config/sessions/types.js";
+import {
+  readSessionTranscriptSummaryAsync,
+  type SessionTranscriptReadScope,
+} from "../../gateway/session-transcript-readers.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
 import {
@@ -16,13 +20,20 @@ import {
   isTerminalSilentAssistantMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
-import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
 import {
   mainSessionRecoveryLog,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
+
+export async function readMainSessionRecoveryCheckpoint(scope: SessionTranscriptReadScope) {
+  const { checkpoint } = await readSessionTranscriptSummaryAsync(scope, {
+    kind: "recovery-checkpoint",
+  });
+  return checkpoint;
+}
 
 export async function reconcileInvalidHarnessCompletion(
   params: MainSessionRecoveryStoreTarget & {
@@ -36,7 +47,6 @@ export async function reconcileInvalidHarnessCompletion(
       const claim = entry.restartRecoveryHarnessCompletion;
       if (
         entry.sessionId !== params.entry.sessionId ||
-        entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         !claim ||
         claim.taskId !== params.entry.restartRecoveryHarnessCompletion?.taskId ||
@@ -50,12 +60,10 @@ export async function reconcileInvalidHarnessCompletion(
       didReconcile = true;
       const endedAt = Date.now();
       return {
-        ...buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: false }),
-        ...buildMainSessionRecoveryClearPatch(entry),
+        ...buildMainSessionRecoverySettlementPatch({ entry, recordTerminalSource: false }),
         status: "killed",
         lifecycleRunId: undefined,
         lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
-        abortedLastRun: false,
         endedAt,
         lastRunError: undefined,
         runtimeMs:
@@ -196,6 +204,10 @@ type RecoveryCheckpointCompletion =
   | { outcome: "changed" }
   | { outcome: "unsafe-transcript"; reason: string };
 
+function unsafeRecoveryTranscript(reason: string): RecoveryCheckpointCompletion {
+  return { outcome: "unsafe-transcript", reason };
+}
+
 export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   agentId: string;
   entry: SessionEntry;
@@ -211,34 +223,31 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   const expectedRecoverySourceRunId = normalizeOptionalString(
     params.entry.restartRecoveryDeliverySourceRunId,
   );
-  const endedAt = Date.now();
+  const settled =
+    isTerminalSessionStatus(params.entry.status) && params.entry.status !== "interrupted";
+  const endedAt = settled ? (params.entry.endedAt ?? Date.now()) : Date.now();
   const lifecyclePatch: SessionTranscriptTurnLifecyclePatch = {
-    ...buildRestartRecoveryClaimCleanupPatch({
+    ...buildMainSessionRecoverySettlementPatch({
       entry: params.entry,
       recordTerminalSource: expectedRecoverySourceRunId !== undefined,
       terminalSourceRunId: expectedRecoverySourceRunId,
     }),
-    abortedLastRun: false,
     lifecycleRunId: undefined,
-    lastRunId: resolveRestartRecoveryTerminalClientRunId(params.entry),
+    lastRunId: settled
+      ? params.entry.lastRunId
+      : resolveRestartRecoveryTerminalClientRunId(params.entry),
     endedAt,
     pendingFinalDelivery: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    restartRecoveryRuns: undefined,
-    ...buildMainSessionRecoveryClearPatch(params.entry),
     runtimeMs:
       typeof params.entry.startedAt === "number"
         ? Math.max(0, endedAt - params.entry.startedAt)
         : undefined,
-    status: "done",
+    status: settled ? params.entry.status : "done",
     updatedAt: endedAt,
   };
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
   if (params.reason === "handled-silent" && !sourceTurnId) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "handled silent checkpoint lacks its durable source turn",
-    };
+    return unsafeRecoveryTranscript("handled silent checkpoint lacks its durable source turn");
   }
   const sourceTurnRange = sourceTurnId
     ? findSourceTurnRange({
@@ -249,23 +258,16 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     : undefined;
   const toolCallId = normalizeOptionalString(params.toolCallId);
   if (sourceTurnId && sourceTurnRange === undefined) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "recovery checkpoint cannot be matched to its durable source turn",
-    };
+    return unsafeRecoveryTranscript(
+      "recovery checkpoint cannot be matched to its durable source turn",
+    );
   }
   if (sourceTurnRange && sourceTurnRange.endIndex !== params.messages.length) {
-    return {
-      outcome: "unsafe-transcript",
-      reason: "recovery checkpoint belongs to an earlier transcript turn",
-    };
+    return unsafeRecoveryTranscript("recovery checkpoint belongs to an earlier transcript turn");
   }
   if (toolCallId) {
     if (!sourceTurnId || !sourceTurnRange) {
-      return {
-        outcome: "unsafe-transcript",
-        reason: "terminal delivery lacks its durable source turn",
-      };
+      return unsafeRecoveryTranscript("terminal delivery lacks its durable source turn");
     }
     const messageToolCallIndex = params.messages.findLastIndex(
       (message, index) =>
@@ -277,16 +279,12 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         ),
     );
     if (messageToolCallIndex === -1) {
-      return {
-        outcome: "unsafe-transcript",
-        reason: "terminal delivery cannot be matched to its message tool call",
-      };
+      return unsafeRecoveryTranscript(
+        "terminal delivery cannot be matched to its message tool call",
+      );
     }
     if (readAssistantToolCalls(params.messages[messageToolCallIndex])?.length !== 1) {
-      return {
-        outcome: "unsafe-transcript",
-        reason: "terminal message tool call has sibling tool work",
-      };
+      return unsafeRecoveryTranscript("terminal message tool call has sibling tool work");
     }
     const successfulToolResultIndex = params.messages.findIndex(
       (message, index) =>
@@ -301,13 +299,11 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         successfulToolResultIndex,
       })
     ) {
-      return {
-        outcome: "unsafe-transcript",
-        reason:
-          successfulToolResultIndex === -1
-            ? "terminal delivery would require an out-of-order transcript repair"
-            : "terminal delivery result is followed by unfinished transcript work",
-      };
+      return unsafeRecoveryTranscript(
+        successfulToolResultIndex === -1
+          ? "terminal delivery would require an out-of-order transcript repair"
+          : "terminal delivery result is followed by unfinished transcript work",
+      );
     }
     if (successfulToolResultIndex === -1) {
       const persisted = await persistSessionTranscriptTurn(
@@ -338,7 +334,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
           updateMode: "none",
         },
       );
-      const completed = persisted.sessionEntry?.status === "done";
+      const completed = persisted.sessionEntry?.status === lifecyclePatch.status;
       if (completed) {
         mainSessionRecoveryLog.info(
           `reconciled delivered terminal reply after restart: ${params.sessionKey}`,
@@ -359,7 +355,6 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         entry.sessionId !== params.entry.sessionId ||
         (params.pendingFinalDeliveryIntentId !== undefined &&
           entry.pendingFinalDelivery?.intentId !== params.pendingFinalDeliveryIntentId) ||
-        entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== expectedRecoveryRunId ||
         normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==

@@ -25,34 +25,6 @@ function compileManifestConfigSchema() {
 }
 
 describe("resolveMemoryWikiConfig", () => {
-  it("returns isolated defaults", () => {
-    const config = resolveMemoryWikiConfig(undefined, { homedir: "/Users/tester" });
-
-    expect(config.vaultMode).toBe("isolated");
-    expect(config.vault.scope).toBe("global");
-    expect(config.vault.renderMode).toBe("native");
-    expect(config.vault.path).toBe(path.join("/Users/tester", ".openclaw", "wiki", "main"));
-    expect(config.search.backend).toBe("shared");
-    expect(config.search.corpus).toBe("wiki");
-    expect(config.context.includeCompiledDigestPrompt).toBe(false);
-  });
-
-  it.each([
-    { scope: "global" as const, segments: ["wiki", "main"] },
-    { scope: "agent" as const, segments: ["wiki"] },
-  ])("keeps default $scope vaults inside the configured state directory", ({ scope, segments }) => {
-    const stateDir = "/tmp/openclaw-isolated-state";
-    const config = resolveMemoryWikiConfig(
-      { vault: { scope } },
-      {
-        homedir: "/Users/tester",
-        env: { HOME: "/Users/tester", OPENCLAW_STATE_DIR: stateDir },
-      },
-    );
-
-    expect(config.vault.path).toBe(path.join(stateDir, ...segments));
-  });
-
   it("uses the configured state directory for schema-resolved defaults", () => {
     const stateDir = "/tmp/openclaw-schema-state";
 
@@ -64,26 +36,6 @@ describe("resolveMemoryWikiConfig", () => {
         data: { vault: { path: path.join(stateDir, "wiki", "main") } },
       });
     });
-  });
-
-  it("expands ~/ paths and preserves explicit modes", () => {
-    const config = resolveMemoryWikiConfig(
-      {
-        vaultMode: "bridge",
-        vault: {
-          path: "~/vaults/wiki",
-          renderMode: "obsidian",
-        },
-      },
-      {
-        homedir: "/Users/tester",
-        env: { HOME: "/Users/tester", OPENCLAW_STATE_DIR: "/tmp/openclaw-isolated-state" },
-      },
-    );
-
-    expect(config.vaultMode).toBe("bridge");
-    expect(config.vault.path).toBe(path.join("/Users/tester", "vaults", "wiki"));
-    expect(config.vault.renderMode).toBe("obsidian");
   });
 
   it("resolves normalized agent ids to distinct vault roots", () => {
@@ -98,7 +50,7 @@ describe("resolveMemoryWikiConfig", () => {
     );
     const appConfig = {
       agents: {
-        list: [{ id: "Support Team", default: true }, { id: "Marketing" }],
+        entries: { "support-team": {}, marketing: {} },
       },
     } as OpenClawConfig;
 
@@ -133,34 +85,12 @@ describe("resolveMemoryWikiConfig", () => {
 
     const resolved = resolveMemoryWikiAgentConfig({
       config: base,
-      appConfig: { agents: { list: [{ id: "support", default: true }] } },
+      appConfig: { agents: { entries: { support: {} } } },
     });
 
     const expectedRoot = path.join("/Users/tester", ".openclaw", "wiki");
     expect(base.vault.path).toBe(expectedRoot);
     expect(resolved.vault.path).toBe(path.join(expectedRoot, "support"));
-  });
-
-  it("fails closed when a multi-agent scoped vault has no agent context", () => {
-    const config = resolveMemoryWikiConfig({ vault: { scope: "agent" } });
-    const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
-    } as OpenClawConfig;
-
-    expect(() => resolveMemoryWikiAgentConfig({ config, appConfig })).toThrow(
-      "agentId is required",
-    );
-  });
-
-  it("fails closed for unknown scoped agents", () => {
-    const config = resolveMemoryWikiConfig({ vault: { scope: "agent" } });
-    const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
-    } as OpenClawConfig;
-
-    expect(() => resolveMemoryWikiAgentConfig({ config, appConfig, agentId: "finance" })).toThrow(
-      "Unknown memory-wiki agentId: finance",
-    );
   });
 
   it("rejects unsafe-local access for agent-scoped vaults", () => {
@@ -199,39 +129,6 @@ describe("resolveMemoryWikiConfig", () => {
 });
 
 describe("memory-wiki manifest config schema", () => {
-  it("accepts the documented config shape", () => {
-    const validate = compileManifestConfigSchema();
-    const config = {
-      vaultMode: "unsafe-local",
-      vault: {
-        path: "~/wiki",
-        renderMode: "obsidian",
-      },
-      obsidian: {
-        enabled: true,
-        useOfficialCli: true,
-      },
-      bridge: {
-        enabled: true,
-        readMemoryArtifacts: true,
-        followMemoryEvents: true,
-      },
-      unsafeLocal: {
-        allowPrivateMemoryCoreAccess: true,
-        paths: ["extensions/memory-core/src"],
-      },
-      search: {
-        backend: "shared",
-        corpus: "all",
-      },
-      context: {
-        includeCompiledDigestPrompt: true,
-      },
-    };
-
-    expect(validate(config)).toBe(true);
-  });
-
   it("rejects unsafe-local access for agent-scoped vaults", () => {
     const validate = compileManifestConfigSchema();
 

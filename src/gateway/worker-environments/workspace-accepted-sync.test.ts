@@ -20,7 +20,7 @@ import {
 import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary } from "./tunnel.test-support.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
-  createAcceptedWorkspacePublisherFactory as createAcceptedWorkspacePublisherFactoryRaw,
+  createAcceptedWorkspacePublisher,
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
 import { createWorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
@@ -124,37 +124,40 @@ function settlement(outcome: "begun" | "rolled-back" | "applied" | "committed"):
 
 function createAcceptedWorkspacePublisherFactory(
   params: Omit<
-    Parameters<typeof createAcceptedWorkspacePublisherFactoryRaw>[0],
-    "hashMemo" | "metrics"
+    Parameters<typeof createAcceptedWorkspacePublisher>[0],
+    "hashMemo" | "metrics" | "remoteManifest" | "initialRemoteRef"
   >,
 ) {
   const runWorkspaceCommand = params.runWorkspaceCommand;
-  return createAcceptedWorkspacePublisherFactoryRaw({
-    ...params,
-    hashMemo: new Map(),
-    metrics: createWorkspaceReconcileMetrics(),
-    runWorkspaceCommand: async (command) => {
-      const response = await runWorkspaceCommand(command);
-      const returnedRef = response.stdout.trim();
-      if (command.argv.at(-1) !== "memo-v1" || !/^sha256:[a-f0-9]{64}$/u.test(returnedRef)) {
-        return response;
-      }
-      return result({
-        stdout: `${JSON.stringify({
-          version: 1,
-          manifestRef: returnedRef,
-          memo: [],
-          metrics: {
-            contentHashCount: 0,
-            contentHashDurationMs: 0,
-            memoHitCount: 0,
-            memoTruncatedCount: 0,
-            totalDurationMs: 0,
-          },
-        })}\n`,
-      });
-    },
-  });
+  return (remoteManifest: WorkerWorkspaceManifest, initialRemoteRef: string) =>
+    createAcceptedWorkspacePublisher({
+      ...params,
+      remoteManifest,
+      initialRemoteRef,
+      hashMemo: new Map(),
+      metrics: createWorkspaceReconcileMetrics(),
+      runWorkspaceCommand: async (command) => {
+        const response = await runWorkspaceCommand(command);
+        const returnedRef = response.stdout.trim();
+        if (command.argv.at(-1) !== "memo-v1" || !/^sha256:[a-f0-9]{64}$/u.test(returnedRef)) {
+          return response;
+        }
+        return result({
+          stdout: `${JSON.stringify({
+            version: 1,
+            manifestRef: returnedRef,
+            memo: [],
+            metrics: {
+              contentHashCount: 0,
+              contentHashDurationMs: 0,
+              memoHitCount: 0,
+              memoTruncatedCount: 0,
+              totalDurationMs: 0,
+            },
+          })}\n`,
+        });
+      },
+    });
 }
 
 describe("accepted workspace publication", () => {

@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRegistryOwner } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -136,6 +137,7 @@ describe("iMessage plugin payload attachments", () => {
     });
 
     await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: {
         channels: { imessage: { includeAttachments: true, dmPolicy: "open" } },
         session: { mainKey: "main" },
@@ -152,8 +154,6 @@ describe("iMessage plugin payload attachments", () => {
 
   it.each([
     { kind: "final", text: "provider-visible ordinary final", visible: true },
-    { kind: "tool", text: "provider-visible tool result", visible: true },
-    { kind: "block", text: "provider-visible streamed block", visible: true },
     { kind: "tool", text: "<thinking>private reasoning</thinking>", visible: false },
   ] as const)(
     "settles direct $kind delivery through actual provider, hooks, and SQLite ($visible)",
@@ -198,19 +198,13 @@ describe("iMessage plugin payload attachments", () => {
           });
         }
         const settled = await params.dispatcherOptions.deliver({ text }, { kind });
-        expect(settled).toMatchObject(
-          visible
-            ? {
-                visibleReplySent: true,
-                messageIds: [`native-${kind}-guid`],
-                receipt: { platformMessageIds: [`native-${kind}-guid`] },
-                content: text,
-              }
-            : { visibleReplySent: false, suppression: { reason: "no_visible_result" } },
-        );
+        expect(settled).toMatchObject({
+          visibleReplySent: false,
+          suppression: { reason: "no_visible_result" },
+        });
         return {
           queuedFinal: false,
-          counts: { tool: kind === "tool" ? 1 : 0, block: kind === "block" ? 1 : 0, final: 0 },
+          counts: { tool: 1, block: 0, final: 0 },
         };
       });
       const runActual = channelInbound.runChannelInboundEvent;
@@ -285,6 +279,7 @@ describe("iMessage plugin payload attachments", () => {
       try {
         await withPluginRuntimeRegistryScope(registry, () =>
           monitorIMessageProvider({
+            scheduler: createTestPluginServiceScheduler(),
             config: {
               plugins: { slots: { memory: "none" } },
               channels: {

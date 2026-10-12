@@ -17,7 +17,6 @@ import {
   prepareOutboundPayloadBatch,
   prepareStructuredOutboundPayloadBatch,
 } from "./deliver-prepare.js";
-import type { deliverOutboundPayloads } from "./deliver.js";
 import { createStructuredOutboundPayloadPlan } from "./payloads.js";
 
 type PreparationFixture = {
@@ -36,13 +35,7 @@ type PreparationFixture = {
   };
 };
 
-type DeliverOutboundArgs = Parameters<typeof deliverOutboundPayloads>[0];
-type MatrixDeliveryArgs = Omit<DeliverOutboundArgs, "cfg" | "channel" | "to" | "payloads"> &
-  Partial<Pick<DeliverOutboundArgs, "cfg" | "to" | "payloads">>;
-type ImageProjectionFixture = PreparationFixture & {
-  deliverMatrix: (params: MatrixDeliveryArgs) => ReturnType<typeof deliverOutboundPayloads>;
-  requireMatrixSendCall: (sendMatrix: ReturnType<typeof vi.fn>, index?: number) => unknown[];
-};
+type ImageProjectionFixture = Pick<PreparationFixture, "setTestOutbound" | "hookMocks">;
 
 // Keep registration in deliver.test.ts so its hoisted queue/hooks and per-case registry reset apply.
 export function registerOutboundPreparationMetadataTests({
@@ -132,12 +125,8 @@ export function registerOutboundPreparationMetadataTests({
 }
 
 export function registerOutboundImageProjectionTests({
-  matrixChunkConfig,
-  matrixOutboundForTest,
   setTestOutbound,
   hookMocks,
-  deliverMatrix,
-  requireMatrixSendCall,
 }: ImageProjectionFixture) {
   function installRegisteredPayloadHooks(
     hooks: Pick<PluginHookHandlerMap, "reply_payload_sending" | "message_sending">,
@@ -159,44 +148,9 @@ export function registerOutboundImageProjectionTests({
     );
   }
 
-  it("keeps markdown images as text for channels that do not opt in", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-text", roomId: "!room" });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [{ text: "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
-    const sendMatrixOptions = sendMatrixCall[2] as { mediaUrl?: unknown } | undefined;
-    expect(sendMatrixCall[0]).toBe("!room:example");
-    expect(sendMatrixCall[1]).toBe("Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)");
-    expect(sendMatrixOptions?.mediaUrl).toBeUndefined();
-  });
-
-  it("extracts markdown images for channels that opt in", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-media", roomId: "!room" });
-    setTestOutbound({ ...matrixOutboundForTest, extractMarkdownImages: true });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [{ text: "Chart ![chart](https://example.com/chart.png) now" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
-    const sendMatrixOptions = sendMatrixCall[2] as { mediaUrl?: unknown } | undefined;
-    expect(sendMatrixCall[0]).toBe("!room:example");
-    expect(sendMatrixCall[1]).toBe("Chart now");
-    expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
-  });
-
   it.each([
     { operation: "raw", extractMarkdownImages: true },
     { operation: "structured", extractMarkdownImages: true },
-    { operation: "raw", extractMarkdownImages: false },
-    { operation: "structured", extractMarkdownImages: false },
   ] as const)(
     "projects hook-added channel images ($operation; enabled=$extractMarkdownImages)",
     async ({ operation, extractMarkdownImages }) => {
@@ -347,96 +301,4 @@ export function registerOutboundImageProjectionTests({
       }
     },
   );
-
-  it.each([false, true])(
-    "prepares channel images without reinterpreting prepared directive literals (images: %s)",
-    async (extractMarkdownImages) => {
-      setTestOutbound({ ...matrixOutboundForTest, extractMarkdownImages });
-      const text =
-        "[[reply_to:literal]] [[audio_as_voice]]\n" +
-        "MEDIA:https://example.com/literal.png\n" +
-        "Chart ![one](https://example.com/one.png) ![two](https://example.com/two.png)\nAfter  \n";
-      const payloads: ReplyPayload[] = [
-        { text: "" },
-        {
-          text,
-          replyToId: undefined,
-          mediaUrl: "https://example.com/primary.png",
-          mediaUrls: ["https://example.com/explicit.png", "https://example.com/one.png"],
-        },
-      ];
-      const batch = await prepareStructuredOutboundPayloadBatch(
-        {
-          cfg: matrixChunkConfig,
-          channel: "matrix",
-          to: "!room:example",
-          payloads,
-          deps: { matrix: vi.fn() },
-        },
-        createStructuredOutboundPayloadPlan(payloads),
-      );
-
-      expect(batch.entries).toEqual([
-        { sourceIndex: 0, status: "suppressed", reason: "no_visible_payload" },
-        expect.objectContaining({
-          sourceIndex: 1,
-          status: "accepted",
-          preparedMediaCount: extractMarkdownImages ? 4 : 3,
-          payload: {
-            text: extractMarkdownImages
-              ? "[[reply_to:literal]] [[audio_as_voice]]\nMEDIA:https://example.com/literal.png\nChart\nAfter  \n"
-              : text,
-            replyToId: undefined,
-            mediaUrls: [
-              "https://example.com/explicit.png",
-              "https://example.com/one.png",
-              "https://example.com/primary.png",
-              ...(extractMarkdownImages ? ["https://example.com/two.png"] : []),
-            ],
-          },
-        }),
-      ]);
-    },
-  );
-
-  it.each([
-    {
-      name: "MEDIA directives",
-      text: "Caption\nMEDIA:https://example.com/one.png\nMEDIA:https://example.com/two.png",
-      extractMarkdownImages: false,
-    },
-    {
-      name: "Markdown images",
-      text: "Caption ![one](https://example.com/one.png) ![two](https://example.com/two.png)",
-      extractMarkdownImages: true,
-    },
-  ])("delivers explicit attachments and every extracted $name", async (testCase) => {
-    const sendMedia = vi.fn<NonNullable<ChannelOutboundAdapter["sendMedia"]>>(async () => ({
-      channel: "matrix",
-      messageId: "sent",
-    }));
-    setTestOutbound({
-      ...matrixOutboundForTest,
-      sendMedia,
-      extractMarkdownImages: testCase.extractMarkdownImages,
-    });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [
-        {
-          text: testCase.text,
-          mediaUrl: "https://example.com/primary.png",
-          mediaUrls: ["https://example.com/explicit.png", "https://example.com/one.png"],
-        },
-      ],
-    });
-
-    expect(sendMedia.mock.calls.map(([params]) => params.mediaUrl)).toEqual([
-      "https://example.com/explicit.png",
-      "https://example.com/one.png",
-      "https://example.com/primary.png",
-      "https://example.com/two.png",
-    ]);
-  });
 }

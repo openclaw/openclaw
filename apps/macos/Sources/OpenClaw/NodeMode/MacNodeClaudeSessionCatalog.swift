@@ -93,7 +93,6 @@ enum MacNodeClaudeSessionCatalog {
         var scannedBytes: Int
         var record: SessionRecord?
         var sidechain: Bool
-        var generation: UInt64 = 0
     }
 
     private struct CLIRecordInspection {
@@ -116,109 +115,67 @@ enum MacNodeClaudeSessionCatalog {
         var cacheable: Bool
     }
 
-    private final class CatalogDiscoveryCache: @unchecked Sendable {
+    private struct TranscriptReadLease {
+        var rootPath: String
+        var threadId: String
+        var fileURL: URL
+        var expiresAt: Date
+    }
+
+    private final class CatalogCache<Value>: @unchecked Sendable {
+        private struct Entry {
+            var value: Value
+            var generation: UInt64
+        }
+
         private let lock = NSLock()
-        private var entries: [String: CatalogDiscoveryCacheEntry] = [:]
+        private let limit: Int
+        private var entries: [String: Entry] = [:]
         private var generation: UInt64 = 0
 
+        init(limit: Int) {
+            self.limit = limit
+        }
+
         func lookup(
-            path: String,
-            rootPath: String,
-            identity: CatalogFileIdentity,
-            sessionId: String) -> CatalogDiscoveryCacheEntry?
+            key: String,
+            removeInvalid: Bool = false,
+            matches: (Value) -> Bool) -> Value?
         {
             self.lock.lock()
             defer { self.lock.unlock() }
-            guard var entry = self.entries[path],
-                  entry.rootPath == rootPath,
-                  entry.identity == identity,
-                  entry.sessionId == sessionId
-            else { return nil }
+            guard var entry = self.entries[key], matches(entry.value) else {
+                if removeInvalid { self.entries.removeValue(forKey: key) }
+                return nil
+            }
             self.generation &+= 1
             entry.generation = self.generation
-            self.entries[path] = entry
-            return entry
+            self.entries[key] = entry
+            return entry.value
         }
 
-        func store(_ entry: CatalogDiscoveryCacheEntry, path: String) {
+        func store(key: String, makeValue: () -> Value) {
             self.lock.lock()
             defer { self.lock.unlock() }
             self.generation &+= 1
-            var entry = entry
-            entry.generation = self.generation
-            self.entries[path] = entry
-            if self.entries.count > MacNodeClaudeSessionCatalog.maxCatalogDiscoveryCacheEntries,
+            self.entries[key] = Entry(value: makeValue(), generation: self.generation)
+            if self.entries.count > self.limit,
                let oldest = self.entries.min(by: { $0.value.generation < $1.value.generation })
             {
                 self.entries.removeValue(forKey: oldest.key)
             }
         }
 
-        func removeUnseen(rootPath: String, seenPaths: Set<String>) {
+        func remove(key: String) {
             self.lock.lock()
             defer { self.lock.unlock() }
-            self.entries = self.entries.filter { path, entry in
-                entry.rootPath != rootPath || seenPaths.contains(path)
-            }
-        }
-    }
-
-    private struct TranscriptReadLease {
-        var rootPath: String
-        var threadId: String
-        var fileURL: URL
-        var expiresAt: Date
-        var generation: UInt64
-    }
-
-    private final class TranscriptReadLeaseCache: @unchecked Sendable {
-        private let lock = NSLock()
-        private var entries: [String: TranscriptReadLease] = [:]
-        private var generation: UInt64 = 0
-
-        func lookup(leaseId: String, rootPath: String, threadId: String) -> URL? {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            guard var entry = self.entries[leaseId],
-                  entry.rootPath == rootPath,
-                  entry.threadId == threadId,
-                  entry.expiresAt > Date()
-            else {
-                self.entries.removeValue(forKey: leaseId)
-                return nil
-            }
-            self.generation &+= 1
-            entry.generation = self.generation
-            self.entries[leaseId] = entry
-            return entry.fileURL
+            self.entries.removeValue(forKey: key)
         }
 
-        func store(rootPath: String, threadId: String, fileURL: URL) -> String {
+        func remove(where predicate: (String, Value) -> Bool) {
             self.lock.lock()
             defer { self.lock.unlock() }
-            self.generation &+= 1
-            let leaseId = UUID().uuidString
-            self.entries[leaseId] = TranscriptReadLease(
-                rootPath: rootPath,
-                threadId: threadId,
-                fileURL: fileURL,
-                expiresAt: Date().addingTimeInterval(
-                    MacNodeClaudeSessionCatalog.transcriptReadLeaseLifetimeSeconds),
-                generation: self.generation)
-            let overflow = self.entries.count - MacNodeClaudeSessionCatalog.maxTranscriptReadLeases
-            guard overflow > 0 else { return leaseId }
-            let oldest = self.entries.sorted { $0.value.generation < $1.value.generation }
-                .prefix(overflow)
-            for entry in oldest {
-                self.entries.removeValue(forKey: entry.key)
-            }
-            return leaseId
-        }
-
-        func remove(leaseId: String) {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            self.entries.removeValue(forKey: leaseId)
+            self.entries = self.entries.filter { !predicate($0.key, $0.value.value) }
         }
     }
 
@@ -244,8 +201,9 @@ enum MacNodeClaudeSessionCatalog {
     private static let cliEntrypoints: Set<String> = ["cli", "sdk-cli"]
     private static let iso8601FractionalStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601Style = Date.ISO8601FormatStyle()
-    private static let catalogDiscoveryCache = CatalogDiscoveryCache()
-    private static let transcriptReadLeases = TranscriptReadLeaseCache()
+    private static let catalogDiscoveryCache = CatalogCache<CatalogDiscoveryCacheEntry>(
+        limit: maxCatalogDiscoveryCacheEntries)
+    private static let transcriptReadLeases = CatalogCache<TranscriptReadLease>(limit: maxTranscriptReadLeases)
     private static let catalogEnumerationObserver = LockIsolated<(@Sendable (String) -> Void)?>(nil)
 
     static func setCatalogEnumerationObserverForTesting(
@@ -264,6 +222,15 @@ enum MacNodeClaudeSessionCatalog {
             MacNodeClaudeSessionCatalogContract.pluginId,
             root: root)
         else { return false }
+        let pluginConfig = OpenClawConfigFile.pluginEntry(
+            MacNodeClaudeSessionCatalogContract.pluginId,
+            root: root)?["config"] as? [String: Any]
+        let sessionCatalog = pluginConfig?["sessionCatalog"] as? [String: Any]
+        if let enabled = sessionCatalog?["enabled"] as? NSNumber,
+           CFGetTypeID(enabled) == CFBooleanGetTypeID(), !enabled.boolValue
+        {
+            return false
+        }
         let projectsURL = self.projectsURL(homeURL: homeURL, environment: environment)
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(
@@ -398,10 +365,16 @@ enum MacNodeClaudeSessionCatalog {
             selectedBytes += data.count
         }
         let hasEarlierItems = selected.count < found.count || position > 0
-        let leaseId = target.leaseId ?? self.transcriptReadLeases.store(
-            rootPath: projectsURL.standardizedFileURL.path,
-            threadId: params.threadId,
-            fileURL: fileURL)
+        let leaseId = target.leaseId ?? UUID().uuidString
+        if target.leaseId == nil {
+            self.transcriptReadLeases.store(key: leaseId) {
+                TranscriptReadLease(
+                    rootPath: projectsURL.standardizedFileURL.path,
+                    threadId: params.threadId,
+                    fileURL: fileURL,
+                    expiresAt: Date().addingTimeInterval(self.transcriptReadLeaseLifetimeSeconds))
+            }
+        }
         var response: [String: Any] = try [
             "threadId": params.threadId,
             // Shared UI expects newest-first pages and restores chronological order.
@@ -531,10 +504,9 @@ extension MacNodeClaudeSessionCatalog {
     {
         let rootPath = projectsURL.standardizedFileURL.path
         if let leaseId {
-            if let candidate = self.transcriptReadLeases.lookup(
-                leaseId: leaseId,
-                rootPath: rootPath,
-                threadId: threadId),
+            if let candidate = self.transcriptReadLeases.lookup(key: leaseId, removeInvalid: true, matches: {
+                $0.rootPath == rootPath && $0.threadId == threadId && $0.expiresAt > Date()
+            })?.fileURL,
                 let fileURL = self.revalidatedSessionFile(
                     projectsURL: projectsURL,
                     threadId: threadId,
@@ -544,7 +516,7 @@ extension MacNodeClaudeSessionCatalog {
             }
             // A lease is only an optimization. App restart, expiry, eviction, or
             // a moved file must fall back to current eligibility discovery.
-            self.transcriptReadLeases.remove(leaseId: leaseId)
+            self.transcriptReadLeases.remove(key: leaseId)
         }
 
         guard let candidate = try self.sessions(homeURL: homeURL, projectsURL: projectsURL)
@@ -630,7 +602,9 @@ extension MacNodeClaudeSessionCatalog {
             }
         }
         if !truncated {
-            self.catalogDiscoveryCache.removeUnseen(rootPath: context.rootPath, seenPaths: seenPaths)
+            self.catalogDiscoveryCache.remove { path, entry in
+                entry.rootPath == context.rootPath && !seenPaths.contains(path)
+            }
         }
     }
 
@@ -658,11 +632,9 @@ extension MacNodeClaudeSessionCatalog {
         // Cache identity does not encode ACLs. Preserve open-on-every-list authorization.
         guard FileManager.default.isReadableFile(atPath: cachePath) else { return false }
         if let identity,
-           let cached = self.catalogDiscoveryCache.lookup(
-               path: cachePath,
-               rootPath: context.rootPath,
-               identity: identity,
-               sessionId: sessionId),
+           let cached = self.catalogDiscoveryCache.lookup(key: cachePath, matches: {
+               $0.rootPath == context.rootPath && $0.identity == identity && $0.sessionId == sessionId
+           }),
            scannedBytes + cached.scannedBytes <= self.maxCatalogMetadataScanBytes
         {
             if cached.sidechain {
@@ -697,15 +669,15 @@ extension MacNodeClaudeSessionCatalog {
         }
         let budgetConstrained = scannedBytes >= self.maxCatalogMetadataScanBytes
         if let identity, !budgetConstrained, scan.cacheable {
-            self.catalogDiscoveryCache.store(
+            self.catalogDiscoveryCache.store(key: cachePath) {
                 CatalogDiscoveryCacheEntry(
                     rootPath: context.rootPath,
                     identity: identity,
                     sessionId: sessionId,
                     scannedBytes: scan.fileBytes,
                     record: scan.record,
-                    sidechain: scan.sidechain),
-                path: cachePath)
+                    sidechain: scan.sidechain)
+            }
         }
         return budgetConstrained
     }
@@ -894,33 +866,25 @@ extension MacNodeClaudeSessionCatalog {
             if sidechainIds.contains(sessionId) {
                 continue
             }
-            var record = records[sessionId]
-            if record == nil,
-               let fileURL = (sessionFiles["\(sessionId).jsonl"] ?? []).lazy.compactMap({ candidate in
-                   self.safeSessionFile(
-                       root: projectsURL,
-                       resolvedRoot: resolvedProjectsURL,
-                       candidate: candidate,
-                       sessionId: sessionId)
-               }).first
-            {
-                record = SessionRecord(
-                    threadId: sessionId,
-                    name: nil,
-                    cwd: nil,
-                    createdAt: nil,
-                    updatedAt: nil,
-                    source: "claude-desktop",
-                    gitBranch: nil,
-                    fileURL: fileURL)
-            }
-            guard var record else { continue }
-            record.name = self.string(metadata["title"], maxLength: 500) ?? record.name
-            record.cwd = self.string(metadata["cwd"]) ?? self.string(metadata["originCwd"]) ?? record.cwd
-            record.createdAt = self.timestampMs(metadata["createdAt"]) ?? record.createdAt
-            record.updatedAt = self.timestampMs(metadata["lastActivityAt"]) ?? record.updatedAt
-            record.source = "claude-desktop"
-            records[sessionId] = record
+            let record = records[sessionId]
+            guard let fileURL = record?.fileURL ??
+                (sessionFiles["\(sessionId).jsonl"] ?? []).lazy.compactMap({ candidate in
+                    self.safeSessionFile(
+                        root: projectsURL,
+                        resolvedRoot: resolvedProjectsURL,
+                        candidate: candidate,
+                        sessionId: sessionId)
+                }).first
+            else { continue }
+            records[sessionId] = SessionRecord(
+                threadId: sessionId,
+                name: self.string(metadata["title"], maxLength: 500) ?? record?.name,
+                cwd: self.string(metadata["cwd"]) ?? self.string(metadata["originCwd"]) ?? record?.cwd,
+                createdAt: self.timestampMs(metadata["createdAt"]) ?? record?.createdAt,
+                updatedAt: self.timestampMs(metadata["lastActivityAt"]) ?? record?.updatedAt,
+                source: "claude-desktop",
+                gitBranch: record?.gitBranch,
+                fileURL: fileURL)
         }
         return records.values.sorted { left, right in
             let leftTime = left.updatedAt ?? 0
@@ -933,8 +897,7 @@ extension MacNodeClaudeSessionCatalog {
 extension MacNodeClaudeSessionCatalog {
     private static func decodeObject(_ paramsJSON: String?) throws -> [String: Any] {
         guard let paramsJSON, !paramsJSON.isEmpty else { return [:] }
-        guard let data = paramsJSON.data(using: .utf8),
-              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let value = try? JSONSerialization.jsonObject(with: Data(paramsJSON.utf8)) as? [String: Any]
         else { throw CatalogError.invalidParams("parameters must be valid JSON objects") }
         return value
     }
@@ -1041,9 +1004,7 @@ extension MacNodeClaudeSessionCatalog {
         if let maxBytes, data.count > maxBytes {
             throw CatalogError.responseTooLarge
         }
-        guard let result = String(data: data, encoding: .utf8)
-        else { throw CatalogError.unavailable }
-        return result
+        return String(bytes: data, encoding: .utf8)!
     }
 
     private static func truncateUTF8(_ value: String, maxBytes: Int) -> String {

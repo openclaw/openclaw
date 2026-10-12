@@ -1,8 +1,6 @@
 import { resolveGatewayRunOptions } from "../cli/gateway-cli/run-options.js";
-import type { runGatewayCommand } from "../cli/gateway-cli/run.js";
 import { getGatewayRunRuntimeHooks } from "../cli/gateway-cli/runtime-hooks.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
-import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -15,21 +13,15 @@ import {
 } from "./onboard-browser-handoff.js";
 import { resolveLocalControlUiProbeLinks, waitForGatewayReachable } from "./onboard-helpers.js";
 
-type QuickstartForegroundGatewayDeps = {
-  readConfigSnapshot?: () => Promise<Pick<ConfigFileSnapshot, "config">>;
-  runGateway?: typeof runGatewayCommand;
-  waitForGateway?: typeof waitForGatewayReachable;
-  runBrowserHandoff?: typeof runBrowserHatchHandoff;
-};
-
 /** Start the foreground Gateway with fresh plugin facts after onboarding installs. */
-export async function runQuickstartForegroundGateway(
-  params: { runtime: RuntimeEnv; suppressTokenOutput?: boolean; agentId?: string },
-  deps: QuickstartForegroundGatewayDeps = {},
-): Promise<void> {
+export async function runQuickstartForegroundGateway(params: {
+  runtime: RuntimeEnv;
+  suppressTokenOutput?: boolean;
+  agentId?: string;
+}): Promise<void> {
   return await withPluginCache(createPluginCache(), async () => {
     const { runtime } = params;
-    const { config } = await (deps.readConfigSnapshot ?? readConfigFileSnapshot)();
+    const { config } = await readConfigFileSnapshot();
     const links = resolveLocalControlUiProbeLinks({
       bind: config.gateway?.bind,
       port: resolveGatewayPort(config),
@@ -42,16 +34,18 @@ export async function runQuickstartForegroundGateway(
       modeOverride: "local",
     });
     const authMode = config.gateway?.auth?.mode ?? (credentials.password ? "password" : "token");
-    const runGateway =
-      deps.runGateway ?? (await import("../cli/gateway-cli/run.js")).runGatewayCommand;
-    const gateway = runGateway(resolveGatewayRunOptions({}), getGatewayRunRuntimeHooks());
+    const { runGatewayCommand } = await import("../cli/gateway-cli/run.js");
+    const gateway = runGatewayCommand(resolveGatewayRunOptions({}), getGatewayRunRuntimeHooks());
     const stopped = gateway.then(() => null);
     const reachable = await Promise.race([
       stopped,
-      (deps.waitForGateway ?? waitForGatewayReachable)({
+      waitForGatewayReachable({
         url: links.wsUrl,
         token: authMode === "token" ? credentials.token : undefined,
-        password: authMode === "password" ? credentials.password : undefined,
+        password:
+          authMode === "password" || authMode === "trusted-proxy"
+            ? credentials.password
+            : undefined,
         ...resolveGatewayStartupTiming(),
       }),
     ]);
@@ -62,7 +56,7 @@ export async function runQuickstartForegroundGateway(
       // Browser failure must not end the process that now owns the Gateway.
       const handoff = await Promise.race([
         stopped,
-        (deps.runBrowserHandoff ?? runBrowserHatchHandoff)({
+        runBrowserHatchHandoff({
           config,
           prompter: createQuickstartNotePrompter(runtime),
           suppressTokenOutput: params.suppressTokenOutput,

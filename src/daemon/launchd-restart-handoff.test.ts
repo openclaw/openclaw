@@ -285,8 +285,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('launchctl bootout "$service_target"');
     // The unload poll must outlast launchd's ExitTimeOut SIGKILL ceiling plus
-    // margin (#110137): 35 × 1s vs the old 15 × 0.2s stop window.
-    expect(args[1]).toContain('bootout_wait_count="35"');
+    // margin (#110137): 345 × 1s vs the old 15 × 0.2s stop window.
+    expect(args[1]).toContain('bootout_wait_count="345"');
     expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain("sleep 1");
     // Bootstrap failures retry; kickstart -k only fires while the label is

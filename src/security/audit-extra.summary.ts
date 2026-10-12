@@ -4,7 +4,6 @@ import {
   listAgentIds,
   resolveAgentConfig,
 } from "../agents/agent-scope-config.js";
-// Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
   resolveProviderToolPolicy,
@@ -113,7 +112,6 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   });
 }
 
-/** Produce a concise inventory of major security-relevant surfaces. */
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
@@ -132,7 +130,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     `browser control: ${browserEnabled ? "enabled" : "disabled"}` +
     `\n` +
-    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting";
+    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For mutually untrusted users or organizations, run separate Gateways with separate credentials, ideally under separate OS users or hosts: https://docs.openclaw.ai/gateway/security/trust-model";
 
   const findings: SecurityAuditFinding[] = [
     {
@@ -240,7 +238,7 @@ export function collectCrossAgentSessionAccessFindings(
         [...reachers, ...nonReachers, "Incognito sessions remain hidden."].join("\n") +
         trustDetail,
       remediation:
-        'Set tools.sessions.visibility to "agent", "tree", or "self"; restrict tools.agentToAgent.allow to the intended requester and target ids; or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',
+        'Set tools.sessions.visibility to "agent", "tree", or "self"; use agents.entries.<id>.tools.agentToAgent.send for explicit send-only destinations when needed. Restrict tools.agentToAgent.allow to the intended requester and target ids, or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',
     },
   ];
 }

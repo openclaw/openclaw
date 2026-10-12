@@ -6,6 +6,7 @@ import type {
   SessionStateEventRow,
   SessionStateNotice,
 } from "./session-state-events.kernel.js";
+import type { SessionStateSweepAddress } from "./session-state-events.types.js";
 import type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 export type SessionStateWatchAddress = {
@@ -14,6 +15,19 @@ export type SessionStateWatchAddress = {
 };
 
 export type SessionStateWorkerOperations = {
+  "sessionState.cleanup": {
+    input:
+      | { kind: "reset"; sessionKey: string }
+      | { kind: "delete"; sessionKey: string; agentId: string };
+    output: void;
+  };
+  "sessionState.sweep": {
+    input: {
+      cursors: readonly SessionStateSweepAddress[];
+      now: number;
+    };
+    output: SessionStateNotice[];
+  };
   "sessionState.registerWatch": {
     input: {
       watcherSessionKey: string;

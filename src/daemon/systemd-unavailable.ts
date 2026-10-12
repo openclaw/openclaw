@@ -1,5 +1,6 @@
 /** Classifies systemd/systemctl unavailable errors into user-facing categories. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getServiceInspectionClock } from "./service-inspection-budget.js";
 import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
@@ -10,7 +11,8 @@ export async function resolveUnavailableSystemdInspectionReason(
   deadline: number,
 ): Promise<ServiceInspectionReason> {
   const { execFileUtf8 } = await import("./exec-file.js");
-  const timeout = Math.floor(deadline - performance.now());
+  const now = getServiceInspectionClock();
+  const timeout = Math.floor(deadline - now());
   if (timeout <= 0) {
     return reason;
   }

@@ -52,6 +52,10 @@ export function truncateDiscordCommandDescriptionLocalizations(params: {
   );
 }
 
+function buildDiscordChoiceOptions(choices: ReturnType<typeof resolveCommandArgChoices>) {
+  return choices.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value }));
+}
+
 export function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
   cfg: OpenClawConfig;
@@ -70,7 +74,7 @@ export function buildDiscordCommandOptions(params: {
   if (!args || args.length === 0) {
     return undefined;
   }
-  return args.map((arg) => {
+  return args.map((arg): CommandOptions[number] => {
     const base = {
       name: arg.name,
       description: truncateDiscordCommandDescription({
@@ -80,12 +84,9 @@ export function buildDiscordCommandOptions(params: {
       required: arg.required ?? false,
     };
     if (arg.type === "number" || arg.type === "boolean") {
-      return Object.assign(base, {
-        type:
-          arg.type === "number"
-            ? ApplicationCommandOptionType.Number
-            : ApplicationCommandOptionType.Boolean,
-      });
+      return arg.type === "number"
+        ? Object.assign(base, { type: ApplicationCommandOptionType.Number as const })
+        : Object.assign(base, { type: ApplicationCommandOptionType.Boolean as const });
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
     const shouldAutocomplete =
@@ -136,22 +137,17 @@ export function buildDiscordCommandOptions(params: {
                 normalizeLowercaseStringOrEmpty(choice.label).includes(focusValue),
               )
             : choices;
-          await interaction.respond(
-            filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
-          );
+          await interaction.respond(buildDiscordChoiceOptions(filtered));
         }
       : undefined;
-    const choices =
-      resolvedChoices.length > 0 && !autocomplete
-        ? resolvedChoices.slice(0, 25).map((choice) => ({
-            name: choice.label,
-            value: choice.value,
-          }))
-        : undefined;
     return Object.assign(base, {
-      type: ApplicationCommandOptionType.String,
-      choices,
-      autocomplete,
+      type: ApplicationCommandOptionType.String as const,
+      ...(autocomplete
+        ? { autocomplete }
+        : {
+            choices:
+              resolvedChoices.length > 0 ? buildDiscordChoiceOptions(resolvedChoices) : undefined,
+          }),
     });
   }) satisfies CommandOptions;
 }

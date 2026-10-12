@@ -202,7 +202,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     ...DEPRECATION_MARKING,
     owner: "agent-runtime",
     replacement:
-      "AgentHarnessAttemptResult.terminal; retain until published harness plugins no longer return legacy terminal fields",
+      "AgentHarnessAttemptResult.terminal and AgentHarnessDeliveryDefaults.visibleReplies; retain until harness migration verifies that legacy terminal fields and sourceVisibleReplies are unread",
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: [
       "AgentHarnessAttemptResult.aborted",
@@ -214,9 +214,10 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "AgentHarnessAttemptResult.timedOutByRunBudget",
       "AgentHarnessAttemptResult.promptError",
       "AgentHarnessAttemptResult.promptErrorSource",
+      "AgentHarnessDeliveryDefaults.sourceVisibleReplies",
     ],
     diagnostics: [
-      "TypeScript @deprecated annotations on agent harness result fields",
+      "TypeScript @deprecated annotations on agent harness result and delivery defaults",
       "plugin boundary report compatibility inventory",
     ],
     tests: [
@@ -224,7 +225,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Agent harness result booleans remain available while published plugins migrate to terminal outcomes. Removed sourceVisibleReplies after the October 1 compatibility window; use AgentHarnessDeliveryDefaults.visibleReplies.",
+      "Agent harness result booleans and sourceVisibleReplies remain available while harnesses migrate to terminal outcomes and visibleReplies.",
   },
   {
     code: "official-plugin-export-aliases",

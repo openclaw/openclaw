@@ -629,6 +629,15 @@ struct MacNodeClaudeSessionCatalogTests {
             withIntermediateDirectories: true)
         #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(root: [:], homeURL: fixture.home, environment: [:]))
         #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(root: root, homeURL: fixture.home, environment: [:]))
+        for (enabled, expected) in [(false as Any, false), (true as Any, true), (0 as Any, true)] {
+            let entry: [String: Any] = [
+                "enabled": true,
+                "config": ["sessionCatalog": ["enabled": enabled]],
+            ]
+            let configured: [String: Any] = ["plugins": ["entries": ["anthropic": entry]]]
+            #expect(MacNodeClaudeSessionCatalog.shouldAdvertise(
+                root: configured, homeURL: fixture.home, environment: [:]) == expected)
+        }
         let disabled: [String: Any] = ["plugins": ["entries": ["anthropic": ["enabled": false]]]]
         #expect(!MacNodeClaudeSessionCatalog.shouldAdvertise(root: disabled, homeURL: fixture.home, environment: [:]))
         let denied: [String: Any] = ["plugins": ["deny": ["anthropic"]]]

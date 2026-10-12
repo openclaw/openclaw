@@ -7,7 +7,6 @@ import {
   mergeArgumentChurnActivity,
   recordDiagnosticActivityProgress,
 } from "./diagnostic-argument-churn-activity.js";
-import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
 import {
   type DiagnosticRepeatedRequestActivity,
   mergeRepeatedRequestActivity,
@@ -45,7 +44,30 @@ export type DiagnosticOwnerRegistration = {
 
 export const activityByRef = new Map<string, SessionActivity>();
 export const activityByRunId = new Map<string, SessionActivity>();
-export const embeddedRunIndex = createDiagnosticEmbeddedRunIndex(activityByRunId);
+export const embeddedRunIndex = {
+  remove(activity: SessionActivity, workKey: string): void {
+    const embeddedRun = activity.activeEmbeddedRuns.get(workKey);
+    if (!embeddedRun) {
+      return;
+    }
+    activity.activeEmbeddedRuns.delete(workKey);
+    const runIdStillActive = Array.from(activity.activeEmbeddedRuns.values()).some(
+      (candidate) => candidate.runId === embeddedRun.runId,
+    );
+    if (!runIdStillActive && activityByRunId.get(embeddedRun.runId) === activity) {
+      activityByRunId.delete(embeddedRun.runId);
+    }
+  },
+  clear(activity: SessionActivity): void {
+    // Every local owner is leaving; only retain indexes now owned by another activity.
+    for (const { runId } of activity.activeEmbeddedRuns.values()) {
+      if (activityByRunId.get(runId) === activity) {
+        activityByRunId.delete(runId);
+      }
+    }
+    activity.activeEmbeddedRuns.clear();
+  },
+};
 export const activeDiagnosticOwners = new Map<
   CoreModelRequestOwnerGeneration,
   DiagnosticOwnerRegistration

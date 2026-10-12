@@ -2,10 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  createChangedExtensionFallbackShards,
-  createChangedNodeTestShards,
-} from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { rebalanceMeasuredSerialJobs } from "../../scripts/lib/ci-measured-compact-packing.mts";
 import * as nodeTestInventory from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
@@ -55,6 +52,7 @@ import {
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "../vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "../vitest/vitest.agents.config.ts";
+import { createAutoReplyReplyVitestConfig } from "../vitest/vitest.auto-reply-reply.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
 import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
@@ -103,6 +101,7 @@ describe("Control UI release-only inventories", () => {
   const sidebar = "ui/src/components/app-sidebar.stress.browser.test.ts";
   const embed = "ui/src/e2e/native-embed-settings.e2e.test.ts";
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
+  const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
@@ -154,6 +153,7 @@ describe("Control UI release-only inventories", () => {
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
     expect(groups.e2e[0]?.includePatterns).toContain(embed);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
+    expect(groups.e2e[0]?.includePatterns).not.toContain(staleBuild);
     expect(
       uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
     ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)));
@@ -174,6 +174,7 @@ describe("Control UI release-only inventories", () => {
       includeReleaseOnlyTests: false,
       changedPaths: [
         entry,
+        staleBuild,
         ...releaseOnlyRealGateway,
         "ui/src/components/app-sidebar.ts",
         "ui/src/e2e",
@@ -181,6 +182,7 @@ describe("Control UI release-only inventories", () => {
     };
     const groups = createUiTestShardGroups(options);
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
+    expect(groups.e2e[0]?.includePatterns).toContain(staleBuild);
     expect(
       groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
     ).toEqual(
@@ -2002,6 +2004,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/auto-reply/reply/new.test.tsx",
       "src/infra/outbound/new.test.ts",
       "test/tsconfig/tsconfig.core.test.messaging.json",
+      "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
     ]) {
       expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(guard);
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
@@ -2020,9 +2023,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("selects provisioning and closure guards without replacing source test owners", () => {
     const guards = [
-      "test/scripts/pr-worktree-provision.test.ts",
-      "test/scripts/eager-import-closure.test.ts",
-    ];
+      // Provisioning inspects templates through the fork-owned SQLite broker.
+      ["test/scripts/pr-worktree-provision.test.ts", "test/vitest/vitest.infra.config.ts"],
+      ["test/scripts/eager-import-closure.test.ts", "test/vitest/vitest.tooling.config.ts"],
+    ] as const;
     const manifest = "scripts/pr-lib/wrapper-components.txt";
     for (const changedPath of [
       "scripts/pr",
@@ -2031,7 +2035,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/plugins/discovery-availability.ts",
     ]) {
       const targets = resolvePolicyTestTargets([changedPath]);
-      for (const guard of guards) {
+      for (const [guard] of guards) {
         expect(targets, changedPath).toContain(guard);
       }
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
@@ -2039,19 +2043,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const newModule = "src/plugins/unrelated-new-plugin.ts";
     const newModuleTargets = resolvePolicyTestTargets([newModule]);
     const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
-    for (const guard of guards) {
+    for (const [guard] of guards) {
       expect(newModuleTargets).toContain(guard);
       expect(testOnlyTargets).not.toContain(guard);
     }
     expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
     const shards = expectDefined(createChangedNodeTestShards([manifest]), "manifest test plan");
-    for (const guard of guards) {
+    for (const [guard, config] of guards) {
       const owners = shards
         .flatMap((shard) => shard.groups ?? [])
         .filter((group) => group.includePatterns?.includes(guard));
       expect(owners).toHaveLength(1);
-      expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+      expect(owners[0]?.configs).toEqual([config]);
     }
   });
 
@@ -3058,11 +3062,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   );
 
   it.each(["github"])(
-    "shares one prepared runtime across affordable %s tooling groups",
+    "shares one prepared runtime across affordable %s groups",
     (runnerBackend) => {
       const targets = [
         PRIVATE_QA_TOOLING_TEST,
-        "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+        "src/infra/update-candidate-canary.integration.test.ts",
       ];
       vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
         Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
@@ -3081,6 +3085,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
     },
   );
+
+  it("retains indivisible-file costs when canonical measurements are stale-low", () => {
+    const target = "src/cli/local-state-owner.process.test.ts";
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+      Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
+    );
+    vi.spyOn(shardMetadata, "estimateVitestTestFileSeconds").mockImplementation((file) =>
+      file === target ? 200 : 3,
+    );
+    const plan = expectDefined(
+      createSelectedNodeTestShardBundles([target], { runnerBackend: "hybrid" }),
+      "selected process plan",
+    );
+    expect(
+      plan.flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? [])),
+    ).toEqual([target]);
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.predictedTestSeconds).toBeGreaterThanOrEqual(200);
+  });
 
   it("allocates sparse selections without reserving their full-suite rows", async () => {
     const heavyCli = "src/cli/gateway-backed-exit-health.process.test.ts";
@@ -3727,8 +3750,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(listMatchedTestFiles(worker)).toEqual(
       expect.arrayContaining([
         "src/gateway/github-publication-transcript.test.ts",
+        "src/gateway/mcp-http.session-controls.test.ts",
+        "src/gateway/mcp-http.test.ts",
+        "src/gateway/server-worker-placement-session-evidence.test.ts",
+        "src/gateway/server-worker-placement-session-evidence.worker.test.ts",
         "src/gateway/session-lifecycle-run-failure.test.ts",
         "src/gateway/session-lifecycle-state.persistence.test.ts",
+        "src/gateway/talk/client-permission-parity.test.ts",
+        "src/gateway/tool-resolution.swarm-collector.test.ts",
+        "src/gateway/tool-resolution.terminal.test.ts",
         "src/gateway/worker-workspace-recovery-transcript.test.ts",
         "src/gateway/session-utils.queued-collector-admission.test.ts",
         "src/gateway/session-utils.queued-collector.test.ts",
@@ -3761,6 +3791,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
+      "src/agents/sandbox.context.github-identity.test.ts",
+      "src/auto-reply/reply/session-reset-prompt.test.ts",
       "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
       "src/plugin-sdk/session-transcript-runtime.test.ts",
@@ -3781,6 +3814,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         support,
         createAgentsToolsVitestConfig({}),
         createAgentsVitestConfig({}),
+        createAutoReplyReplyVitestConfig({}),
         createPluginSdkLightVitestConfig({}),
         createPluginSdkVitestConfig({}),
         createPluginsVitestConfig({}),
@@ -4008,20 +4042,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("keeps changed native browser tests in UI jobs and out of extension fallback", () => {
+  it("keeps changed native browser tests in UI jobs", () => {
     const target = "extensions/workboard/browser/catalog.test.ts";
     const shards = createChangedNodeTestShards([target]);
     expect(shards).not.toBeNull();
     expect(shards?.flatMap((shard) => shard.targets ?? shard.includePatterns ?? [])).toContain(
       target,
     );
-    expect(createChangedExtensionFallbackShards([target])).toEqual([]);
   });
 
   it.each(["extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts"])(
-    "prepares the provider runtime in extension fallback for %s",
+    "prepares the provider runtime for selected extension target %s",
     (target) => {
-      const owners = createChangedExtensionFallbackShards([target]).filter((shard) =>
+      const owners = (createChangedNodeTestShards([target]) ?? []).filter((shard) =>
         (shard.groups ?? [shard]).some((group) => group.includePatterns?.includes(target)),
       );
 
@@ -4048,10 +4081,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       changedPaths,
       includeReleaseOnlyPluginShards: false,
     };
-    const shards = [
-      ...createNodeTestShards(options),
-      ...createChangedExtensionFallbackShards(changedPaths),
-    ];
+    const shards = createNodeTestShards(options);
     expect(shards.filter((shard) => shard.shardName === "agentic-plugins")).toEqual([
       {
         checkName: "checks-node-agentic-plugins",
@@ -4062,33 +4092,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         runner: DEFAULT_NODE_TEST_RUNNER,
       },
     ]);
-  });
-
-  it("packs precise plugin tests through their canonical owner without enabling the sweep", () => {
-    const targets = [
-      "src/plugins/runtime.test.ts",
-      "src/plugins/public-surface-loader.test.ts",
-      "src/plugins/plugin-instance.consumer.test.ts",
-    ];
-    const selected = expectDefined(
-      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
-      "selected plugin owner",
-    );
-    const groups = selected.flatMap((shard) => shard.groups);
-    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-      targets.toSorted(),
-    );
-    expect(
-      groups.every(
-        (group) =>
-          group.configs.length === 1 && group.configs[0] === "test/vitest/vitest.plugins.config.ts",
-      ),
-    ).toBe(true);
-    expect(
-      createNodeTestShards({ includeReleaseOnlyPluginShards: false }).some((shard) =>
-        shard.configs.includes("test/vitest/vitest.plugins.config.ts"),
-      ),
-    ).toBe(false);
   });
 
   it("retains only exact changed plugin-owner tests in deterministic order", () => {

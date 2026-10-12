@@ -57,7 +57,7 @@ export type WorkerPlacementReclaimBarriers = {
     params: WorkerPlacementReclaimRequest & {
       authorize?: WorkerPlacementAuthorization;
       beforeDrain?: WorkerPlacementAuthorization;
-      begin: () => WorkerReclaimStartPlacement;
+      begin: (assertCurrent?: () => void) => Promise<WorkerReclaimStartPlacement>;
       reclaim: (
         workspace: WorkerSessionWorkspace,
         placement: WorkerReclaimStartPlacement,

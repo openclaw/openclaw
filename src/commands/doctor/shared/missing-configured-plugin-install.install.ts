@@ -58,16 +58,6 @@ export function isClawHubReviewNotice(message: string): boolean {
   return audit.includes("ClawHub Security Audit") && audit.includes("Outcome: Review");
 }
 
-function formatInstalledConfiguredPluginChange(params: {
-  pluginId: string;
-  installSpec: string;
-  repairReason?: InstallCandidateRepairReason;
-}): string {
-  return params.repairReason === "stale-version-bound-runtime"
-    ? `Refreshed stale configured plugin "${params.pluginId}" from ${params.installSpec}.`
-    : `Installed missing configured plugin "${params.pluginId}" from ${params.installSpec}.`;
-}
-
 export async function installCandidate(params: {
   candidate: DownloadableInstallCandidate;
   config: OpenClawConfig;
@@ -77,7 +67,6 @@ export async function installCandidate(params: {
   timeoutMs?: number;
   workTimeoutMs?: number | null;
   mode?: "install" | "update";
-  preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -279,7 +268,7 @@ async function installCandidatePackage(
               trustedSourceLinkedOfficialInstall: candidate.trustedSourceLinkedOfficialInstall,
             });
           let result = await install(mode);
-          if (!result.ok && mode === "install" && isPluginAlreadyExistsError(result.error)) {
+          if (!result.ok && mode === "install" && /\bplugin already exists:/.test(result.error)) {
             result = await install("update");
           }
           retainPluginInstallTransaction(params, result);
@@ -290,15 +279,11 @@ async function installCandidatePackage(
           (source.source === "npm"
             ? isUnavailableNpmTarget(attempt.result)
             : isUnavailableClawHubTarget(attempt.result)),
-        onFallback: (message) => {
-          channelNotices.push(message);
-        },
+        onFallback: (message) => void channelNotices.push(message),
       });
     },
     result: (attempt) => attempt.result,
-    onFallback: (message) => {
-      channelNotices.push(message);
-    },
+    onFallback: (message) => void channelNotices.push(message),
   });
   if (!installResult.ok) {
     return {
@@ -336,6 +321,9 @@ async function installCandidatePackage(
           version: installResult.version,
           ...buildNpmResolutionInstallFields(installResult.npmResolution),
         };
+  const installSpec =
+    (installedSource.source === "npm" ? npmSpecs : clawhubSpecs)?.installSpec ??
+    installedSource.spec;
   return {
     records: {
       ...params.records,
@@ -345,21 +333,13 @@ async function installCandidatePackage(
       }),
     },
     changes: [
-      formatInstalledConfiguredPluginChange({
-        pluginId,
-        installSpec:
-          (installedSource.source === "npm" ? npmSpecs : clawhubSpecs)?.installSpec ??
-          installedSource.spec,
-        repairReason: params.repairReason,
-      }),
+      staleRuntimeRepair
+        ? `Refreshed stale configured plugin "${pluginId}" from ${installSpec}.`
+        : `Installed missing configured plugin "${pluginId}" from ${installSpec}.`,
     ],
     notices: [...channelNotices, ...warnings],
     warnings: [],
   };
-}
-
-function isPluginAlreadyExistsError(error: string): boolean {
-  return /\bplugin already exists:/.test(error);
 }
 
 function resolveExistingCandidateNpmPackagePath(params: {

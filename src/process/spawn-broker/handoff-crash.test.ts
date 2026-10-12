@@ -15,10 +15,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { hasErrnoCode } from "../../infra/errno.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { createSpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("spawn broker admission custody", () => {
   let receipts: FixtureReceiptChannel;
@@ -34,6 +35,7 @@ describe.skipIf(skipBrokerTests)("spawn broker admission custody", () => {
     const marker = path.join(tempDirs.make("openclaw-broker-handoff-"), "pid");
     let pid: number | undefined;
     let stoppedBroker: number | undefined;
+    let closeOutcome: Promise<unknown> | undefined;
     try {
       await withinTest(host.ready(), signal);
       const child = host.spawn(
@@ -103,11 +105,25 @@ fixtureReceiptSocket.end();`,
       expect(pid).toBeTypeOf("number");
       expect(child.pid).toBeUndefined();
       process.kill(stoppedBroker!, "SIGKILL");
+      // Begin the join before yielding to the broker exit callback: its intentional
+      // SIGKILL must be reported as failed shutdown, not race with close admission.
+      closeOutcome = host.close().catch((error: unknown) => error);
       stoppedBroker = undefined;
       await expect(withinTest(readiness, signal)).resolves.toMatchObject({
         code: "ERR_SPAWN_BROKER_UNAVAILABLE",
       });
-      await withinTest(host.close(), signal);
+      await expect(withinTest(closeOutcome, signal)).resolves.toMatchObject({
+        name: "AggregateError",
+        errors: [
+          {
+            code: "ERR_SPAWN_BROKER_UNAVAILABLE",
+            message: "Spawn broker shutdown failed",
+            cause: { message: "exited with code=null signal=SIGKILL" },
+          },
+        ],
+      });
+      await withinTest(child.waitForClose(), signal);
+      expect(child.stdin?.destroyed).toBe(true);
       expect(isPidDefinitelyDead(pid!)).toBe(true);
     } finally {
       for (const candidate of [stoppedBroker, pid]) {
@@ -117,7 +133,7 @@ fixtureReceiptSocket.end();`,
           } catch {}
         }
       }
-      await host.close();
+      await (closeOutcome ?? host.close());
     }
   }, 15_000);
 });

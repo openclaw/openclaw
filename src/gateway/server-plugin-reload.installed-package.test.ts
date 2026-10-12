@@ -28,7 +28,10 @@ import {
   createPluginRegistryOwner,
   resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -245,7 +248,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
       ].toSorted(),
     );
-    const initial = bootstrap.prepareGatewayPluginLoad({
+    const initial = await bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
       pluginLookUpTable: loadPluginLookUpTable({
         config: initialConfig,
@@ -263,7 +266,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       loadIntent: "startup",
     });
     activatePluginRegistry(initial.pluginRegistry, null, "gateway-bindable", workspaceDir);
+    const scheduler = createTestGatewayScheduler();
     let currentServices: PluginServicesHandle | null = await startPluginServices({
+      scheduler,
       registry: initial.pluginRegistry,
       config: initialConfig,
       workspaceDir,
@@ -275,7 +280,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       },
     });
     const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, workspaceDir);
-    const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
+    const metadata = retainGatewayPluginMetadata(scheduler);
     metadata.publish(initialMetadata);
     const loaded = [initial];
     let beforeAttachment: ((candidate: (typeof loaded)[number]) => void) | undefined;
@@ -291,9 +296,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         }
         await registryOwner.close();
         await metadata.close();
+        await scheduler.stop();
       }
     });
     const runtime = {
+      scheduler,
       requestEntryLifetime: new GatewayRequestEntryLifetime(),
       pluginMetadataSnapshot: initialMetadata,
       pluginRuntime: registryOwner,
@@ -929,9 +936,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         expect(await probe("installed-probe")).toEqual(configured);
         expect(runtime.pluginRuntime.registry).toBe(previousRegistry);
         expect(previousInstance.disposing).toBe(false);
-        expect(() => retainRuntimePluginWork([previousRegistry])).toThrow(
-          "replacement is in progress",
-        );
         finishSecondRun();
         await expect(replacing).resolves.toMatchObject({
           runtime: { pluginIds: ["installed-probe"] },

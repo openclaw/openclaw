@@ -152,7 +152,9 @@ describe("cli json stdout contract", () => {
           },
         });
         expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-        expect(result.stderr).not.toContain("--timeout must be a positive integer (seconds)");
+        expect(result.stderr).toContain(
+          "[openclaw] Reason: --timeout must be a positive integer (seconds)",
+        );
       },
       { prefix: "openclaw-update-empty-timeout-e2e-" },
     );
@@ -332,7 +334,7 @@ describe("cli json stdout contract", () => {
             expect(report.probe).toEqual({
               ok: false,
               timedOut: true,
-              error: "probe timed out after 20ms",
+              error: "check timed out after 20ms",
             });
           } else {
             expect(report.probe).toEqual({ ok: true });

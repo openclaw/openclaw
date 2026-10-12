@@ -16,6 +16,8 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import {
   projectPublicSessionEntry,
   projectPublicSessionEntryPatch,
@@ -38,6 +40,38 @@ afterEach(async () => {
 });
 
 describe("SQLite session row persistence", () => {
+  it("updates maintenance and retained-reference predicates with the canonical entry", async () => {
+    const scope = createScope("predicate-columns");
+    await upsertSessionEntryCore(scope, {
+      sessionId: "current",
+      updatedAt: 10,
+      sessionStartedAt: 5,
+      previousSessionId: "previous",
+    });
+    const database = openOpenClawAgentDatabase(scope);
+    const prepare = vi.spyOn(database.db, "prepare");
+    const startedAt = () =>
+      [...readSessionMaintenanceAgeQueries(database.db).activity(undefined)].find(
+        (row) => row.session_key === scope.sessionKey,
+      )?.session_started_at;
+    const references = () => readReferencedSessionIds(database, new Set(), ["previous"]);
+    expect(startedAt()).toBe(5);
+    expect(references().has("previous")).toBe(true);
+
+    await patchSessionEntryCore(
+      scope,
+      () => ({ sessionStartedAt: 8, previousSessionId: undefined }),
+      { skipMaintenance: true },
+    );
+    expect(startedAt()).toBe(8);
+    expect(references().has("previous")).toBe(false);
+    const queries = prepare.mock.calls.map(([query]) => query);
+    expect(queries.some((query) => query.includes('"session_started_at"'))).toBe(true);
+    expect(queries.some((query) => query.includes('"has_optional_references" ='))).toBe(true);
+    expect(queries.every((query) => !query.includes("$.sessionStartedAt"))).toBe(true);
+    prepare.mockRestore();
+  });
+
   it("bounds saved-prompt decoding while publishing identity changes", async () => {
     const env = {
       ...process.env,
@@ -169,39 +203,46 @@ describe("SQLite session row persistence", () => {
     },
   );
 
-  it("protects required profile provenance during replacement", async () => {
-    const scope = createScope("stamp");
-    const stamp = {
-      createdVia: "operator" as const,
-      createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
-      createdAt: 10,
-      sandbox: "required" as const,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 10, ...stamp });
-    const replacement: InternalSessionEntry = {
-      sessionId: "replacement",
-      updatedAt: 20,
-      createdVia: "plugin",
-      createdActor: { type: "agent", id: "replacement-agent" },
-      createdAt: 20,
-    };
-    expect(
-      await patchSessionEntryCore(scope, () => replacement, { replaceEntry: true }),
-    ).toMatchObject(stamp);
-    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "replacement", ...stamp });
-    const row = openOpenClawAgentDatabase(scope)
-      .db.prepare(
-        "SELECT created_actor_type, created_actor_id, created_via, created_at, entry_json FROM session_nodes WHERE session_key = ?",
-      )
-      .get(scope.sessionKey);
-    expect(row).toMatchObject({
-      created_actor_type: "human",
-      created_actor_id: "profile-creator",
-      created_via: "operator",
-      created_at: 10,
-    });
-    expect(JSON.parse(String(row?.entry_json))).toMatchObject(stamp);
-  });
+  it.each([undefined, "plugin-dock"] as const)(
+    "protects required profile provenance and surface %s during replacement",
+    async (createdSurface) => {
+      const scope = createScope("stamp");
+      const stamp = {
+        createdVia: "operator" as const,
+        ...(createdSurface ? { createdSurface } : {}),
+        createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
+        createdAt: 10,
+        sandbox: "required" as const,
+      };
+      await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 10, ...stamp });
+      const replacement: InternalSessionEntry = {
+        sessionId: "replacement",
+        updatedAt: 20,
+        createdVia: "plugin",
+        createdSurface: createdSurface ? undefined : "plugin-dock",
+        createdActor: { type: "agent", id: "replacement-agent" },
+        createdAt: 20,
+      };
+      expect(
+        await patchSessionEntryCore(scope, () => replacement, { replaceEntry: true }),
+      ).toMatchObject(stamp);
+      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "replacement", ...stamp });
+      expect(loadSessionEntry(scope)?.createdSurface).toBe(createdSurface);
+      const row = openOpenClawAgentDatabase(scope)
+        .db.prepare(
+          "SELECT created_actor_type, created_actor_id, created_via, created_at, entry_json FROM session_nodes WHERE session_key = ?",
+        )
+        .get(scope.sessionKey);
+      expect(row).toMatchObject({
+        created_actor_type: "human",
+        created_actor_id: "profile-creator",
+        created_via: "operator",
+        created_at: 10,
+      });
+      expect(JSON.parse(String(row?.entry_json))).toMatchObject(stamp);
+      expect(JSON.parse(String(row?.entry_json)).createdSurface).toBe(createdSurface);
+    },
+  );
 
   it("keeps new required provenance with a fallback", async () => {
     const env = {
@@ -242,12 +283,14 @@ describe("SQLite session row persistence", () => {
         updatedAt: 20,
         createdVia: "operator",
         createdActor: { type: "human", source: "profile", id: "new-profile" },
+        createdSurface: "plugin-dock",
       }),
       { replaceEntry: true },
     );
     const persisted = loadSessionEntry(scope);
     expect(persisted).toMatchObject({ sessionId: "replacement", createdVia: "operator" });
     expect(persisted?.createdActor).toBeUndefined();
+    expect(persisted?.createdSurface).toBeUndefined();
     expect(persisted).not.toHaveProperty("sandbox");
     expect(persisted).not.toHaveProperty("label");
   });

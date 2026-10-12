@@ -1,9 +1,5 @@
 // Implements text-to-speech commands and persisted voice preferences.
 import crypto from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -11,23 +7,18 @@ import {
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
 import {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  listSpeechProviders,
-} from "../../tts/provider-registry.js";
-import {
-  getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsPersona,
-  getTtsProvider,
+  getTtsProviderAsync,
   isSummarizationEnabled,
   isTtsEnabled,
-  isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
   listTtsPersonas,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   setLastTtsAttempt,
   setSummarizationEnabled,
   setTtsEnabled,
@@ -47,48 +38,20 @@ import {
   persistCommandSession,
   sessionEntryPersistenceConflictReply,
 } from "./commands-session-store.js";
+import { splitCommandAction } from "./commands-slash-parse.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 const log = createSubsystemLogger("auto-reply/commands-tts");
 
-type ParsedTtsCommand = {
-  action: string;
-  args: string;
-};
-
-type TtsAttemptDetail = NonNullable<
-  NonNullable<ReturnType<typeof getLastTtsAttempt>>["attempts"]
->[number];
-
 type TtsCommandParams = Parameters<CommandHandler>[0];
 
-function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
+function parseTtsCommand(normalized: string) {
   const rest = matchCommandPrefix(normalized, "/tts");
   if (rest === null) {
     return null;
   }
-  const [action, ...tail] = (rest || "status").split(/\s+/);
-  return {
-    action: normalizeOptionalLowercaseString(action) ?? "",
-    args: normalizeOptionalString(tail.join(" ")) ?? "",
-  };
-}
-
-function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string | undefined {
-  if (!attempts || attempts.length === 0) {
-    return undefined;
-  }
-  return attempts
-    .map((attempt) => {
-      const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
-      const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
-      const persona =
-        attempt.persona && attempt.personaBinding && attempt.personaBinding !== "none"
-          ? ` persona=${attempt.persona}:${attempt.personaBinding}`
-          : "";
-      return `${attempt.provider}:${attempt.outcome}(${reason})${persona}${latency}`;
-    })
-    .join(", ");
+  const parsed = splitCommandAction(rest, "status");
+  return { ...parsed, args: parsed.args.split(/\s+/).join(" ") };
 }
 
 function ttsUsage(): CommandHandlerResult {
@@ -127,7 +90,7 @@ async function buildTtsAudioReply(params: {
   accountId?: string;
   prefsPath: string;
   agentId?: string;
-}): Promise<{ reply: ReplyPayload } | { error: string }> {
+}): Promise<{ reply: ReplyPayload } | { error: CommandHandlerResult }> {
   const start = Date.now();
   const result = await textToSpeech(params);
   const success = result.success && Boolean(result.audioPath);
@@ -158,7 +121,12 @@ async function buildTtsAudioReply(params: {
     };
   }
 
-  return { error: result.error ?? "unknown error" };
+  log.warn(`Audio generation failed: ${result.error ?? "unknown error"}`);
+  return {
+    error: stopWithText(
+      "⚠️ Couldn't create the audio. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    ),
+  };
 }
 
 async function handleTtsChatAction(
@@ -233,10 +201,7 @@ async function handleTtsLatestAction(
     agentId: targetAgentId,
   });
   if ("error" in audio) {
-    log.warn(`Audio generation failed: ${audio.error}`);
-    return stopWithText(
-      "⚠️ Couldn't create the audio. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-    );
+    return audio.error;
   }
 
   params.sessionEntry.lastTtsReadLatestHash = hash;
@@ -249,18 +214,18 @@ async function handleTtsLatestAction(
   ) {
     return sessionEntryPersistenceConflictReply();
   }
-  return { shouldContinue: false, reply: audio.reply };
+  return stopWithText(audio.reply);
 }
 
-function handleTtsStatusAction(
+async function handleTtsStatusAction(
   params: TtsCommandParams,
   config: ReturnType<typeof resolveTtsConfig>,
   prefsPath: string,
-): CommandHandlerResult {
+): Promise<CommandHandlerResult> {
   const enabled = isTtsEnabled(config, prefsPath);
-  const provider = getTtsProvider(config, prefsPath);
+  const provider = await getTtsProviderAsync(config, prefsPath);
   const persona = getTtsPersona(config, prefsPath);
-  const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
+  const hasKey = await isTtsProviderConfiguredAsync(config, provider, params.cfg);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath);
   const last = getLastTtsAttempt();
@@ -293,7 +258,17 @@ function handleTtsStatusAction(
       if (last.attemptedProviders && last.attemptedProviders.length > (last.success ? 1 : 0)) {
         lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
       }
-      const details = formatAttemptDetails(last.attempts);
+      const details = last.attempts
+        ?.map((attempt) => {
+          const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
+          const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
+          const personaDetail =
+            attempt.persona && attempt.personaBinding && attempt.personaBinding !== "none"
+              ? ` persona=${attempt.persona}:${attempt.personaBinding}`
+              : "";
+          return `${attempt.provider}:${attempt.outcome}(${reason})${personaDetail}${latency}`;
+        })
+        .join(", ");
       if (details) {
         lines.push(`Attempt details: ${details}`);
       }
@@ -314,9 +289,8 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       channelId: params.command.channel,
       accountId,
     });
-    const prefsPath = resolveTtsPrefsPath(config);
-    const action = parsed.action;
-    const args = parsed.args;
+    const prefsPath = await resolveTtsPrefsPathAsync(config);
+    const { action, args } = parsed;
 
     if (action === "help") {
       return ttsUsage();
@@ -353,40 +327,23 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
         prefsPath,
         agentId: params.agentId,
       });
-      if (!("error" in audio)) {
-        return { shouldContinue: false, reply: audio.reply };
-      }
-      log.warn(`Audio generation failed: ${audio.error}`);
-      return stopWithText(
-        "⚠️ Couldn't create the audio. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-      );
+      return "error" in audio ? audio.error : stopWithText(audio.reply);
     }
 
     if (action === "provider") {
-      const currentProvider = getTtsProvider(config, prefsPath);
+      const currentProvider = await getTtsProviderAsync(config, prefsPath);
       if (!args) {
         const providers = listSpeechProviders(params.cfg);
+        const providerStates = await Promise.all(
+          providers.map(
+            async (provider) =>
+              `${provider.label}: ${(await isTtsProviderConfiguredAsync(config, provider, params.cfg)) ? "✅" : "❌"}`,
+          ),
+        );
         return stopWithText(
           `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            providers
-              .map(
-                (provider) =>
-                  `${provider.label}: ${
-                    provider.isConfigured({
-                      cfg: params.cfg,
-                      providerConfig: getResolvedSpeechProviderConfig(
-                        config,
-                        provider.id,
-                        params.cfg,
-                      ),
-                      timeoutMs: config.timeoutMs,
-                    })
-                      ? "✅"
-                      : "❌"
-                  }`,
-              )
-              .join("\n") +
+            providerStates.join("\n") +
             `\nUsage: /tts provider <id>`,
         );
       }
@@ -397,8 +354,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
         return ttsUsage();
       }
 
-      const nextProvider =
-        canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+      const nextProvider = resolvedProvider.id;
       setTtsProvider(prefsPath, nextProvider);
       return stopWithText(`✅ TTS provider set to ${nextProvider}.`);
     }

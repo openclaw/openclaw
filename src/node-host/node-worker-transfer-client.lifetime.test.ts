@@ -291,6 +291,7 @@ describe("node worker upload HTTP lifetime", () => {
             }
           : {
               message: "workspace-transfer-failed: transfer did not complete",
+              operation: "upload",
               stage: mode === "cancellation" ? "reconcile" : "acknowledgement",
               ...(mode === "writer failure" || mode === "writer failure after headers"
                 ? { cause: readInterruption }

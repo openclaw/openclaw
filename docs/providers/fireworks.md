@@ -99,6 +99,20 @@ The catalog uses the [Fast pricing](https://docs.fireworks.ai/serverless/pricing
   OpenClaw pins all Fireworks Kimi models to `thinking: off` because Kimi on Fireworks can leak chain-of-thought into the visible reply unless the request explicitly disables thinking. Routing the same model through [Moonshot](/providers/moonshot) directly preserves Kimi reasoning output. See [thinking modes](/tools/thinking) for switching between providers.
 </Note>
 
+## Prompt caching
+
+Fireworks enables [prefix caching](https://docs.fireworks.ai/guides/prompt-caching)
+automatically. For its native OpenAI-compatible endpoint, OpenClaw sends the existing
+prompt-cache key or session id as `prompt_cache_key` so repeated turns can reach the
+same replica. Fireworks owns cache retention; `cacheRetention: "none"` suppresses
+OpenClaw's affinity hint but does not disable Fireworks' automatic cache.
+
+Cache usage comes from the response body's `prompt_tokens_details.cached_tokens`.
+For dedicated deployments that report caching only in response headers, OpenClaw
+uses `fireworks-cached-prompt-tokens` when `fireworks-prompt-tokens` matches the body
+usage. Body cache counters take precedence, including an explicit zero. Custom proxy
+endpoints retain their configured cache behavior.
+
 ## Custom Fireworks model ids
 
 OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution uses the Fire Pass template's OpenAI-compatible API and marks GLM ids as text-only; other dynamic ids advertise text + image input. Thinking is disabled automatically when the id matches the Kimi pattern. For a model with different capabilities, configure a custom model entry with its supported input types.

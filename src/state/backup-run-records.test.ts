@@ -57,18 +57,6 @@ async function testEnv(options?: { bootstrap?: boolean }): Promise<NodeJS.Proces
 }
 
 describe("backup run records", () => {
-  it("skips filesystem canonicalization when scratch discovery has no ledger", async () => {
-    const env = await testEnv();
-    const realpath = vi.spyOn(fsSync.realpathSync, "native").mockImplementation(() => {
-      throw new Error("Scratch discovery must not canonicalize an absent ledger");
-    });
-    await expect(readBackupArchiveDirectories(env)).resolves.toEqual([]);
-    expect(realpath).not.toHaveBeenCalled();
-    await expect(fs.access(resolveOpenClawStateSqlitePath(env))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it("discovers native absolute archive parents without requiring them to exist", async () => {
     const env = await testEnv({ bootstrap: true });
     const parent = path.join(path.dirname(resolveOpenClawStateSqlitePath(env)), "archives");
@@ -340,21 +328,30 @@ describe("backup run records", () => {
     expect(mocks.note).not.toHaveBeenCalled();
   });
 
-  it("records an ordinary snapshot outcome without main-thread SQL and retains it after reopen", async () => {
+  it("records in the captured state without main-thread SQL and retains the outcome after reopen", async () => {
     const env = await testEnv({ bootstrap: true });
+    const otherEnv = await testEnv({ bootstrap: true });
+    const mutableEnv = { ...env };
     await closeOpenClawStateDatabaseAsync();
     requireNodeSqlite();
     const sql = observeMainThreadSql();
     try {
-      await recordBackupRunOutcome({
-        env,
+      const pending = recordBackupRunOutcome({
+        env: mutableEnv,
         archivePath: "/backups/snapshot",
         kind: "sqlite-snapshot",
         status: "ok",
         createdAt: 7,
       });
-      expect(await readBackupRunFreshness(env)).toMatchObject({
-        latest: { kind: "sqlite-snapshot", createdAt: 7 },
+      mutableEnv.OPENCLAW_STATE_DIR = otherEnv.OPENCLAW_STATE_DIR;
+      await pending;
+      const [first, second] = await Promise.all([
+        readBackupRunFreshness(env),
+        readBackupRunFreshness(otherEnv),
+      ]);
+      expect(second).toEqual({});
+      expect(first).toMatchObject({
+        latest: { archivePath: "/backups/snapshot", kind: "sqlite-snapshot", createdAt: 7 },
       });
       sql.expectIdle();
     } finally {
@@ -454,49 +451,16 @@ describe("backup run records", () => {
     },
   );
 
-  it("binds each outcome and read to its requested state directory", async () => {
-    const firstEnv = await testEnv({ bootstrap: true });
-    const secondEnv = await testEnv({ bootstrap: true });
-    const mutableEnv = { ...firstEnv };
-    const pending = recordBackupRunOutcome({
-      env: mutableEnv,
-      archivePath: "/backups/first.tar.gz",
-      status: "ok",
-      kind: "archive",
-    });
-    mutableEnv.OPENCLAW_STATE_DIR = secondEnv.OPENCLAW_STATE_DIR;
-    await pending;
-    const [first, second] = await Promise.all([
-      readBackupRunFreshness(firstEnv),
-      readBackupRunFreshness(secondEnv),
-    ]);
-    expect(second).toEqual({});
-    expect(first).toMatchObject({ latest: { archivePath: "/backups/first.tar.gz" } });
-  });
-
-  it("does not split surrogate pairs at the persisted diagnostic limit", async () => {
-    const env = await testEnv({ bootstrap: true });
-    await recordBackupRunOutcome({
-      env,
-      archivePath: "/backups/git",
-      status: "ok",
-      kind: "git",
-      error: `${"x".repeat(1_199)}😀tail`,
-      pushFailed: true,
-      createdAt: 1,
-    });
-
-    const persisted = (await readBackupRunFreshness(env)).latest?.error;
-    expect(persisted).toBe("x".repeat(1_199));
-  });
-
   it("treats an older same-version database without backup_runs as no recorded backups", async () => {
     const env = await testEnv({ bootstrap: true });
     withExistingOpenClawStateDatabaseReadOnly(() => undefined, { env });
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    fsSync.renameSync(pathname, `${pathname}.seed`);
+    fsSync.copyFileSync(`${pathname}.seed`, pathname);
     const { DatabaseSync } = await import("node:sqlite");
-    const raw = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+    const raw = new DatabaseSync(pathname);
     raw.exec("DROP TABLE backup_runs");
     raw.close();
     expect(await readBackupRunFreshness(env)).toEqual({});
@@ -504,6 +468,12 @@ describe("backup run records", () => {
 
   it("keeps absent status reads read-only and formats none, failed, fresh, and stale states", async () => {
     const env = await testEnv();
+    const realpath = vi.spyOn(fsSync.realpathSync, "native").mockImplementation(() => {
+      throw new Error("Scratch discovery must not canonicalize an absent ledger");
+    });
+    await expect(readBackupArchiveDirectories(env)).resolves.toEqual([]);
+    expect(realpath).not.toHaveBeenCalled();
+    realpath.mockRestore();
     await recordBackupRunOutcome({
       env,
       archivePath: "/backups/failed.tar.gz",
@@ -564,9 +534,11 @@ describe("backup run records", () => {
       status: "ok",
       kind: "git",
       pushFailed: true,
+      error: `${"x".repeat(1_199)}😀tail`,
       createdAt: 2,
     });
     const pushFailed = await readBackupRunFreshness(env);
+    expect(pushFailed.latest?.error).toBe("x".repeat(1_199));
     expect(
       buildBackupStatusValue({
         freshness: pushFailed,

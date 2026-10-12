@@ -16,6 +16,12 @@ import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { normalizePhoneNumber } from "./allowlist.js";
+import {
+  CallCallbacksConfigSchema,
+  CallLiveConfigSchema,
+  CallReportsConfigSchema,
+  CallVoicemailConfigSchema,
+} from "./errand-config.js";
 import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
@@ -68,7 +74,6 @@ const VoiceCallNumberRouteConfigSchema = z
     responseTimeoutMs: z.number().int().positive().optional(),
   })
   .strict();
-type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
 
 const VoiceCallServeConfigSchema = z
   .object({
@@ -76,8 +81,7 @@ const VoiceCallServeConfigSchema = z
     bind: z.string().default("127.0.0.1"),
     path: z.string().min(1).default("/voice/webhook"),
   })
-  .strict()
-  .default({ port: 3334, bind: "127.0.0.1", path: "/voice/webhook" });
+  .strict();
 
 const VoiceCallTunnelConfigSchema = z
   .object({
@@ -89,8 +93,7 @@ const VoiceCallTunnelConfigSchema = z
     /** Trust loopback forwarding for ngrok URL reconstruction; signatures remain mandatory. */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
   })
-  .strict()
-  .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
+  .strict();
 
 const VoiceCallWebhookSecurityConfigSchema = z
   .object({
@@ -107,8 +110,7 @@ const VoiceCallWebhookSecurityConfigSchema = z
      */
     trustedProxyIPs: z.array(z.string().min(1)).default([]),
   })
-  .strict()
-  .default({ allowedHosts: [], trustForwardingHeaders: false, trustedProxyIPs: [] });
+  .strict();
 export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfigSchema>;
 
 const CallModeSchema = z.enum(["notify", "conversation"]);
@@ -122,8 +124,7 @@ const OutboundConfigSchema = z
     /** Seconds to wait after TTS before auto-hangup in notify mode */
     notifyHangupDelaySec: z.number().int().nonnegative().default(3),
   })
-  .strict()
-  .default({ defaultMode: "notify", notifyHangupDelaySec: 3 });
+  .strict();
 
 const RealtimeToolSchema = z
   .object({
@@ -164,14 +165,7 @@ const VoiceCallRealtimeFastContextConfigSchema = z
     /** Fall back to the full agent consult when fast context has no answer. */
     fallbackToConsult: z.boolean().default(false),
   })
-  .strict()
-  .default({
-    enabled: false,
-    timeoutMs: 800,
-    maxResults: 3,
-    sources: ["memory", "sessions"],
-    fallbackToConsult: false,
-  });
+  .strict();
 const VoiceCallRealtimeAgentContextConfigSchema = z
   .object({
     /** Include configured identity and selected profile files alongside the always-on agent context. */
@@ -184,14 +178,7 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     /** Workspace-relative files to include, bounded by maxChars. */
     files: z.array(z.string().min(1)).default(["SOUL.md", "IDENTITY.md", "USER.md"]),
   })
-  .strict()
-  .default({
-    enabled: false,
-    maxChars: 6000,
-    includeIdentity: true,
-    includeWorkspaceFiles: true,
-    files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-  });
+  .strict();
 
 const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
@@ -212,6 +199,8 @@ const VoiceCallRealtimeConfigSchema = z
     provider: z.string().min(1).optional(),
     /** Optional override for the local WebSocket route path. */
     streamPath: z.string().min(1).optional(),
+    /** End an active realtime call after this much speech inactivity. */
+    idleHangupMs: z.number().int().positive().optional(),
     /** System instructions passed to the realtime provider. */
     instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
     /** Tool policy for the shared OpenClaw agent consult tool. */
@@ -224,24 +213,17 @@ const VoiceCallRealtimeConfigSchema = z
     consultFastMode: z.boolean().optional(),
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
-    fastContext: VoiceCallRealtimeFastContextConfigSchema,
+    fastContext: VoiceCallRealtimeFastContextConfigSchema.default(
+      VoiceCallRealtimeFastContextConfigSchema.parse({}),
+    ),
     /** Bounded agent persona/context injection for the fast realtime voice path. */
-    agentContext: VoiceCallRealtimeAgentContextConfigSchema,
+    agentContext: VoiceCallRealtimeAgentContextConfigSchema.default(
+      VoiceCallRealtimeAgentContextConfigSchema.parse({}),
+    ),
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallProvidersConfigSchema,
   })
-  .strict()
-  .default({
-    enabled: false,
-    instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
-    toolPolicy: "safe-read-only",
-    consultPolicy: "auto",
-    tools: [],
-    // Keep outer defaults' arrays independent of the inner object defaults.
-    fastContext: VoiceCallRealtimeFastContextConfigSchema.parse({}),
-    agentContext: VoiceCallRealtimeAgentContextConfigSchema.parse({}),
-    providers: {},
-  });
+  .strict();
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
 
 const VoiceCallStreamingConfigSchema = z
@@ -265,16 +247,7 @@ const VoiceCallStreamingConfigSchema = z
     /** Hard cap for all open media stream sockets (pending + active). */
     maxConnections: z.number().int().positive().default(128),
   })
-  .strict()
-  .default({
-    enabled: false,
-    streamPath: "/voice/stream",
-    providers: {},
-    preStartTimeoutMs: 5000,
-    maxPendingConnections: 32,
-    maxPendingConnectionsPerIp: 4,
-    maxConnections: 128,
-  });
+  .strict();
 
 export const VoiceCallConfigSchema = z
   .object({
@@ -302,8 +275,14 @@ export const VoiceCallConfigSchema = z
     /** Per-dialed-number overrides for inbound calls. Keys are E.164 numbers. */
     numbers: z.record(E164Schema, VoiceCallNumberRouteConfigSchema).default({}),
 
-    outbound: OutboundConfigSchema,
+    outbound: OutboundConfigSchema.default(OutboundConfigSchema.parse({})),
 
+    reports: CallReportsConfigSchema,
+    live: CallLiveConfigSchema,
+    callbacks: CallCallbacksConfigSchema,
+    voicemail: CallVoicemailConfigSchema,
+
+    /** Maximum call duration in seconds */
     maxDurationSeconds: z.number().int().positive().default(300),
 
     /**
@@ -322,18 +301,20 @@ export const VoiceCallConfigSchema = z
 
     maxConcurrentCalls: z.number().int().positive().default(1),
 
-    serve: VoiceCallServeConfigSchema,
+    serve: VoiceCallServeConfigSchema.default(VoiceCallServeConfigSchema.parse({})),
 
     /** @deprecated Prefer tunnel config. */
     tailscale: VoiceCallTailscaleConfigSchema,
 
-    tunnel: VoiceCallTunnelConfigSchema,
+    tunnel: VoiceCallTunnelConfigSchema.default(VoiceCallTunnelConfigSchema.parse({})),
 
-    webhookSecurity: VoiceCallWebhookSecurityConfigSchema,
+    webhookSecurity: VoiceCallWebhookSecurityConfigSchema.default(
+      VoiceCallWebhookSecurityConfigSchema.parse({}),
+    ),
 
-    streaming: VoiceCallStreamingConfigSchema,
+    streaming: VoiceCallStreamingConfigSchema.default(VoiceCallStreamingConfigSchema.parse({})),
 
-    realtime: VoiceCallRealtimeConfigSchema,
+    realtime: VoiceCallRealtimeConfigSchema.default(VoiceCallRealtimeConfigSchema.parse({})),
 
     /** Session memory scope for voice conversations. */
     sessionScope: VoiceCallSessionScopeSchema.default("per-phone"),
@@ -450,9 +431,6 @@ function resolveVoiceCallNumberRouteKey(
   phone: string | undefined,
 ): string | undefined {
   const routes = config.numbers;
-  if (!routes) {
-    return undefined;
-  }
   if (phone && Object.hasOwn(routes, phone)) {
     return phone;
   }
@@ -500,7 +478,6 @@ export function resolveVoiceCallEffectiveConfig(
       ...config,
       ...route,
       tts: normalizeVoiceCallTtsConfig(config.tts, route.tts),
-      numbers: config.numbers,
     },
   };
 }
@@ -508,11 +485,8 @@ export function resolveVoiceCallEffectiveConfig(
 function sanitizeVoiceCallProviderConfigs(
   value: Record<string, Record<string, unknown> | undefined> | undefined,
 ): Record<string, Record<string, unknown>> {
-  if (!value) {
-    return {};
-  }
   return Object.fromEntries(
-    Object.entries(value).filter(
+    Object.entries(value ?? {}).filter(
       (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
     ),
   );
@@ -520,13 +494,10 @@ function sanitizeVoiceCallProviderConfigs(
 
 function sanitizeVoiceCallNumberRoutes(
   value: Record<string, unknown> | undefined,
-): Record<string, VoiceCallNumberRouteConfig> {
-  if (!value) {
-    return {};
-  }
+): VoiceCallConfig["numbers"] {
   return Object.fromEntries(
-    Object.entries(value)
-      .filter((entry): entry is [string, unknown] => entry[1] !== undefined)
+    Object.entries(value ?? {})
+      .filter(([, route]) => route !== undefined)
       .map(([key, route]) => [key, VoiceCallNumberRouteConfigSchema.parse(route)]),
   );
 }
@@ -565,10 +536,12 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...defaults,
     ...config,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
-    numbers: sanitizeVoiceCallNumberRoutes(
-      (config.numbers ?? defaults.numbers) as Record<string, unknown>,
-    ),
+    numbers: sanitizeVoiceCallNumberRoutes(config.numbers ?? defaults.numbers),
     outbound: { ...defaults.outbound, ...config.outbound },
+    reports: CallReportsConfigSchema.parse(config.reports),
+    live: CallLiveConfigSchema.parse(config.live),
+    callbacks: CallCallbacksConfigSchema.parse(config.callbacks),
+    voicemail: CallVoicemailConfigSchema.parse(config.voicemail),
     serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },
     tunnel: { ...defaults.tunnel, ...config.tunnel },
@@ -616,17 +589,10 @@ export function resolveVoiceCallSessionKey(params: {
   coreSession?: VoiceCallCoreSessionConfig;
 }): string {
   const explicit = params.explicitSessionKey?.trim();
-  if (explicit) {
+  if (explicit || params.config.sessionScope === "main") {
     return resolveVoiceCallAgentSessionKey({
       config: params.config,
-      sessionKey: explicit,
-      coreSession: params.coreSession,
-    });
-  }
-  if (params.config.sessionScope === "main") {
-    return resolveVoiceCallAgentSessionKey({
-      config: params.config,
-      sessionKey: "main",
+      sessionKey: explicit || "main",
       coreSession: params.coreSession,
     });
   }
@@ -722,7 +688,7 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   resolved.webhookSecurity.trustForwardingHeaders =
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
 
-  return normalizeVoiceCallConfig(resolved);
+  return resolved;
 }
 
 export function validateProviderConfig(config: VoiceCallConfig): {
@@ -747,48 +713,35 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     );
   }
 
+  const requireCredential = (
+    field: string,
+    value: string | boolean | undefined,
+    envName: string,
+  ) => {
+    if (!value) {
+      errors.push(
+        `plugins.entries.voice-call.config.${config.provider}.${field} is required (or set ${envName} env)`,
+      );
+    }
+  };
   if (config.provider === "telnyx") {
-    if (!config.telnyx?.apiKey) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.apiKey is required (or set TELNYX_API_KEY env)",
-      );
-    }
-    if (!config.telnyx?.connectionId) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
-      );
-    }
-    if (!config.skipSignatureVerification && !config.telnyx?.publicKey) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)",
-      );
+    requireCredential("apiKey", config.telnyx?.apiKey, "TELNYX_API_KEY");
+    requireCredential("connectionId", config.telnyx?.connectionId, "TELNYX_CONNECTION_ID");
+    if (!config.skipSignatureVerification) {
+      requireCredential("publicKey", config.telnyx?.publicKey, "TELNYX_PUBLIC_KEY");
     }
   }
-
   if (config.provider === "twilio") {
-    if (!config.twilio?.accountSid) {
-      errors.push(
-        "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
-      );
-    }
-    if (!hasConfiguredSecretInput(config.twilio?.authToken)) {
-      errors.push(
-        "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
-      );
-    }
+    requireCredential("accountSid", config.twilio?.accountSid, "TWILIO_ACCOUNT_SID");
+    requireCredential(
+      "authToken",
+      hasConfiguredSecretInput(config.twilio?.authToken),
+      "TWILIO_AUTH_TOKEN",
+    );
   }
-
   if (config.provider === "plivo") {
-    if (!config.plivo?.authId) {
-      errors.push(
-        "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
-      );
-    }
-    if (!config.plivo?.authToken) {
-      errors.push(
-        "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
-      );
-    }
+    requireCredential("authId", config.plivo?.authId, "PLIVO_AUTH_ID");
+    requireCredential("authToken", config.plivo?.authToken, "PLIVO_AUTH_TOKEN");
   }
 
   if (config.realtime.enabled && config.inboundPolicy === "disabled") {

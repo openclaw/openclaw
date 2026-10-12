@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterAll, afterEach, describe, expect, expectTypeOf, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -51,6 +51,8 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       taskSuggestionDeliveryMode: "gateway",
       assertSourceCurrent: () => {},
       beforeTerminalDelivery: async () => {},
+      isTerminalOutcomeObserved: () => true,
+      prepareAssistantTranscriptMessage: () => ({ role: "assistant", content: "forged" }),
       internalDeliverySuppressErrors: true,
       operatorAuthority: {
         profileId: "forged",
@@ -59,6 +61,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       },
     };
 
+    expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
     expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
       message: "create an automation",
       privateCompletion: undefined,
@@ -71,6 +74,8 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       taskSuggestionDeliveryMode: undefined,
       assertSourceCurrent: undefined,
       beforeTerminalDelivery: undefined,
+      isTerminalOutcomeObserved: undefined,
+      prepareAssistantTranscriptMessage: undefined,
       internalDeliverySuppressErrors: undefined,
       operatorAuthority: undefined,
     });
@@ -98,7 +103,6 @@ describe("Gateway agent command execution identity", () => {
     const sessionEntry = {
       sessionId: "recovery-session",
       updatedAt: 100,
-      status: "running" as const,
       abortedLastRun: false,
       lifecycleRunId: "recovery-run",
       restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],

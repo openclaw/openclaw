@@ -15,11 +15,11 @@ import {
   unwrapGatewayMethodDispatchResponse,
 } from "../server-in-process-dispatch.js";
 import {
-  authorizeGatewayRequestPreDispatch,
   createRequestGatewayMethodRegistry,
   runWithGatewayRequestEnvelope,
 } from "../server-methods.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { authorizeGatewayRequestPreDispatch } from "../server-methods/request-authorization.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { validateGatewayMethodParams } from "../server-methods/validation.js";
 import { runWithGatewayObservationScope } from "../server-request-lifecycle.js";

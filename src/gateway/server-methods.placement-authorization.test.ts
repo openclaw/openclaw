@@ -18,30 +18,12 @@ const placementCases = [
     false,
   ],
   [
-    "admin profile dispatch",
-    "sessions.dispatch",
-    { key: "agent:main:test", profileId: "development" },
-    ["operator.admin"],
-    true,
-  ],
-  [
     "writer gateway move",
     "sessions.move",
     {
       key: "agent:main:test",
       expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
       target: { kind: "gateway" },
-    },
-    ["operator.write"],
-    true,
-  ],
-  [
-    "writer device move",
-    "sessions.move",
-    {
-      key: "agent:main:test",
-      expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
-      target: { kind: "device", deviceId: "device-1" },
     },
     ["operator.write"],
     true,

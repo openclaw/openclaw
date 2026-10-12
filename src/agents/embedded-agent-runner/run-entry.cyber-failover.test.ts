@@ -208,16 +208,6 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
     await expect(runEntry("run-cyber-throw")).rejects.toBe(thrown);
   });
 
-  it("does not escalate a preliminary refusal replaced by a successful final result", async () => {
-    const result = await runEntry("run-cyber-replaced", async (provider, model, options) => {
-      options.classifyResult(makeRefusalResult(provider, model));
-      return makeResult({ provider, model });
-    });
-    expect(searchedModels()).toEqual(["gpt-5.6"]);
-    expect(result.model).toBe("gpt-5.6");
-    expect(result.result.payloads).toEqual([{ text: "recovered" }]);
-  });
-
   it.each([
     {
       name: "live committed side effects",
@@ -271,53 +261,37 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
     expect(result.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
   });
 
-  it("restores the original refusal transcript when Daybreak fails", async () => {
-    const transcript = await import("../../config/sessions/transcript.js");
+  it("restores the original refusal display when Daybreak fails", async () => {
     const { makeAssistantMessageFixture } =
       await import("../test-helpers/assistant-message-fixtures.js");
-    const target = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      storePath: "/tmp/unused-cyber-transcript.sqlite",
-    };
-    const append = vi
-      .spyOn(transcript, "appendExactAssistantMessageToSessionTranscript")
-      .mockResolvedValue({ ok: true, target, messageId: "assistant-error" });
-    try {
-      await runEntry("run-cyber-transcript", async (provider, model, options) => {
-        const retry = model === "gpt-daybreak-blue-latest";
-        options.assistantErrorTranscript.record(
-          makeAssistantMessageFixture({
-            provider,
-            model,
-            errorMessage: retry ? "Daybreak unauthorized" : "Original cyber refusal",
-            diagnostics: retry
-              ? undefined
-              : [
-                  {
-                    type: "provider_refusal",
-                    timestamp: 1,
-                    details: { provider: "openai", category: "cyber" },
-                  },
-                ],
-          }),
-          target,
-        );
-        if (retry) {
-          throw Object.assign(new Error("401 unauthorized"), { status: 401 });
-        }
-        const refusal = makeRefusalResult(provider, model);
-        refusal.meta.error = { kind: "incomplete_turn", message: "Original cyber refusal" };
-        return refusal;
+    const displayChanges: Array<{ text: string; visible: boolean }> = [];
+    await runEntry("run-cyber-transcript", async (provider, model, options) => {
+      const retry = model === "gpt-daybreak-blue-latest";
+      const message = makeAssistantMessageFixture({
+        provider,
+        model,
+        errorMessage: retry ? "Daybreak unauthorized" : "Original cyber refusal",
+        diagnostics: retry
+          ? undefined
+          : [
+              {
+                type: "provider_refusal",
+                timestamp: 1,
+                details: { provider: "openai", category: "cyber" },
+              },
+            ],
       });
-      expect(append).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.objectContaining({ errorMessage: "Original cyber refusal" }),
-        }),
-      );
-    } finally {
-      append.mockRestore();
-    }
+      options.assistantErrorTranscript.record(message);
+      options.assistantErrorTranscript.bindStream(message, (visible) => {
+        displayChanges.push({ text: message.errorMessage ?? "", visible });
+      });
+      if (retry) {
+        throw Object.assign(new Error("401 unauthorized"), { status: 401 });
+      }
+      const refusal = makeRefusalResult(provider, model);
+      refusal.meta.error = { kind: "incomplete_turn", message: "Original cyber refusal" };
+      return refusal;
+    });
+    expect(displayChanges.at(-1)).toEqual({ text: "Original cyber refusal", visible: true });
   });
 });

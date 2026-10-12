@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
@@ -13,47 +12,22 @@ import {
   scanSessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
+import { sha256Base64Url } from "./crypto-digest.js";
 import {
   resolveUsageCostTranscriptFile,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
-import {
-  applyCostBreakdown,
-  applyCostTotal,
-  applyUsageTotals,
-  parseUsageCostTranscriptRecord,
-  needsUsageCostEstimate,
-  applyUsageCostEstimate,
-} from "./session-cost-usage-pricing.js";
-import {
-  USAGE_COST_ROLLUP_VERSION,
-  type UsageCostJsonlCheckpoint,
-  type UsageCostSqliteCheckpoint,
-  type UsageCostRollupEntry,
-} from "./session-cost-usage-rollup-codec.js";
-import {
-  appendSessionUsageRollupContribution,
-  createSessionUsageRollupData,
-  type SessionUsageRollupData,
-} from "./session-cost-usage-rollup.js";
-import { createEmptyCostUsageTotals as emptyTotals } from "./session-cost-usage-totals.js";
-import type {
-  CostUsageTotals,
-  ParsedTranscriptEntry,
-  UsageCostTranscriptFile,
-} from "./session-cost-usage.types.js";
+import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
+import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
-
-function hashUsageCostCheckpoint(value: Buffer | string): string {
-  return createHash("sha256").update(value).digest("base64url");
-}
 
 async function readJsonlAnchorHash(filePath: string, offset: number): Promise<string | undefined> {
   const start = Math.max(0, offset - USAGE_COST_FILE_ANCHOR_BYTES);
   const length = offset - start;
   if (length === 0) {
-    return hashUsageCostCheckpoint("");
+    return sha256Base64Url("");
   }
   const handle = await fs.promises.open(filePath, "r").catch(() => null);
   if (!handle) {
@@ -62,7 +36,7 @@ async function readJsonlAnchorHash(filePath: string, offset: number): Promise<st
   try {
     const buffer = Buffer.alloc(length);
     const { bytesRead } = await handle.read(buffer, 0, length, start);
-    return bytesRead === length ? hashUsageCostCheckpoint(buffer) : undefined;
+    return bytesRead === length ? sha256Base64Url(buffer) : undefined;
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -140,35 +114,6 @@ async function scanJsonlRange(params: {
   }
 }
 
-function appendParsedEntryToRollup(
-  rollup: SessionUsageRollupData,
-  entry: ParsedTranscriptEntry,
-): { countedRecord: boolean; parsedRecord: boolean } {
-  let usageTotals: CostUsageTotals | undefined;
-  if (entry.usage) {
-    usageTotals = emptyTotals();
-    applyUsageTotals(usageTotals, entry.usage);
-    if (entry.costBreakdown?.total !== undefined) {
-      applyCostBreakdown(usageTotals, entry.costBreakdown);
-    } else {
-      applyCostTotal(usageTotals, entry.costTotal, entry.provider, entry.model);
-    }
-  }
-  const timestamp = entry.timestamp?.getTime();
-  appendSessionUsageRollupContribution(rollup, {
-    timestamp,
-    role: entry.role,
-    durationMs: entry.durationMs,
-    provider: entry.provider,
-    model: entry.model,
-    stopReason: entry.stopReason,
-    toolNames: entry.toolNames,
-    toolResultCounts: entry.toolResultCounts,
-    usageTotals,
-  });
-  return { parsedRecord: Boolean(entry.usage), countedRecord: Boolean(entry.usage && timestamp) };
-}
-
 type RollupScanInput = {
   file: UsageCostTranscriptFile;
   previous?: UsageCostRollupEntry;
@@ -183,57 +128,6 @@ type RollupScanInput = {
   ) => Promise<Array<{ seq: number; event: unknown }>>;
   access: UsageCostCollectionAccess;
 };
-
-function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }) {
-  const previous = params.appendOnly ? params.previous : undefined;
-  // This task exclusively owns the decoded body; publication retains its original envelope for CAS.
-  const rollup = previous?.rollup ?? createSessionUsageRollupData();
-  let countedRecords = 0;
-  let parsedRecords = 0;
-  return {
-    async addRecords(records: Iterable<Record<string, unknown>>): Promise<void> {
-      let batch: ParsedTranscriptEntry[] = [];
-      const flush = async () => {
-        const estimated = batch.filter(needsUsageCostEstimate);
-        const costs = await params.resolveCosts(
-          estimated.map(({ provider, model }) => ({ provider, model })),
-        );
-        for (let i = 0; i < estimated.length; i++) {
-          applyUsageCostEstimate(estimated[i]!, () => costs[i]);
-        }
-        for (const entry of batch) {
-          const counted = appendParsedEntryToRollup(rollup, entry);
-          countedRecords += counted.countedRecord ? 1 : 0;
-          parsedRecords += counted.parsedRecord ? 1 : 0;
-        }
-        batch = [];
-      };
-      for (const record of records) {
-        const entry = parseUsageCostTranscriptRecord(record);
-        if (entry) {
-          batch.push(entry);
-        }
-        if (batch.length === 128) {
-          await flush();
-        }
-      }
-      if (batch.length > 0) {
-        await flush();
-      }
-    },
-    finish(checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint): UsageCostRollupEntry {
-      return {
-        version: USAGE_COST_ROLLUP_VERSION,
-        pricingFingerprint: params.pricingFingerprint,
-        checkpoint,
-        scannedAt: Date.now(),
-        parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,
-        countedRecords: (previous?.countedRecords ?? 0) + countedRecords,
-        rollup,
-      };
-    },
-  };
-}
 
 async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
   const previousCheckpoint =
@@ -319,7 +213,7 @@ function selectIncrementalSqliteRecords(
 }
 
 function sqliteCheckpointAnchorHash(event: unknown): string {
-  return hashUsageCostCheckpoint(JSON.stringify(event));
+  return sha256Base64Url(JSON.stringify(event));
 }
 
 async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
@@ -336,7 +230,7 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   }
   const snapshotAnchorHash = snapshotLastRow
     ? sqliteCheckpointAnchorHash(snapshotLastRow.event)
-    : hashUsageCostCheckpoint("");
+    : sha256Base64Url("");
   const previousCheckpoint =
     params.previous?.checkpoint.kind === "sqlite" ? params.previous.checkpoint : undefined;
   const previousAnchor = previousCheckpoint?.maxSeq

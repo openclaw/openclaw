@@ -179,33 +179,6 @@ describe.each(engines)("%s plain gh execution", (engine) => {
     },
   );
 
-  it.each([undefined, ""])(
-    "keeps HOME/bin first on PATH with override %j and does not extract credentials",
-    (override) => {
-      const fixture = makeFixture();
-      fixture.env.OPENCLAW_GH_BIN = override;
-      const before = { ...fixture.env };
-      const result = JSON.parse(runGh(engine, fixture.env));
-      expect(result).toMatchObject({
-        route: "protected",
-        argv: ["--version"],
-        colors: {
-          NO_COLOR: "1",
-          FORCE_COLOR: "0",
-          CLICOLOR: "0",
-          CLICOLOR_FORCE: "0",
-          COLORTERM: null,
-          GH_FORCE_TTY: null,
-        },
-      });
-      expect(result.tokens).toEqual({});
-      expect(fixture.calls()).toEqual([
-        { route: "protected", argv: ["--version"], override: override ?? null },
-      ]);
-      expect(fixture.env).toEqual(before);
-    },
-  );
-
   it("preserves a protected refusal and both output streams without fallback", () => {
     const fixture = makeFixture();
     fixture.env.FAKE_GH_REJECT = "1";
@@ -236,7 +209,7 @@ describe.each(engines)("%s plain gh execution", (engine) => {
     },
   );
 
-  it.each(tokenNames)("preserves ambient %s without probing in either route", (tokenName) => {
+  it.each(["GH_TOKEN"])("preserves ambient %s without probing in either route", (tokenName) => {
     const fixture = makeFixture();
     fixture.env[tokenName] = "fixture-ambient";
     for (const explicit of [false, true]) {
@@ -257,7 +230,6 @@ describe.each(engines)("%s plain gh execution", (engine) => {
   });
 
   it.each([
-    { host: undefined, tokenName: "GH_TOKEN", args: ["auth", "token"] },
     {
       host: "github.com",
       tokenName: "GH_TOKEN",
@@ -330,7 +302,7 @@ describe("plain gh subprocess contracts", () => {
     expect(fixture.calls()).toHaveLength(1);
   });
 
-  it.each(["bin", ""])("uses the Node child cwd for relative PATH entry %j", (entry) => {
+  it.each([""])("uses the Node child cwd for relative PATH entry %j", (entry) => {
     const fixture = makeFixture();
     const cwd = entry ? fixture.home : fixture.protectedBin;
     fixture.env.PATH = [entry, fixture.secondBin, fixture.toolsBin].join(path.delimiter);

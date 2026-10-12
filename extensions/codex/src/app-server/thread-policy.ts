@@ -17,10 +17,8 @@ import {
 } from "./request.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
-import type {
-  CodexStartOrResumeThreadParams,
-  CodexThreadRequestContext,
-} from "./thread-lifecycle-types.js";
+import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 
 /** A refusal, not a failed native write: the ephemeral conversation must stay alive. */
 export class CodexIncognitoPolicyChangeError extends AgentHarnessPreflightError {
@@ -53,6 +51,7 @@ type CodexThreadHandoffParams = {
   signal?: AbortSignal;
   /** Warm reuse proves ownership before writing; an in-turn restore already holds it. */
   assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
 };
 
 /** The complete body remains generic configuration for compaction and native child inheritance. */
@@ -131,7 +130,11 @@ async function injectCodexThreadDeveloperHandoff(
       },
     });
     outcome = "acknowledged";
-    params.assertCurrent?.();
+    if (params.withCurrent) {
+      await params.withCurrent(() => params.assertCurrent?.());
+    } else {
+      params.assertCurrent?.();
+    }
     params.signal?.throwIfAborted();
   } catch (cause) {
     if (
@@ -172,14 +175,17 @@ export function assertCodexSupervisionThreadLineage(
 export async function assertAdoptedCodexThreadResumeAllowed(
   params: CodexStartOrResumeThreadParams,
   threadId: string,
-  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
+  context: {
+    lifecycleTiming: Pick<CodexThreadLifecycleTimingTracker, "measure">;
+    throwIfAborted: () => void;
+  },
   assertCurrent: () => void,
 ): Promise<CodexThread> {
   const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>
     params.client.request(
       "thread/read",
       { threadId, includeTurns: false },
-      { signal: params.signal, assertCurrent },
+      { signal: params.signal, assertCurrent, withCurrent: params.authority?.withCurrent },
     ),
   );
   context.throwIfAborted();

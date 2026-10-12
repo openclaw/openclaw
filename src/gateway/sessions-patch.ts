@@ -6,6 +6,7 @@ import {
   errorShape,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { SESSION_COMMUNICATION_MODES } from "../../packages/gateway-protocol/src/session-communication.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
@@ -29,6 +30,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -49,6 +51,7 @@ import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
+import { createAgentPatchedSessionModelFallback } from "../config/sessions/session-model-fallback.js";
 import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-overrides.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -58,10 +61,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import {
-  isAgentHarnessSessionKeyOwnedBy,
-  resolveMissingAgentHarnessSessionError,
-} from "../sessions/agent-harness-session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
   applyTraceOverride,
@@ -69,10 +68,6 @@ import {
   parseTraceOverride,
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
-import {
-  isModelSelectionLocked,
-  MODEL_SELECTION_LOCKED_MESSAGE,
-} from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
@@ -93,9 +88,9 @@ import { applySessionExecutionSettings } from "./session-execution-settings.js";
 import {
   isAgentSessionModelPatchOrigin,
   isSessionStatusModelPatchOrigin,
-  snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
+import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
@@ -121,6 +116,8 @@ type SessionPatchProjectionParams = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Resolved spawn identity supplied only by the trusted creation owner. */
   preparedModelSelection?: ModelRef;
+  /** Creation snapshots selected models, including the configured default. */
+  pinModelSelection?: boolean;
 };
 
 type SessionPatchProjectionResult =
@@ -155,7 +152,6 @@ export function prepareSessionsPatchEntry(
   };
 }
 
-/** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(
   params: SessionPatchProjectionParams & {
     loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
@@ -176,36 +172,9 @@ function* projectSessionPatchSteps(
   params: SessionPatchProjectionParams,
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
-  if ("execSecurity" in patch || "execAsk" in patch) {
-    return invalid(
-      "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
-    );
-  }
-  const authorizedHarnessCreation =
-    params.existingEntry === undefined &&
-    isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
-  const harnessSessionError = authorizedHarnessCreation
-    ? undefined
-    : resolveMissingAgentHarnessSessionError(storeKey, params.existingEntry);
-  if (harnessSessionError) {
-    return invalid(harnessSessionError);
-  }
-  if (typeof patch.archived === "boolean" || "snoozedUntil" in patch) {
-    if (!params.existingEntry?.sessionId) {
-      return invalid(`session not found: ${storeKey}`);
-    }
-    if (patch.expectedSessionId === undefined) {
-      return invalid(`expectedSessionId required for session lifecycle patch: ${storeKey}`);
-    }
-  }
-  if (
-    ("model" in patch || "agentRuntime" in patch) &&
-    isModelSelectionLocked(params.existingEntry)
-  ) {
-    return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
-  }
-  if (typeof patch.agentRuntime === "string" && typeof patch.model !== "string") {
-    return invalid("agentRuntime requires an explicit canonical provider/model selection");
+  const invalidPatch = validateSessionPatchAdmission(params);
+  if (invalidPatch) {
+    return invalidPatch;
   }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
@@ -441,6 +410,28 @@ function* projectSessionPatchSteps(
     }
   }
 
+  if (patch.communication === null) {
+    delete next.communication;
+  } else if (patch.communication !== undefined) {
+    const communication = { ...next.communication };
+    for (const direction of ["send", "receive"] as const) {
+      const mode = patch.communication[direction];
+      if (mode === null) {
+        delete communication[direction];
+      } else if (mode !== undefined) {
+        if (!SESSION_COMMUNICATION_MODES.some((allowed) => allowed === mode)) {
+          return invalid(`invalid communication.${direction} (use always|ask|never)`);
+        }
+        communication[direction] = mode;
+      }
+    }
+    if (Object.keys(communication).length) {
+      next.communication = communication;
+    } else {
+      delete next.communication;
+    }
+  }
+
   if ("verboseLevel" in patch) {
     const parsed = parseVerboseOverride(patch.verboseLevel);
     if (!parsed.ok) {
@@ -499,7 +490,11 @@ function* projectSessionPatchSteps(
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
         ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
-        : snapshotAgentModelFallback(cfg, next, sessionAgentId, now)
+        : createAgentPatchedSessionModelFallback({
+            ...resolveSessionModelRef(cfg, next, sessionAgentId),
+            entry: next,
+            ts: now,
+          })
       : undefined;
     if (!statusModelPatch) {
       delete next.modelFallback;
@@ -537,7 +532,7 @@ function* projectSessionPatchSteps(
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      selection = resolved;
+      selection = { ...resolved, isDefault: !params.pinModelSelection && resolved.isDefault };
     }
     if (selection) {
       const prepared = prepareSessionPatchModelSelection({
@@ -591,10 +586,21 @@ function* projectSessionPatchSteps(
       }
       // Catalog membership does not guarantee an activatable harness. Reject before
       // committing the session so sticky defaults cannot retain an unusable selection.
+      // Use the execution decision: a turn runs an unavailable implicit harness on OpenClaw.
       const harnessSelection = {
         provider: selection.provider,
         modelId: selection.model,
-        runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
+        runtime:
+          params.preparedAgentRuntime ??
+          resolveEffectiveAgentRuntime({
+            cfg,
+            provider: selection.provider,
+            modelId: selection.model,
+            agentId: sessionAgentId,
+            sessionKey: storeKey,
+            sessionEntry: next,
+            mode: "execution",
+          }),
         agentId: sessionAgentId,
       };
       if (
@@ -620,7 +626,7 @@ function* projectSessionPatchSteps(
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection,
-        explicitDefaultSelection: raw === null || (statusModelPatch && selection.isDefault),
+        explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }

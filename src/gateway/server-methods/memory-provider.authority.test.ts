@@ -16,7 +16,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type Client = NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
 
-const providerConfig: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+const providerConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
 let config = providerConfig;
 const reference = { providerId: "records", id: "claim:42" };
 
@@ -227,11 +227,14 @@ describe("Memory Core legacy owner", () => {
 
   beforeEach(async () => {
     // Memory Core's registered runtime owns session-hit authorization, unmodified.
-    const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
-      "../../../extensions/memory-core/runtime-api.js",
-    );
+    const { createMemoryRuntime } = await vi.importActual<{
+      createMemoryRuntime: (host: {
+        runInBackgroundContext: <T>(run: () => T) => T;
+      }) => MemoryPluginRuntime;
+    }>("../../../extensions/memory-core/runtime-api.js");
+    const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
     config = {
-      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
       tools: { sessions: { visibility: "agent" } },
     };
     const registry = createEmptyPluginRegistry();

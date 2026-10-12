@@ -1,4 +1,3 @@
-import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type {
   OpenClawStateReadCommand,
@@ -6,7 +5,36 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
-  if (command.type === "sessionState.versions" || command.type === "sessionState.events") {
+  if (command.type === "userProfiles.catalogIdentity") {
+    return { ...command, input: structuredClone(command.input) };
+  }
+  if (command.type === "meetingTranscripts.export") {
+    return structuredClone(command);
+  }
+  if (
+    command.type === "localWorkspace.get" ||
+    command.type === "localWorkspace.exists" ||
+    command.type === "pairing.allowFrom" ||
+    command.type === "secrets.metadata" ||
+    command.type === "secrets.execEnvironment" ||
+    command.type === "secrets.value" ||
+    command.type === "sessionState.versions" ||
+    command.type === "sessionState.ambientTargets" ||
+    command.type === "sessionState.events" ||
+    command.type === "sessionUpstream.read" ||
+    command.type === "operatorApprovals.placementGrant" ||
+    command.type === "operatorApprovals.history" ||
+    command.type === "diagnostic.latest" ||
+    command.type === "diagnostic.configAuditFacts" ||
+    command.type === "operatorApprovals.listCronGrants" ||
+    command.type === "operatorApprovals.validateCronGrant" ||
+    command.type === "acpSessions.metadata" ||
+    command.type === "sessionRows.sharedFacts" ||
+    command.type === "agentDeletion.sessionStoreBlocker" ||
+    command.type === "githubPublication.knownPullRequestUrls" ||
+    command.type === "githubRepository.knownPullRequestUrls" ||
+    command.type === "workers.placementProjection"
+  ) {
     return structuredClone(command);
   }
   if (isWorkspaceJournalReadCommand(command)) {
@@ -125,21 +153,6 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   if (command.type === "devicePairing.bootstrapContext") {
     return { ...command, input: { ...command.input } };
   }
-  if (
-    command.type === "operatorApprovals.history" ||
-    command.type === "diagnostic.latest" ||
-    command.type === "operatorApprovals.listCronGrants"
-  ) {
-    return structuredClone(command);
-  }
-  if (
-    command.type === "acpSessions.metadata" ||
-    command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls" ||
-    command.type === "workers.placementProjection"
-  ) {
-    return structuredClone(command);
-  }
   if (command.type === "pluginBlob.lookup") {
     const { pluginId, namespace, key } = command.input;
     return { type: command.type, input: { pluginId, namespace, key } };
@@ -204,345 +217,44 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   return { ...command };
 }
 
-function commandBytes(command: OpenClawStateReadRequest["command"]): number {
-  if (command.type === "sessionState.versions" || command.type === "sessionState.events") {
-    return Buffer.byteLength(JSON.stringify(command), "utf8");
+function stringBytes(values: readonly (string | undefined)[]): number {
+  return values.reduce((bytes, value) => bytes + Buffer.byteLength(value ?? "", "utf8"), 0);
+}
+
+// Account for the captured payload, not a second per-command schema. Object keys
+// and escaped strings deliberately overcharge the queue rather than omit new fields.
+function commandBytes(value: unknown): number {
+  if (typeof value === "string") {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
   }
-  if (isWorkspaceJournalReadCommand(command)) {
-    return Buffer.byteLength(JSON.stringify(command), "utf8");
+  if (typeof value === "number" || typeof value === "bigint") {
+    return 8;
   }
-  let bytes = Buffer.byteLength(command.type, "utf8");
-  if (command.type === "diagnostic.latest") {
-    return bytes + Buffer.byteLength(command.input.scope, "utf8") + 16;
+  if (typeof value === "boolean") {
+    return 1;
   }
-  if (command.type === "cron.activeReceiptOwners") {
-    return bytes + Buffer.byteLength(command.agentId, "utf8");
+  if (value === null || value === undefined) {
+    return 0;
   }
-  if (command.type === "workerPlacements.changeSnapshot") {
-    return (command.profileIds ?? []).reduce(
-      (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
-      bytes,
-    );
+  if (Array.isArray(value)) {
+    return value.reduce((bytes, entry) => bytes + 8 + commandBytes(entry), 0);
   }
-  if (command.type === "tui.lastSession.read") {
-    return bytes + Buffer.byteLength(command.stateKey, "utf8");
-  }
-  if (isChannelIngressReadCommand(command)) {
-    return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
-  }
-  if (command.type === "acpSessions.metadata") {
-    return command.entries.reduce(
-      (total, input) =>
-        total +
-        input.keys.reduce((sum, key) => sum + Buffer.byteLength(key, "utf8"), 0) +
-        Buffer.byteLength(input.legacyKey ?? "", "utf8") +
-        Buffer.byteLength(input.entry?.lifecycleRevision ?? "", "utf8") +
-        Buffer.byteLength(input.entry?.sessionId ?? "", "utf8") +
-        (input.entry?.sessionStartedAt === undefined ? 0 : 8),
-      bytes,
-    );
-  }
-  if (command.type === "capture.readOnlyEvents") {
-    return bytes + Buffer.byteLength(command.sessionId, "utf8") + 8;
-  }
-  if (command.type === "capture.readOnlyBlob") {
-    return bytes + Buffer.byteLength(command.blobId, "utf8");
-  }
-  if (command.type === "cron.jobNames") {
-    return command.jobIds.reduce(
-      (sum, id) => sum + Buffer.byteLength(id, "utf8"),
-      bytes + Buffer.byteLength(command.storePath ?? "", "utf8"),
-    );
-  }
-  if (command.type === "cron.quarantine") {
-    return bytes + Buffer.byteLength(command.storeKey, "utf8");
-  }
-  if (command.type === "githubPublication.sharedObservation") {
-    return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
-  }
-  if (command.type === "sessionRepositoryWorkspaces.find") {
-    return command.owners.reduce(
-      (total, owner) =>
-        total +
-        Buffer.byteLength(owner.agentId, "utf8") +
-        Buffer.byteLength(owner.sessionKey, "utf8"),
-      bytes,
-    );
-  }
-  if (command.type === "agentDatabaseDeletion.snapshot") {
-    return bytes + Buffer.byteLength(command.purpose, "utf8");
-  }
-  if (
-    command.type === "agentDeletionJournal.status" ||
-    command.type === "agentDeletionJournal.authority"
-  ) {
-    return bytes + Buffer.byteLength(command.agentId, "utf8");
-  }
-  if (command.type === "subagents.runs") {
-    return (
-      bytes +
-      (command.scope.kind === "descendants"
-        ? command.scope.sessionKeys.reduce(
-            (total, key) => total + Buffer.byteLength(key, "utf8"),
-            0,
-          ) +
-          command.scope.liveTopology.reduce(
-            (total, link) =>
-              total +
-              Buffer.byteLength(link.childSessionKey, "utf8") +
-              Buffer.byteLength(link.requesterSessionKey, "utf8"),
-            0,
-          )
-        : command.scope.kind === "session"
-          ? Buffer.byteLength(command.scope.sessionKey, "utf8")
-          : command.scope.kind === "ids"
-            ? command.scope.runIds.reduce(
-                (total, runId) => total + Buffer.byteLength(runId, "utf8"),
-                0,
-              )
-            : 0)
-    );
-  }
-  if (command.type === "mcpOAuth.statuses") {
-    return command.input.reduce((total, key) => total + Buffer.byteLength(key, "utf8"), bytes);
-  }
-  if (
-    command.type === "mcpOAuth.readOnly" ||
-    command.type === "mcpOAuth.keys" ||
-    command.type === "mcpOAuth.pending" ||
-    command.type === "mcpOAuth.countPrincipals"
-  ) {
-    return bytes + Buffer.byteLength(command.input, "utf8");
-  }
-  if (command.type === "sessionGroups.members") {
-    return bytes + Buffer.byteLength(JSON.stringify(command.cfg), "utf8");
-  }
-  if (command.type === "conversationBindings.inspect") {
-    return (
-      bytes +
-      Object.values(command.conversation).reduce(
-        (sum, value) => sum + Buffer.byteLength(value ?? "", "utf8"),
-        0,
-      )
-    );
-  }
-  if (command.type === "cron.currentReceipt") {
-    return bytes + Buffer.byteLength(JSON.stringify(command.handle), "utf8") + 2;
-  }
-  if (command.type === "cron.observeRunRecovery") {
-    return command.proposals.reduce(
-      (total, proposal) =>
-        total +
-        Buffer.byteLength(proposal.jobId, "utf8") +
-        (proposal.queuedAtMs === undefined ? 0 : 8) +
-        (proposal.runningAtMs === undefined ? 0 : 8),
-      bytes + Buffer.byteLength(command.storeKey, "utf8"),
-    );
-  }
-  if (command.type === "cron.scratch") {
-    return (
-      bytes +
-      Buffer.byteLength(command.storeKey, "utf8") +
-      Buffer.byteLength(command.selector.kind, "utf8") +
-      (command.selector.kind === "job" ? 8 : 0) +
-      Buffer.byteLength(
-        command.selector.kind === "job" ? command.selector.jobId : command.selector.agentId,
-        "utf8",
-      )
-    );
-  }
-  if (command.type === "devicePairing.bootstrapContext") {
-    return (
-      bytes +
-      Buffer.byteLength(command.input.token) +
-      Buffer.byteLength(command.input.deviceId) +
-      Buffer.byteLength(command.input.publicKey) +
-      8
-    );
-  }
-  if (command.type === "devicePairing.lookup") {
-    return bytes + Buffer.byteLength(command.deviceId);
-  }
-  if (command.type === "devicePairing.pending") {
-    return bytes + Buffer.byteLength(command.requestId) + 8;
-  }
-  if (command.type === "devicePairing.list") {
-    return bytes + 8 + Buffer.byteLength(command.publishedRevision ?? "");
-  }
-  if (command.type === "operatorApprovals.history") {
-    return (
-      bytes +
-      Buffer.byteLength(command.input.cursor ?? "", "utf8") +
-      Buffer.byteLength(command.input.kind ?? "", "utf8") +
-      16
-    );
-  }
-  if (command.type === "operatorApprovals.listCronGrants") {
-    return bytes + 8;
-  }
-  if (command.type === "deliveryQueue.outbound") {
-    return bytes + Buffer.byteLength(command.id ?? "", "utf8");
-  }
-  if (
-    command.type === "githubPublication.request" ||
-    command.type === "githubRepository.request" ||
-    command.type === "githubPublication.lifecycle"
-  ) {
-    return bytes + Buffer.byteLength(command.requestId, "utf8") + 8;
-  }
-  if (
-    command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls"
-  ) {
-    return Object.values(command.input).reduce<number>(
-      (total, value) => total + (typeof value === "string" ? Buffer.byteLength(value, "utf8") : 8),
-      bytes,
-    );
-  }
-  if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
-    return (
-      bytes +
-      Buffer.byteLength(command.input.pluginId, "utf8") +
-      Buffer.byteLength(command.input.namespace, "utf8") +
-      (command.type === "pluginBlob.lookup" ? Buffer.byteLength(command.input.key, "utf8") : 0)
-    );
-  }
-  if (command.type === "subagents.forChildSession") {
-    return bytes + Buffer.byteLength(command.childSessionKey, "utf8");
-  }
-  if (command.type === "sandboxRegistry.get") {
-    return bytes + Buffer.byteLength(command.containerName, "utf8");
-  }
-  if (command.type === "sandboxRegistry.runtimeIds") {
-    return (
-      bytes +
-      Buffer.byteLength(command.backendId, "utf8") +
-      Buffer.byteLength(command.scopeKey, "utf8")
-    );
-  }
-  if (command.type === "updateRuns.get" || command.type === "updateRuns.reconciliationCandidate") {
-    return bytes + Buffer.byteLength(command.runId, "utf8");
-  }
-  if (command.type === "updateRuns.reconciliationCandidates") {
-    return (command.input.runIds ?? []).reduce(
-      (total, runId) => total + Buffer.byteLength(runId, "utf8"),
-      bytes + 3 + (command.input.repairHistorySinceMs === undefined ? 0 : 8),
-    );
-  }
-  if (command.type === "updateRuns.list") {
-    return (
-      bytes +
-      Buffer.byteLength(command.input.reason ?? "", "utf8") +
-      Buffer.byteLength(command.input.includeRunId ?? "", "utf8") +
-      (command.input.limit === undefined ? 0 : 8) +
-      (command.input.active === undefined ? 0 : 1)
-    );
-  }
-  if (
-    command.type === "skills.library.descriptions" ||
-    command.type === "skills.library.manifests"
-  ) {
-    return command.input.reduce(
-      (total, pin) =>
-        total + Buffer.byteLength(pin.skillId, "utf8") + Buffer.byteLength(pin.revision, "utf8"),
-      bytes,
-    );
-  }
-  if (command.type === "fleet.get") {
-    return bytes + Buffer.byteLength(command.tenantId, "utf8");
-  }
-  if (command.type === "onboardingRecommendations.read") {
-    return bytes + Buffer.byteLength(command.configKey, "utf8");
-  }
-  if (
-    command.type === "userModelAccounts.links" ||
-    command.type === "userProfiles.reconcile" ||
-    command.type === "userProfiles.avatar.inspect" ||
-    command.type === "userProfiles.channelIdentity.list" ||
-    command.type === "userProfiles.authority.resolve"
-  ) {
-    return bytes + Buffer.byteLength(command.profileId, "utf8");
-  }
-  if (command.type === "userProfiles.avatar.read") {
-    return (
-      bytes +
-      Buffer.byteLength(command.profileId, "utf8") +
-      Object.values(command.expected).reduce(
-        (total, value) => total + Buffer.byteLength(value, "utf8"),
-        0,
-      )
-    );
-  }
-  if (command.type === "userProfiles.githubIdentity.cached") {
-    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
-  }
-  if (
-    command.type === "userProfiles.githubAttribution.resolve" ||
-    command.type === "userPreferences.values"
-  ) {
-    return command.profileIds.reduce(
-      (total, profileId) => total + Buffer.byteLength(profileId, "utf8"),
-      bytes + (command.type === "userPreferences.values" ? Buffer.byteLength(command.key) : 0),
-    );
-  }
-  if (command.type === "userProfiles.channelIdentity.resolve") {
-    return bytes + Buffer.byteLength(JSON.stringify(command.identity), "utf8");
-  }
-  if (command.type === "userProfiles.email.resolve") {
-    return bytes + Buffer.byteLength(command.email, "utf8");
-  }
-  if (command.type === "workspace.snapshot") {
-    return bytes + Buffer.byteLength(command.workspaceDir, "utf8");
-  }
-  if (command.type === "audit.run.inspect") {
-    const input = command.input;
-    // Each supplied numeric scalar retains one eight-byte JavaScript number.
-    bytes += Buffer.byteLength(input.decisionCursor ?? "", "utf8") + 8;
-    if (input.decisionLimit !== undefined) {
-      bytes += 8;
-    }
-    if ("executionId" in input) {
-      return bytes + Buffer.byteLength(input.executionId, "utf8");
-    }
-    return (
-      bytes +
-      Buffer.byteLength(input.runId, "utf8") +
-      (input.executionOffset === undefined ? 0 : 8) +
-      (input.executionLimit === undefined ? 0 : 8)
-    );
-  }
-  if (
-    command.type === "workers.placementProjection" ||
-    command.type === "workers.placementPendingResults"
-  ) {
-    return Buffer.byteLength(JSON.stringify(command), "utf8");
-  }
-  if (command.type === "workerEnvironments.pruneCandidates") {
-    return (
-      bytes +
-      8 +
-      (command.input.limit === undefined ? 0 : 8) +
-      (command.input.cursor ? 8 + Buffer.byteLength(command.input.cursor.environmentId, "utf8") : 0)
-    );
-  }
-  if (command.type === "workerEnvironments.snapshot") {
-    return (
-      bytes + (command.ids?.reduce((total, id) => total + Buffer.byteLength(id, "utf8"), 0) ?? 0)
-    );
-  }
-  return bytes;
+  return Object.entries(value).reduce(
+    (bytes, [key, entry]) => bytes + Buffer.byteLength(key, "utf8") + 8 + commandBytes(entry),
+    0,
+  );
 }
 
 export function requestBytes(request: OpenClawStateReadRequest): number {
-  return [
-    ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
-    request.context.existingSchemaPath,
-    request.databasePath,
-    request.location,
-    request.expectedIdentity,
-    request.snapshotRoot,
-  ].reduce(
-    (bytes, value) => bytes + (value === undefined ? 0 : Buffer.byteLength(value, "utf8")),
-    commandBytes(request.command),
+  return (
+    commandBytes(request.command) +
+    stringBytes([
+      ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
+      request.context.existingSchemaPath,
+      request.databasePath,
+      request.location,
+      request.expectedIdentity,
+      request.snapshotRoot,
+    ])
   );
 }

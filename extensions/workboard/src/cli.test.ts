@@ -7,7 +7,7 @@ import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
-  getRuntimeConfig: vi.fn(() => ({})),
+  isImplicitLocalGatewayTargetFromCli: vi.fn(async () => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
@@ -17,11 +17,17 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
   return {
     ...actual,
     callGatewayFromCli: gatewayRuntime.callGatewayFromCli,
+    isImplicitLocalGatewayTargetFromCli: gatewayRuntime.isImplicitLocalGatewayTargetFromCli,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: gatewayRuntime.getRuntimeConfig,
+vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/cli-state-owner")>()),
+  runWithLocalStateOwner: ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent(): void }) => unknown;
+  }) => runLocal({ assertCurrent() {} }),
 }));
 
 function createProgram(store: WorkboardStore): Command {
@@ -31,7 +37,7 @@ function createProgram(store: WorkboardStore): Command {
     writeErr: () => {},
     writeOut: () => {},
   });
-  registerWorkboardCli({ program, store });
+  registerWorkboardCli({ program, withStore: async (action) => action(store) });
   return program;
 }
 
@@ -65,8 +71,7 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
 describe("registerWorkboardCli", () => {
   beforeEach(() => {
     gatewayRuntime.callGatewayFromCli.mockReset();
-    gatewayRuntime.getRuntimeConfig.mockReset();
-    gatewayRuntime.getRuntimeConfig.mockReturnValue({});
+    gatewayRuntime.isImplicitLocalGatewayTargetFromCli.mockReset().mockResolvedValue(false);
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
@@ -125,6 +130,28 @@ describe("registerWorkboardCli", () => {
     expect(includeOutput).toContain("(archived)");
   });
 
+  it("rejects invalid list status filters instead of reporting an empty board", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const running = await store.create({ title: "Active work", status: "running" });
+    await store.create({ title: "Queued work", status: "todo" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--status", "running", "--json"], {
+        from: "user",
+      });
+    });
+    expect(JSON.parse(output)).toMatchObject({ cards: [{ id: running.id }] });
+
+    await captureStdout(async () => {
+      await expect(
+        program.parseAsync(["workboard", "list", "--status", "runnning", "--json"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Allowed choices are.*running/);
+    });
+  });
+
   it("marks archived cards in show output", async () => {
     const store = createWorkboardSqliteTestStore();
     const archived = await store.create({ title: "Archived card", status: "ready" });
@@ -173,9 +200,7 @@ describe("registerWorkboardCli", () => {
     const store = createWorkboardSqliteTestStore();
     const card = await store.create({ title: "Configured remote target", status: "ready" });
     const program = createProgram(store);
-    gatewayRuntime.getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
-    });
+
     gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
       new Error("connect ECONNREFUSED gateway.example:443"),
     );
@@ -220,6 +245,35 @@ describe("registerWorkboardCli", () => {
       mode: "cli",
       scopes: ["operator.admin", "operator.write", "operator.read"],
     });
+  });
+
+  it.each([false, true])("reports each dispatch failure with JSON=%s", async (json) => {
+    const store = createWorkboardSqliteTestStore();
+    const program = createProgram(store);
+    const result = {
+      started: [{ cardId: "started-card", runId: "run-started" }],
+      startFailures: [
+        { cardId: "12345678-first-card", error: "Workspace is unavailable." },
+        { cardId: "abcdef01-second-card", error: "Model is unavailable." },
+      ],
+    };
+    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(result);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "dispatch", ...(json ? ["--json"] : [])], {
+        from: "user",
+      });
+    });
+
+    if (json) {
+      expect(JSON.parse(output)).toEqual(result);
+    } else {
+      expect(output).toBe(
+        "dispatch complete: started=1 failures=2\n" +
+          "12345678: Workspace is unavailable.\n" +
+          "abcdef01: Model is unavailable.\n",
+      );
+    }
   });
 
   it("omits maxStarts from the dispatch gateway call when the flag is absent", async () => {

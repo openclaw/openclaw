@@ -1,5 +1,6 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { scopeLegacySessionKeyToAgent } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
@@ -9,10 +10,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
-import type {
-  SubagentLifecycleCommonContext,
-  SubagentLifecycleCompletionContext,
-} from "./subagent-registry-lifecycle-context.js";
+import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
   maskLifecycleIdentifier,
@@ -22,31 +20,6 @@ import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
-
-type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
-
-async function retireRunModeBundleMcpRuntime(
-  context: SubagentLifecycleCommonContext,
-  cleanupParams: { runId: string; entry: SubagentRunRecord; reason: string },
-): Promise<void> {
-  const params = context.options;
-  if (cleanupParams.entry.spawnMode === "session") {
-    return;
-  }
-  await retireSessionMcpRuntimeForSessionKey({
-    sessionKey: cleanupParams.entry.childSessionKey,
-    reason: cleanupParams.reason,
-    preserveActiveLeases: true,
-    onError: (error, sessionId) => {
-      params.warn("failed to retire subagent bundle MCP runtime", {
-        error: buildSafeLifecycleErrorMeta(error),
-        sessionId,
-        runId: maskLifecycleIdentifier(cleanupParams.runId, "run"),
-        childSessionKey: maskLifecycleIdentifier(cleanupParams.entry.childSessionKey, "session"),
-      });
-    },
-  });
-}
 
 export async function completeTerminalEffects(
   context: SubagentLifecycleCompletionContext,
@@ -60,7 +33,9 @@ export async function completeTerminalEffects(
     terminalGeneration: number;
     stateContext: OpenClawStateWorkerContext;
     assertCurrent: () => void;
-    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup>;
+    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
+      typeof cleanupBrowserSessionsForLifecycleEnd
+    >;
   },
 ): Promise<void> {
   const params = context.options;
@@ -69,17 +44,17 @@ export async function completeTerminalEffects(
   let entry = args.entry;
   let { sessionSuperseded, suppressSessionEffects } = args;
   const isCurrentTerminalCallback = () => {
-    if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+    if (!context.isTerminalCallbackCurrent(entry, terminalGeneration)) {
       return false;
     }
     args.assertCurrent();
     entry = getCurrentSubagentRunOwner(params.runs, entry)!;
     return true;
   };
+  const isSessionEffectsOwnerCurrent = () =>
+    isCurrentTerminalCallback() && !context.newerGenerationOwnsSession(entry);
   const isCurrentSessionEffectsOwner = () =>
-    isCurrentTerminalCallback() &&
-    !context.newerGenerationOwnsSession(entry) &&
-    context.sessionEffectsHostCurrent(entry);
+    isSessionEffectsOwnerCurrent() && context.sessionEffectsHostCurrent(entry);
   const persistSessionEffectsSuppression = async () => {
     entry = await commitSubagentLifecycleMutation(context, {
       entry,
@@ -117,6 +92,11 @@ export async function completeTerminalEffects(
       await params.retireSupersededRun(currentEntry.runId, currentEntry);
     }
   };
+  const warnMeta = (error: unknown) => ({
+    error: buildSafeLifecycleErrorMeta(error),
+    runId: maskLifecycleIdentifier(completeParams.runId, "run"),
+    childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
+  });
   sessionSuperseded ||= context.newerGenerationOwnsSession(entry);
   if (sessionSuperseded) {
     // This callback belongs to an older run that shared the session key.
@@ -228,8 +208,6 @@ export async function completeTerminalEffects(
   await refreshSessionEffectsSuppression();
   // Cleanup also rejects newer session generations, but host custody is checked
   // at each resource dispatch rather than shared with terminal-signal admission.
-  const isSessionEffectsOwnerCurrent = () =>
-    isCurrentTerminalCallback() && !context.newerGenerationOwnsSession(entry);
   const refreshCleanupSuppression = async () => {
     if (
       suppressSessionEffects ||
@@ -269,11 +247,7 @@ export async function completeTerminalEffects(
     try {
       cleanupBrowserSessions ??= await args.loadCleanupBrowserSessionsForLifecycleEnd();
     } catch (error) {
-      params.warn("failed to load browser cleanup for completed subagent", {
-        error: buildSafeLifecycleErrorMeta(error),
-        runId: maskLifecycleIdentifier(completeParams.runId, "run"),
-        childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
-      });
+      params.warn("failed to load browser cleanup for completed subagent", warnMeta(error));
     }
     if (cleanupBrowserSessions) {
       if (!isCurrentTerminalCallback()) {
@@ -329,14 +303,18 @@ export async function completeTerminalEffects(
           throw error;
         }
         if (dispatchedBrowserCleanup) {
-          if (!isSessionEffectsOwnerCurrent() || !context.sessionEffectsHostCurrent(entry)) {
+          if (!isCurrentSessionEffectsOwner()) {
             return;
           }
           try {
             await cleanupBrowserSessions({
-              sessionKeys: [entry.childSessionKey],
-              isCurrent: () =>
-                isSessionEffectsOwnerCurrent() && context.sessionEffectsHostCurrent(entry),
+              sessionKeys: [
+                scopeLegacySessionKeyToAgent({
+                  agentId: entry.childAgentId,
+                  sessionKey: entry.childSessionKey,
+                }) ?? "",
+              ],
+              isCurrent: isCurrentSessionEffectsOwner,
               prepareCurrent: async () =>
                 !(await context.shouldSuppressSessionEffects(entry)) &&
                 isSessionEffectsOwnerCurrent(),
@@ -344,11 +322,10 @@ export async function completeTerminalEffects(
               onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
             });
           } catch (error) {
-            params.warn("failed to cleanup browser sessions for completed subagent", {
-              error: buildSafeLifecycleErrorMeta(error),
-              runId: maskLifecycleIdentifier(completeParams.runId, "run"),
-              childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
-            });
+            params.warn(
+              "failed to cleanup browser sessions for completed subagent",
+              warnMeta(error),
+            );
           }
         }
       }
@@ -374,17 +351,24 @@ export async function completeTerminalEffects(
       return;
     }
     try {
-      await retireRunModeBundleMcpRuntime(context, {
-        runId: entry.runId,
-        entry,
-        reason: "subagent-run-complete",
-      });
+      if (entry.spawnMode !== "session") {
+        const cleanupEntry = entry;
+        await retireSessionMcpRuntimeForSessionKey({
+          sessionKey: cleanupEntry.childSessionKey,
+          reason: "subagent-run-complete",
+          preserveActiveLeases: true,
+          onError: (error, sessionId) => {
+            params.warn("failed to retire subagent bundle MCP runtime", {
+              error: buildSafeLifecycleErrorMeta(error),
+              sessionId,
+              runId: maskLifecycleIdentifier(cleanupEntry.runId, "run"),
+              childSessionKey: maskLifecycleIdentifier(cleanupEntry.childSessionKey, "session"),
+            });
+          },
+        });
+      }
     } catch (error) {
-      params.warn("failed to retire subagent bundle MCP runtime after completion", {
-        error: buildSafeLifecycleErrorMeta(error),
-        runId: maskLifecycleIdentifier(completeParams.runId, "run"),
-        childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
-      });
+      params.warn("failed to retire subagent bundle MCP runtime after completion", warnMeta(error));
     }
     if (!isCurrentTerminalCallback()) {
       return;
@@ -404,6 +388,6 @@ export async function completeTerminalEffects(
 
   await refreshCleanupSuppression();
   if (isCurrentTerminalCallback()) {
-    context.startSubagentAnnounceCleanupFlow(entry.runId, entry);
+    context.startSubagentAnnounceCleanupFlow(entry);
   }
 }

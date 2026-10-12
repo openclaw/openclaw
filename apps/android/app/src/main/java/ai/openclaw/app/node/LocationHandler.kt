@@ -8,79 +8,40 @@ import android.content.Context
 import android.location.Location
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
-/**
- * Injectable location facade for command tests and Android runtime access.
- */
-internal interface LocationDataSource {
-  fun hasFinePermission(context: Context): Boolean
-
-  fun hasCoarsePermission(context: Context): Boolean
-
-  fun hasBackgroundPermission(context: Context): Boolean
-
-  suspend fun fetchLocation(
-    desiredProviders: List<String>,
-    maxAgeMs: Long?,
-    timeoutMs: Long,
-  ): Location
-}
-
-private class DefaultLocationDataSource(
-  private val capture: LocationCaptureManager,
-) : LocationDataSource {
-  override fun hasFinePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-
-  override fun hasCoarsePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-
-  override fun hasBackgroundPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-
-  override suspend fun fetchLocation(
-    desiredProviders: List<String>,
-    maxAgeMs: Long?,
-    timeoutMs: Long,
-  ): Location =
-    capture.getLocation(
-      desiredProviders = desiredProviders,
-      maxAgeMs = maxAgeMs,
-      timeoutMs = timeoutMs,
-    )
-}
-
 class LocationHandler internal constructor(
-  private val appContext: Context,
-  private val dataSource: LocationDataSource,
-  private val json: Json = Json { ignoreUnknownKeys = true },
+  appContext: Context,
+  capture: suspend (List<String>, Long?, Long) -> Location,
+  private val hasFinePermission: () -> Boolean = { appContext.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) },
+  private val hasCoarsePermission: () -> Boolean = { appContext.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION) },
+  private val hasBackgroundPermission: () -> Boolean = { appContext.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) },
   private val isForeground: () -> Boolean = { true },
   private val locationMode: () -> LocationMode = { LocationMode.WhileUsing },
   private val backgroundLocationEnabled: () -> Boolean = { false },
-  private val locationPreciseEnabled: () -> Boolean = { true },
+  locationPreciseEnabled: () -> Boolean = { true },
 ) {
   private val disclosure =
     LocationDisclosure(
       preciseEnabled = locationPreciseEnabled,
-      hasFinePermission = { dataSource.hasFinePermission(appContext) },
-      capture = dataSource::fetchLocation,
+      hasFinePermission = hasFinePermission,
+      capture = capture,
     )
 
   constructor(
     appContext: Context,
     location: LocationCaptureManager,
-    json: Json,
     isForeground: () -> Boolean,
     locationMode: () -> LocationMode,
     backgroundLocationEnabled: () -> Boolean,
     locationPreciseEnabled: () -> Boolean,
   ) : this(
     appContext = appContext,
-    dataSource = DefaultLocationDataSource(location),
-    json = json,
+    capture = location::getLocation,
     isForeground = isForeground,
     locationMode = locationMode,
     backgroundLocationEnabled = backgroundLocationEnabled,
@@ -93,7 +54,7 @@ class LocationHandler internal constructor(
       // Android foreground restrictions and user expectation keep live location tied to the visible app.
       return nodeInvokeError("LOCATION_BACKGROUND_UNAVAILABLE", "choose Always and grant background location access")
     }
-    if (!dataSource.hasFinePermission(appContext) && !dataSource.hasCoarsePermission(appContext)) {
+    if (!hasFinePermission() && !hasCoarsePermission()) {
       return nodeInvokeError("LOCATION_PERMISSION_REQUIRED", "grant Location permission")
     }
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
@@ -125,18 +86,10 @@ class LocationHandler internal constructor(
   private fun allowsBackgroundLocation(): Boolean =
     backgroundLocationEnabled() &&
       locationMode() == LocationMode.Always &&
-      dataSource.hasBackgroundPermission(appContext)
+      hasBackgroundPermission()
 
   private fun parseLocationParams(paramsJson: String?): Triple<Long?, Long, String?> {
-    if (paramsJson.isNullOrBlank()) {
-      return Triple(null, 10_000L, null)
-    }
-    val root =
-      try {
-        json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      }
+    val root = parseJsonParamsObject(paramsJson)
     val maxAgeMs = (root?.get("maxAgeMs") as? JsonPrimitive)?.content?.toLongOrNull()
     val timeoutMs =
       (root?.get("timeoutMs") as? JsonPrimitive)?.content?.toLongOrNull()?.coerceIn(1_000L, 60_000L)

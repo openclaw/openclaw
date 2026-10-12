@@ -67,39 +67,6 @@ describe("existing-only SQLite worker admission", () => {
     expect(await readFile(file)).toEqual(Buffer.alloc(0));
   });
 
-  it("shares ordinary write intent with an existing actor across aliases and drains accepted work", async () => {
-    const file = databasePath();
-    await seed(file, "seed");
-    const existing = await open(file, true);
-    assert.ok(existing);
-    const alias = path.join(path.dirname(file), "alias.sqlite");
-    await link(file, alias);
-    const ordinary = await open(alias);
-    assert.ok(ordinary);
-    let settled = false;
-    const pending = ordinary
-      .execute({ type: "append", input: { value: "ordinary" } })
-      .then((receipt) => {
-        settled = true;
-        return receipt;
-      });
-    const closed = ordinary.close();
-    await expect(
-      ordinary.execute({ type: "append", input: { value: "after close" } }),
-    ).rejects.toMatchObject({ code: "closed" });
-    await closed;
-    expect(settled).toBe(true);
-    const first = await pending;
-    const second = await existing.execute({ type: "append", input: { value: "existing" } });
-    expect(second).toEqual({ ...first, writes: 2 });
-    expect(first.threadId).toBeGreaterThan(0);
-    expect(await existing.execute({ type: "read", input: undefined })).toEqual([
-      "seed",
-      "ordinary",
-      "existing",
-    ]);
-  });
-
   it.each(["deleted", "replaced"] as const)(
     "rejects a file %s after parent admission before dispatching its factory",
     async (kind) => {

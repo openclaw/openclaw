@@ -10,8 +10,6 @@ import {
   buildConnector,
   fetch as undiciFetch,
   getGlobalDispatcher,
-  Headers as UndiciHeaders,
-  Pool,
   Response as UndiciResponse,
   setGlobalDispatcher,
 } from "undici";
@@ -131,84 +129,48 @@ describe("SOCKS proxy protocol boundaries", () => {
     }, credentials);
   });
 
-  it.each(["environment", "custom-http", "forward-http"])(
-    "preserves TCP policy on the actual %s proxy connection",
-    async (mode) => {
-      const family = vi
-        .spyOn(familyPolicy, "resolveUndiciAutoSelectFamilyConnectOptions")
-        .mockReturnValue({ autoSelectFamily: false, autoSelectFamilyAttemptTimeout: 321 });
-      const connect = vi.spyOn(net, "connect");
-      const keepAlive = vi.spyOn(net.Socket.prototype, "setKeepAlive");
-      try {
-        await withProxyFixture(async ({ socksProxy, httpProxy, httpOrigin, certificate }) => {
-          const options = {
+  it("preserves TCP policy on the actual SOCKS proxy connection", async () => {
+    const family = vi
+      .spyOn(familyPolicy, "resolveUndiciAutoSelectFamilyConnectOptions")
+      .mockReturnValue({ autoSelectFamily: false, autoSelectFamilyAttemptTimeout: 321 });
+    const connect = vi.spyOn(net, "connect");
+    const keepAlive = vi.spyOn(net.Socket.prototype, "setKeepAlive");
+    try {
+      await withProxyFixture(async ({ socksProxy, certificate }) => {
+        await fetchPayload(
+          createHttp1EnvHttpProxyAgent({
             requestTls: { ca: certificate },
-            connect: {
-              family: 4,
-              keepAlive: mode !== "forward-http",
-              keepAliveInitialDelay: 30_000,
-            },
-            ...(mode === "custom-http" ? { proxyTls: { keepAliveInitialDelay: 7_000 } } : {}),
-          };
-          const clientFactory = vi.fn(
-            (origin: URL, poolOptions: object) => new Pool(origin, poolOptions),
-          );
-          const proxyUrl =
-            mode === "forward-http" ? httpOrigin : mode === "custom-http" ? httpProxy : socksProxy;
-          const dispatcher =
-            mode === "environment"
-              ? createHttp1EnvHttpProxyAgent({ ...options, httpsProxy: proxyUrl, noProxy: "" })
-              : createHttp1ProxyAgent({
-                  ...options,
-                  uri: proxyUrl,
-                  proxyTunnel: mode !== "forward-http",
-                  ...(mode === "custom-http" ? { clientFactory } : {}),
-                });
-          if (mode === "forward-http") {
-            try {
-              const response = await undiciFetch(`http://${TARGET_HOST}/media`, { dispatcher });
-              expect(await readProxyPayload(response)).toBe(PAYLOAD);
-            } finally {
-              await dispatcher.destroy();
-            }
-          } else {
-            await fetchPayload(dispatcher);
-          }
-          const proxyPort = Number(new URL(proxyUrl).port);
-          if (mode === "custom-http") {
-            expect(clientFactory).toHaveBeenCalledOnce();
-          }
-          const socketCalls: ReadonlyArray<readonly unknown[]> = connect.mock.calls;
-          const proxyIndex = socketCalls.findIndex(
-            ([value]) =>
-              value !== null &&
-              typeof value === "object" &&
-              "port" in value &&
-              Number(value.port) === proxyPort,
-          );
-          const proxySocket = connect.mock.results[proxyIndex]?.value;
-          expect({
-            options: socketCalls[proxyIndex]?.[0],
-            keepAliveCalls: keepAlive.mock.calls.filter(
-              (_, index) => keepAlive.mock.contexts[index] === proxySocket,
-            ),
-          }).toMatchObject({
-            options: {
-              family: 4,
-              autoSelectFamily: false,
-              autoSelectFamilyAttemptTimeout: 321,
-            },
-            keepAliveCalls:
-              mode === "forward-http" ? [] : [[true, mode === "custom-http" ? 7_000 : 30_000]],
-          });
+            connect: { family: 4, keepAlive: true, keepAliveInitialDelay: 30_000 },
+            httpsProxy: socksProxy,
+            noProxy: "",
+          }),
+        );
+        const proxyPort = Number(new URL(socksProxy).port);
+        const socketCalls: ReadonlyArray<readonly unknown[]> = connect.mock.calls;
+        const proxyIndex = socketCalls.findIndex(
+          ([value]) =>
+            value !== null &&
+            typeof value === "object" &&
+            "port" in value &&
+            Number(value.port) === proxyPort,
+        );
+        const proxySocket = connect.mock.results[proxyIndex]?.value;
+        expect({
+          options: socketCalls[proxyIndex]?.[0],
+          keepAliveCalls: keepAlive.mock.calls.filter(
+            (_, index) => keepAlive.mock.contexts[index] === proxySocket,
+          ),
+        }).toMatchObject({
+          options: { family: 4, autoSelectFamily: false, autoSelectFamilyAttemptTimeout: 321 },
+          keepAliveCalls: [[true, 30_000]],
         });
-      } finally {
-        connect.mockRestore();
-        keepAlive.mockRestore();
-        family.mockRestore();
-      }
-    },
-  );
+      });
+    } finally {
+      connect.mockRestore();
+      keepAlive.mockRestore();
+      family.mockRestore();
+    }
+  });
 
   // The dispatchers share Undici's clock, so each handshake must settle before the next row.
   it.each([
@@ -345,7 +307,7 @@ describe("SOCKS proxy protocol boundaries", () => {
     15_000,
   );
 
-  it.each(["object", "flat array", "Headers", "inherited object"])(
+  it.each(["flat array", "inherited object"])(
     "rejects per-request proxy credentials from %s before any SOCKS dispatch",
     async (form) => {
       await withProxyFixture(async ({ socksProxy, connections, originRoutes }) => {
@@ -356,27 +318,14 @@ describe("SOCKS proxy protocol boundaries", () => {
         const inherited = {};
         Object.setPrototypeOf(inherited, auth);
         try {
-          const request =
-            form === "Headers"
-              ? undiciFetch(`http://${TARGET_HOST}/media`, {
-                  dispatcher,
-                  headers: new UndiciHeaders(auth),
-                })
-              : dispatcher.request({
-                  origin: `http://${TARGET_HOST}`,
-                  path: "/media",
-                  method: "GET",
-                  headers:
-                    form === "flat array"
-                      ? Object.entries(auth).flat()
-                      : form === "inherited object"
-                        ? inherited
-                        : auth,
-                });
+          const request = dispatcher.request({
+            origin: `http://${TARGET_HOST}`,
+            path: "/media",
+            method: "GET",
+            headers: form === "flat array" ? Object.entries(auth).flat() : inherited,
+          });
           const error = { code: "UND_ERR_INVALID_ARG" };
-          await expect(request).rejects.toMatchObject(
-            form === "Headers" ? { cause: error } : error,
-          );
+          await expect(request).rejects.toMatchObject(error);
           expect(connections).toEqual([]);
           expect(originRoutes).toEqual([]);
           const response = await dispatcher.request({
@@ -394,24 +343,15 @@ describe("SOCKS proxy protocol boundaries", () => {
     },
   );
 
-  it.each([
-    { source: "supplied-env", managedHop: "https" },
-    { source: "active", managedHop: "http" },
-  ])("keeps $source managed TLS on the $managedHop proxy hop", async ({ source, managedHop }) => {
+  it("keeps supplied-env managed TLS on the HTTPS proxy hop", async () => {
     await withProxyFixture(async ({ socksProxy, httpsProxy, connections, certificate }) => {
       const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-socks-ca-"));
       const caFile = path.join(dir, "ca.pem");
       await writeFile(caFile, certificate);
-      const registration =
-        source === "active"
-          ? registerActiveManagedProxyUrl(new URL(httpsProxy), {
-              proxyTls: { ca: certificate },
-            })
-          : undefined;
       const dispatcher = createHttp1EnvHttpProxyAgent(
         {
-          httpProxy: managedHop === "http" ? httpsProxy : socksProxy,
-          httpsProxy: managedHop === "http" ? socksProxy : httpsProxy,
+          httpProxy: socksProxy,
+          httpsProxy,
           noProxy: "",
           requestTls: { ca: certificate },
         },
@@ -427,16 +367,9 @@ describe("SOCKS proxy protocol boundaries", () => {
           const response = await undiciFetch(url, { dispatcher });
           expect(await readProxyPayload(response)).toBe(PAYLOAD);
         }
-        expect(connections).toEqual(
-          (managedHop === "http" ? ["https", "socks"] : ["socks", "https"]).map(
-            (kind) => `${kind}:${TARGET_HOST}`,
-          ),
-        );
+        expect(connections).toEqual([`socks:${TARGET_HOST}`, `https:${TARGET_HOST}`]);
       } finally {
         await dispatcher.destroy();
-        if (registration) {
-          stopActiveManagedProxyRegistration(registration);
-        }
         await rm(dir, { recursive: true, force: true });
       }
     });

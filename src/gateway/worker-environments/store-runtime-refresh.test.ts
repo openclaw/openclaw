@@ -219,7 +219,7 @@ describe("worker environment runtime refresh", () => {
       if (operation === "destroying") {
         await store.requestDestroy({ environmentId: environment.environmentId, state: "attached" });
       } else if (operation === "moving") {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: placement!.sessionId,
           source: {
             generation: placement!.generation,
@@ -229,7 +229,7 @@ describe("worker environment runtime refresh", () => {
           target: { kind: "gateway" },
         });
       } else {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: placement!.sessionId,
           environmentId: environment.environmentId,
           ownerEpoch: environment.ownerEpoch,

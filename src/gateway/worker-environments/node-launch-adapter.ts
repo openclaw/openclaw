@@ -43,24 +43,16 @@ import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunne
 import { boundedWorkerError } from "./worker-error.js";
 
 export function nodeWorkerSpawnResultFromReceipt(
-  receipt: NodeWorkerSupervisorReceipt,
+  receipt: TerminalNodeWorkerSupervisorReceipt,
 ): SpawnResult {
-  if (
-    receipt.state === "completed" ||
-    receipt.state === "failed" ||
-    receipt.state === "interrupted" ||
-    receipt.state === "cancelled"
-  ) {
-    return {
-      stdout: receipt.state === "completed" ? receipt.resultJson : "",
-      stderr: receipt.state === "completed" ? "" : receipt.errorText,
-      code: receipt.state === "completed" ? 0 : 1,
-      signal: null,
-      killed: receipt.state === "cancelled" || receipt.state === "interrupted",
-      termination: "exit",
-    };
-  }
-  throw new Error("node worker launch returned without a terminal receipt");
+  return {
+    stdout: receipt.state === "completed" ? receipt.resultJson : "",
+    stderr: receipt.state === "completed" ? "" : receipt.errorText,
+    code: receipt.state === "completed" ? 0 : 1,
+    signal: null,
+    killed: receipt.state === "cancelled" || receipt.state === "interrupted",
+    termination: "exit",
+  };
 }
 
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
@@ -354,19 +346,19 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         deviceId: params.deviceId,
         signal,
       });
-      params.prepareLaunch?.(node);
-      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
-        throw new NodeWorkerLaunchTransportError(
-          "PRIVATE_DIALECT_UNAVAILABLE",
-          "node worker idle retention is unavailable",
-        );
-      }
       if (
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
         (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
           resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
         throw createNodeRunnerInventoryIssueError(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE);
+      }
+      params.prepareLaunch?.(node);
+      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
+        throw new NodeWorkerLaunchTransportError(
+          "PRIVATE_DIALECT_UNAVAILABLE",
+          "node worker idle retention is unavailable",
+        );
       }
       // A retained environment already owns its slot. The node arbitrates new physical
       // launches atomically; its advertised free-slot count cannot reject turn reuse.
@@ -419,17 +411,14 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     }
   };
 
-  const waitBeforeRetry = async (params: {
-    delayMs: number;
-    deadline: OperationDeadline;
-  }): Promise<number> => {
-    const remainingMs = params.deadline.remainingMs();
-    params.deadline.signal.throwIfAborted();
+  const waitBeforeRetry = async (delayMs: number, deadline: OperationDeadline): Promise<number> => {
+    const remainingMs = deadline.remainingMs();
+    deadline.signal.throwIfAborted();
     await raceNodeWorkerOperation(
-      sleep(Math.min(params.delayMs, remainingMs), params.deadline.signal),
-      params.deadline.signal,
+      sleep(Math.min(delayMs, remainingMs), deadline.signal),
+      deadline.signal,
     );
-    return Math.min(params.delayMs * 2, MAX_RETRY_DELAY_MS);
+    return Math.min(delayMs * 2, MAX_RETRY_DELAY_MS);
   };
 
   const cancelUntilTerminal = async (params: {
@@ -473,7 +462,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             throw error;
           }
         }
-        delayMs = await waitBeforeRetry({ delayMs, deadline });
+        delayMs = await waitBeforeRetry(delayMs, deadline);
       }
     } finally {
       deadline.dispose();
@@ -542,6 +531,15 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? {
                   prepareLaunch: (node: NodeWorkerSupervisorNodeProof) => {
                     if (
+                      input.descriptor.assignment.inference === "runtime-local" &&
+                      node.workerHost.nativeInference !== 1
+                    ) {
+                      throw createNodeRunnerInventoryIssueError(
+                        node.nodeId,
+                        NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+                      );
+                    }
+                    if (
                       node.workerHost.idleRetention === true &&
                       input.descriptor.admission.handshake.protocolFeatures.includes(
                         NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
@@ -598,10 +596,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                 // The node journal holds this attempt's reason and proves its child
                 // is gone. Re-arm only after backoff and current authority revalidation.
                 mayHaveLaunched = false;
-                await waitBeforeRetry({
-                  delayMs: rearmDelayMs,
-                  deadline,
-                });
+                await waitBeforeRetry(rearmDelayMs, deadline);
                 // Deterministic IDs make a replay of this adapter find the same journal
                 // rows, never another child for an already completed retry.
                 input = rearmNodeWorkerLaunchInput(originalInput, admissionAttempts++);
@@ -648,10 +643,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           }
           pollStatus = false;
         }
-        delayMs = await waitBeforeRetry({
-          delayMs,
-          deadline: dispatchReady ? deadline : availabilityDeadline,
-        });
+        delayMs = await waitBeforeRetry(delayMs, dispatchReady ? deadline : availabilityDeadline);
       }
     } catch (error) {
       if (restartSignal.aborted && isAgentRunRestartAbortReason(deadline.signal.reason)) {

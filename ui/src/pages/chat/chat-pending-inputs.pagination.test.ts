@@ -11,6 +11,7 @@ import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import {
   input,
   makeChatPageHost,
@@ -25,7 +26,6 @@ import {
   loadChatPendingInputs,
   readChatInputRunIds,
 } from "./chat-pending-inputs.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
@@ -263,32 +263,6 @@ describe("server-owned pending input pagination", () => {
       renderChatView({ historyState: host, sessionKey }).querySelector(".chat-queue__item"),
     ).toBeNull();
     expect(readChatInputRunIds(host)).not.toContain(input.runId);
-  });
-
-  it("pages custody without replacing transcript or applying a stale physical-session response", async () => {
-    let resolve!: (value: unknown) => void;
-    const response = new Promise((done) => {
-      resolve = done;
-    });
-    const host = makeChatHost({
-      sessionKey,
-      currentSessionId: sessionId,
-      requestHandlers: { "chat.history": () => response },
-    });
-    const history = [{ role: "user", content: "Canonical history" }];
-    host.chatMessages = history;
-    applyChatPendingInputs(host, page);
-    const loading = loadChatPendingInputs(host, 2);
-    expect(host.request).toHaveBeenCalledWith(
-      "chat.history",
-      expect.objectContaining({ pendingBefore: 2 }),
-    );
-    host.currentSessionId = "replacement-session";
-    resolve({ sessionId, pendingInputs: { items: [], total: 2 } });
-    await loading;
-    expect(host.chatMessages).toBe(history);
-    expect(getChatPendingInputs(host)).toBeUndefined();
-    expect(host.request).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -532,7 +506,7 @@ describe("server-owned pending input pagination", () => {
     },
   );
 
-  it.each(["connection", "source"])(
+  it.each(["session", "connection", "source"])(
     "stops invalidated custody rereads after the %s changes",
     async (change) => {
       const response = createDeferred<unknown>();
@@ -541,21 +515,38 @@ describe("server-owned pending input pagination", () => {
         currentSessionId: sessionId,
         requestHandlers: { "chat.history": () => response.promise },
       });
+      const history = [{ role: "user", content: "Canonical history" }];
+      host.chatMessages = history;
       applyChatPendingInputs(host, page);
       const paging = loadChatPendingInputs(host, 2);
-      applyChatPendingInputs(host, page);
-      if (change === "connection") {
+      expect(host.request).toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({ pendingBefore: 2 }),
+      );
+      if (change !== "session") {
+        applyChatPendingInputs(host, page);
+      }
+      if (change === "session") {
+        host.currentSessionId = "replacement-session";
+      } else if (change === "connection") {
         host.connectionEpoch += 1;
       } else {
         clearChatPendingInputs(host);
         applyChatPendingInputs(host, page);
       }
-      response.resolve({ sessionId, pendingInputs: { items: [], total: 0 } });
+      response.resolve({
+        sessionId,
+        pendingInputs: { items: [], total: change === "session" ? 2 : 0 },
+      });
       await paging;
-
-      expect(getChatPendingInputs(host)?.page).toEqual(page);
-      expect(getChatPendingInputs(host)?.before).toBeUndefined();
-      expect(getChatPendingInputs(host)?.loading).toBe(false);
+      expect(host.chatMessages).toBe(history);
+      if (change === "session") {
+        expect(getChatPendingInputs(host)).toBeUndefined();
+      } else {
+        expect(getChatPendingInputs(host)?.page).toEqual(page);
+        expect(getChatPendingInputs(host)?.before).toBeUndefined();
+        expect(getChatPendingInputs(host)?.loading).toBe(false);
+      }
       expect(host.request).toHaveBeenCalledTimes(1);
     },
   );

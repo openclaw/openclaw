@@ -1,4 +1,12 @@
-import type { Api, AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  runtimeContextContentToText,
+  type Api,
+  type AssistantMessage,
+  type Context,
+  type Model,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseFunctionCallOutputItemList,
@@ -24,10 +32,12 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
+  RESPONSES_RETAINED_USER,
   type OpenAIResponsesReasoningReplayMetadata,
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import {
@@ -36,31 +46,31 @@ import {
   providerReplayContextMatches,
   type ProviderReplayContext,
 } from "./provider-replay-context.js";
-import {
-  sanitizeNonEmptyTransportPayloadText,
-  sanitizeTransportPayloadText,
-} from "./transport-stream-shared.js";
+import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
-export function stripEncryptedReasoningContentFields(value: unknown): {
-  value: unknown;
-  changed: boolean;
-} {
+function resolveResponsesInstructionRole(model: Model): "developer" | "system" {
+  const supportsDeveloperRole =
+    !isRecord(model.compat) || model.compat.supportsDeveloperRole !== false;
+  return model.reasoning && supportsDeveloperRole ? "developer" : "system";
+}
+
+export function stripEncryptedReasoningContentFields(value: unknown): unknown {
   if (!value || typeof value !== "object") {
-    return { value, changed: false };
+    return value;
   }
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((item) => {
       const stripped = stripEncryptedReasoningContentFields(item);
-      changed ||= stripped.changed;
-      return stripped.value;
+      changed ||= !Object.is(stripped, item);
+      return stripped;
     });
-    return changed ? { value: next, changed: true } : { value, changed: false };
+    return changed ? next : value;
   }
 
   const source = value as Record<string, unknown>;
   if (source.type === "compaction") {
-    return { value, changed: false };
+    return value;
   }
   let changed = false;
   const next: Record<string, unknown> = {};
@@ -70,20 +80,16 @@ export function stripEncryptedReasoningContentFields(value: unknown): {
       continue;
     }
     const stripped = stripEncryptedReasoningContentFields(child);
-    changed ||= stripped.changed;
-    next[key] = stripped.value;
+    changed ||= !Object.is(stripped, child);
+    next[key] = stripped;
   }
-  return changed ? { value: next, changed: true } : { value, changed: false };
+  return changed ? next : value;
 }
 
 function isOpenAIResponsesReasoningReplayMetadata(
   value: unknown,
 ): value is OpenAIResponsesReasoningReplayMetadata {
-  if (!isProviderReplayContext(value)) {
-    return false;
-  }
-  const record = value as Record<string, unknown>;
-  return record.v === 1 && record.source === "openai-responses";
+  return isProviderReplayContext(value) && value.v === 1 && value.source === "openai-responses";
 }
 
 function readOpenAIResponsesReasoningReplayBlockMetadata(
@@ -99,11 +105,7 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
 function normalizeOpenAIResponsesReasoningReplayItem(
   item: ReplayableResponseReasoningItem,
 ): ReplayableResponseReasoningItem {
-  const record = item as ReplayableResponseReasoningItem & Record<string, unknown>;
-  if (record.type !== "reasoning" || Array.isArray(record.summary)) {
-    return item;
-  }
-  return { ...record, summary: [] } as ReplayableResponseReasoningItem;
+  return Array.isArray(item.summary) ? item : { ...item, summary: [] };
 }
 
 function prepareOpenAIResponsesReasoningItemForReplay(
@@ -112,11 +114,10 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   blockMetadata?: OpenAIResponsesReasoningReplayMetadata | null,
   options?: { preserveUnattributedEncryptedContent?: boolean },
 ): ReplayableResponseReasoningItem {
-  const record = item as ReplayableResponseReasoningItem & Record<string, unknown>;
-  const hasRawMetadata = Object.hasOwn(record, OPENAI_RESPONSES_REASONING_REPLAY_META_KEY);
-  const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } = record;
+  const hasRawMetadata = Object.hasOwn(item, OPENAI_RESPONSES_REASONING_REPLAY_META_KEY);
+  const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } = item;
   if (!("encrypted_content" in rest)) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
+    return normalizeOpenAIResponsesReasoningReplayItem(rest);
   }
   const metadata =
     blockMetadata !== undefined
@@ -129,25 +130,21 @@ function prepareOpenAIResponsesReasoningItemForReplay(
     !hasRawMetadata &&
     options?.preserveUnattributedEncryptedContent === true;
   if (preserveUnattributed || (metadata && providerReplayContextMatches(metadata, context))) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
+    return normalizeOpenAIResponsesReasoningReplayItem(rest);
   }
-  const stripped = stripEncryptedReasoningContentFields(rest);
   return normalizeOpenAIResponsesReasoningReplayItem(
-    stripped.value as ReplayableResponseReasoningItem,
+    stripEncryptedReasoningContentFields(rest) as ReplayableResponseReasoningItem,
   );
 }
 
-function normalizeResponsesReplayItemId(
-  id: string | undefined,
-  prefix: string,
-): string | undefined {
+function normalizeResponsesReplayItemId(id: string | undefined): string | undefined {
   if (!id) {
     return undefined;
   }
   if (id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH) {
     return id;
   }
-  return `${prefix}_${shortHash(id)}`;
+  return `msg_${shortHash(id)}`;
 }
 
 export { encodeTextSignatureV1 } from "../utils/text-signature.js";
@@ -264,6 +261,7 @@ type ConvertResponsesMessagesOptions = {
   sessionId?: string;
   authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
+  retainUserProvenance?: boolean;
 };
 
 function convertResponsesMessagesWithStyle(
@@ -342,27 +340,24 @@ function convertResponsesMessagesWithStyle(
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
-      buildResponsesInputMessage(
-        model.reasoning &&
-          (model.compat as { supportsDeveloperRole?: boolean } | undefined)
-            ?.supportsDeveloperRole !== false
-          ? "developer"
-          : "system",
-        [
-          {
-            type: "input_text",
-            text: sanitizeTransportPayloadText(
-              stripSystemPromptCacheBoundary(context.systemPrompt),
-            ),
-          },
-        ],
-      ),
+      buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
+        {
+          type: "input_text",
+          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        },
+      ]),
     );
   }
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
-    messages.push(...replayPlan.compactedWindow);
+    messages.push(
+      ...replayPlan.compactedWindow.map((item) =>
+        options?.retainUserProvenance && item.type === "message" && item.role === "user"
+          ? Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true })
+          : item,
+      ),
+    );
   }
   let replayMessages = replayPlan.compaction
     ? [replayPlan.compaction, ...transformedMessages]
@@ -371,7 +366,7 @@ function convertResponsesMessagesWithStyle(
   // Each carrier stays with its preceding user/checkpoint; moving it past an
   // appended steering user would rewrite the already admitted request prefix.
   const isCarrier = (message: (typeof replayMessages)[number]) =>
-    "role" in message && message.role === "user" && message.runtimeContextCarrier === true;
+    "role" in message && hasRuntimeContextMarker(message);
   if (replayMessages.some(isCarrier)) {
     const anchored: typeof replayMessages = [];
     // A canonical window is already emitted above; its checkpoint anchors an otherwise userless tail.
@@ -393,39 +388,59 @@ function convertResponsesMessagesWithStyle(
   }
   let msgIndex = 0;
   const appendAssistant = createResponsesInputReplay(model);
+  const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
   for (const msg of replayMessages) {
     if (!("role" in msg)) {
       messages.push(msg);
       continue;
     }
-    if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        messages.push(
-          buildResponsesInputMessage(
-            "user",
-            [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
-            msg,
-          ),
-        );
-      } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter(
-          (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",
-        );
-        if (content.length > 0) {
-          messages.push(buildResponsesInputMessage("user", content, msg));
-        } else if (providerStyle) {
-          continue;
+    if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
+      messages.push(
+        buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
+          {
+            type: "input_text",
+            text: sanitizeTransportPayloadText(runtimeContextContentToText(msg.content)),
+          },
+        ]),
+      );
+    } else if (msg.role === "user") {
+      const role =
+        msg.operatorMessage &&
+        inHistorySystemUpdates &&
+        (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
+          ? resolveResponsesInstructionRole(model)
+          : "user";
+      const content: ResponseInputMessageContentList =
+        typeof msg.content === "string"
+          ? [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }]
+          : (
+              msg.content.map((item) =>
+                item.type === "text"
+                  ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
+                  : {
+                      type: "input_image",
+                      detail: "auto",
+                      image_url: `data:${item.mimeType};base64,${item.data}`,
+                    },
+              ) as ResponseInputMessageContentList
+            ).filter(
+              (item) =>
+                providerStyle || model.input.includes("image") || item.type !== "input_image",
+            );
+      if (content.length > 0) {
+        const input = buildResponsesInputMessage(role, content, msg);
+        if (
+          options?.retainUserProvenance &&
+          role === "user" &&
+          !msg.synthetic &&
+          !msg.operatorMessage &&
+          !hasRuntimeContextMarker(msg)
+        ) {
+          Object.assign(input, { [RESPONSES_RETAINED_USER]: true });
         }
+        messages.push(input);
+      } else if (providerStyle) {
+        continue;
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
@@ -483,7 +498,7 @@ function convertResponsesMessagesWithStyle(
           if (!textSignature?.id) {
             textFallbackOrdinal += 1;
           }
-          msgId = normalizeResponsesReplayItemId(msgId, "msg");
+          msgId = normalizeResponsesReplayItemId(msgId);
           const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
             role: "assistant",
@@ -542,8 +557,7 @@ function convertResponsesMessagesWithStyle(
       }
     } else if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
-      const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
-      const hasText = sanitizedTextResult.trim().length > 0;
+      const hasText = textResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
       const separatorIndex = msg.toolCallId.indexOf("|");
@@ -556,7 +570,7 @@ function convertResponsesMessagesWithStyle(
           hasImages && model.input.includes("image")
             ? ([
                 ...(hasText
-                  ? [{ type: "input_text", text: sanitizedTextResult }]
+                  ? [{ type: "input_text", text: textResult }]
                   : mediaPlaceholder === "(see attached media)"
                     ? [{ type: "input_text", text: mediaPlaceholder }]
                     : []),
@@ -566,7 +580,9 @@ function convertResponsesMessagesWithStyle(
                   image_url: `data:${item.mimeType};base64,${item.data}`,
                 })),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
+            : hasText
+              ? textResult
+              : (mediaPlaceholder ?? "(no output)"),
       });
     }
     msgIndex += 1;
@@ -599,6 +615,7 @@ export function convertProviderResponsesMessages<TApi extends Api>(
     sessionId?: string;
     authProfileId?: string;
     replayMode?: OpenAIResponsesReplayMode;
+    retainUserProvenance?: boolean;
   },
 ): ResponseInput {
   return convertResponsesMessagesWithStyle(

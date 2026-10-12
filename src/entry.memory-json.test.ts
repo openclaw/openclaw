@@ -25,7 +25,7 @@ import { runMainOrRootHelp } from "./entry.js";
 import { openNodeSqliteDatabase } from "./infra/node-sqlite.js";
 import { resetLogger, setLoggerOverride } from "./logging/logger.js";
 import { createPluginCliLoadSession } from "./plugins/cli-registry-loader.js";
-import { registerPluginCliCommands } from "./plugins/cli.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "./plugins/cli.js";
 import { createPluginCache, retirePluginCache } from "./plugins/plugin-cache.js";
 import { createDeferredCore } from "./shared/deferred.js";
 
@@ -98,9 +98,8 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
               const session = createPluginCliLoadSession(cache, { resources });
               try {
                 await session.withCache(async () => {
-                  await registerPluginCliCommands(
+                  await registerPluginCliCommandsFromValidatedConfig(
                     program,
-                    config,
                     fixtureEnv,
                     { pluginSdkResolution: "src" },
                     { primary: "memory", session },
@@ -180,7 +179,9 @@ describe("memory command failures at the root JSON boundary", () => {
           message: "Missing search query. Provide a positional query or use --query <text>.",
         },
       });
-      expect(stderr()).toContain("The CLI command failed.");
+      expect(stderr().trim()).toBe(
+        "Missing search query. Provide a positional query or use --query <text>.",
+      );
       // Vitest suppresses the native one-shot exit; this checks the logical code only.
       expect(process.exitCode).toBe(1);
     });
@@ -245,8 +246,7 @@ describe("memory command failures at the root JSON boundary", () => {
           });
           expect(beforeRemovalSettled).toBe("");
           expect(cleanupAttempts).toBe(1);
-          expect(stderr()).toContain("[openclaw] The CLI command failed.");
-          expect(stderr()).not.toContain(cleanupError.message);
+          expect(stderr().trim()).toBe(cleanupError.message);
           expect(process.exitCode).toBe(1);
           expect(await fs.readFile(historyPath, "utf8")).toBe(history);
         } finally {
@@ -449,7 +449,7 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
             ok: true,
             result: {
               details: {
-                results: ["snapshot", "traffic", "verify", "repair", "rollback"].map((name) => ({
+                results: ["snapshot", "verify", "traffic", "repair", "rollback"].map((name) => ({
                   path: `memory/${name}.md`,
                   source: "memory",
                   vectorScore: expect.any(Number),

@@ -101,6 +101,8 @@ The model list and detail endpoints require `operator.read` or a scope that incl
 
 `/v1/embeddings` uses the same agent-target `model` ids. Send `x-openclaw-model` (from a shared-secret caller, or an identity-bearing caller with `operator.admin`) to pick a specific embedding model; otherwise the request uses the selected agent's normal embedding setup.
 
+Embedding model overrides stay within the agent's configured embedding provider. A recognized provider prefix must match that provider; other slash-containing values, such as `library/bge-m3` or `hf:org/model`, remain complete model IDs. This also applies to explicitly configured embedding model names.
+
 ## Session behavior
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).
@@ -242,7 +244,7 @@ Set `stream: true` to receive Server-Sent Events:
 
 Failed agent runs, including whole-agent timeouts, return an error instead of a successful completion. A streaming failure emits an `error` object followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
 
-Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests. If the Gateway itself cancels the agent run while the client is still connected, the request fails with `500 api_error` and the message `agent run was cancelled`, not as a provider timeout.
 
 ## Open WebUI quick setup
 
@@ -333,6 +335,8 @@ curl -sS http://127.0.0.1:18789/v1/embeddings \
 ```
 
 `/v1/embeddings` supports `input` as a string or array of strings.
+
+Responses include `usage.prompt_tokens` and `usage.total_tokens`. Native Ollama and OpenAI-compatible embedding providers pass through their reported token counts, including zero. Providers without usage reporting return zero for both fields; OpenClaw does not estimate token usage.
 
 Provider failures use the same error mapping as chat completions: missing provider credentials return `401 authentication_error` with setup guidance, unknown provider models return `404 invalid_request_error`, and provider overload returns `503 api_error`. Credential values are redacted. Unexpected failures return `500 api_error` with `internal error`.
 

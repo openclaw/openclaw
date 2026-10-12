@@ -4,6 +4,9 @@ import { formatProviderLoginCommand } from "../../shared/provider-login-command.
 
 const CUSTOM_MODEL_SETUP_GUIDANCE =
   "Set up this connection with the custom-provider guide: https://docs.openclaw.ai/concepts/model-providers/custom-providers";
+// missing-auth on a Claude CLI route also covers a disabled plugin, so stay conditional.
+const CLAUDE_CLI_SETUP_GUIDANCE =
+  "If Claude Code is signed out, run claude auth login on the Gateway host, or choose another model.";
 const MODEL_PROVIDER_ROUTE_DETAILS = {
   claudeCli:
     "Claude CLI runs through Claude Code using its native login or a selected saved account. An explicitly selected API-key account has separate API billing; CLI does not mean free or subscription-only.",
@@ -66,9 +69,12 @@ export function buildModelsMenu(data: {
         switch (state.unavailableReason) {
           case "missing-auth":
             label = "Sign-in needed";
-            recovery = loginSupported
-              ? `Connect with ${loginCommand}.`
-              : CUSTOM_MODEL_SETUP_GUIDANCE;
+            recovery =
+              route === "claudeCli"
+                ? CLAUDE_CLI_SETUP_GUIDANCE
+                : loginSupported
+                  ? `Connect with ${loginCommand}.`
+                  : CUSTOM_MODEL_SETUP_GUIDANCE;
             break;
           case "auth-failed":
             label = "Sign-in failed";

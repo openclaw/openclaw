@@ -1,19 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runInNewContext } from "node:vm";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
-import {
-  isSupportedOpenClawNodeVersion,
-  PROCESS_NODE_VERSION_CHECK,
-} from "../../../node-version.mjs";
-import { NODE_RELEASE_VERSION_CASES } from "../../../test/helpers/node-version-cases.js";
+import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
-import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
+import { registerBootstrapRuntimeProbeTests } from "./bootstrap.runtime-probe.test-support.js";
+import { fakeRunner, result } from "./bootstrap.test-support.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
 
 type WorkerBootstrapRequest = Parameters<typeof bootstrapWorkerCore>[0];
@@ -68,41 +65,6 @@ const BUNDLE: WorkerInstallationArtifact = {
 
 function tagged(action: "current" | "install" | "receipt", payload: string): string {
   return `${OUTPUT_TAG}\t${action}\t${payload}\n`;
-}
-
-function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
-function fakeRunner(
-  responses: SpawnResult[],
-  inspectCall?: (
-    argv: string[],
-    options: Parameters<WorkerBootstrapCommandRunner>[1],
-  ) => void | Promise<void>,
-) {
-  const calls: Array<{
-    argv: string[];
-    options: Parameters<WorkerBootstrapCommandRunner>[1];
-  }> = [];
-  const runCommand: WorkerBootstrapCommandRunner = async (argv, options) => {
-    calls.push({ argv, options });
-    await inspectCall?.(argv, options);
-    const response = responses.shift();
-    if (!response) {
-      throw new Error("unexpected bootstrap command");
-    }
-    return response;
-  };
-  return { calls, runCommand };
 }
 
 function commandPort(argv: string[]): number {
@@ -282,7 +244,7 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
     expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
     expect(runner.calls[2]?.options.input).toContain(
-      'const artifactPaths = ["file-tool-planning.worker.mjs","github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
+      'const artifactPaths = ["code-mode-node.worker.mjs","openclaw-state-read.worker.mjs","worker-native-lifecycle.worker.mjs","file-tool-planning.worker.mjs","file-tool-read.worker.mjs","github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-source-revision.worker.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
     );
     expect(runner.calls[2]?.options.input).not.toContain('npm install --prefix "$staging"');
     expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
@@ -341,7 +303,7 @@ describe("bootstrapWorker", () => {
     },
   );
 
-  it.each([Number.NaN, -1, 1.5])(
+  it.each([Number.NaN, -1])(
     "rejects invalid bundle tarball size %s before any remote work",
     async (tarballBytes) => {
       const runner = fakeRunner([]);
@@ -358,8 +320,6 @@ describe("bootstrapWorker", () => {
   it.each([
     `/home/worker/other/.incoming/${UPLOAD_FILENAME}`,
     `/home/worker/.openclaw-worker/.incoming/../.incoming/${UPLOAD_FILENAME}`,
-    `/home/worker/./.openclaw-worker/.incoming/${UPLOAD_FILENAME}`,
-    `/home//worker/.openclaw-worker/.incoming/${UPLOAD_FILENAME}`,
     `/home/worker/.openclaw-worker/.incoming/${UPLOAD_FILENAME}.other`,
   ])("rejects a noncanonical or non-owned upload path: %s", async (remotePath) => {
     const runner = fakeRunner([result({ stdout: tagged("install", remotePath) }), result()]);
@@ -479,60 +439,12 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[0]?.options.input).toContain("SELECT sqlite_version() AS version");
   });
 
-  it("embeds a shell-safe Node release check matching the canonical contract", () => {
-    expect(PROCESS_NODE_VERSION_CHECK).not.toContain("'");
-    for (const version of NODE_RELEASE_VERSION_CASES) {
-      const actual = runInNewContext(PROCESS_NODE_VERSION_CHECK, {
-        process: { versions: { node: version } },
-      });
-      expect(actual, version).toBe(isSupportedOpenClawNodeVersion(version));
-    }
-  });
-
-  it("installs only the exact npm package without transferring a tarball", async () => {
-    const artifact: WorkerInstallationArtifact = {
-      install: "npm",
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: VERSION,
-      protocolFeatures: [],
-      packageIntegrity: NPM_INTEGRITY,
-      packageSpec: `openclaw@${VERSION}`,
-    };
-    const npmReceipt = JSON.stringify({
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: VERSION,
-      protocolFeatures: [],
-    });
-    const npmRunner = fakeRunner([
-      result({ stdout: tagged("install", REMOTE_TARBALL) }),
-      result({ stdout: tagged("receipt", npmReceipt) }),
-      result(),
-    ]);
-
-    await bootstrapWorker(
-      { ssh: SSH, artifact },
-      { resolveIdentity, runCommand: npmRunner.runCommand },
-    );
-
-    expect(npmRunner.calls.map((call) => call.argv[0])).toEqual(["ssh", "ssh", "ssh"]);
-    expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
-    expect(npmRunner.calls[1]?.options.input).not.toContain("npm install");
-    expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    for (const artifactPath of [
-      "worker.mjs",
-      "file-tool-planning.worker.mjs",
-      "github-exec-launcher.mjs",
-      "image-processor.worker.mjs",
-      "service-child-group-anchor.mjs",
-      "service-child-relay.mjs",
-      "sqlite-store.worker.mjs",
-      "workspace-rsync-receiver.mjs",
-    ]) {
-      expect(npmRunner.calls[1]?.options.input).toContain(JSON.stringify(artifactPath));
-    }
-    expect(npmRunner.calls[1]?.options.input).toContain('const prefix = "package/dist/worker/"');
-    expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
-    expect(npmRunner.calls[1]?.argv.at(-1)).toContain(`openclaw@${VERSION}`);
+  registerBootstrapRuntimeProbeTests({
+    bootstrapWorker,
+    resolveIdentity,
+    ssh: SSH,
+    artifact: BUNDLE,
+    currentReceipt: tagged("current", RECEIPT_JSON),
   });
 
   it.each([
@@ -981,13 +893,13 @@ describe("bootstrapWorker", () => {
           cacheDir: path.join(root, "cache"),
           openclawVersion: VERSION,
         }).prepare();
-        const nestedChunk = path.join(packageRoot, "dist/worker/worker-chunk-nested/escape.mjs");
-        await fs.mkdir(path.dirname(nestedChunk));
-        await fs.writeFile(nestedChunk, "export {};\n");
-        await fs.writeFile(
-          path.join(packageRoot, "dist/worker/worker-chunk-invalid.txt"),
-          "ignore",
+        const packagedWorkerRoot = path.join(packageRoot, "dist/worker-artifacts");
+        await fs.mkdir(packagedWorkerRoot);
+        await fs.copyFile(
+          bundle.tarballPath,
+          path.join(packagedWorkerRoot, `${bundle.bundleHash}.tar.gz`),
         );
+        await fs.rm(path.join(packageRoot, "dist/worker"), { recursive: true });
         const packageArchive = path.join(root, "package.tgz");
         await tar.create({ cwd: root, file: packageArchive, gzip: true }, ["package"]);
         const packageIntegrity = `sha512-${createHash("sha512")

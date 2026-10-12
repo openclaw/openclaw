@@ -10,8 +10,6 @@ import {
 
 describe("gateway log sentinels", () => {
   it.each([
-    [{ content: [{ type: "toolResult", content: "codex output" }] }, "codex output"],
-    [{ content: [{ type: "text", text: "standard output" }] }, "standard output"],
     [
       {
         content: [
@@ -67,6 +65,33 @@ describe("gateway log sentinels", () => {
     );
   });
 
+  it("classifies channel final reply delivery failures without block-reply noise", () => {
+    const findings = scanGatewayLogSentinels(
+      [
+        "2026-10-11T07:57:01.932+00:00 [telegram] final reply failed: SqliteWorkerError: Session actor version changed before command admission",
+        "[tlon] final reply failed after 812ms: Error: socket closed",
+        "msteams block reply failed: Error: throttled",
+      ].join("\n"),
+    );
+
+    expect(
+      findings.map(({ kind, line, verdict, owner }) => ({ kind, line, verdict, owner })),
+    ).toEqual([
+      {
+        kind: "final-reply-delivery-failure",
+        line: 1,
+        verdict: "product-bug",
+        owner: "openclaw-routing",
+      },
+      {
+        kind: "final-reply-delivery-failure",
+        line: 2,
+        verdict: "product-bug",
+        owner: "openclaw-routing",
+      },
+    ]);
+  });
+
   it("honors log cursors while preserving absolute line numbers", () => {
     const prefix = "safe line\n";
     const findings = scanGatewayLogSentinels(`${prefix}codex app-server attempt timed out`, {
@@ -80,13 +105,13 @@ describe("gateway log sentinels", () => {
     });
   });
 
-  it("throws actionable summaries unless only environment blockers are allowed", () => {
+  it("throws actionable summaries for product and environment failures", () => {
     expect(() => assertNoGatewayLogSentinels("codex_app_server progress stalled")).toThrow(
       "stalled-agent-run",
     );
-    expect(() =>
-      assertNoGatewayLogSentinels("OpenAI quota exceeded", { allowEnvironmentBlocked: true }),
-    ).not.toThrow();
+    expect(() => assertNoGatewayLogSentinels("OpenAI quota exceeded")).toThrow(
+      "live-quota-or-subscription",
+    );
     expect(formatGatewayLogSentinelSummary(scanGatewayLogSentinels("OpenAI quota exceeded"))).toBe(
       "live-quota-or-subscription@1 environment-blocked owner=environment: OpenAI quota exceeded",
     );

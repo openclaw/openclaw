@@ -5,7 +5,7 @@ import SwiftUI
 
 private let quickChatLogger = Logger(subsystem: "ai.openclaw", category: "quickchat")
 
-private final class QuickChatPanel: NSPanel {
+final class QuickChatPanel: NSPanel {
     /// Quick Chat must accept typing without behaving like a normal activating app window.
     override var canBecomeKey: Bool {
         true
@@ -207,20 +207,15 @@ final class QuickChatController: NSObject {
         panel.alphaValue = 1
         if wasVisible {
             OverlayPanelFactory.applyFrame(window: panel, target: target, animate: true)
-            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         } else {
             let start = QuickChatPlacement.scaledRect(target, factor: 0.96)
             OverlayPanelFactory.animatePresent(window: panel, from: start, to: target, duration: 0.16)
-            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
+        AppActivation.shared.makeKeyAndOrderFront(window: panel)
         self.focusEditor()
     }
 
-    func dismiss() {
-        self.dismiss(immediate: false)
-    }
-
-    private func dismiss(immediate: Bool) {
+    func dismiss(immediate: Bool = false) {
         self.stopDictation()
         self.cancelPasteRequest()
         if self.isVisible {
@@ -536,8 +531,7 @@ final class QuickChatController: NSObject {
     }
 
     private func dismissIfFocusWasLost() {
-        guard self.canDismissForOutsideInteraction, !self.ownsWindow(NSApp?.keyWindow) else { return }
-        self.dismiss()
+        self.dismissIfClickOutside(window: NSApp?.keyWindow)
     }
 
     /// These flows intentionally move focus outside the bar without ending its presentation.
@@ -674,17 +668,6 @@ final class QuickChatController: NSObject {
             !self.isMenuActive
     }
 
-    private func captureFocusedAppText() {
-        self.invalidateRecentsFetch()
-        self.model.captureFocusedAppText()
-    }
-
-    private func grantMissingPermissions() {
-        self.invalidateRecentsFetch()
-        self.stopDictation()
-        self.model.grantMissingPermissions()
-    }
-
     private func presentRecentSessionsMenu(rows: [SessionRow]) {
         let items = QuickChatRecentMenuLogic.items(
             rows: rows,
@@ -779,47 +762,33 @@ extension QuickChatController {
         QuickChatView(
             model: self.model,
             replyBinding: self.replyBinding,
-            onDismiss: { [weak self] in self?.dismiss() },
-            onSendAccepted: { [weak self] openChat in
-                self?.handleSendAccepted(openChat: openChat)
-            },
-            onShowAgentPicker: { [weak self] in
-                self?.showAgentPicker()
-            },
-            onShowModelMenu: { [weak self] in
-                self?.showModelMenu()
-            },
-            onShowRecentSessions: { [weak self] in
-                self?.showRecentSessionsPicker()
-            },
-            onToggleReply: { [weak self] in
-                self?.toggleReply()
-            },
-            onToggleDictation: { [weak self] in
-                self?.toggleDictation()
-            },
-            onStopDictation: { [weak self] in
-                self?.stopDictation()
-            },
-            onCaptureTextContext: { [weak self] in
-                self?.captureFocusedAppText()
-            },
-            onShowCaptureMenu: { [weak self] in
-                self?.showCaptureMenu()
-            },
-            onGrantPermissions: { [weak self] in
-                self?.grantMissingPermissions()
-            },
-            onPasteReply: { [weak self] in
-                self?.pasteReplyToFrontmostApp()
-            },
-            onContentHeightChange: { [weak self] height in
-                self?.updateContentHeight(height)
-            },
-            onTextViewReady: { [weak self] textView in
-                self?.textView = textView
-                self?.focusEditor()
-            })
+            onAction: { [weak self] action in self?.handleAction(action) })
+    }
+
+    private func handleAction(_ action: QuickChatView.Action) {
+        switch action {
+        case .dismiss: self.dismiss()
+        case .showAgentPicker: self.showAgentPicker()
+        case .showModelMenu: self.showModelMenu()
+        case .showRecentSessions: self.showRecentSessionsPicker()
+        case .toggleReply: self.toggleReply()
+        case .toggleDictation: self.toggleDictation()
+        case .stopDictation: self.stopDictation()
+        case .captureTextContext:
+            self.invalidateRecentsFetch()
+            self.model.captureFocusedAppText()
+        case .showCaptureMenu: self.showCaptureMenu()
+        case .grantPermissions:
+            self.invalidateRecentsFetch()
+            self.stopDictation()
+            self.model.grantMissingPermissions()
+        case .pasteReply: self.pasteReplyToFrontmostApp()
+        case let .sendAccepted(openChat): self.handleSendAccepted(openChat: openChat)
+        case let .contentHeightChanged(height): self.updateContentHeight(height)
+        case let .textViewReady(textView):
+            self.textView = textView
+            self.focusEditor()
+        }
     }
 }
 

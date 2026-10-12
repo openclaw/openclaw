@@ -6,16 +6,51 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
-import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type {
+  UserProfileCatalogIdentityInput,
+  UserProfileCatalogIdentityRead,
+} from "../state/user-profile-catalog-identity.read.js";
 import { selectStoredGitHubIdentities } from "../state/user-profile-github-identity.js";
 import { getUserProfileDisplays } from "../state/user-profile-list.js";
 import { getUserProfileDisplay, UserProfileNotFoundError } from "../state/user-profiles.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { projectSessionActor, projectSessionParticipant } from "./session-identity-projection.js";
 
 type CatalogSourceIdentity = { pluginId: string; sourceDomain: string };
+
+async function prepareIdentityFacts(input: UserProfileCatalogIdentityInput) {
+  const context = captureOpenClawStateReadWorkerContext();
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userProfiles.catalogIdentity", input },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  if (reply && (!reply.ok || reply.type !== "userProfiles.catalogIdentity")) {
+    throw new Error("Session catalog identity reader returned an unexpected result");
+  }
+  const result: UserProfileCatalogIdentityRead = reply?.result ?? {
+    profiles: new Map(),
+    accounts: new Map(),
+    owners: new Map(),
+  };
+  return {
+    ...result,
+    // Attribution is a display snapshot; profile edits apply to the next page.
+    assertCurrent: context.admission.assertCurrent,
+    readProfile(id: string) {
+      const profile = result.profiles.get(id);
+      return profile?.facts ?? { profileId: id, profile: undefined, github: undefined };
+    },
+  };
+}
 
 function sourceLabel(value: string | null | undefined): string | undefined {
   const text = value?.trim();
@@ -72,18 +107,27 @@ function projectSourceParticipant(
   };
 }
 
-/** A synchronous page reuses first-read display facts; later pages read fresh state. */
-export function createSessionCatalogSourceParticipantProjector() {
-  const profiles = new Map<string, ReturnType<typeof readSourceProfileFacts>>();
-  return (params: SourceParticipantParams): SessionParticipant =>
-    projectSourceParticipant(params, (id) => {
-      let facts = profiles.get(id);
-      if (!facts) {
-        facts = readSourceProfileFacts(id);
-        profiles.set(id, facts);
-      }
-      return facts;
-    });
+/** Prepare one sender cohort off-thread; synchronous projection never opens profile storage. */
+export async function prepareSessionCatalogSourceParticipantProjector(
+  identities: readonly TranscriptSenderIdentity[],
+) {
+  const ids = [
+    ...new Set(
+      identities.flatMap((identity) => (identity.type === "profile" ? [identity.id] : [])),
+    ),
+  ];
+  const prepared = ids.length
+    ? await prepareIdentityFacts({ kind: "source", profileIds: ids })
+    : undefined;
+  return {
+    project: (params: SourceParticipantParams): SessionParticipant =>
+      projectSourceParticipant(params, (id) => {
+        if (!prepared) {
+          throw new Error("Session catalog sender was not prepared");
+        }
+        return prepared.readProfile(id);
+      }),
+  };
 }
 
 function projectSourceActor(
@@ -127,32 +171,108 @@ export function createSessionCatalogSourceActorProjector(
     ),
   ];
   let facts: Map<string, ReturnType<typeof readSourceProfileFacts>> | undefined;
-  let attempted = false;
   return (actor) =>
     projectSourceActor({ ...params, actor }, (requestedId) => {
-      if (!attempted) {
-        attempted = true;
-        try {
-          const profiles = getUserProfileDisplays(ids);
-          const canonicalIds = [...new Set(ids.map((id) => profiles.get(id)?.id ?? id))];
-          const identities = verifiedGitHubIdentities(canonicalIds);
-          facts = new Map(
-            ids.map((id) => {
-              const profile = profiles.get(id);
-              const profileId = profile?.id ?? id;
-              return [id, { profileId, profile, github: identities?.get(profileId)?.primary }];
-            }),
-          );
-        } catch (error) {
-          // Corruption has already reached the database lifecycle owner; never retry a poisoned read.
-          if (isSqliteCorruptionError(error)) {
-            throw error;
-          }
-          // Nonterminal conversion/parse failures replay in the original scalar and actor-label order.
-        }
+      if (!facts) {
+        const profiles = getUserProfileDisplays(ids);
+        const canonicalIds = [...new Set(ids.map((id) => profiles.get(id)?.id ?? id))];
+        const identities = verifiedGitHubIdentities(canonicalIds);
+        facts = new Map(
+          ids.map((id) => {
+            const profile = profiles.get(id);
+            const profileId = profile?.id ?? id;
+            return [id, { profileId, profile, github: identities?.get(profileId)?.primary }];
+          }),
+        );
       }
-      return facts?.get(requestedId) ?? readSourceProfileFacts(requestedId);
+      return facts.get(requestedId) ?? readSourceProfileFacts(requestedId);
     });
+}
+
+/** Prepare portable creator claims at the profile reader before synchronous page disclosure. */
+export async function prepareSessionCatalogSourceActorProjector(
+  params: CatalogSourceIdentity & { actors: readonly (StoredSessionActor | undefined)[] },
+) {
+  const ids = [
+    ...new Set(
+      params.actors.flatMap((actor) => {
+        const id = sessionCreatorProfileId(actor);
+        return id ? [id] : [];
+      }),
+    ),
+  ];
+  const prepared = ids.length
+    ? await prepareIdentityFacts({ kind: "source", profileIds: ids })
+    : undefined;
+  return (actor: StoredSessionActor | undefined) =>
+    projectSourceActor({ ...params, actor }, (id) => {
+      if (!prepared) {
+        throw new Error("Session catalog creator was not prepared");
+      }
+      return prepared.readProfile(id);
+    });
+}
+
+/** Link only the selected page's portable claims; these display facts never grant access. */
+export async function prepareSessionCatalogGitHubLinker(params: {
+  participants: readonly SessionParticipant[];
+  owners?: readonly string[];
+}) {
+  const accountIds = [
+    ...new Set(
+      params.participants.flatMap(({ identity }) =>
+        identity.type === "remote" && identity.idKind === "github-account" ? [identity.id] : [],
+      ),
+    ),
+  ];
+  if (accountIds.length === 0 && !params.owners?.length) {
+    return {
+      assertCurrent(this: void) {},
+      linkParticipant(this: void, participant: SessionParticipant): SessionParticipant {
+        return participant;
+      },
+      resolveOwner(this: void, _owner: string): SessionCreatedActor | undefined {
+        return undefined;
+      },
+    };
+  }
+  const prepared = await prepareIdentityFacts({
+    kind: "link",
+    accountIds,
+    owners: params.owners ?? [],
+  });
+  const profiles: Parameters<typeof projectSessionParticipant>[1] = new Map();
+  const prepareDisplay = (id: string) => {
+    if (!profiles.has(id)) {
+      const display = resolveCurrentUserProfileDisplay(id, () => prepared.readProfile(id).profile);
+      profiles.set(id, display.kind === "resolved" ? display : undefined);
+    }
+  };
+  return {
+    assertCurrent: prepared.assertCurrent,
+    linkParticipant(this: void, participant: SessionParticipant): SessionParticipant {
+      const { identity } = participant;
+      const id =
+        identity.type === "remote" && identity.idKind === "github-account"
+          ? prepared.accounts.get(identity.id)
+          : undefined;
+      if (!id) {
+        return participant;
+      }
+      prepareDisplay(id);
+      return projectSessionParticipant({ type: "profile", id }, profiles);
+    },
+    resolveOwner(this: void, owner: string): SessionCreatedActor | undefined {
+      const id = prepared.owners.get(owner);
+      const profile = id ? prepared.readProfile(id).profile : undefined;
+      if (!profile) {
+        return undefined;
+      }
+      prepareDisplay(id!);
+      profiles.set(profile.id, profiles.get(id!));
+      return projectSessionActor({ type: "human", id: profile.id }, profiles);
+    },
+  };
 }
 
 /** Snapshot attribution links once per catalog page; claims never grant access. */

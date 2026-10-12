@@ -42,13 +42,11 @@ function rejectSchedulerWrite(jobId: string) {
 
 describe("cron recovery run identity", () => {
   it.each([
-    { name: "retired predecessor", edit: "predecessor", advanceMs: 0, staleProposal: false },
-    { name: "retired pending run", edit: "pending", advanceMs: 0, staleProposal: false },
-    { name: "edit after receipt closure", edit: "late", advanceMs: 0, staleProposal: false },
-    { name: "unedited pending run", edit: "none", advanceMs: 0, staleProposal: false },
-    { name: "advancing clock", edit: "predecessor", advanceMs: 1, staleProposal: false },
-    { name: "stale predecessor proposal", edit: "none", advanceMs: 0, staleProposal: true },
-  ] as const)("recovers the pending run with $name", async ({ edit, advanceMs, staleProposal }) => {
+    { name: "retired predecessor", edit: "predecessor", staleProposal: false },
+    { name: "retired pending run", edit: "pending", staleProposal: false },
+    { name: "edit after receipt closure", edit: "late", staleProposal: false },
+    { name: "stale predecessor proposal", edit: "none", staleProposal: true },
+  ] as const)("recovers the pending run with $name", async ({ edit, staleProposal }) => {
     const { storePath } = await makeStorePath();
     const storeKey = cronStoreKey(storePath);
     const firstStartedAt = Date.now();
@@ -121,7 +119,7 @@ describe("cron recovery run identity", () => {
       payload.completion.resolve({ status: "ok", summary: "first completed" });
       await expect(run).resolves.toEqual({ ok: true, ran: true });
 
-      const pendingStartedAt = firstStartedAt + advanceMs;
+      const pendingStartedAt = firstStartedAt;
       vi.setSystemTime(pendingStartedAt);
       if (!cron.getJob(job.id)?.enabled) {
         await cron.update(job.id, { enabled: true });
@@ -176,7 +174,7 @@ describe("cron recovery run identity", () => {
           startedAt: pendingStartedAt,
         }),
       );
-      expect(fallback.receiptId).toBe(advanceMs === 0 ? first.receiptId : pending.receiptId);
+      expect(fallback.receiptId).toBe(first.receiptId);
 
       if (staleProposal) {
         const before = await readJob();

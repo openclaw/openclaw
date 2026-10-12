@@ -17,21 +17,44 @@ import {
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | null }));
 
-vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof agentDatabase>();
+vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
   return {
     ...actual,
-    runOpenClawAgentWriteTransaction: <T>(
-      run: Parameters<typeof actual.runOpenClawAgentWriteTransaction<T>>[0],
-      options: Parameters<typeof actual.runOpenClawAgentWriteTransaction<T>>[1],
-    ) => {
-      const inject = transactionInjection.run;
-      transactionInjection.run = null;
-      inject?.();
-      return actual.runOpenClawAgentWriteTransaction(run, options);
+    captureOpenClawAgentDatabaseExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
+    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
+      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, operation, options) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              operation({
+                execute: (command, commandOptions) => {
+                  if (
+                    command.type === "session.lifecycle.reset" ||
+                    command.type === "session.lifecycle.project"
+                  ) {
+                    // The snapshot is prepared, but the worker has not begun its transaction.
+                    const inject = transactionInjection.run;
+                    transactionInjection.run = null;
+                    inject?.();
+                  }
+                  return worker.execute(command, commandOptions);
+                },
+              }),
+            options,
+          ),
+      };
     },
   };
 });
@@ -106,7 +129,7 @@ describe("reset boundary concurrency", () => {
           ],
         }),
     },
-  ])("parents the $name boundary without hydrating prior message bodies", async ({ reset }) => {
+  ])("parents the $name boundary without hydrating caller message bodies", async ({ reset }) => {
     const scope = {
       sessionId: "current-session",
       sessionKey: "agent:main:reset-race",
@@ -174,6 +197,7 @@ describe("reset boundary concurrency", () => {
       ),
     ).toContain("concurrent");
 
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
     await waitForSessionTranscriptProjection(scope);
     expect(
@@ -213,10 +237,10 @@ describe("reset boundary concurrency", () => {
       ["opaque"],
       JSON.parse(`{"type":"opaque","body":${"[".repeat(1_001)}0${"]".repeat(1_001)}}`) as unknown,
     ];
-    const insert = database.db.prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+    const insert = createTranscriptEventInserter(database.db, sessionId);
+    events.forEach((event, seq) =>
+      insert({ seq, eventJson: JSON.stringify(event), createdAt: seq }),
     );
-    events.forEach((event, seq) => insert.run(sessionId, seq, JSON.stringify(event), seq));
 
     const projected = loadTranscriptEventsFromDatabase(database, sessionId, {
       projection: "reset-boundary",
@@ -237,7 +261,7 @@ describe("reset boundary concurrency", () => {
       events.slice(0, 2),
     );
 
-    insert.run(sessionId, events.length, "{", events.length);
+    insert({ seq: events.length, eventJson: "{", createdAt: events.length });
     for (const projection of [undefined, "reset-boundary"] as const) {
       expect(() => loadTranscriptEventsFromDatabase(database, sessionId, { projection })).toThrow(
         SyntaxError,

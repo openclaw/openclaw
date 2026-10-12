@@ -12,6 +12,7 @@ import type {
   UserProfile,
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { createSolidControlUiBuildPlugin } from "../src/cli/plugins-build-solid.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
@@ -58,6 +59,7 @@ import {
   buildChatAttachmentHistory,
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
+import { backgroundMockInitScript } from "./control-ui-mock-background.ts";
 import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
@@ -74,16 +76,14 @@ import {
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
 import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
-import {
-  buildSkillWorkshopMocks,
-  skillWorkshopMockInitScript,
-} from "./control-ui-mock-skill-workshop.js";
+import { skillWorkshopMockInitScript } from "./control-ui-mock-skill-workshop.js";
 import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
 
 const FIXTURES = [
   "approval",
   "attachments",
   "avatars",
+  "backgrounds",
   "board",
   "code-fences",
   "dashboards",
@@ -91,6 +91,7 @@ const FIXTURES = [
   "plugins-dense",
   "reactions",
   "sidebar-roster",
+  "startup-pending",
   "swarm",
   "update-available",
   "update-blocked",
@@ -2068,7 +2069,6 @@ async function createChatPickerScenario(
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
-  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   const richAttention = fixture === "approval";
   const cronMocks = buildCronMocks(Date.now(), {
     richAttention,
@@ -2123,7 +2123,7 @@ async function createChatPickerScenario(
       ? "agent:main:production-export"
       : fixture === "dashboards"
         ? "agent:main:dashboard:release-health"
-        : fixture === "update-available"
+        : fixture === "update-available" || fixture === "startup-pending"
           ? "agent:main:home-server"
           : fixture === "update-blocked"
             ? "agent:main:model-budget"
@@ -2293,15 +2293,11 @@ async function createChatPickerScenario(
       "sessions.search",
       "session.reactions.list",
       "session.reactions.set",
+      "skills.workshop.archive",
+      "skills.workshop.changes",
+      "skills.workshop.list",
       "skills.workshop.read",
-      "skills.proposals.apply",
-      "skills.proposals.evaluate",
-      "skills.proposals.historyScan",
-      "skills.proposals.historyStatus",
-      "skills.proposals.inspect",
-      "skills.proposals.list",
-      "skills.proposals.reject",
-      "skills.proposals.requestRevision",
+      "skills.workshop.restore",
       "skills.library.activate",
       "skills.library.import",
       "skills.library.list",
@@ -2755,7 +2751,6 @@ async function createChatPickerScenario(
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
-      "skills.proposals.requestRevision": skillWorkshop.requestRevision,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelAuthStatus,
@@ -3289,6 +3284,7 @@ async function createChatPickerScenario(
       taxChildRow,
     ],
     sessionKey: fixtureSessionKey,
+    startupPendingResponses: fixture === "startup-pending" ? 4 : 0,
     workspace: "/Users/demo/Projects/openclaw",
     workspaceGit: true,
   };
@@ -3314,6 +3310,16 @@ async function createChatPickerScenario(
     scenario.sessions = rosterSessions;
     scenario.repeatingSessionEvents = { events: [] };
     scenario.sessionGroups = [];
+  }
+  if (fixture === "backgrounds") {
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "users.prefs.get",
+      "users.prefs.set",
+      "users.background.get",
+      "users.background.upload",
+      "users.background.remove",
+    ];
   }
   return scenario;
 }
@@ -3361,6 +3367,7 @@ async function createMockGatewayPlugin(
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
       approvalMockInitScript(fixture === "approval") +
+      (fixture === "backgrounds" ? backgroundMockInitScript() : "") +
       (fixture === "workboard" || fixture === "workboard-states"
         ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`
         : ""),
@@ -3499,7 +3506,21 @@ async function buildWorkboardStatesAssets() {
   const { build } = await import("esbuild");
   const rootDir = path.join(repoRoot, "extensions/workboard");
   const entry = path.join(rootDir, "browser/index.ts");
-  let transformed = false;
+  const cardRenderer = fs.realpathSync(path.join(rootDir, "browser/pages/workboard/view-card.tsx"));
+  const fixtureProjections = fileURLToPath(
+    new URL("./control-ui-workboard-state-projections.ts", import.meta.url),
+  );
+  const projections = new Map([
+    [
+      "../../lib/workboard/index.ts",
+      { source: "index.ts", name: "getWorkboardLifecycle", fixture: "getFixtureLifecycle" },
+    ],
+    [
+      "../../lib/workboard/card-alerts.ts",
+      { source: "card-alerts.ts", name: "getCardAlerts", fixture: "getFixtureAlerts" },
+    ],
+  ]);
+  const reached = new Set<string>();
   const result = await build({
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
@@ -3517,32 +3538,37 @@ async function buildWorkboardStatesAssets() {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
     plugins: [
+      createSolidControlUiBuildPlugin(rootDir),
       {
         name: "workboard-state-projections",
         setup(builder) {
-          builder.onLoad(
-            { filter: /[/\\]pages[/\\]workboard[/\\]view-card\.ts$/ },
-            async ({ path: sourcePath }) => {
-              const source = await fs.promises.readFile(sourcePath, "utf8");
-              const lifecycleImport =
-                /\bgetWorkboardLifecycle,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/index\.ts")/g;
-              const alertImport =
-                /\bgetCardAlerts,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/card-alerts\.ts")/g;
-              if (
-                [...source.matchAll(lifecycleImport)].length !== 1 ||
-                [...source.matchAll(alertImport)].length !== 1
-              ) {
-                throw new Error(
-                  "Workboard state fixture import seam changed; update its exact import transform.",
-                );
+          builder.onResolve(
+            {
+              filter: /^\.\.\/\.\.\/lib\/workboard\/(?:index|card-alerts)\.ts$/,
+              namespace: "file",
+            },
+            ({ path: specifier, importer }) => {
+              if (importer !== cardRenderer) {
+                return undefined;
               }
-              transformed = true;
+              reached.add(specifier);
+              return { path: specifier, namespace: "workboard-state-projections" };
+            },
+          );
+          builder.onLoad(
+            { filter: /.*/, namespace: "workboard-state-projections" },
+            ({ path: specifier }) => {
+              const projection = projections.get(specifier);
+              if (!projection) {
+                throw new Error(`Unknown Workboard fixture projection: ${specifier}`);
+              }
               return {
                 loader: "ts",
-                resolveDir: path.dirname(sourcePath),
-                contents:
-                  source.replace(lifecycleImport, "").replace(alertImport, "") +
-                  `\nimport { getFixtureLifecycle as getWorkboardLifecycle, getFixtureAlerts as getCardAlerts } from ${JSON.stringify(fileURLToPath(new URL("./control-ui-workboard-state-projections.ts", import.meta.url)))};\n`,
+                resolveDir: rootDir,
+                contents: [
+                  `export * from ${JSON.stringify(path.join(rootDir, "browser/lib/workboard", projection.source))};`,
+                  `export { ${projection.fixture} as ${projection.name} } from ${JSON.stringify(fixtureProjections)};`,
+                ].join("\n"),
               };
             },
           );
@@ -3550,8 +3576,8 @@ async function buildWorkboardStatesAssets() {
       },
     ],
   });
-  if (!transformed) {
-    throw new Error("Workboard state fixture did not reach the real card renderer.");
+  if (reached.size !== projections.size) {
+    throw new Error("Workboard state fixture did not reach both real card renderer projections.");
   }
   const revision = createHash("sha256");
   for (const file of result.outputFiles) {

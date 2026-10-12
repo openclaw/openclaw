@@ -844,6 +844,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/check-limits.mts",
       "scripts/lib/error-format.mts",
       "scripts/lib/managed-child-process.mts",
+      "scripts/lib/managed-cleanup-handoff.mts",
       "scripts/lib/vitest-resource-ownership.mts",
       "scripts/lib/npm-json-output.mts",
       "scripts/lib/optional-bundled-clusters.mjs",
@@ -855,6 +856,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/release-notes-compaction.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
+      "src/infra/npm-command.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];
     try {
@@ -1539,26 +1541,32 @@ describe("package-openclaw-for-docker", () => {
     const outputDir = tempDirs.make("openclaw-package-output-");
     const sourceDir = createPackageSourceFixture("openclaw-package-source-");
     const calls: string[] = [];
-    const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
-      ...skipTarballModeNormalization,
-      prepareBundledAiRuntime: skipBundledAiRuntime,
-      prepareChangelog: async (cwd: string) => {
-        calls.push(`prepare:${cwd}`);
-      },
-      restoreChangelog: async (cwd: string) => {
-        calls.push(`restore-changelog:${cwd}`);
-      },
-      prepareDocsMap: async (cwd: string) => {
-        calls.push(`prepare-docs:${cwd}`);
-      },
-      restoreDocsMap: async (cwd: string) => {
-        calls.push(`restore-docs:${cwd}`);
-      },
-      runCaptureImpl: async (command: string, args: string[], cwd: string) => {
-        calls.push(`${command}:${args.join(" ")}:${cwd}`);
-        return "openclaw-2026.5.28.tgz\n";
-      },
-    });
+    const packTimeouts: unknown[] = [];
+    const tarball = await withEnvAsync(
+      { OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS: undefined },
+      async () =>
+        await packOpenClawPackageForDocker(sourceDir, outputDir, {
+          ...skipTarballModeNormalization,
+          prepareBundledAiRuntime: skipBundledAiRuntime,
+          prepareChangelog: async (cwd: string) => {
+            calls.push(`prepare:${cwd}`);
+          },
+          restoreChangelog: async (cwd: string) => {
+            calls.push(`restore-changelog:${cwd}`);
+          },
+          prepareDocsMap: async (cwd: string) => {
+            calls.push(`prepare-docs:${cwd}`);
+          },
+          restoreDocsMap: async (cwd: string) => {
+            calls.push(`restore-docs:${cwd}`);
+          },
+          runCaptureImpl: async (command: string, args: string[], cwd: string, options) => {
+            calls.push(`${command}:${args.join(" ")}:${cwd}`);
+            packTimeouts.push(options.timeoutMs);
+            return "openclaw-2026.5.28.tgz\n";
+          },
+        }),
+    );
 
     expect(tarball).toBe(path.join(outputDir, "openclaw-2026.5.28.tgz"));
     expect(calls).toEqual([
@@ -1568,6 +1576,7 @@ describe("package-openclaw-for-docker", () => {
       `restore-changelog:${sourceDir}`,
       `restore-docs:${sourceDir}`,
     ]);
+    expect(packTimeouts).toEqual([15 * 60 * 1000]);
   });
 
   it("does not touch other source artifacts when the docs-map lock fails", async () => {

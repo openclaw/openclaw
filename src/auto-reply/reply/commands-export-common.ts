@@ -1,28 +1,19 @@
-/** Shared export-command parsing and target session resolution helpers. */
-import {
-  resolveDefaultSessionStorePath,
-  resolveSessionFilePathCore,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-/** Resolved session entry and scoped transcript identity targeted by an export command. */
 interface ExportCommandSessionTarget {
   agentId: string;
   entry: SessionEntry;
   sessionId: string;
-  sessionFile: string;
   sessionKey: string;
   storePath: string;
 }
 
 const MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS = 512;
 
-/** Parses an optional non-flag output path from export command text. */
 export function parseExportCommandOutputPath(
   commandBodyNormalized: string,
   aliases: readonly string[],
@@ -42,7 +33,6 @@ export function parseExportCommandOutputPath(
   return { outputPath };
 }
 
-/** Resolves the session store entry and transcript file for an export command. */
 export function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
 ): ExportCommandSessionTarget | { text: string } {
@@ -58,23 +48,11 @@ export function resolveExportCommandSessionTarget(
     return { text: `❌ Session not found: ${params.sessionKey}` };
   }
 
-  try {
-    const sessionFile = resolveSessionFilePathCore(
-      sessionId,
-      entry,
-      resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
-    );
-    return {
-      agentId: targetAgentId,
-      entry,
-      sessionFile,
-      sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-    };
-  } catch (err) {
-    return {
-      text: `❌ Failed to resolve session file: ${formatErrorMessage(err)}`,
-    };
-  }
+  return {
+    agentId: targetAgentId,
+    entry,
+    sessionId,
+    sessionKey: params.sessionKey,
+    storePath,
+  };
 }

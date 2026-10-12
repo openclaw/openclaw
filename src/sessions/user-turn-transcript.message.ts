@@ -103,33 +103,20 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     const media: PersistedUserTurnMediaInput = {
       contentType: fact.contentType ?? mimeTypeFromFilePath(mediaPath ?? url),
     };
-    if (mediaPath) {
-      media.path = mediaPath;
-    }
-    if (url) {
-      media.url = url;
-    }
-    if (fact.kind) {
-      media.kind = fact.kind;
-    }
-    if (fact.fileName) {
-      media.fileName = fact.fileName;
-    }
-    if (fact.origin) {
-      media.origin = fact.origin;
-    }
-    if (fact.sizeBytes !== undefined) {
-      media.sizeBytes = fact.sizeBytes;
-    }
-    if (fact.durationMs !== undefined) {
-      media.durationMs = fact.durationMs;
-    }
-    if (fact.width !== undefined) {
-      media.width = fact.width;
-    }
-    if (fact.height !== undefined) {
-      media.height = fact.height;
-    }
+    const set = <K extends keyof typeof media>(key: K, value: (typeof media)[K]) => {
+      if (value !== undefined) {
+        media[key] = value;
+      }
+    };
+    set("path", mediaPath);
+    set("url", url);
+    set("kind", fact.kind);
+    set("fileName", fact.fileName);
+    set("origin", fact.origin);
+    set("sizeBytes", fact.sizeBytes);
+    set("durationMs", fact.durationMs);
+    set("width", fact.width);
+    set("height", fact.height);
     return media;
   });
   return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];
@@ -153,6 +140,65 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
 function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
   return asOptionalRecord(Reflect.get(message, "__openclaw"));
 }
+
+export function readModelPromptProjection(message: unknown): string | undefined {
+  if (!isUserMessage(message)) {
+    return undefined;
+  }
+  const metadata = readOpenClawMessageMeta(message);
+  if (!metadata || !Object.hasOwn(metadata, "modelPromptProjection")) {
+    return undefined;
+  }
+  const projection = asOptionalRecord(metadata.modelPromptProjection);
+  if (projection?.version !== 1 || typeof projection.text !== "string") {
+    throw new Error(
+      "Unsupported or invalid user-turn model prompt projection; update OpenClaw to a compatible version or start a new session.",
+    );
+  }
+  return projection.text;
+}
+
+export function projectRecordedModelPrompt(
+  message: AgentMessage,
+  transcript?: AgentMessage,
+): AgentMessage {
+  if (!isUserMessage(message)) {
+    return message;
+  }
+  const text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
+  if (text === undefined) {
+    return message;
+  }
+  let content = message.content;
+  if (Array.isArray(content)) {
+    let replaced = false;
+    content = content.map((block) => {
+      if (block.type !== "text" || replaced) {
+        return block;
+      }
+      replaced = true;
+      return { ...block, text };
+    });
+    if (!replaced) {
+      content = [{ type: "text", text }, ...content];
+    }
+  } else {
+    content = text;
+  }
+  const metadata = { ...message["__openclaw"] };
+  delete metadata.modelPromptProjection;
+  const projected: PersistedUserTurnMessage = {
+    ...message,
+    content,
+    timestamp: transcript?.role === "user" ? transcript.timestamp : message.timestamp,
+  };
+  delete projected["__openclaw"];
+  if (Object.keys(metadata).length > 0) {
+    projected["__openclaw"] = metadata;
+  }
+  return projected;
+}
+
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = params.text ?? "";
@@ -215,6 +261,7 @@ export function buildLateResolvedMediaMessage(params: {
     lateMedia: true,
   };
   delete metadata.humanMentions;
+  delete metadata.modelPromptProjection;
   // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
   return {
     ...params.resolvedMessage,

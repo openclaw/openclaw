@@ -8,7 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
 import { normalizeScpRemotePath } from "../../infra/scp-host.js";
-import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
+import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
@@ -18,6 +18,7 @@ import {
 import {
   commandFailure,
   isSuccess,
+  matchesCommandFailure,
   runSshScript,
   type WorkerBootstrapCommandRunner,
 } from "./bootstrap-command.js";
@@ -29,6 +30,7 @@ import {
   runWorkerSshCandidates,
   workerSshCommandOptions,
   workerSshOptions,
+  type WorkerSshIdentityResolver,
 } from "./ssh.js";
 
 const BOOTSTRAP_ROOT = ".openclaw-worker";
@@ -46,13 +48,19 @@ const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
-const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};
-if (!nodeSafe) process.exit(1);
-try { const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:");
-  const sqlite = parse(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? ""));
-  db.close(); if (!sqlite) process.exit(1);
-  const sqliteSafe = atLeast(sqlite, [3, 51, 3]) || (sqlite[0] === 3 && ((sqlite[1] === 50 && sqlite[2] >= 7) || (sqlite[1] === 44 && sqlite[2] >= 6)));
-  process.exit(sqliteSafe ? 0 : 1); } catch { process.exit(1); }`;
+function checkRuntime() {
+  const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};
+  if (!nodeSafe) return 1;
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  try {
+    const sqlite = parse(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? ""));
+    if (!sqlite) return 1;
+    const sqliteSafe = atLeast(sqlite, [3, 51, 3]) || (sqlite[0] === 3 && ((sqlite[1] === 50 && sqlite[2] >= 7) || (sqlite[1] === 44 && sqlite[2] >= 6)));
+    return sqliteSafe ? 0 : 1;
+  } finally { db.close(); }
+}
+try { process.exitCode = checkRuntime(); } catch { process.exitCode = 1; }`;
 
 const RECEIPT_MATCH_JS = String.raw`const fs = require("node:fs");
 try {
@@ -65,16 +73,15 @@ try {
     Array.isArray(expected.protocolFeatures) &&
     actual.protocolFeatures.length === expected.protocolFeatures.length &&
     actual.protocolFeatures.every((feature, index) => feature === expected.protocolFeatures[index]);
-  process.exit(
+  process.exitCode =
     shapeMatches &&
       actual.bundleHash === expected.bundleHash &&
       actual.openclawVersion === expected.openclawVersion &&
       featuresMatch
       ? 0
-      : 1,
-  );
+      : 1;
 } catch {
-  process.exit(1);
+  process.exitCode = 1;
 }`;
 
 const VERIFY_ARCHIVE_JS = String.raw`const crypto = require("node:crypto");
@@ -82,9 +89,9 @@ const fs = require("node:fs");
 try {
   const npm = process.argv[3] === "npm";
   const actual = (npm ? "sha512-" : "") + crypto.createHash(npm ? "sha512" : "sha256").update(fs.readFileSync(process.argv[1])).digest(npm ? "base64" : "hex");
-  process.exit(actual === process.argv[2] ? 0 : 1);
+  process.exitCode = actual === process.argv[2] ? 0 : 1;
 } catch {
-  process.exit(1);
+  process.exitCode = 1;
 }`;
 
 const READ_NPM_PACK_FILENAME_JS = String.raw`const fs = require("node:fs");
@@ -93,24 +100,20 @@ try {
   const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const filename = Array.isArray(value) && value.length === 1 ? value[0]?.filename : undefined;
   if (typeof filename !== "string" || !filename || path.basename(filename) !== filename) {
-    process.exit(1);
+    throw new Error("invalid npm pack filename");
   }
   process.stdout.write(filename);
 } catch {
-  process.exit(1);
+  process.exitCode = 1;
 }`;
 
 const WORKER_ARTIFACT_PATHS_JS = `const artifactPaths = ${JSON.stringify(WORKER_BUNDLE_ARTIFACT_PATHS)};
 const chunkPathPattern = ${WORKER_BUNDLE_CHUNK_PATH_PATTERN.toString()};`;
 
 const SELECT_NPM_WORKER_FILES_JS = String.raw`const fs = require("node:fs");
-${WORKER_ARTIFACT_PATHS_JS}
-const prefix = "package/dist/worker/";
-const selected = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((entry) => {
-  const name = entry.startsWith(prefix) ? entry.slice(prefix.length) : "";
-  return artifactPaths.includes(name) || chunkPathPattern.test(name);
-});
-if (new Set(selected).size !== selected.length) throw new Error("duplicate worker package artifact");
+const expected = "package/dist/worker-artifacts/" + process.argv[2] + ".tar.gz";
+const selected = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((entry) => entry === expected);
+if (selected.length !== 1) throw new Error("missing or duplicate packaged worker bundle archive");
 process.stdout.write(selected.join("\n") + "\n");`;
 
 // Recompute the gateway's canonical flat file manifest before a receipt can attest to it.
@@ -170,10 +173,10 @@ try {
   for (const entry of entries) {
     hash.update(entry.path + separator + entry.mode.toString(8) + separator + entry.size + separator + entry.sha256 + separator);
   }
-  process.exit(hash.digest("hex") === expected ? 0 : 1);
+  process.exitCode = hash.digest("hex") === expected ? 0 : 1;
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  process.exitCode = 1;
 }`;
 
 const ENSURE_PRIVATE_DIRECTORY_SH = String.raw`ensure_private_directory() {
@@ -410,8 +413,11 @@ case "$install" in
       exit 2
     fi
     tar -tzf "$package_archive" > "$staging/npm-members.txt"
-    node -e '${SELECT_NPM_WORKER_FILES_JS}' "$staging/npm-members.txt" > "$staging/npm-worker-files.txt"
+    node -e '${SELECT_NPM_WORKER_FILES_JS}' "$staging/npm-members.txt" "$hash" > "$staging/npm-worker-files.txt"
     tar -xzf "$package_archive" -C "$staging" --strip-components=3 -T "$staging/npm-worker-files.txt"
+    worker_archive=$staging/$hash.tar.gz
+    tar -xzf "$worker_archive" -C "$staging"
+    rm -f "$worker_archive"
     rm -f "$npm_pack_json" "$package_archive" "$staging/npm-members.txt" "$staging/npm-worker-files.txt"
     ;;
   *)
@@ -440,10 +446,7 @@ type WorkerBootstrapRequest = {
 };
 
 type WorkerBootstrapDependencies = {
-  resolveIdentity: (
-    keyRef: WorkerSshEndpoint["keyRef"],
-    context: { assertCurrent: () => void },
-  ) => Promise<WorkerSshIdentity>;
+  resolveIdentity: WorkerSshIdentityResolver;
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -575,20 +578,12 @@ function parsePreflight(
   expected: WorkerAdmissionHandshake,
   expectedUploadFilename: string,
 ): { action: "current"; receipt: WorkerAdmissionHandshake } | { action: "install"; path: string } {
-  if (
-    result.code === NODE_MISSING_EXIT_CODE ||
-    result.stderr.includes(NODE_MISSING_MARKER) ||
-    result.stdout.includes(NODE_MISSING_MARKER)
-  ) {
+  if (matchesCommandFailure(result, NODE_MISSING_EXIT_CODE, NODE_MISSING_MARKER)) {
     throw new Error(
       "Worker bootstrap requires Node.js on the leased host; install Node in the provider setup phase and retry",
     );
   }
-  if (
-    result.code === NODE_UNSUPPORTED_EXIT_CODE ||
-    result.stderr.includes(NODE_UNSUPPORTED_MARKER) ||
-    result.stdout.includes(NODE_UNSUPPORTED_MARKER)
-  ) {
+  if (matchesCommandFailure(result, NODE_UNSUPPORTED_EXIT_CODE, NODE_UNSUPPORTED_MARKER)) {
     throw new Error(
       "Worker bootstrap requires Node 24.16.0+ or 26.1.0+ with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry",
     );
@@ -716,11 +711,7 @@ export async function bootstrapWorker(
       }),
     );
     assertCurrent();
-    if (
-      install.code === NPM_MISSING_EXIT_CODE ||
-      install.stderr.includes(NPM_MISSING_MARKER) ||
-      install.stdout.includes(NPM_MISSING_MARKER)
-    ) {
+    if (matchesCommandFailure(install, NPM_MISSING_EXIT_CODE, NPM_MISSING_MARKER)) {
       throw new Error(
         "Worker npm bootstrap requires npm on the leased host; use bundle install or provide npm in the provider setup phase",
       );

@@ -4,6 +4,7 @@ import {
   coerceErrorMessage,
   collectNestedErrorCandidates,
   formatErrorMessage,
+  ProviderAuthPersistenceError,
   stringifyNonErrorCause,
   toErrorObject,
   toStructuredErrorObject,
@@ -14,6 +15,50 @@ const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
 
 describe("formatErrorMessage", () => {
+  it("keeps provider persistence diagnostics in initiating order without reordering other errors", () => {
+    const persistence = new Error("write secret", { cause: new Error("write root") });
+    const cleanup = new AggregateError([new Error("cleanup root")], "cleanup secret");
+    const failure = new ProviderAuthPersistenceError("persistence failed", persistence, {
+      cause: cleanup,
+    });
+    const redact = (text: string) => text.replaceAll("secret", "[REDACTED]");
+
+    expect(formatErrorMessage(new Error("outer", { cause: failure }), { redact })).toBe(
+      "outer | persistence failed | write [REDACTED] | cleanup [REDACTED] | write root | cleanup root",
+    );
+    expect(String(failure)).toBe("AggregateError: persistence failed");
+
+    const plain = new AggregateError([persistence, cleanup], "persistence failed", {
+      cause: cleanup,
+    });
+    plain.name = "ProviderAuthPersistenceError";
+    expect(formatErrorMessage(new Error("outer", { cause: plain }), { redact })).toBe(
+      "outer | persistence failed | cleanup [REDACTED] | write [REDACTED] | cleanup root | write root",
+    );
+  });
+
+  it.each(["persistenceError", "cleanupError"])(
+    "retains aggregate diagnostics when the typed %s field is inaccessible",
+    (field) => {
+      const persistence = new Error("write failed");
+      const cleanup = new Error("cleanup failed");
+      const failure = new ProviderAuthPersistenceError("persistence failed", persistence, {
+        cause: cleanup,
+      });
+      Object.defineProperty(failure, field, {
+        get() {
+          throw new Error("diagnostic field unavailable");
+        },
+      });
+
+      expect(format(failure)).toBe(
+        field === "persistenceError"
+          ? "persistence failed | cleanup failed | write failed"
+          : "persistence failed | write failed | cleanup failed",
+      );
+    },
+  );
+
   it("retains both failures from actual async disposal", async () => {
     const body = new Error("body secret");
     const cleanup = new Error("cleanup secret");

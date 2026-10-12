@@ -19,7 +19,7 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
-import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import {
   createPlacementTurnClaimFixtureOps,
   seedAttachedPlacementEnvironment,
@@ -67,8 +67,7 @@ export function createHarness(
     reconcileChanged?: boolean;
     reconcileCommitsManifest?: boolean;
     reconcileCommitsManifestOnApply?: boolean;
-    verifyFails?: boolean;
-    verifyFailureCall?: number;
+    verifyFailurePhase?: "before-apply" | "after-apply";
     leaseFails?: boolean;
     leaseFailureCount?: number;
     leaseFailureCall?: number;
@@ -106,7 +105,7 @@ export function createHarness(
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
   let leaseCalls = 0;
-  let verifyCalls = 0;
+  let pendingVerifyFailurePhase = options.verifyFailurePhase;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const reportWorkspaceResultRecoveryFailure = vi.fn(
@@ -125,45 +124,45 @@ export function createHarness(
   const placements: WorkerDispatchPlacementStore = {
     ...placementStore,
     closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
-    beginPlacementMove: (params) => {
-      const begun = placementStore.beginPlacementMove(params);
+    beginPlacementMove: async (params, guard) => {
+      const begun = await placementStore.beginPlacementMove(params, guard);
       if (!begun.joined) {
         log.push("placement:draining");
       }
       return begun;
     },
-    completePlacementMoveSourceToLocal: (params) => {
+    completePlacementMoveSourceToLocal: (params, guard) => {
       log.push("placement:local");
-      return placementStore.completePlacementMoveSourceToLocal(params);
+      return placementStore.completePlacementMoveSourceToLocal(params, guard);
     },
-    completeAbandonedPlacementMoveSourceToLocal: (params) => {
+    completeAbandonedPlacementMoveSourceToLocal: (params, guard) => {
       log.push("placement:local");
-      return placementStore.completeAbandonedPlacementMoveSourceToLocal(params);
+      return placementStore.completeAbandonedPlacementMoveSourceToLocal(params, guard);
     },
     acceptWorkspaceResult: (...args) => placementStore.acceptWorkspaceResult(...args),
     completeWorkspaceResultAndReleaseTurn: (...args) =>
       placementStore.completeWorkspaceResultAndReleaseTurn(...args),
-    failWorkspaceResultAndReleaseTurn: (pending, error) => {
+    failWorkspaceResultAndReleaseTurn: (pending, error, assertCurrent) => {
       const current = placementStore.get(pending.sessionId);
       if (current?.state === "active") {
         log.push("placement:draining");
       }
       log.push("placement:reconciling", "placement:failed");
-      return placementStore.failWorkspaceResultAndReleaseTurn(pending, error);
+      return placementStore.failWorkspaceResultAndReleaseTurn(pending, error, assertCurrent);
     },
     startDispatch: (params, dispatchOptions) => {
       log.push("placement:requested");
       return placementStore.startDispatch(params, dispatchOptions);
     },
-    transition: (params) => {
+    transition: (params, assertCurrent) => {
       log.push(`placement:${params.to}`);
-      return placementStore.transition(params);
+      return placementStore.transition(params, assertCurrent);
     },
-    fail: (params) => {
+    fail: (params, assertCurrent) => {
       log.push("placement:failed");
-      return placementStore.fail(params);
+      return placementStore.fail(params, assertCurrent);
     },
-    startDrain: (params) => {
+    startDrain: (params, assertCurrent) => {
       log.push("placement:draining");
       if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
         createPlacementTurnClaimFixtureOps(database).claimTurn({
@@ -179,15 +178,15 @@ export function createHarness(
           },
         });
       }
-      return placementStore.startDrain(params);
+      return placementStore.startDrain(params, assertCurrent);
     },
     startWorkspaceResultDrain: (...args) => {
       log.push("placement:draining");
       return placementStore.startWorkspaceResultDrain(...args);
     },
-    startReconcile: (params) => {
+    startReconcile: (params, assertCurrent) => {
       log.push("placement:reconciling");
-      return placementStore.startReconcile(params);
+      return placementStore.startReconcile(params, assertCurrent);
     },
     adoptActive: (params) => {
       log.push("placement:adopted");
@@ -271,7 +270,7 @@ export function createHarness(
         await placementStore.acceptWorkspaceResult(claim);
         setEnvironment(destroyedEnvironment(currentEnvironment?.ownerEpoch ?? 1));
         log.push("teardown:destroy");
-        await completeReclaimedWorkspaceTeardown({
+        await completeWorkerWorkspaceTeardown({
           placements: placementStore,
           turnClaim: claim,
           environmentId: owned.environmentId,
@@ -283,6 +282,7 @@ export function createHarness(
         await stagedResult.record(stagedResult.ref);
       }
       await options.afterReconcile?.();
+      let applied = false;
       const verifyLocalStable = async () => {
         log.push("workspace:verify-local");
         if (options.localVerifyFails) {
@@ -296,8 +296,8 @@ export function createHarness(
         discardPreparedStagedResult: async () => {},
         verifyStable: async () => {
           log.push("workspace:verify");
-          verifyCalls += 1;
-          if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
+          if (pendingVerifyFailurePhase === (applied ? "after-apply" : "before-apply")) {
+            pendingVerifyFailurePhase = undefined;
             throw new Error("workspace changed after reconciliation");
           }
         },
@@ -319,6 +319,7 @@ export function createHarness(
               applyPreparedStagedResult: async () => {
                 log.push("workspace:apply-prepared");
                 await journal.commit(reconciledManifestRef);
+                applied = true;
               },
             }
           : {}),
@@ -439,6 +440,7 @@ export function createHarness(
     Object.assign(environments, options.environmentService);
   }
   const service = createWorkerPlacementDispatchService({
+    initialPlacements: placementStore.list(),
     placements,
     environments,
     isShuttingDown: options.isShuttingDown,
@@ -513,13 +515,13 @@ export function createHarness(
     runReclaimBarrier:
       options.runReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, beforeDrain, begin, reclaim }) =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("placement-reclaim", {
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
           run: async () => {
             authorize?.();
             beforeDrain?.();
-            const placement = begin();
+            const placement = await begin(authorize);
             return placement.state === "reclaimed"
               ? placement
               : await reclaim(
@@ -532,7 +534,7 @@ export function createHarness(
     runFailedReclaimBarrier:
       options.runFailedReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, reclaim }) =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("placement-failed-reclaim", {
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
           run: async () => {
@@ -644,6 +646,7 @@ export const createRecoveryService = (
   isShuttingDown: () => boolean = () => false,
 ) =>
   createWorkerPlacementDispatchService({
+    initialPlacements: placements.list(),
     placements,
     environments,
     isShuttingDown,
@@ -656,7 +659,7 @@ export const createRecoveryService = (
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation,
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
+      await reclaim({ kind: "local", path: "/gateway/workspace" }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),

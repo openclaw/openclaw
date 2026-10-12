@@ -4,14 +4,12 @@ import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choi
 import { buildProviderPluginMethodChoice } from "../plugins/provider-plugin-choice.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
-export const loadResolvedModelPickerRuntime = createLazyRuntimeNamedExport(
-  () => import("../commands/model-picker.runtime.js"),
-  "modelPickerRuntime",
-);
+export async function loadResolvedModelPickerRuntime() {
+  return (await import("../commands/model-picker.runtime.js")).modelPickerRuntime;
+}
 
 export async function resolveProviderPluginSetupOptions(params: {
   cfg: OpenClawConfig;
@@ -20,16 +18,15 @@ export async function resolveProviderPluginSetupOptions(params: {
 }): Promise<WizardSelectOption[]> {
   const runtime = await loadResolvedModelPickerRuntime();
   return runtime
-    .resolveProviderModelPickerContributions({
+    .resolveProviderModelPickerEntries({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: params.env,
     })
-    .map(({ option }) =>
-      Object.assign(
-        { value: option.value, label: option.label },
-        option.hint ? { hint: option.hint } : {},
-      ),
+    .map(({ value, label, hint }) => Object.assign({ value, label }, hint ? { hint } : undefined))
+    .toSorted(
+      (left, right) =>
+        left.label.localeCompare(right.label) || left.value.localeCompare(right.value),
     );
 }
 

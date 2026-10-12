@@ -45,6 +45,16 @@ unchanged backlog counts do not repeat the warning every sweep. A count change
 at or above 25, or a return to that threshold after recovery, produces a new
 warning. The backlog size does not discard results or change their retention.
 
+A suspended delivery expires after seven days. The warning records its run and
+session identifiers, original delivery error, and suspension time. Expiry ends
+automatic delivery; it does not turn a successful child execution into a failure.
+For a retained run, `/subagents info <runId>` shows the captured result, discarded
+delivery status, and original error, even after the run leaves the recent list.
+Inspect that result or available child session history and ask the requester to
+continue. Cleanup and retention still apply: `cleanup: "delete"` can remove the
+run, and hidden session cleanup can remove its transcript. Expiry does not promise
+that deleted results remain recoverable.
+
 ## Liveness and recovery
 
 OpenClaw does not treat `endedAt` absence as permanent proof that a
@@ -64,6 +74,11 @@ processing. An already-admitted replacement run can finish refreshing a deferred
 child result before shutdown. The refresh remains tracked until capture and
 persistence finish; it does not admit a new run.
 
+Completion waits retire with their original registry database during shutdown.
+Late cleanup recovery leaves retained state for the next Gateway instead of
+retrying against a closed store. Failed writes with an unknown outcome still
+report an error and remain fenced until recovery reads the stored state.
+
 After a Gateway restart, the parent owns continuation of the user's task.
 Interrupted sub-agents are finalized through their normal completion path instead
 of automatically relaunched. Their results tell the parent that execution was
@@ -76,6 +91,13 @@ from an orphaned child launch. Its frozen child-result batch retains the exact
 saved continuation across restart. Registry recovery waits for that owner instead
 of reporting interruption while the same continuation is being replayed. This
 does not authorize automatic relaunch of unrelated interrupted child work.
+
+Recovery retires superseded requester-transfer generations before restoring the
+remaining claim. The current generation keeps its completion custody; obsolete
+transfers do not retry indefinitely. Registry hydration and startup transfer each
+run once per attempt. A failed hydration logs its error and can be retried by the
+next registry access; an incomplete startup transfer remains recorded for the
+next activation or restart. Recovery does not keep a separate retry timer.
 
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
@@ -114,13 +136,14 @@ When required registration has an unknown outcome or retained registry state
 forbids deleting the child session, a Gateway-hosted ordinary spawn's error keeps
 the child's session and run identifiers. If the first cancellation attempt also
 fails, the error reports unconfirmed termination and whether Gateway cleanup was
-scheduled. The Gateway retains the child's admission slot while retrying and
-rechecks the exact run owner before each attempt. If database admission retires
-while that child still runs, cancellation stops but its slot stays reserved until
-the child controller retires or Gateway shutdown takes over. The child session
-stays intact. Provisional session rollback, collector FIFO cleanup, and local
-embedded cleanup remain joined. Inspect the retained child before retrying the
-spawn.
+scheduled. The Gateway makes at most one tracked follow-up cancellation attempt,
+rechecking the exact run owner before dispatch. If termination still cannot be
+confirmed, it logs a warning and keeps the child's admission slot until the
+child controller retires or Gateway shutdown takes over. The child session stays
+intact. Provisional cleanup runs once; a failed collector launch keeps its FIFO
+slot when its failure cannot be settled, until shutdown or restart recovery.
+Cleanup already in progress remains joined. Inspect the retained child and
+cleanup error before retrying the spawn.
 
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /
@@ -152,15 +175,29 @@ session key. Legacy runs without a recorded owner use current configuration to
 resolve one agent and clear only that agent's queues. The optional binding stays
 in `payload_json` when an older build rewrites the run.
 
-Owner-aware child lookups keep watched follow-ups, steering, and run generations
-separate when agents share a raw key. Rows without a recorded owner and callers
-without an explicit owner retain their existing key-only lookup behavior.
+Owner-aware child lookups keep watched follow-ups, steering, run generations,
+completion transcripts, and timeout reconciliation separate when agents share a
+raw key. Terminal events and session timing updates use that same child owner.
+Rows without a recorded owner and callers without an explicit owner retain their
+existing key-only lookup behavior.
 
 Stop also retires pending completion continuations for the selected work, even
 when a child has already finished. Cancelling a completion turn retires its
 matching child batch, so automatic delivery retries cannot start it again under
 a new run ID. Captured child results and their execution outcomes remain intact;
 you can inspect them or send a new instruction afterward.
+
+A parent Stop also drains ordinary commands retained by its selected native
+children, even after their model execution has completed. Completed child results
+remain completed; command cleanup does not add canceled model runs to the result.
+Commands deliberately started with `background: true` remain independent.
+A live command continuation retains the original request's child ownership when
+it runs in another session. Stop selects only that request's bound native children,
+leaving newer human work and replacement child generations alone.
+A fresh session Stop can still select those children after the continuation has
+completed and its notification has been consumed. It uses the current original
+session's authority and generation; a historical exact-run Stop does not regain
+authority after that request's active, process, and event ownership has ended.
 
 For Gateway callers, `chat.abort` with a `runId` uses this exact-parent scope.
 `sessions.abort` with a `runId` also targets that run. When it resolves a recovered

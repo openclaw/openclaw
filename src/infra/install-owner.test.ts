@@ -54,19 +54,16 @@ it("discovers host ownership before any Git, package manager, or registry probe"
 it.each([
   ["malformed JSON", "{"],
   ["unknown schema", JSON.stringify({ ...owner, schemaVersion: 2 })],
-  ["unknown owner", JSON.stringify({ ...owner, owner: "other" })],
-  ["blank hint", JSON.stringify({ ...owner, updateHint: " " })],
   ["null", "null"],
-])("ignores %s with a warning", async (_label, content) => {
+  ["absent marker", undefined],
+])("ignores %s, warning only for invalid markers", async (_label, content) => {
   const root = tempDirs.make("openclaw-install-owner-invalid-");
-  await fs.writeFile(path.join(root, "openclaw-install-owner.json"), content);
+  if (content !== undefined) {
+    await fs.writeFile(path.join(root, "openclaw-install-owner.json"), content);
+  }
   expect(await readInstallOwner(root)).toBeNull();
-  expect(warn).toHaveBeenCalledOnce();
-});
-
-it("ignores an absent marker without warning", async () => {
-  const root = tempDirs.make("openclaw-install-owner-absent-");
-  expect(await readInstallOwner(root)).toBeNull();
-  expect(await readInstallOwner(null)).toBeNull();
-  expect(warn).not.toHaveBeenCalled();
+  if (content === undefined) {
+    expect(await readInstallOwner(null)).toBeNull();
+  }
+  expect(warn).toHaveBeenCalledTimes(content === undefined ? 0 : 1);
 });

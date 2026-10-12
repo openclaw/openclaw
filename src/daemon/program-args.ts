@@ -1,4 +1,3 @@
-/** Builds runtime command arguments for gateway and node service installs. */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -28,14 +27,34 @@ const canAccessEntrypoint = (candidate: string) =>
     () => false,
   );
 
-async function resolveCliEntrypointPathForService(): Promise<string> {
-  const argv1 = process.argv[1];
+async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Promise<string> {
   if (!argv1) {
     throw new Error("Unable to resolve CLI entrypoint path");
   }
 
   const normalized = path.resolve(argv1);
   const resolvedPath = await fs.realpath(normalized).catch(() => normalized);
+  if (resolvedPath.includes(`${path.sep}.pnpm${path.sep}`)) {
+    const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+    const { resolvePnpmGlobalInstallOwner } = await import("../infra/update-global.js");
+    const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
+    const owner = packageRoot ? await resolvePnpmGlobalInstallOwner(packageRoot) : null;
+    if (
+      packageRoot &&
+      owner &&
+      (await fs.realpath(owner.packageRoot).catch(() => null)) ===
+        (await fs.realpath(packageRoot).catch(() => undefined))
+    ) {
+      // Persist the verified package link, never the replaceable store generation.
+      const stableEntrypoint = await findFirstAccessibleGatewayEntrypoint(
+        buildGatewayInstallEntrypointCandidates(owner.packageRoot),
+        canAccessEntrypoint,
+      );
+      if (stableEntrypoint) {
+        return stableEntrypoint;
+      }
+    }
+  }
   const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
   if (looksLikeDist) {
     // Existing installed command lines may point at versioned pnpm realpaths.
@@ -133,6 +152,7 @@ export async function resolveOpenClawWrapperPath(
 }
 
 async function resolveCliProgramArguments(params: {
+  cliEntrypoint?: string;
   args: string[];
   dev?: boolean;
   runtime: GatewayDaemonRuntime;
@@ -166,7 +186,7 @@ async function resolveCliProgramArguments(params: {
     };
   }
 
-  const cliEntrypointPath = await resolveCliEntrypointPathForService();
+  const cliEntrypointPath = await resolveCliEntrypointPathForService(params.cliEntrypoint);
   return {
     programArguments: [
       runtimePath,
@@ -178,6 +198,8 @@ async function resolveCliProgramArguments(params: {
 }
 
 export async function resolveGatewayProgramArguments(params: {
+  /** Retained CLI entrypoint to plan for instead of this process's argv[1]. */
+  cliEntrypoint?: string;
   port: number;
   allowUnconfigured?: boolean;
   dev?: boolean;
@@ -191,11 +213,8 @@ export async function resolveGatewayProgramArguments(params: {
     gatewayArgs.push("--allow-unconfigured");
   }
   const result = await resolveCliProgramArguments({
+    ...params,
     args: gatewayArgs,
-    dev: params.dev,
-    runtime: params.runtime,
-    runtimePath: params.runtimePath,
-    wrapperPath: params.wrapperPath,
   });
   if (params.runtime === "node" && !params.wrapperPath?.trim()) {
     // Size only the managed Gateway, before Node loads its entrypoint. Keeping
@@ -206,6 +225,7 @@ export async function resolveGatewayProgramArguments(params: {
 }
 
 export async function resolveNodeProgramArguments(params: {
+  cliEntrypoint?: string;
   host: string;
   port: number;
   contextPath?: string;
@@ -249,11 +269,5 @@ export async function resolveNodeProgramArguments(params: {
   } else if (params.commands !== undefined) {
     args.push("--commands", params.commands.join(","));
   }
-  return resolveCliProgramArguments({
-    args,
-    dev: params.dev,
-    runtime: params.runtime,
-    runtimePath: params.runtimePath,
-    wrapperPath: params.wrapperPath,
-  });
+  return resolveCliProgramArguments({ ...params, args });
 }

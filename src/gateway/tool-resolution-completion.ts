@@ -7,10 +7,16 @@ import { evaluateGatewayToolCallerReceiptAdmission } from "../agents/tools/gatew
 import type { GatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-receipt.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { projectSessionEntryCapabilityFacts } from "../config/sessions/session-entry-capability-facts.js";
 import type {
   SessionEntryCurrentFacts,
   SessionEntryCurrentSource,
 } from "../config/sessions/session-entry-current.types.js";
+import { captureIncognitoSessionTopology } from "../config/sessions/session-incognito-binding.js";
 import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -37,6 +43,47 @@ type CompletionGrantLineageParams = {
   >;
 };
 
+function createMemoryCompletionCapabilityStore(): SessionCapabilityLookup | undefined {
+  const memory = getSessionActorStorageBinding({});
+  if (!memory) {
+    return undefined;
+  }
+  const storage = memory.actor.storage!;
+  const owners = new Map<string, ReturnType<typeof captureSessionActorStorageOwner>>();
+  return {
+    authoritative: true,
+    get(sessionKey) {
+      const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+      if (agentId === memory.agentId) {
+        const entry = storage.readCurrent(
+          { type: "session.entry.read", input: { sessionKey, projection: "list" } },
+          memory.authority,
+        );
+        return entry && projectSessionEntryCapabilityFacts(entry);
+      }
+      if (!agentId || !isIncognitoSessionKey(sessionKey)) {
+        throw new Error("Completion lineage requires its selected session actor owner");
+      }
+      if (!owners.has(agentId)) {
+        owners.set(agentId, captureSessionActorStorageOwner({ agentId, sessionActor: memory }));
+      }
+      const selected = owners.get(agentId);
+      const entry = selected?.owner?.readSession(sessionKey, selected.authority)?.entry;
+      return entry && projectSessionEntryCapabilityFacts(entry);
+    },
+    getById(sessionId) {
+      const row = storage.readCurrent(
+        {
+          type: "session.entry.readById",
+          input: { sessionId, projection: "list", currentOnly: true },
+        },
+        memory.authority,
+      );
+      return row && projectSessionEntryCapabilityFacts(row.entry);
+    },
+  };
+}
+
 /**
  * Whether a completion grant's requester lineage still verifies. Grants without a
  * handoff carry no lineage and are always current. The child entry can be removed or
@@ -55,7 +102,8 @@ function isCompletionGrantLineageCurrent(params: CompletionGrantLineageParams): 
       modelId: context.modelId,
       inputProvenance: context.inputProvenance,
       trustedInternalHandoff: context.trustedInternalHandoff,
-      preparedSessionCapabilityStore: params.preparedSessionCapabilityStore,
+      preparedSessionCapabilityStore:
+        params.preparedSessionCapabilityStore ?? createMemoryCompletionCapabilityStore(),
     })
   );
 }
@@ -73,6 +121,36 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
   if (!params.context.trustedInternalHandoff) {
     return { isCurrent: () => true, admission: undefined };
   }
+  const memoryStore = createMemoryCompletionCapabilityStore();
+  if (memoryStore) {
+    const isCurrent = () => {
+      try {
+        return isCompletionGrantLineageCurrent({
+          ...params,
+          preparedSessionCapabilityStore: memoryStore,
+        });
+      } catch {
+        return false;
+      }
+    };
+    const admission: GatewayToolCallerReceiptAdmission = {
+      async prepare() {
+        return {
+          isCurrent,
+          current: {
+            sources: [],
+            assertCurrent() {
+              if (!isCurrent()) {
+                throw new Error("CLI completion tool grant no longer matches its requester policy");
+              }
+            },
+          },
+        };
+      },
+    };
+    return { admission, isCurrent };
+  }
+  const topology = captureIncognitoSessionTopology();
   const admission: GatewayToolCallerReceiptAdmission = {
     async prepare() {
       const { withSessionStoreReaderInWorker } =
@@ -83,13 +161,13 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
         assertSourceCurrent(): void;
       }> = [];
       const entries = new Map<string, SessionEntryCurrentFacts | undefined>();
-      const nativeReads = new Map<string, () => SessionEntryCurrentFacts | undefined>();
+      const publishedReads = new Map<string, () => SessionEntryCurrentFacts | undefined>();
       const readKey = (query: LineageRead) => JSON.stringify([query.kind, query.key]);
       const get = (query: LineageRead) => {
         const key = readKey(query);
-        const native = nativeReads.get(key);
-        if (native) {
-          return native();
+        const published = publishedReads.get(key);
+        if (published) {
+          return published();
         }
         if (!entries.has(key)) {
           throw new CompletionLineageReadRequired(query);
@@ -101,8 +179,13 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
         get: (key) => get({ kind: "key", key }),
         getById: (key) => get({ kind: "id", key }),
       };
-      const current = () =>
-        isCompletionGrantLineageCurrent({ ...params, preparedSessionCapabilityStore: store });
+      const current = () => {
+        topology?.assertCurrent();
+        return isCompletionGrantLineageCurrent({
+          ...params,
+          preparedSessionCapabilityStore: store,
+        });
+      };
       const maximumReads = 2 * MAX_DELEGATION_LINEAGE_DEPTH;
       for (;;) {
         let query: LineageRead;
@@ -117,7 +200,7 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
           }
           query = error.query;
         }
-        if (reads.length + nativeReads.size >= maximumReads) {
+        if (reads.length + publishedReads.size >= maximumReads) {
           throw new Error("Completion lineage changed during worker preparation");
         }
         const agentId = parseAgentSessionKey(query.key)?.agentId;
@@ -125,9 +208,20 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
           throw new Error("Completion lineage requires an agent-qualified source");
         }
         if (query.kind === "key" && isIncognitoSessionKey(query.key)) {
+          if (topology) {
+            topology.assertCurrent();
+            const actor = topology.entries.find((candidate) => candidate.agentId === agentId);
+            const claim = actor?.facts.captureCurrent(query.key);
+            publishedReads.set(readKey(query), () => {
+              topology.assertCurrent();
+              claim?.assertCurrent();
+              return actor?.facts.readCapability(query.key);
+            });
+            continue;
+          }
           const pathname = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
           const database = getOpenIncognitoAgentDatabase(agentId, pathname);
-          nativeReads.set(readKey(query), () => {
+          publishedReads.set(readKey(query), () => {
             if (getOpenIncognitoAgentDatabase(agentId, pathname) !== database) {
               throw new Error("Completion lineage incognito owner changed");
             }
@@ -142,9 +236,12 @@ export function createCompletionGrantLineageAdmission(params: CompletionGrantLin
           });
           continue;
         }
-        const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+        const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+          agentId,
+          env: topology?.env,
+        });
         await withSessionStoreReaderInWorker(
-          { agentId, storePath },
+          { agentId, storePath, env: topology?.env },
           async (owner) => {
             const result = await owner.reader.readExactEntries({
               ...(query.kind === "key"

@@ -1,14 +1,27 @@
 name: OpenClaw Release Prepare
+run-name: ${{ inputs.operation == 'admit-qualification' && format('Qualification Admission {0}', fromJSON(inputs.qualification_request).requestId) || 'OpenClaw Release Prepare' }}
 
 on:
   workflow_dispatch:
     inputs:
-      publish_inputs:
-        description: Frozen publication inputs JSON from the release candidate checklist
+      operation:
+        description: Prepare publication or authenticate an exact reviewed candidate qualification request
         required: true
+        type: choice
+        default: prepare
+        options:
+          - prepare
+          - admit-qualification
+      qualification_request:
+        description: Exact reviewed C=Q qualification request from full-release-validation-at-sha
+        required: false
+        type: string
+      publish_inputs:
+        description: Frozen publication inputs JSON from the release candidate checklist (required for prepare)
+        required: false
         type: string
       preparation_request:
-        description: Recovery only — retained request JSON with both explicitly identified child run IDs
+        description: Recovery only — retained request JSON with the explicitly identified ClawHub child run ID
         required: false
         type: string
 
@@ -18,11 +31,12 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"
 
 jobs:
   prepare:
     name: Start or recover exact npm and ClawHub preparation
-    if: github.repository == 'openclaw/openclaw'
+    if: github.repository == 'openclaw/openclaw' && inputs.operation == 'prepare'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -69,7 +83,7 @@ jobs:
             {
               echo '## Preparation dispatch needs inspection'
               echo
-              echo 'A null child ID is unconfirmed, not proof that no run was created. Inspect Actions before another dispatch. Fill both exact child run IDs in this request and start OpenClaw Release Prepare with the same publish_inputs plus this preparation_request; recovery adopts those runs without dispatching builds.'
+              echo 'A null ClawHub child ID is unconfirmed, not proof that no run was created. Inspect Actions before another dispatch. Preserve npmArtifact exactly, fill the exact clawhubRunId in this request, and start OpenClaw Release Prepare with the same publish_inputs plus this preparation_request; recovery adopts that run without rebuilding or redispatching plugin npm.'
               echo
               echo '```json'
               cat "$RUNNER_TEMP/release-ready/request.json"
@@ -131,3 +145,36 @@ jobs:
             artifactId: artifact.id, artifactName: env.ARTIFACT_NAME, artifactDigest: `sha256:${env.ARTIFACT_DIGEST}`, artifactSizeBytes: artifact.size_in_bytes };
           appendFileSync(env.GITHUB_STEP_SUMMARY, `## Prepared npm and ClawHub publication\n\nAfter this run succeeds, run **OpenClaw Release Button** at \`${env.GITHUB_REF_NAME}\` with this \`prepared_artifact\` input:\n\n\`\`\`json\n${JSON.stringify(descriptor)}\n\`\`\`\n\nThe button publishes through the existing protected release workflow and waits for canonical ClawHub byte verification. Native app/store and website owners retain their existing release steps.\n`);
           NODE
+
+  admit_qualification:
+    name: Admit frozen candidate qualification
+    if: github.repository == 'openclaw/openclaw' && inputs.operation == 'admit-qualification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout authenticated P admission owner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          submodules: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+      - name: Authenticate operator and freeze complete Q policy
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-qualification-admission.mjs
+      - name: Upload immutable qualification admission
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.admission.outputs.artifact_name }}
+          path: ${{ runner.temp }}/qualification-admission/qualification-admission.json
+          if-no-files-found: error
+          # Expiry is a recovery boundary, never permission to trust a Q witness instead.
+          retention-days: 90

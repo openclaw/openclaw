@@ -42,7 +42,6 @@ describe("yielded settle final after requester reset", () => {
       const entry = {
         sessionId: "parent-session",
         lifecycleRevision: "before-reset",
-        status: "running" as const,
         updatedAt: Date.now(),
       };
       await replaceSessionEntry(target, entry);

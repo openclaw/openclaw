@@ -16,6 +16,29 @@ import { describeWithLanNodePairingServer } from "./test-helpers.lan-pairing.js"
 installGatewayTestHooks({ scope: "suite" });
 
 describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve", (attempt) => {
+  test("does not reuse earlier silent provenance for a remote initial capability surface", async () => {
+    await attempt({
+      identityName: "remote-node-earlier-silent-approval",
+      run: async ({ loaded, connectNode }) => {
+        const request = await requestDevicePairing({
+          deviceId: loaded.identity.deviceId,
+          publicKey: loaded.publicKey,
+          role: "node",
+          scopes: [],
+        });
+        await pairingApprovals.approveDevicePairing(request.request.requestId, {
+          callerScopes: [],
+          approvedVia: "silent",
+        });
+        expect(await connectNode()).toMatchObject({ ok: true });
+        const paired = await getPairedDevice(loaded.identity.deviceId);
+        expect(paired?.approvedVia).toBe("silent");
+        expect(paired?.nodeSurface).toBeUndefined();
+        expect(paired?.pendingNodeSurface).toBeDefined();
+      },
+    });
+  });
+
   test("keeps an existing operator's node role upgrade pending from a matching CIDR", async () => {
     await attempt({
       identityName: "trusted-cidr-node-role-upgrade",

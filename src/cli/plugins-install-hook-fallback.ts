@@ -22,7 +22,6 @@ import {
   resolveFullyBlockedConfigMutationReason,
   type ConfigSnapshotForInstallExecution,
 } from "../plugins/install-config.js";
-import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { resolveBundledInstallPlanForNpmFailure } from "../plugins/install-source-plan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
@@ -33,10 +32,10 @@ import { shortenHomePath } from "../utils.js";
 import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
-  createHookPackInstallLogger,
   createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
+import { runWithLocalPluginState } from "./plugins-local-state.js";
 
 type HookCompatibleSource = Extract<PluginsInstallParams, { source: "local" | "npm" }>;
 type InstallParams = Parameters<typeof installManagedPlugin>[0] & {
@@ -55,16 +54,6 @@ type InstallResult =
       installSource?: ManagedPluginLifecycleError["installSource"];
     };
 
-export function resolveInstallSafetyOverrides(
-  overrides: InstallSafetyOverrides,
-): InstallSafetyOverrides {
-  return {
-    config: overrides.config,
-    onInstallPolicyWarning: overrides.onInstallPolicyWarning,
-    trustedSourceLinkedOfficialInstall: overrides.trustedSourceLinkedOfficialInstall,
-  };
-}
-
 async function attemptHookInstall(
   source: HookCompatibleSource,
   params: InstallParams,
@@ -75,12 +64,16 @@ async function attemptHookInstall(
   },
   assertOwned?: () => void,
 ): Promise<InstallHooksResult> {
+  const runtime = params.runtime ?? defaultRuntime;
   const common = requestDeferredPackageDirInstall(
     {
-      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
+      ...params.safetyOverrides,
       config: params.snapshot.config,
       mode: source.mode,
-      logger: createHookPackInstallLogger(params.runtime),
+      logger: {
+        info: (message: string) => runtime.log(message),
+        warn: (message: string) => runtime.log(theme.warn(message)),
+      },
       ...options,
     },
     assertOwned,
@@ -114,6 +107,17 @@ async function installHookPack(
         "--no-enable is only supported for plugins. Install hook packs separately with openclaw hooks install.",
     };
   }
+  return await runWithLocalPluginState("install (hook fallback)", (assertCurrent) =>
+    installHookPackLocal(source, params, expectedPackageKind, assertCurrent),
+  );
+}
+
+async function installHookPackLocal(
+  source: HookCompatibleSource,
+  params: InstallParams,
+  expectedPackageKind: "hook-only" | undefined,
+  assertCurrent: () => void,
+): Promise<InstallResult> {
   // Online plugin rejection can precede this fallback; acquire and reread only for the hook write.
   return await withPluginLifecycleLease({ signal: params.signal }, async (lease) => {
     const request = resolvePluginInstallRequestContext({
@@ -142,6 +146,7 @@ async function installHookPack(
       return { ok: false, error: "Linked hook pack paths must be directories." };
     }
     const beforePersistentApply = () => {
+      assertCurrent();
       params.signal?.throwIfAborted();
       lease.assertOwned();
       snapshot.writeOptions.assertConfigPathForWrite?.();

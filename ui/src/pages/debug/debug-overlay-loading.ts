@@ -10,7 +10,7 @@ export const DEBUG_OVERLAY_SECTION_HEADERS = {
 
 export type DebugOverlaySectionId = keyof typeof DEBUG_OVERLAY_SECTION_HEADERS;
 
-export function renderDebugOverlaySectionLoading(id: DebugOverlaySectionId) {
+function renderDebugOverlaySectionLoading(id: DebugOverlaySectionId) {
   return html`
     <div
       class="debug-overlay__placeholder debug-overlay__placeholder--${id}"

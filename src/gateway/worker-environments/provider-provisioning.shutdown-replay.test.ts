@@ -83,7 +83,7 @@ describe("worker node provisioning shutdown replay", () => {
     const intent = deriveEnvironmentIntent(
       `session-dispatch:${REQUEST.sessionId}:${requested.generation}`,
     );
-    const placement = placements.transition({
+    const placement = await placements.transition({
       sessionId: requested.sessionId,
       from: "requested",
       to: "provisioning",
@@ -129,6 +129,7 @@ describe("worker node provisioning shutdown replay", () => {
 
     const createDispatch = (environments: typeof first) =>
       createProviderReplayDispatch({
+        initialPlacements: placements.list(),
         placements,
         environments,
         resolveDevicePlacementRequirement: async () => ({

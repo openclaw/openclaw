@@ -134,10 +134,11 @@ test("new unpinned sessions bind the account for the permitted operator default"
 });
 
 test.each([
+  { mode: "public", model: "default", expected: "default" },
+  { mode: "in-process", model: "default", expected: "default" },
   { mode: "public", model: "middle", expected: "final" },
   { mode: "in-process", model: "middle", expected: "middle" },
   { mode: "signed", model: "middle", expected: "middle" },
-  { mode: "in-process", model: "custom/model", expected: "custom/model" },
   { mode: "disallowed", model: "middle", expected: undefined },
   { mode: "revoked", model: "middle", expected: undefined },
   { mode: "mismatched", model: "middle", expected: undefined },

@@ -190,10 +190,11 @@ function* parseContentDispositionParameters(header: string): Generator<{
     if (separator > 0) {
       yield {
         name: parameter.slice(0, separator).trim().toLowerCase(),
+        // Apostrophes are token characters, not HTTP quoted-string delimiters.
         value: parameter
           .slice(separator + 1)
           .trim()
-          .replace(/^["']|["']$/g, ""),
+          .replace(/^"|"$/g, ""),
       };
     }
   }
@@ -291,30 +292,28 @@ async function fetchGuardedMediaResponse(
     url,
   });
   const requestSignal = responseHeaderDeadline.signal;
-  const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
-    await fetchWithSsrFGuard(
-      (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
-        ? withTrustedExplicitProxyGuardedFetchMode
-        : withStrictGuardedFetchMode)({
-        url,
-        fetchImpl,
-        ...(beforeRequest ? { beforeRequest } : {}),
-        init: requestInit,
-        maxRedirects,
-        ...(requireHttps !== undefined ? { requireHttps } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(requestSignal ? { signal: requestSignal } : {}),
-        policy: ssrfPolicy,
-        lookupFn: attempt.lookupFn ?? lookupFn,
-        dispatcherPolicy: attempt.dispatcherPolicy,
-      }),
-    );
   try {
     let result!: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     const attemptErrors: unknown[] = [];
-    for (let i = 0; i < attempts.length; i += 1) {
+    for (const [i, attempt] of attempts.entries()) {
       try {
-        result = await runGuardedFetch(expectDefined(attempts[i], "attempts entry at i"));
+        result = await fetchWithSsrFGuard(
+          (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
+            ? withTrustedExplicitProxyGuardedFetchMode
+            : withStrictGuardedFetchMode)({
+            url,
+            fetchImpl,
+            ...(beforeRequest ? { beforeRequest } : {}),
+            init: requestInit,
+            maxRedirects,
+            ...(requireHttps !== undefined ? { requireHttps } : {}),
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+            ...(requestSignal ? { signal: requestSignal } : {}),
+            policy: ssrfPolicy,
+            lookupFn: attempt.lookupFn ?? lookupFn,
+            dispatcherPolicy: attempt.dispatcherPolicy,
+          }),
+        );
         break;
       } catch (err) {
         if (
@@ -335,9 +334,6 @@ async function fetchGuardedMediaResponse(
         attemptErrors.push(err);
       }
     }
-    // Clear only the header timer. The merged parent signal stays attached until
-    // release so shutdown can still interrupt a response body read.
-    responseHeaderDeadline.cleanup();
     return {
       response: result.response,
       finalUrl: result.finalUrl,
@@ -345,8 +341,10 @@ async function fetchGuardedMediaResponse(
       sourceUrl,
     };
   } catch (err) {
-    responseHeaderDeadline.cleanup();
     throw createMediaFetchFailure(sourceUrl, err);
+  } finally {
+    // Clear only the header timer; release owns the parent signal during body reads.
+    responseHeaderDeadline.cleanup();
   }
 }
 
@@ -568,28 +566,6 @@ function shouldRetryMediaFetch(err: unknown): boolean {
   return isTransientNetworkError(err);
 }
 
-async function withMediaFetchRetry<T>(
-  options: FetchMediaOptions,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const retry = options.retry;
-  if (!retry) {
-    return await fn();
-  }
-  return await retryAsync(fn, {
-    label: "media:fetch",
-    ...retry,
-    shouldRetry: (err, attempt) =>
-      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
-    sleep:
-      retry.sleep ??
-      ((delay) =>
-        sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
-          throw createMediaFetchFailure(redactSensitiveText(options.url), cause);
-        })),
-  });
-}
-
 /** Validates and saves a caller-provided response without performing a new fetch. */
 export async function saveResponseMedia(
   res: Response,
@@ -632,7 +608,7 @@ async function withGuardedMediaResponse<T>(
   options: FetchMediaOptions,
   consume: (result: GuardedMediaResponse) => Promise<T>,
 ): Promise<T> {
-  return await withMediaFetchRetry(options, async () => {
+  const run = async () => {
     const result = await fetchGuardedMediaResponse(options);
     const { release } = result;
     try {
@@ -647,6 +623,22 @@ async function withGuardedMediaResponse<T>(
     } finally {
       await release();
     }
+  };
+  const retry = options.retry;
+  if (!retry) {
+    return await run();
+  }
+  return await retryAsync(run, {
+    label: "media:fetch",
+    ...retry,
+    shouldRetry: (err, attempt) =>
+      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    sleep:
+      retry.sleep ??
+      ((delay) =>
+        sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
+          throw createMediaFetchFailure(redactSensitiveText(options.url), cause);
+        })),
   });
 }
 

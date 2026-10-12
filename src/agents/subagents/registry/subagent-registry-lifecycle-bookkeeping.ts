@@ -1,5 +1,4 @@
-import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayDetachedWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -7,6 +6,7 @@ import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-too
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   CleanupBookkeepingParams,
   SubagentLifecycleWakeContext,
@@ -20,28 +20,6 @@ import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-function applyCleanupBookkeeping(
-  cleanup: CleanupBookkeepingParams,
-  suppressSessionEffects: boolean,
-  retireAfterSettle: boolean,
-): void {
-  const { entry } = cleanup;
-  entry.cleanupCompletedAt = cleanup.completedAt;
-  if (suppressSessionEffects) {
-    entry.execution = {
-      ...entry.execution,
-      restartRecovery: undefined,
-      suppressSessionEffects: true,
-    };
-    entry.terminalOwner = undefined;
-  }
-  if (entry.collect) {
-    entry.requesterSettleWake = undefined;
-  } else if (!cleanup.skipRequesterSettleWake) {
-    markRequesterSettleWakePending(entry, { retireAfterSettle });
-  }
-}
 
 export async function completeCleanupBookkeeping(
   context: SubagentLifecycleWakeContext,
@@ -83,7 +61,7 @@ export async function completeCleanupBookkeeping(
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // Admission can outlive the caller's async scope. Own the tail's lifetime
       // and recheck row ownership after waiting; surviving tails still block snapshots.
-      void runWithGatewayDetachedWorkAdmission(async () => {
+      void runWithGatewayDetachedWorkContinuation(async () => {
         if (
           !(await context.shouldSuppressSessionEffects(entry)) &&
           postBookkeepingEffectsAllowed()
@@ -176,11 +154,17 @@ export async function completeCleanupBookkeeping(
       retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
       cleanupParams.discardDelivery?.(draft);
       if (!retireImmediately) {
-        applyCleanupBookkeeping(
-          { ...cleanupParams, entry: draft },
-          suppressSessionEffects,
-          retireAfterSettle,
-        );
+        draft.cleanupCompletedAt = cleanupParams.completedAt;
+        if (suppressSessionEffects) {
+          draft.execution.restartRecovery = undefined;
+          draft.execution.suppressSessionEffects = true;
+          draft.terminalOwner = undefined;
+        }
+        if (draft.collect) {
+          draft.requesterSettleWake = undefined;
+        } else if (!cleanupParams.skipRequesterSettleWake) {
+          markRequesterSettleWakePending(draft, { retireAfterSettle });
+        }
       }
     },
   });
@@ -189,7 +173,7 @@ export async function completeCleanupBookkeeping(
     subagentRuns.confirmRetirement(entry);
   }
   if (retireImmediately || entry.collect || cleanupParams.skipRequesterSettleWake) {
-    clearGatewayContextResolver(entry);
+    retireSubagentGatewayBinding(entry);
   }
   if (isDeleteCleanup || retireAfterSettle) {
     params.clearPendingLifecycleError(entry.runId);

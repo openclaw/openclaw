@@ -37,6 +37,7 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
 import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
@@ -239,7 +240,7 @@ test("identity changes fence archive before cancellation and force fresh authori
 
     let sharingSettled = false;
     const sharing = track(
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("archive", {
         scope: sharingTarget.storePath,
         identities: [
           sharingTarget.canonicalKey,
@@ -429,7 +430,7 @@ test("alias archive lets an earlier alias mutation finish before canonical recla
     const reclaim = vi.fn(async () => {
       reclaimEntered.resolve();
       await allowNestedReclaim.promise;
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("archive", {
         scope: storePath,
         identities: [aliasKey, sessionKey, sessionId],
         run: async () => {},
@@ -455,7 +456,7 @@ test("alias archive lets an earlier alias mutation finish before canonical recla
     );
     await racePromiseWithAbortSignal(reclaimEntered.promise, signal);
     const contender = track(
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("archive", {
         scope: storePath,
         identities: [aliasKey],
         run: async () => {
@@ -480,7 +481,11 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:archive-worker-recheck";
   const sessionId = "session-archive-worker-recheck";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const retained = {
+    abortedLastRun: true,
+    lifecycleRunId: "retained-worker-run",
+  };
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, retained) } });
   const release = vi.fn();
   const workerEnvironmentService = createWorkerInferenceDrainService(() => ({
     drained: Promise.resolve(),
@@ -501,24 +506,32 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   expect(archived.ok).toBe(false);
   expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(retained);
   expect(release).toHaveBeenCalledOnce();
 });
 
-test("sessions.patch fails closed when active worker inference has no archive drain", async () => {
+test("sessions.patch fails closed when active worker inference refuses its archive drain", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:archive-worker-drain-unavailable";
   const sessionId = "session-archive-worker-drain-unavailable";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+
+  const workerEnvironmentService = {};
+  registerWorkerInferenceSessionControl(workerEnvironmentService, {
+    hasSession: () => true,
+    reserveSessionDrain: () => {
+      throw new Error("Worker inference drain is unavailable");
+    },
+    captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+    resolveSessionTargetForRunId: () => undefined,
+  });
 
   const archived = await directSessionReq(
     "sessions.patch",
     { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
-        workerEnvironmentService: {
-          cancelInferenceForSession: vi.fn(() => []),
-          hasInferenceForSession: vi.fn(() => true),
-        },
+        workerEnvironmentService,
       },
     },
   );

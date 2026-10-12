@@ -5,7 +5,7 @@ import {
   formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatLocationText,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
   toInboundMediaFactsWithMetadata,
   toLocationContext,
   type BuildChannelInboundEventContextParams,
@@ -368,11 +368,12 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
       })
     : undefined;
 
-  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    sessionKey: params.route.sessionKey,
-  });
+  const { storePath, envelopeOptions, previousTimestamp } =
+    await resolveInboundSessionEnvelopeContextAsync({
+      cfg: params.cfg,
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+    });
 
   const agentBody = params.agentBody ?? params.rawBody;
   const media =
@@ -520,7 +521,13 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const nativeMediaKind = extractNativeMediaKind(message);
   const mediaFacts: ChannelInboundMediaInput[] =
     allMedia.length > 0
-      ? allMedia.map((media) => ({ ...media, kind: nativeMediaKind }))
+      ? allMedia.map((media) => ({
+          ...media,
+          kind:
+            nativeMediaKind === "document" && media.contentType?.startsWith("image/")
+              ? "image"
+              : nativeMediaKind,
+        }))
       : nativeMediaKind
         ? [{ kind: nativeMediaKind }]
         : [];

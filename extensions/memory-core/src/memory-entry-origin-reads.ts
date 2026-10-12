@@ -1,23 +1,23 @@
 import type { DatabaseSync } from "node:sqlite";
-import { readMemoryEntryOriginsInDatabase } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  encodeSqliteStringSet,
+  readMemoryEntryOriginsInDatabase,
+  sqliteStringSetEntries,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   tableExists,
-  withFreshOpenClawAgentDatabaseReadOnly,
-} from "openclaw/plugin-sdk/sqlite-runtime";
-import type { MemoryOriginReadInput, MemoryOriginReadOutput } from "./memory-entry-origins-task.js";
-import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  MEMORY_SESSION_TOMBSTONE_BATCH_SIZE,
+  type MemoryOriginReadInput,
+  type MemoryOriginReadOutput,
+} from "./memory-entry-origins-task.js";
 
 type OriginReadDatabase = {
-  memory_entry_origins: { entry_key: string; agent_id: string; session_id: string };
-  memory_session_tombstones: {
-    session_id: string;
-    agent_id: string;
-    reason: string;
-    created_at: number;
-  };
-  memory_index_chunks: { text: string; source: string };
+  memory_session_tombstones: { session_id: string; agent_id: string };
 };
 
 function queryOrigins(
@@ -33,53 +33,28 @@ function queryOrigins(
           : [],
     };
   }
-  if (request.kind === "origin-exists") {
-    let exists = false;
-    if (db && tableExists(db, "memory_entry_origins")) {
-      let query = getNodeSqliteKysely<OriginReadDatabase>(db)
-        .selectFrom("memory_entry_origins")
-        .select("entry_key")
-        .where("agent_id", "=", request.agentId)
-        .where("entry_key", "in", request.entryKeys);
-      if (request.sessionIds) {
-        query = query.where("session_id", "in", request.sessionIds);
-      }
-      exists = executeSqliteQuerySync(db, query.limit(1)).rows.length > 0;
-    }
-    return { kind: request.kind, exists };
+  if (!db || !tableExists(db, "memory_session_tombstones")) {
+    return { kind: request.kind, indices: [] };
   }
-  if (request.kind === "session-tombstones") {
-    if (!db || !tableExists(db, "memory_session_tombstones")) {
-      return { kind: request.kind, rows: [] };
-    }
-    let query = getNodeSqliteKysely<OriginReadDatabase>(db)
-      .selectFrom("memory_session_tombstones")
-      .selectAll()
-      .where("agent_id", "=", request.agentId);
-    if (request.sessionIds) {
-      query = query.where("session_id", "in", request.sessionIds);
-    }
-    return {
-      kind: request.kind,
-      rows: executeSqliteQuerySync(db, query.orderBy("session_id", "asc")).rows.map((row) => ({
-        sessionId: row.session_id,
-        agentId: row.agent_id,
-        reason: row.reason,
-        createdAt: row.created_at,
-      })),
-    };
-  }
-  const keys = db
-    ? executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<OriginReadDatabase>(db)
-          .selectFrom("memory_index_chunks")
-          .select("text")
-          .where("source", "=", "memory")
-          .where("text", "like", "%openclaw-memory-promotion:%"),
-      ).rows.flatMap(({ text }) => extractPromotionKeys(text))
-    : [];
-  return { kind: request.kind, keys };
+  const query = getNodeSqliteKysely<OriginReadDatabase>(db)
+    .selectFrom(sqliteStringSetEntries(encodeSqliteStringSet(request.sessionIds)).as("selected"))
+    .select("selected.key")
+    .where("selected.key", "<", MEMORY_SESSION_TOMBSTONE_BATCH_SIZE)
+    .where((expression) =>
+      expression.exists(
+        expression
+          .selectFrom("memory_session_tombstones")
+          .select("session_id")
+          .where("agent_id", "=", request.agentId)
+          .whereRef("session_id", "=", "selected.value"),
+      ),
+    )
+    .orderBy("selected.key", "asc")
+    .limit(MEMORY_SESSION_TOMBSTONE_BATCH_SIZE);
+  return {
+    kind: request.kind,
+    indices: executeSqliteQuerySync(db, query).rows.map((row) => row.key),
+  };
 }
 
 export function readMemoryOriginsInWorker(request: MemoryOriginReadInput): MemoryOriginReadOutput {

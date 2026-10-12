@@ -216,14 +216,12 @@ struct RootTabs: View {
                 // and the periodic attention refresh all land here.
                 .task(id: self.sidebarRefreshID) {
                     guard self.scenePhase == .active else { return }
-                    await self.sidebarModel.refresh(appModel: self.appModel)
-                    await self.appModel.refreshPendingApprovalInbox()
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(600))
-                        guard !Task.isCancelled else { return }
+                    repeat {
                         await self.sidebarModel.refresh(appModel: self.appModel)
                         await self.appModel.refreshPendingApprovalInbox()
-                    }
+                        guard !Task.isCancelled else { return }
+                        try? await Task.sleep(for: .seconds(600))
+                    } while !Task.isCancelled
                 }
                 .task(id: "\(self.sidebarRefreshID):events") {
                     guard self.scenePhase == .active else { return }
@@ -300,7 +298,6 @@ struct RootTabs: View {
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
-                headerTitle: "Overview",
                 headerSidebarAction: self.sidebarHeaderAction,
                 dashboardModel: self.sidebarModel,
                 openChat: { self.selectSidebarDestination(.chat) },
@@ -374,6 +371,7 @@ struct RootTabs: View {
             } else {
                 NavigationStack(path: self.$sidebarNavigationPath) {
                     self.sidebarDetailShell
+                        .background(SidebarNavigationMarginAnchor())
                 }
             }
         }
@@ -403,18 +401,13 @@ struct RootTabs: View {
         else {
             return nil
         }
-        if self.isSidebarVisible {
-            return OpenClawSidebarHeaderAction(
-                systemName: "line.3.horizontal",
-                accessibilityLabel: .localized("Hide Sidebar"),
-                accessibilityIdentifier: Self.sidebarHideButtonAccessibilityIdentifier,
-                action: { self.hideSidebar() })
-        }
         return OpenClawSidebarHeaderAction(
             systemName: "line.3.horizontal",
-            accessibilityLabel: .localized("Show Sidebar"),
-            accessibilityIdentifier: Self.sidebarShowButtonAccessibilityIdentifier,
-            action: { self.showSidebar() })
+            accessibilityLabel: self.isSidebarVisible ? .localized("Hide Sidebar") : .localized("Show Sidebar"),
+            accessibilityIdentifier: self.isSidebarVisible
+                ? Self.sidebarHideButtonAccessibilityIdentifier
+                : Self.sidebarShowButtonAccessibilityIdentifier,
+            action: self.isSidebarVisible ? { self.hideSidebar() } : { self.showSidebar() })
     }
 
     private var sidebarAnimation: Animation? {
@@ -544,11 +537,6 @@ struct RootTabs: View {
             }
     }
 
-    private func handleGatewayProblemReport() {
-        guard self.isGatewayToastSwipeDismissed else { return }
-        self.isGatewayToastSwipeDismissed = false
-    }
-
     private func rootLifecycle(_ content: some View) -> some View {
         self.rootRequestLifecycle(
             self.rootGatewayLifecycle(
@@ -623,7 +611,7 @@ struct RootTabs: View {
                 }
             }
             .onChange(of: self.appModel.gatewayProblemReportCount) { _, _ in
-                self.handleGatewayProblemReport()
+                self.isGatewayToastSwipeDismissed = false
             }
     }
 

@@ -173,14 +173,13 @@ export function createCodexAppServerProcessReaperService(): OpenClawPluginServic
 export async function prepareCodexAppServerProcessRegistration(): Promise<
   (child: ChildProcessWithoutNullStreams) => Promise<void>
 > {
-  if (process.platform === "win32") {
-    return async (child) => {
-      await once(child, "spawn");
-    };
-  }
-  const store = await reapRegisteredCodexAppServerOrphans();
+  const store =
+    process.platform === "win32" ? undefined : await reapRegisteredCodexAppServerOrphans();
   return async (child) => {
     await once(child, "spawn");
+    if (!store) {
+      return;
+    }
     if (!child.pid) {
       throw new ProcessInspectionError("unavailable");
     }

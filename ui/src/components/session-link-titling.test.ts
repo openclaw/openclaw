@@ -59,97 +59,86 @@ describe("SessionLinkTitler", () => {
     vi.restoreAllMocks();
   });
 
-  it("seeds a titled link and canonical href from the loaded session roster", async () => {
-    const row = {
-      key: SESSION_KEY,
-      agentId: "main",
-      kind: "direct",
-      displayName: "Cached research",
-      updatedAt: Date.now(),
-    } as GatewaySessionRow;
-    const { request, titler } = createTitler([row]);
-    const anchor = sessionAnchor();
+  it.each([false, true])(
+    "seeds roster titles while preserving navigation (label only: %s)",
+    async (labelOnly) => {
+      const { host, request, titler } = createTitler([
+        { key: SESSION_KEY, kind: "direct", displayName: "Cached research", updatedAt: Date.now() },
+      ]);
+      const label = labelOnly ? document.createElement("span") : sessionAnchor();
+      if (labelOnly) {
+        label.dataset.sessionTitleOnly = "";
+        label.dataset.sessionKey = SESSION_KEY;
+        label.innerHTML = '<span class="session-label"></span>';
+      }
+      host.append(label);
+      titler.refresh();
+      expect(label.textContent).toBe("Cached research");
+      expect(label.querySelector(":scope > .session-label")?.textContent).toBe("Cached research");
+      expect(label.classList.contains("markdown-session-link--titled")).toBe(true);
+      expect(label.title).toBe(SESSION_KEY);
+      expect(label.getAttribute("href")).toBe(labelOnly ? null : "/chat/main/research");
+      expect(label.parentElement).toBe(host);
+      expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(!labelOnly);
+      expect(request).not.toHaveBeenCalled();
+      titler.context = sessionContext([
+        {
+          key: SESSION_KEY,
+          kind: "direct",
+          displayName: "Current research",
+          updatedAt: Date.now(),
+        },
+      ]);
+      await titler.decorate(label);
+      expect(label.textContent).toBe("Current research");
+      expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(!labelOnly);
+    },
+  );
 
-    await titler.decorate(anchor);
+  it.each([false, true])(
+    "caches preview titles without replacing producer labels (existing label: %s)",
+    async (existingLabel) => {
+      const request = vi.fn().mockResolvedValue(previewResponse());
+      const { titler } = createTitler([], request);
+      const first = sessionAnchor();
+      const second = sessionAnchor();
+      const label = document.createElement("span");
+      label.className = "session-label";
+      label.textContent = SESSION_KEY;
+      if (existingLabel) {
+        first.replaceChildren(label);
+      }
 
-    expect(anchor.textContent).toBe("Cached research");
-    expect(anchor.querySelector(":scope > .session-label")?.textContent).toBe("Cached research");
-    expect(anchor.classList.contains("markdown-session-link--titled")).toBe(true);
-    expect(anchor.title).toBe(SESSION_KEY);
-    expect(anchor.getAttribute("href")).toBe("/chat/main/research");
-    expect(request).not.toHaveBeenCalled();
-  });
+      await titler.decorate(first, true);
+      await titler.decorate(second, true);
 
-  it("decorates disclosure labels without making them navigation targets", async () => {
-    const { host, request, titler } = createTitler([
-      { key: SESSION_KEY, kind: "direct", displayName: "Cached research", updatedAt: Date.now() },
-    ]);
-    const label = document.createElement("span");
-    label.dataset.sessionTitleOnly = "";
-    label.dataset.sessionKey = SESSION_KEY;
-    label.innerHTML = '<span class="session-label"></span>';
-    host.append(label);
-    titler.refresh();
-    expect(label.textContent).toBe("Cached research");
-    expect(label.parentElement).toBe(host);
-    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
-    expect(request).not.toHaveBeenCalled();
-    titler.context = sessionContext([
-      { key: SESSION_KEY, kind: "direct", displayName: "Current research", updatedAt: Date.now() },
-    ]);
-    await titler.decorate(label);
-    expect(label.textContent).toBe("Current research");
-    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
-  });
-
-  it("loads an unseeded title from the preview RPC and reuses its cache", async () => {
-    const request = vi.fn().mockResolvedValue(previewResponse());
-    const { titler } = createTitler([], request);
-    const first = sessionAnchor();
-    const second = sessionAnchor();
-
-    await titler.decorate(first, true);
-    await titler.decorate(second, true);
-
-    expect(first.textContent).toBe("Research plan");
-    expect(second.textContent).toBe("Research plan");
-    expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
-    await titler.decorate(first, true);
-    expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
-    expect(first.getAttribute("href")).toBe("/chat/main/research");
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
-  });
-
-  it("preserves a producer-owned label node when resolving its title", async () => {
-    const request = vi.fn().mockResolvedValue(previewResponse());
-    const { titler } = createTitler([], request);
-    const anchor = sessionAnchor();
-    const label = document.createElement("span");
-    label.className = "session-label";
-    label.textContent = SESSION_KEY;
-    anchor.replaceChildren(label);
-
-    await titler.decorate(anchor, true);
-
-    expect(anchor.firstElementChild).toBe(label);
-    expect(label.textContent).toBe("Research plan");
-    label.textContent = "Updated by the producer";
-    expect(anchor.textContent).toBe("Updated by the producer");
-
-    titler.context = sessionContext([
-      {
-        key: SESSION_KEY,
-        kind: "direct",
-        displayName: "Replacement Gateway",
-        updatedAt: Date.now(),
-      },
-    ]);
-    await titler.decorate(anchor, true);
-
-    expect(anchor.firstElementChild).toBe(label);
-    expect(anchor.textContent).toBe("Updated by the producer");
-  });
+      expect(first.textContent).toBe("Research plan");
+      expect(second.textContent).toBe("Research plan");
+      expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
+      await titler.decorate(first, true);
+      expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
+      expect(first.getAttribute("href")).toBe("/chat/main/research");
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
+      if (existingLabel) {
+        expect(first.firstElementChild).toBe(label);
+        expect(label.textContent).toBe("Research plan");
+        label.textContent = "Updated by the producer";
+        expect(first.textContent).toBe("Updated by the producer");
+        titler.context = sessionContext([
+          {
+            key: SESSION_KEY,
+            kind: "direct",
+            displayName: "Replacement Gateway",
+            updatedAt: Date.now(),
+          },
+        ]);
+        await titler.decorate(first, true);
+        expect(first.firstElementChild).toBe(label);
+        expect(first.textContent).toBe("Updated by the producer");
+      }
+    },
+  );
 
   it.each(
     ["cached", "pending"].flatMap((state) =>
@@ -237,34 +226,10 @@ describe("SessionLinkTitler", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("resolves short references only from the loaded roster", async () => {
-    const sessionKey = "agent:main:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
-    const row = {
-      key: sessionKey,
-      agentId: "main",
-      kind: "direct",
-      displayName: "Research plan",
-      updatedAt: Date.now(),
-    } as GatewaySessionRow;
-    const request = vi.fn().mockResolvedValue(previewResponse());
-    const unseeded = createTitler([], request).titler;
-    const unseededAnchor = document.createElement("a");
-    unseededAnchor.className = "markdown-session-link";
-    unseededAnchor.href = "/chat/main/research-plan-2139bddb";
-
-    await unseeded.decorate(unseededAnchor, true);
-    expect(request).not.toHaveBeenCalled();
-
-    const seeded = createTitler([row], request).titler;
-    const seededAnchor = unseededAnchor.cloneNode() as HTMLAnchorElement;
-    await seeded.decorate(seededAnchor, true);
-    expect(seededAnchor.textContent).toBe("Research plan");
-    expect(seededAnchor.title).toBe(sessionKey);
-    expect(request).not.toHaveBeenCalled();
-  });
   it.each([
     ["bare URL", `${location.origin}/chat/main/d0effac9?view=details#latest`],
     ["relative href", "[Contract](/chat/main/old-name-d0effac9?view=details#latest)"],
+    ["titled short href", "[Contract](/chat/main/shared-contract-d0effac9?view=details#latest)"],
     ["slug-only href", "[Contract](/chat/main/shared-contract?view=details#latest)"],
     ["inline code", "`/chat/main/d0effac9?view=details#latest`"],
     ["public URL", "https://chat.example/chat/main/d0effac9?view=details#latest"],
@@ -279,9 +244,10 @@ describe("SessionLinkTitler", () => {
         displayName: "Shared contract",
         updatedAt: Date.now(),
       };
-      const { host, titler, request } = createTitler([row]);
+      const rows: GatewaySessionRow[] = [];
+      const { host, titler, request } = createTitler(rows);
       titler.context = {
-        ...sessionContext([row]),
+        ...sessionContext(rows),
         runtimeConfig: {
           state: {
             configSnapshot: {
@@ -291,11 +257,15 @@ describe("SessionLinkTitler", () => {
         },
       } as unknown as ApplicationContext;
       host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true, fileLinks: true });
+      await titler.decorate(host.querySelector<HTMLElement>("[data-session-href]")!, true);
+      expect(request).not.toHaveBeenCalled();
+      rows.push(row);
       titler.connect();
       await Promise.resolve();
       const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       expect(link?.dataset.sessionKey).toBe(key);
       expect(link?.textContent).toBe("Shared contract");
+      expect(link?.title).toBe(key);
       expect(link?.getAttribute("href")).toMatch(
         /^\/chat\/main\/(?:.*d0effac9|shared-contract)\?view=details#latest$/,
       );
@@ -305,31 +275,9 @@ describe("SessionLinkTitler", () => {
     },
   );
 
-  it("keeps unknown and ambiguous URLs navigable without a hover identity, then refreshes a known row", () => {
+  it("resolves newly loaded and ambiguous references without mutating unchanged links", () => {
     const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
     const rows: GatewaySessionRow[] = [];
-    const { host, titler, request } = createTitler(rows);
-    host.innerHTML = toSanitizedMarkdownHtml("[Contract](/chat/main/d0effac9)", {
-      sessionLinks: true,
-    });
-    titler.refresh();
-    const link = host.querySelector<HTMLAnchorElement>("a")!;
-    expect(link.dataset.sessionKey).toBeUndefined();
-    expect(link.getAttribute("href")).toBe("/chat/main/d0effac9");
-    rows.push({ key, kind: "direct", displayName: "Shared contract", updatedAt: Date.now() });
-    titler.refresh();
-    expect(link.dataset.sessionKey).toBe(key);
-    rows.push({ key: key.replace("3211", "4322"), kind: "direct", updatedAt: Date.now() });
-    titler.refresh();
-    expect(link.dataset.sessionKey).toBeUndefined();
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("keeps unchanged session links free of mutations across roster refreshes", () => {
-    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
-    const rows: GatewaySessionRow[] = [
-      { key, kind: "direct", displayName: "Shared contract", updatedAt: Date.now() },
-    ];
     const { host, titler, request } = createTitler(rows);
     host.innerHTML = toSanitizedMarkdownHtml(
       "[First](/chat/main/d0effac9?view=details#first) " +
@@ -339,6 +287,11 @@ describe("SessionLinkTitler", () => {
     );
     titler.refresh();
     const links = [...host.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link")];
+    expect(links.map((link) => link.dataset.sessionKey)).toEqual([undefined, undefined, undefined]);
+    expect(links[0]?.getAttribute("href")).toBe("/chat/main/d0effac9?view=details#first");
+    rows.push({ key, kind: "direct", displayName: "Shared contract", updatedAt: Date.now() });
+    titler.refresh();
+    expect(links.map((link) => link.dataset.sessionKey)).toEqual([key, key, undefined]);
     const observer = new MutationObserver(() => undefined);
     observer.observe(host, { attributes: true, childList: true, subtree: true });
     try {

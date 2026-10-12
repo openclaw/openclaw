@@ -438,7 +438,9 @@ describe("browser screencast sessions", () => {
     await flush();
     expect(pending.close).toHaveBeenCalledWith(4004, "target_closed");
     expect(page.newCDPSession).not.toHaveBeenCalled();
-    const successor = await attach(screencastParams({ lifecycleGeneration: 1 }));
+    const successor = await attach(
+      screencastParams({ profileSignal: new AbortController().signal }),
+    );
     const stale = await attach(params);
     expect(stale.close).toHaveBeenCalledWith(4004, "target_closed");
     expect(successor.close).not.toHaveBeenCalled();

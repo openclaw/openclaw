@@ -10,11 +10,11 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import {
   create as createSessionRow,
   sort as sortSessionRows,
 } from "./session-row-projection-record.js";
+import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -42,6 +42,7 @@ export function createSessionRowProjectionFixture(params: {
   const storePath = params.storePath ?? "";
   const rowContext = params.rowContext ?? buildSessionListRowMetadataContext({ now: Date.now() });
   const rows = new Map<string, Row>();
+  const revisions = createSessionRowProjectionRevisions(rows, new Map());
   const store = { ...params.store };
   let revision = 0;
   let revisionToken = {};
@@ -82,6 +83,8 @@ export function createSessionRowProjectionFixture(params: {
     delete store[key];
     revision++;
     revisionToken = {};
+    revisions.publishSelection();
+    revisions.publishFacts();
     if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
       rows.delete(id(fields));
       return;
@@ -153,6 +156,11 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    async readLookup() {
+      throw new Error("Indexed lookup requires a real session row projection");
+    },
+    onSelectionChange: revisions.onSelectionChange,
+    onFactsChange: revisions.onFactsChange,
     observeGeneration() {
       const observedRevision = revision;
       let active = true;
@@ -187,19 +195,7 @@ export function createSessionRowProjectionFixture(params: {
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},
-    modelFacts: (query) => {
-      const row = describe(query)!;
-      return readSessionRowModelFacts({
-        cfg,
-        key: row.key,
-        agentId: row.agentId,
-        entry: row.entry,
-        preparedAcpMeta: row.materialized.source.thinkingProjection.acpMeta,
-        rowContext,
-        modelCatalog,
-        source: { entry: row.storedEntry, readSourceEntry: (key) => store[key] },
-      });
-    },
+    modelFacts: (query) => describe(query)!.materialized.source,
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);
       return { kind: "complete", value: consume(projection) };
@@ -225,7 +221,6 @@ export function createSessionRowProjectionFixture(params: {
     prepareSelection: () => undefined,
     withSelectionPreparation: (consume) => consume(),
     needsSelectionPreparation: () => false,
-    isMaterialized: (query) => describe(query) !== undefined,
     prepareMembership: () => Promise.resolve(),
     needsMembershipPreparation: () => false,
     sessionGroupTargets: () => {
@@ -303,6 +298,7 @@ export function createSessionRowProjectionFixture(params: {
       revision++;
       revisionToken = {};
       rows.clear();
+      revisions.dispose();
     },
   };
   return Object.assign(projection, { setEntry });

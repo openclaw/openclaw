@@ -1,9 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import {
@@ -21,8 +18,12 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionPendingInputWithdrawal } from "./session-pending-input-withdrawal.worker.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 
 function readWithdrawalResult(
@@ -46,6 +47,11 @@ export async function discardSessionPendingInput(
   assertCurrent: () => void,
 ): Promise<boolean> {
   assertCurrent();
+  if (getSessionActorStorageBinding(scope)) {
+    throw new Error(
+      "Queued input removal is unavailable for incognito chats; use Stop to cancel execution",
+    );
+  }
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const target = { ...scope, env };
@@ -63,14 +69,7 @@ export async function discardSessionPendingInput(
     );
   }
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
+  const identities = captureSessionStoreCandidateIdentities(candidates);
   const writeAdmission = resolveSqliteWriteAdmissionScope(target);
   const withdraw = async () => {
     const resolved = await prepareSqliteScope(target);

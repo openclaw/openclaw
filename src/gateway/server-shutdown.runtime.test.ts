@@ -93,6 +93,9 @@ vi.mock("../plugins/plugin-cache.js", () => {
     },
   };
 });
+vi.mock("../agents/subagents/registry/subagent-session-cleanup.js", () => ({
+  loadSubagentSessionCleanupRuntime: async () => undefined,
+}));
 
 const { prepareGatewayShutdownRuntime } = await import("./server-shutdown.runtime.js");
 

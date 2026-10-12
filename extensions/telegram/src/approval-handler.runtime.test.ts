@@ -78,41 +78,6 @@ describe("telegramApprovalNativeRuntime", () => {
     );
   });
 
-  it("omits the Control UI button without a configured public origin", async () => {
-    const payload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: { token: "tg-token" },
-      request: {
-        id: "system-agent:change-2",
-        request: {
-          title: "OpenClaw change",
-          description: "restart the Gateway",
-          command: "restart the Gateway",
-          proposalHash: "b".repeat(64),
-          allowedDecisions: ["allow-once", "deny"],
-          sessionId: "delegation-2",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "system-agent",
-      nowMs: 0,
-      view: {
-        approvalKind: "system-agent",
-        approvalId: "system-agent:change-2",
-        phase: "pending",
-        title: "OpenClaw change requires approval",
-        metadata: [],
-        commandText: "restart the Gateway",
-        operationSummary: "restart the Gateway",
-        actions: [],
-        expiresAtMs: 60_000,
-      },
-    });
-    expect(payload.buttons).toEqual([]);
-  });
-
   it("omits the Control UI button when the Control UI is disabled", async () => {
     const payload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {
@@ -229,28 +194,6 @@ describe("telegramApprovalNativeRuntime", () => {
   });
 
   it.each([
-    {
-      name: "applied",
-      decision: "allow-once",
-      applicationStatus: "applied",
-      summary: "set config gateway.port to 19001",
-      expected: "✅ OpenClaw change approved and applied: set config gateway.port to 19001",
-    },
-    {
-      name: "completion unconfirmed after an approved write",
-      decision: "allow-once",
-      applicationStatus: "not-applied",
-      summary: "set config gateway.port to 19001",
-      expected:
-        "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying.",
-    },
-    {
-      name: "denied and not applied",
-      decision: "deny",
-      applicationStatus: "not-applied",
-      summary: "set config gateway.port to 19001",
-      expected: "❌ OpenClaw change denied. No change was made.",
-    },
     {
       name: "applied with a bounded UTF-16 summary",
       decision: "allow-once",

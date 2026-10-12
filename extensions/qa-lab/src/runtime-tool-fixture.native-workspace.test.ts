@@ -11,6 +11,8 @@ import {
 } from "../test/runtime-tool-fixture-helpers.js";
 import { getQaNativeWorkspaceBehavior } from "./native-workspace-behavior.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
+import { readQaScenarioFile } from "./scenario-catalog.js";
+import { createSession } from "./suite-runtime-agent-session.js";
 
 const OPENCLAW_TOOL_BY_BEHAVIOR = {
   bash: "exec",
@@ -27,7 +29,7 @@ afterEach(() => {
 afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("Codex-native workspace runtime tool fixtures", () => {
-  it.each(["bash", "edit", "exec", "fs-read", "fs-write", "grep"] as const)(
+  it.each(["edit", "fs-write"] as const)(
     "requires correlated native receipts and observable %s outcomes",
     async (behaviorId) => {
       const env = await makeEnv();
@@ -155,20 +157,24 @@ describe("Codex-native workspace runtime tool fixtures", () => {
       }
     },
   );
-  it("uses fresh sessions for sequential native behaviors and repeated invocations", async () => {
+  it("uses stable behavior labels and fresh session keys for sequential native fixtures", async () => {
     const env = await makeEnv();
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
     let sessionIndex = 0;
     const requestedKeys: Array<string | undefined> = [];
+    const requestedLabels: string[] = [];
     const createdKeys: string[] = [];
     const nativeBehaviorIds = ["bash", "exec", "grep"] as const;
-    const createSession = vi.fn(async (_env: unknown, label: string, key?: string) => {
+    env.gateway.call = vi.fn(async (method, params) => {
+      expect(method).toBe("sessions.create");
+      const { label, key } = params as { label: string; key?: string };
       requestedKeys.push(key);
+      requestedLabels.push(label);
       const phase = label.endsWith(" happy") ? "happy" : "failure";
       sessionIndex += 1;
       const sessionKey = `agent:qa:native-workspace:sequence:${sessionIndex}:${phase}`;
       createdKeys.push(sessionKey);
-      return sessionKey;
+      return { key: sessionKey };
     });
     const runAgentPrompt = vi.fn(
       async (
@@ -212,24 +218,25 @@ describe("Codex-native workspace runtime tool fixtures", () => {
     };
 
     for (const behaviorId of ["bash", "exec", "grep", "bash"] as const) {
-      await expect(
-        runRuntimeToolFixture(
-          env,
-          {
-            toolName: OPENCLAW_TOOL_BY_BEHAVIOR[behaviorId],
-            nativeWorkspaceBehavior: behaviorId,
-            toolCoverage: {
-              bucket: "codex-native-workspace",
-              expectedLayer: "codex-native-workspace",
-              required: true,
-            },
-          },
-          deps,
-        ),
-      ).resolves.toContain(`codex-native ${behaviorId} behavior passed`);
+      const scenario = readQaScenarioFile(
+        path.resolve(import.meta.dirname, `../../../qa/scenarios/runtime/tools/${behaviorId}.yaml`),
+      );
+      await expect(runRuntimeToolFixture(env, scenario.execution.config!, deps)).resolves.toContain(
+        `codex-native ${behaviorId} behavior passed`,
+      );
     }
 
     expect(requestedKeys).toEqual(Array.from({ length: 8 }, () => undefined));
     expect(new Set(createdKeys).size).toBe(8);
+    expect(requestedLabels.slice(0, 6)).toEqual([
+      "Runtime tool fixture: bash happy",
+      "Runtime tool fixture: bash failure",
+      "Runtime tool fixture: exec happy",
+      "Runtime tool fixture: exec failure",
+      "Runtime tool fixture: grep happy",
+      "Runtime tool fixture: grep failure",
+    ]);
+    expect(new Set(requestedLabels.slice(0, 6)).size).toBe(6);
+    expect(requestedLabels.slice(6)).toEqual(requestedLabels.slice(0, 2));
   });
 });

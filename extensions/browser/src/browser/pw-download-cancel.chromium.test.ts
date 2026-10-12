@@ -7,6 +7,7 @@ import type { Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import * as outputFiles from "./output-files.js";
+import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import { ensurePageState } from "./pw-session-state.js";
@@ -475,18 +476,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     "cancels a streaming download after %s without publishing output",
     { timeout: 20_000 },
     async (failure, { signal, onTestFinished }) => {
-      const writeSettled = Promise.withResolvers<void>();
-      const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
-      const write = vi
-        .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
-        .mockImplementation((params) => {
-          const pending = writeOutput(params);
-          void pending.then(
-            () => writeSettled.resolve(),
-            () => writeSettled.resolve(),
-          );
-          return pending;
-        });
+      const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
       onTestFinished(() => write.mockRestore());
       const rootDir = tempDirs.make("openclaw-download-stream-cancel-");
       cleanup.push(async () => await fs.rm(rootDir, { recursive: true, force: true }));

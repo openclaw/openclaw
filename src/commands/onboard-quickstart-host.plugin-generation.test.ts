@@ -13,6 +13,18 @@ import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plug
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runQuickstartForegroundGateway } from "./onboard-quickstart-host.js";
 
+const mocks = vi.hoisted(() => ({ readConfigSnapshot: vi.fn(), runGateway: vi.fn() }));
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readConfigSnapshot,
+}));
+// mock-isolation: Gateway host initialization must not alter the plugin generation being tested.
+vi.mock("../cli/gateway-cli/run.js", () => ({ runGatewayCommand: mocks.runGateway }));
+vi.mock("./onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
+  waitForGatewayReachable: async () => ({ ok: false }),
+}));
+
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 it.each([false, true])(
@@ -93,17 +105,13 @@ it.each([false, true])(
               inventories.push(read.pluginMetadataSnapshot?.byPluginId.has("codex") ?? false);
               return { config: read.snapshot.config };
             };
-            await runQuickstartForegroundGateway(
-              { runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } },
-              {
-                readConfigSnapshot: readStartupConfig,
-                runGateway: async () => {
-                  await readStartupConfig();
-                },
-                waitForGateway: async () => ({ ok: false }),
-                runBrowserHandoff: async () => ({ handedOff: false, reason: "timeout" }),
-              },
-            );
+            mocks.readConfigSnapshot.mockImplementation(readStartupConfig);
+            mocks.runGateway.mockImplementation(async () => {
+              await readStartupConfig();
+            });
+            await runQuickstartForegroundGateway({
+              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            });
             expect(inventories).toEqual([true, true]);
             expect(readMetadata().byPluginId.has("codex")).toBe(!pinnedCaller);
           };

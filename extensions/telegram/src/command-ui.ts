@@ -2,6 +2,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildBrowseProvidersButton,
   buildModelsKeyboard,
+  buildPaginationRow,
   buildProviderKeyboard,
   calculateTotalPages,
   expandModelEntries,
@@ -11,34 +12,25 @@ import {
 import { buildTelegramRuntimeVariants } from "./model-runtime-variants.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
+function withTelegramButtons(
+  buttons: ReturnType<typeof buildModelsKeyboard>,
+): ReplyPayload["channelData"] {
+  return { telegram: { buttons } };
+}
+
 export function buildCommandsPaginationKeyboard(
   currentPage: number,
   totalPages: number,
   agentId?: string,
 ): Array<Array<{ text: string; callback_data: string }>> {
-  const buttons: Array<{ text: string; callback_data: string }> = [];
   const suffix = agentId ? `:${agentId}` : "";
-
-  if (currentPage > 1) {
-    buttons.push({
-      text: "◀ Prev",
-      callback_data: `commands_page_${currentPage - 1}${suffix}`,
-    });
-  }
-
-  buttons.push({
-    text: `${currentPage}/${totalPages}`,
-    callback_data: `commands_page_noop${suffix}`,
-  });
-
-  if (currentPage < totalPages) {
-    buttons.push({
-      text: "Next ▶",
-      callback_data: `commands_page_${currentPage + 1}${suffix}`,
-    });
-  }
-
-  return [buttons];
+  return [
+    buildPaginationRow(
+      currentPage,
+      totalPages,
+      (page) => `commands_page_${page ?? "noop"}${suffix}`,
+    ),
+  ];
 }
 
 export function buildTelegramCommandsListChannelData(params: {
@@ -49,15 +41,9 @@ export function buildTelegramCommandsListChannelData(params: {
   if (params.totalPages <= 1) {
     return null;
   }
-  return {
-    telegram: {
-      buttons: buildCommandsPaginationKeyboard(
-        params.currentPage,
-        params.totalPages,
-        params.agentId,
-      ),
-    },
-  };
+  return withTelegramButtons(
+    buildCommandsPaginationKeyboard(params.currentPage, params.totalPages, params.agentId),
+  );
 }
 
 export function buildTelegramModelsProviderChannelData(params: {
@@ -66,11 +52,7 @@ export function buildTelegramModelsProviderChannelData(params: {
   if (params.providers.length === 0) {
     return null;
   }
-  return {
-    telegram: {
-      buttons: buildProviderKeyboard(params.providers),
-    },
-  };
+  return withTelegramButtons(buildProviderKeyboard(params.providers));
 }
 
 export function buildTelegramModelsAddProviderChannelData(params: {
@@ -85,11 +67,7 @@ export function buildTelegramModelsAddProviderChannelData(params: {
       callback_data: buildTelegramNativeCommandCallbackData(`/models add ${provider.id}`),
     },
   ]);
-  return {
-    telegram: {
-      buttons,
-    },
-  };
+  return withTelegramButtons(buttons);
 }
 
 export function buildTelegramModelsListChannelData(
@@ -106,7 +84,7 @@ export function buildTelegramModelsListChannelData(
     modelRuntimeIds,
   });
   if (runtimeVariants.size === 0) {
-    return { telegram: { buttons: buildModelsKeyboard(keyboardParams) } };
+    return withTelegramButtons(buildModelsKeyboard(keyboardParams));
   }
   // Same rows and page offsets as the picker callbacks, which page over
   // runtime rows rather than models.
@@ -118,22 +96,16 @@ export function buildTelegramModelsListChannelData(
     ),
   );
   const currentPage = Math.max(1, Math.min(requestedPage ?? params.currentPage, totalPages));
-  return {
-    telegram: {
-      buttons: buildModelsKeyboard({
-        ...keyboardParams,
-        runtimeVariants,
-        currentPage,
-        totalPages,
-      }),
-    },
-  };
+  return withTelegramButtons(
+    buildModelsKeyboard({
+      ...keyboardParams,
+      runtimeVariants,
+      currentPage,
+      totalPages,
+    }),
+  );
 }
 
 export function buildTelegramModelBrowseChannelData(): ReplyPayload["channelData"] {
-  return {
-    telegram: {
-      buttons: buildBrowseProvidersButton(),
-    },
-  };
+  return withTelegramButtons(buildBrowseProvidersButton());
 }

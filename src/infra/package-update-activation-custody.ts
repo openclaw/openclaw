@@ -3,11 +3,12 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { hasErrnoCode } from "./errors.js";
+import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
   resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
   type PackageActivationJournal,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
@@ -47,7 +48,7 @@ export function inspectPackageActivationCustody(anchor: string, record: PackageA
       entry.source === descriptor.authority.installKey ||
       entry.source.startsWith(`${anchor}${path.sep}`) ||
       fs.realpathSync(path.dirname(entry.source)) !== path.dirname(entry.source) ||
-      packageActivationIdentity(path.dirname(entry.source), true) !== entry.sourceParentIdentity
+      packageActivationIdentity(path.dirname(entry.source), "parent") !== entry.sourceParentIdentity
     ) {
       throw new Error("Package preparation source parent changed.");
     }
@@ -179,4 +180,59 @@ export async function completePackageActivationCustody(
     }
   }
   journal.transition(record, "prepared", null, assertCurrent);
+}
+
+/** Recognized obsolete custody closes before best-effort evidence maintenance. */
+export function settlePackageActivationCustody(params: {
+  anchor: string;
+  journal: PackageActivationJournal;
+  record: PackageActivationRecord;
+  settlement: Extract<NonNullable<PackageActivationRecord["intent"]>, { settled: boolean }>;
+  assertCurrent: () => void;
+  // Once durably closed, archival may move the custody paths verified before close.
+  assertArchiveCurrent?: () => void;
+  onSettled?: () => void;
+}) {
+  const { anchor, journal, settlement, assertCurrent } = params;
+  const record = journal.transition(
+    params.record,
+    "superseded",
+    { ...settlement, settled: true },
+    assertCurrent,
+  );
+  params.onSettled?.();
+  const warning = archivePackageActivationCustody(
+    anchor,
+    journal,
+    record,
+    params.assertArchiveCurrent ?? assertCurrent,
+  );
+  return {
+    record,
+    warning: `${settlement.detail ?? settlement.kind}. ${warning ?? `Preserved at ${anchor}.superseded-${record.descriptor.operationId}`}`,
+    archiveWarning: warning,
+  };
+}
+
+/** Completed history is never a prerequisite for the next mutable update. */
+export function archivePackageActivationCustody(
+  anchor: string,
+  journal: PackageActivationJournal,
+  record: PackageActivationRecord,
+  assertCurrent: () => void,
+) {
+  const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
+  try {
+    journal.archiveSettled(record, assertCurrent);
+  } catch (error) {
+    assertCurrent();
+    // Lost rename acknowledgements may leave only the archived journal. A still
+    // active journal must remain the exact closed record before warning instead.
+    if (fs.lstatSync(resolvePackageActivationJournalPath(anchor), { throwIfNoEntry: false })) {
+      journal.assertCurrent(record);
+    }
+    return `Closed recovery evidence could not be fully archived at ${retained}: ${formatErrorMessage(error)}`;
+  }
+  assertCurrent();
+  return undefined;
 }

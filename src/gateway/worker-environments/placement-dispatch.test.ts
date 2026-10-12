@@ -45,7 +45,7 @@ describe("worker placement dispatch", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("recovers a failed provider destroy and allows a normal local reclaim", async () => {
+  it("recovers a failed provider destroy and returns the completed reclaim", async () => {
     const harness = createTestHarness({
       destroyFailureCount: 1,
       destroyFailureState: "destroying",
@@ -65,14 +65,14 @@ describe("worker placement dispatch", () => {
       state: "destroyed",
     });
     expect(harness.placements.current()).toMatchObject({
-      state: "failed",
+      state: "reclaimed",
       turnClaim: null,
     });
     expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).not.toContain("workspace:resume");
 
-    await expect(harness.service.reclaim(REQUEST)).resolves.toMatchObject({ state: "local" });
+    await expect(harness.service.reclaim(REQUEST)).resolves.toMatchObject({ state: "reclaimed" });
     expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
   });
 
@@ -286,7 +286,7 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    const draining = placementStore.startDrain({
+    const draining = await placementStore.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -450,7 +450,7 @@ describe("worker placement dispatch", () => {
     const harness = createTestHarness({
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
-      verifyFailureCall: 3,
+      verifyFailurePhase: "after-apply",
     });
     await harness.service.dispatch(REQUEST);
 
@@ -560,7 +560,7 @@ describe("worker placement dispatch", () => {
     async (interruptedState) => {
       let interrupted = await placementStore.startDispatch(REQUEST);
       if (interruptedState !== "requested") {
-        interrupted = placementStore.transition({
+        interrupted = await placementStore.transition({
           sessionId: REQUEST.sessionId,
           from: "requested",
           to: "provisioning",
@@ -573,7 +573,7 @@ describe("worker placement dispatch", () => {
         });
       }
       if (interruptedState === "syncing") {
-        interrupted = placementStore.transition({
+        interrupted = await placementStore.transition({
           sessionId: REQUEST.sessionId,
           from: "provisioning",
           to: "syncing",

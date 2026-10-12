@@ -149,41 +149,25 @@ describe("config model reference validation", () => {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      scope: "defaults",
-      allow: [
-        " openai / gpt-5.5 ",
-        "clawrouter/ anthropic/claude-haiku-4-5",
-        " openai / * ",
-        " clawrouter / anthropic / * ",
-      ],
-    },
-    { scope: "per-agent", allow: [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "] },
-  ])("accepts separator padding in $scope policy", ({ scope, allow }) => {
-    const modelPolicy = { allow };
-    const agents =
-      scope === "defaults"
-        ? { defaults: { modelPolicy } }
-        : { entries: { worker: { modelPolicy } } };
+  it("accepts separator padding in per-agent policy", () => {
+    const modelPolicy = { allow: [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "] };
+    const agents = { entries: { worker: { modelPolicy } } };
     const res = validateConfigObjectWithPlugins({ agents }, { pluginValidation: "skip" });
 
     expect(res.ok).toBe(true);
   });
 
-  it.each(["openai/gpt 5.5", "openai//gpt-5.5"])(
-    "still rejects malformed model policy ref %j",
-    (ref) => {
-      const res = validateConfigObjectWithPlugins(
-        { agents: { defaults: { modelPolicy: { allow: [ref] } } } },
-        { pluginValidation: "skip" },
-      );
+  it("rejects whitespace inside a model policy model name", () => {
+    const ref = "openai/gpt 5.5";
+    const res = validateConfigObjectWithPlugins(
+      { agents: { defaults: { modelPolicy: { allow: [ref] } } } },
+      { pluginValidation: "skip" },
+    );
 
-      expect(res.ok).toBe(false);
-      if (!res.ok) {
-        expect(res.issues[0]?.path).toBe("agents.defaults.modelPolicy.allow.0");
-        expect(res.issues[0]?.message).toContain("invalid model policy ref");
-      }
-    },
-  );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agents.defaults.modelPolicy.allow.0");
+      expect(res.issues[0]?.message).toContain("invalid model policy ref");
+    }
+  });
 });

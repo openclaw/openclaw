@@ -147,8 +147,7 @@ export function buildExecAutoReviewTranscript(params: {
         typeof message.content === "string"
           ? message.content
           : message.content
-              .filter((block) => block.type === "text")
-              .map((block) => textOnly(block.text))
+              .flatMap((block) => (block.type === "text" ? [textOnly(block.text)] : []))
               .join("\n");
       if (text) {
         add(

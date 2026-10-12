@@ -1,12 +1,9 @@
-import { beforeEach, describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
   projectAgentHistoryActivity,
   projectAgentToolActivity,
-  type AgentCommandOutputEventData,
-  type AgentItemEventData,
-  type AgentPatchSummaryEventData,
 } from "./agent-activity-events.js";
 import {
   type AgentApprovalEventData,
@@ -16,8 +13,75 @@ import {
 } from "./agent-events.js";
 
 describe("agent activity events", () => {
-  beforeEach(() => {
+  test("emits every activity stream with shared sequencing and context", () => {
+    type ItemData = Extract<
+      Parameters<typeof emitAgentActivityEvent>[0],
+      { stream: "item" }
+    >["data"];
+    expectTypeOf<AgentApprovalEventData>().not.toMatchTypeOf<ItemData>();
+
+    const inputs: Parameters<typeof emitAgentActivityEvent>[0][] = [
+      {
+        runId: "run-1",
+        sessionKey: "session-1",
+        stream: "item",
+        data: { itemId: "item-1", phase: "start", kind: "tool", title: "Read", status: "running" },
+      },
+      {
+        runId: "run-1",
+        sessionKey: "session-1",
+        stream: "approval",
+        data: { phase: "requested", kind: "exec", status: "pending", title: "Approve" },
+      },
+      {
+        runId: "run-1",
+        sessionKey: "session-1",
+        stream: "command_output",
+        data: {
+          itemId: "command-1",
+          phase: "delta",
+          title: "Command",
+          toolCallId: "tool-1",
+          output: "working",
+        },
+      },
+      {
+        runId: "run-1",
+        sessionKey: "",
+        stream: "patch",
+        data: {
+          itemId: "patch-1",
+          phase: "end",
+          title: "Patch",
+          toolCallId: "tool-2",
+          added: ["new.ts"],
+          modified: [],
+          deleted: [],
+          summary: "Added new.ts",
+        },
+      },
+    ];
     resetAgentEventsForTest();
+    const events: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((event) => events.push(event));
+    try {
+      for (const input of inputs) {
+        emitAgentActivityEvent(input);
+      }
+      expect(
+        events.map(({ runId, seq, stream, sessionKey }) => ({ runId, seq, stream, sessionKey })),
+      ).toEqual([
+        { runId: "run-1", seq: 1, stream: "item", sessionKey: "session-1" },
+        { runId: "run-1", seq: 2, stream: "approval", sessionKey: "session-1" },
+        { runId: "run-1", seq: 3, stream: "command_output", sessionKey: "session-1" },
+        { runId: "run-1", seq: 4, stream: "patch", sessionKey: undefined },
+      ]);
+      expect(events.map((event) => event.data)).toEqual(inputs.map((input) => input.data));
+      expect(events[0]?.data).toBe(inputs[0]?.data);
+    } finally {
+      unsubscribe();
+      resetAgentEventsForTest();
+    }
   });
 
   test("projects Tool Search names for live and history activity without changing outcomes or pairing", () => {
@@ -204,6 +268,124 @@ describe("agent activity events", () => {
     }
   });
 
+  test("keeps a completed step countable when its only child is routine progress", () => {
+    const projected = projectAgentHistoryActivity([
+      {
+        messageId: "step",
+        message: {
+          role: "assistant",
+          runId: "run",
+          content: [
+            {
+              type: "toolCall",
+              id: "step",
+              name: "exec",
+              arguments: {
+                title: "Check the release checklist",
+                code: "await tools.progress_card({});",
+              },
+            },
+          ],
+        },
+      },
+      {
+        messageId: "progress",
+        message: createNestedToolActivity({
+          runId: "run",
+          scopeId: "scope",
+          afterEntryId: "step",
+          startOrder: 1,
+          parentToolCallId: "step",
+          toolCallId: "progress",
+          toolName: "progress_card",
+          input: { action: "update", title: "Release checklist" },
+          result: { content: [{ type: "text", text: "Updated" }] },
+          isError: false,
+          startedAt: 1,
+          timestamp: 2,
+        }),
+      },
+      {
+        messageId: "result",
+        message: {
+          role: "toolResult",
+          runId: "run",
+          toolCallId: "step",
+          toolName: "exec",
+          isError: false,
+          content: [{ type: "text", text: "Finished" }],
+        },
+      },
+    ]);
+    expect(projected.find((entry) => entry.messageId === "step")?.items).toEqual([
+      expect.objectContaining({ toolCallId: "step", name: "exec", status: "completed" }),
+    ]);
+    expect(projected.find((entry) => entry.messageId === "progress")?.items).toEqual([]);
+  });
+
+  // Tools record one level of nesting today; these rows pin the rule for deeper graphs.
+  test.each([
+    {
+      shape: "a nested step holds the routine call",
+      nested: [
+        { id: "inner", name: "exec", parent: "outer" },
+        { id: "plan", name: "progress_card", parent: "inner" },
+      ],
+      counted: [["inner", "inner"]],
+    },
+    {
+      shape: "a visible call sits under a hidden one",
+      nested: [
+        { id: "plan", name: "progress_card", parent: "outer" },
+        { id: "read", name: "read", parent: "plan" },
+      ],
+      counted: [["read", "read"]],
+    },
+  ])("counts one operation for a completed step when $shape", ({ nested, counted }) => {
+    const projected = projectAgentHistoryActivity([
+      {
+        messageId: "outer",
+        message: {
+          role: "assistant",
+          __openclaw: { runId: "run" },
+          content: [{ type: "toolCall", id: "outer", name: "exec", arguments: {} }],
+        },
+      },
+      ...nested.map(({ id, name, parent }, index) => ({
+        messageId: id,
+        message: createNestedToolActivity({
+          runId: "run",
+          scopeId: "scope",
+          afterEntryId: "outer-call",
+          startOrder: index + 1,
+          parentToolCallId: parent,
+          toolCallId: id,
+          toolName: name,
+          input: {},
+          result: { content: [{ type: "text", text: "Finished" }] },
+          isError: false,
+          startedAt: 1,
+          timestamp: 2,
+        }),
+      })),
+      {
+        messageId: "outer-result",
+        message: {
+          role: "toolResult",
+          __openclaw: { runId: "run" },
+          toolCallId: "outer",
+          toolName: "exec",
+          isError: false,
+          content: [{ type: "text", text: "Finished" }],
+        },
+      },
+    ]);
+    // The step is never counted alongside a call beneath it that stays visible.
+    expect(
+      projected.flatMap((entry) => entry.items.map((item) => [entry.messageId, item.toolCallId])),
+    ).toEqual(counted);
+  });
+
   test.each([true, false])(
     "does not expose a child assignment in progress (named: %s)",
     (named) => {
@@ -222,90 +404,37 @@ describe("agent activity events", () => {
       expect(JSON.stringify(item)).not.toContain("PRIVATE_CHILD_ASSIGNMENT");
     },
   );
+});
 
-  test("emits every activity stream with shared sequencing and context", () => {
-    const itemData: AgentItemEventData = {
-      itemId: "item-1",
-      phase: "start",
-      kind: "tool",
-      title: "Read",
-      status: "running",
-    };
-    const approvalData: AgentApprovalEventData = {
-      phase: "requested",
-      kind: "exec",
-      status: "pending",
-      title: "Approve",
-    };
-    const commandData: AgentCommandOutputEventData = {
-      itemId: "command-1",
-      phase: "delta",
-      title: "Command",
-      toolCallId: "tool-1",
-      output: "working",
-    };
-    const patchData: AgentPatchSummaryEventData = {
-      itemId: "patch-1",
-      phase: "end",
-      title: "Patch",
-      toolCallId: "tool-2",
-      added: ["new.ts"],
-      modified: [],
-      deleted: [],
-      summary: "Added new.ts",
-    };
-    const events: AgentEventPayload[] = [];
-    const unsubscribe = onAgentEvent((event) => events.push(event));
-
-    emitAgentActivityEvent({
-      runId: "run-1",
-      sessionKey: "session-1",
-      stream: "item",
-      data: itemData,
-    });
-    emitAgentActivityEvent({
-      runId: "run-1",
-      sessionKey: "session-1",
-      stream: "approval",
-      data: approvalData,
-    });
-    emitAgentActivityEvent({
-      runId: "run-1",
-      sessionKey: "session-1",
-      stream: "command_output",
-      data: commandData,
-    });
-    emitAgentActivityEvent({
-      runId: "run-1",
-      sessionKey: "",
-      stream: "patch",
-      data: patchData,
-    });
-
-    expect(
-      events.map(({ runId, seq, stream, sessionKey }) => ({ runId, seq, stream, sessionKey })),
-    ).toEqual([
-      { runId: "run-1", seq: 1, stream: "item", sessionKey: "session-1" },
-      { runId: "run-1", seq: 2, stream: "approval", sessionKey: "session-1" },
-      { runId: "run-1", seq: 3, stream: "command_output", sessionKey: "session-1" },
-      { runId: "run-1", seq: 4, stream: "patch", sessionKey: undefined },
-    ]);
-    expect(events.map((event) => event.data)).toEqual([
-      itemData,
-      approvalData,
-      commandData,
-      patchData,
-    ]);
-    expect(events[0]?.data).toBe(itemData);
-    unsubscribe();
-  });
-
-  test("rejects mismatched stream and payload pairs", () => {
-    type ItemData = Extract<
-      Parameters<typeof emitAgentActivityEvent>[0],
-      { stream: "item" }
-    >["data"];
-
-    expectTypeOf<AgentApprovalEventData>().not.toMatchTypeOf<ItemData>();
-  });
+test("marks only unpaired history calls as provisional, including terminal unknown outcomes", () => {
+  const call = {
+    messageId: "call",
+    message: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "command", name: "exec", arguments: {} }],
+    },
+  };
+  const missing = projectAgentHistoryActivity([call])[0]?.items[0];
+  expect(missing).toMatchObject({ phase: "end", unpairedCall: true, summary: "Outcome unknown" });
+  expect(missing?.status).toBeUndefined();
+  const result = {
+    messageId: "result",
+    message: {
+      role: "toolResult",
+      toolCallId: "command",
+      toolName: "exec",
+      isError: false,
+      details: {
+        status: "completed",
+        exitCode: 143,
+        persistedDetailsTruncated: true,
+        originalDetailKeys: ["exitReason"],
+      },
+    },
+  };
+  for (const entry of projectAgentHistoryActivity([call, result])) {
+    expect(entry.items[0]).toMatchObject({ phase: "end", summary: "Outcome unknown" });
+    expect(entry.items[0]?.status).toBeUndefined();
+    expect(entry.items[0]).not.toHaveProperty("unpairedCall");
+  }
 });

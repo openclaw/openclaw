@@ -109,10 +109,6 @@ describe("sessions_spawn tool", () => {
 
   const requireRecord = createRequireRecord("record", "expected-label");
 
-  function expectDetailFields(details: unknown, expected: Record<string, unknown>) {
-    expect(details).toMatchObject(expected);
-  }
-
   function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
     const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
     return requireRecord(calls?.[callIndex]?.[argIndex], `${label} argument ${argIndex}`);
@@ -141,7 +137,7 @@ describe("sessions_spawn tool", () => {
 
   function makeVisibleTool(options: SpawnOptions = {}) {
     return makeTool({
-      config: { agents: { list: [{ id: "main" }] } },
+      config: { agents: { entries: { main: {} } } },
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
       ...options,
@@ -355,7 +351,7 @@ describe("sessions_spawn tool", () => {
         vi.mocked(callGateway).mockRejectedValue(error);
         const tool = makeVisibleTool({
           callGateway,
-          config: { agents: { list: [{ id: "main", workspace }] } },
+          config: { agents: { entries: { main: { workspace } } } },
         });
         const result = tool.execute("visible-cwd", {
           task: "inspect",
@@ -390,7 +386,7 @@ describe("sessions_spawn tool", () => {
       expectedParentSessionId: "original-parent",
       config: {
         session: { store: storePath },
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
       },
       callGateway,
     });
@@ -458,10 +454,10 @@ describe("sessions_spawn tool", () => {
         config: {
           agents: {
             defaults: { subagents: { allowAgents: ["main", "reviewer"] } },
-            list: [
-              { id: "main", subagents: { model: configuredModel } },
-              { id: "reviewer", subagents: { model: "anthropic/claude-sonnet-4-6" } },
-            ],
+            entries: {
+              main: { subagents: { model: configuredModel } },
+              reviewer: { subagents: { model: "anthropic/claude-sonnet-4-6" } },
+            },
           },
         },
       });
@@ -502,7 +498,7 @@ describe("sessions_spawn tool", () => {
       config: {
         agents: {
           defaults: { subagents: { allowAgents: ["reviewer"] } },
-          list: [{ id: "main" }, { id: "reviewer" }],
+          entries: { main: {}, reviewer: {} },
         },
       },
       callGateway,
@@ -542,7 +538,7 @@ describe("sessions_spawn tool", () => {
       config: {
         agents: {
           defaults: { subagents: { requireAgentId: testCase.requireAgentId } },
-          list: [{ id: "main" }],
+          entries: { main: {} },
         },
       },
       callGateway,
@@ -571,7 +567,7 @@ describe("sessions_spawn tool", () => {
       const tool = makeVisibleTool({
         callGateway,
         config: {
-          agents: { defaults: { sandbox: { mode: "all" } }, list: [{ id: "main", workspace }] },
+          agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: { workspace } } },
         },
       });
       const result = await tool.execute("visible-sandbox-cwd", {
@@ -840,21 +836,6 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it.each([{ status: "forbidden" as const, error: "not allowed" }])(
-    "adds requested role to forwarded subagent $status results",
-    async (spawnResult) => {
-      hoisted.spawnSubagentDirectMock.mockResolvedValueOnce(spawnResult);
-      const tool = makeTool();
-
-      const result = await tool.execute("call-role-error", {
-        task: "build feature",
-        agentId: "reviewer",
-      });
-
-      expectDetailFields(result.details, { ...spawnResult, role: "reviewer" });
-    },
-  );
-
   it("dispatches ACP with the caller's identity, policy, resume, and completion context", async () => {
     registerAcpBackendForTest();
     const caller: SpawnOptions = {
@@ -1056,6 +1037,13 @@ describe("sessions_spawn tool", () => {
         },
       },
     });
+    const schema = requireRecord(tool.parameters, "schema");
+    const properties = requireRecord(schema.properties, "properties");
+    const attachments = requireRecord(properties.attachments, "attachments");
+    const items = requireRecord(attachments.items, "items");
+    const fields = requireRecord(items.properties, "attachment properties");
+    expect(fields.content).toMatchObject({ type: "string" });
+    expect(fields.content).not.toHaveProperty("maxLength");
     const result = await tool.execute("acp-image", {
       runtime: "acp",
       task: "describe the image",
@@ -1074,16 +1062,6 @@ describe("sessions_spawn tool", () => {
       expect.anything(),
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps attachment content unconstrained for llama.cpp grammar safety", () => {
-    const schema = requireRecord(createSessionsSpawnTool().parameters, "schema");
-    const properties = requireRecord(schema.properties, "properties");
-    const attachments = requireRecord(properties.attachments, "attachments");
-    const items = requireRecord(attachments.items, "items");
-    const fields = requireRecord(items.properties, "attachment properties");
-    expect(fields.content).toMatchObject({ type: "string" });
-    expect(fields.content).not.toHaveProperty("maxLength");
   });
 
   it("rejects an unsupported visible model before creation or registration", async () => {

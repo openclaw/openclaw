@@ -104,22 +104,9 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     mockRunCronFallbackPassthrough();
   });
 
-  it.each([
-    {
-      label: "uses agentId for workspace, session key, and store paths",
-      agentId: "ops",
-      sessionKey: "cron:job-ops",
-      explicitAgentId: true,
-      jobSessionKey: false,
-    },
-    {
-      label: "uses an agent-scoped job session when the cron job omits agentId",
-      agentId: "molty",
-      sessionKey: "agent:molty:cron:job-molty",
-      explicitAgentId: false,
-      jobSessionKey: true,
-    },
-  ])("$label", async ({ agentId, sessionKey, explicitAgentId, jobSessionKey }) => {
+  it("uses agentId for workspace, session key, and store paths", async () => {
+    const agentId = "ops";
+    const sessionKey = "cron:job-ops";
     await withTempHome(async (home) => {
       const deps = makeDeps();
       const workspaceDir = path.join(home, `${agentId}-workspace`);
@@ -131,7 +118,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         {
           agents: {
             defaults: { workspace: path.join(home, "default-workspace") },
-            list: [{ id: "main" }, { id: agentId, workspace: workspaceDir }],
+            entries: { main: {}, [agentId]: { workspace: workspaceDir } },
           },
         },
       );
@@ -142,13 +129,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         deps,
         job: {
           ...makeJob({ kind: "agentTurn", message: DEFAULT_MESSAGE }),
-          ...(explicitAgentId ? { agentId } : {}),
-          ...(jobSessionKey ? { sessionKey } : {}),
+          agentId,
           delivery: { mode: "none" },
         },
         message: DEFAULT_MESSAGE,
         sessionKey,
-        ...(explicitAgentId ? { agentId } : {}),
+        agentId,
         lane: "cron",
       });
 

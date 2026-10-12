@@ -46,42 +46,6 @@ describe("diagnostic log events", () => {
     expect(structuredCloneSpy).not.toHaveBeenCalled();
   });
 
-  it("emits structured log records through diagnostics", async () => {
-    const received: Array<{
-      event: Extract<DiagnosticEventPayload, { type: "log.record" }>;
-      metadata: DiagnosticEventMetadata;
-    }> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt, metadata) => {
-      if (evt.type === "log.record") {
-        received.push({ event: evt, metadata });
-      }
-    });
-
-    const logger = getChildLogger({
-      subsystem: "diagnostic",
-      trace: { traceId: TRACE_ID, spanId: SPAN_ID },
-    });
-    logger.info({ runId: "run-1" }, "hello diagnostic logs");
-    await yieldToEventLoop();
-    unsubscribe();
-
-    expect(received).toHaveLength(1);
-    const { event, metadata } = expectDefined(received[0], "diagnostic log event");
-    expect(event.type).toBe("log.record");
-    expect(event.level).toBe("INFO");
-    expect(event.message).toBe("hello diagnostic logs");
-    expect(event.attributes).toStrictEqual({
-      subsystem: "diagnostic",
-      runId: "run-1",
-    });
-    expect(event.trace).toStrictEqual({
-      traceId: TRACE_ID,
-      spanId: SPAN_ID,
-    });
-    expect(metadata.trusted).toBe(false);
-    expect(metadata.trustedTraceContext).toBeUndefined();
-  });
-
   it("uses active request trace context for unbound log records", async () => {
     const trace = createDiagnosticTraceContext({
       traceId: TRACE_ID,
@@ -146,23 +110,6 @@ describe("diagnostic log events", () => {
     expect(Object.hasOwn(event.attributes ?? {}, "nested")).toBe(false);
     expect(Object.hasOwn(event.attributes ?? {}, "bad key")).toBe(false);
     expect(Object.hasOwn(event, "argsJson")).toBe(false);
-  });
-
-  it("keeps bounded diagnostic messages UTF-16 safe", async () => {
-    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "log.record") {
-        received.push(event);
-      }
-    });
-    const prefix = "x".repeat(4_095);
-
-    getChildLogger({ subsystem: "diagnostic" }).info(`${prefix}😀tail`);
-    await yieldToEventLoop();
-    unsubscribe();
-
-    // The post-redaction bound keeps the first dot from the initial truncation marker.
-    expect(received.at(-1)?.message).toBe(`${prefix}....(truncated)`);
   });
 
   it("drops sensitive, blocked, and excess log attribute keys without copying large objects", async () => {

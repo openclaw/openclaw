@@ -123,14 +123,12 @@ export function renderPluginContribution(
   kind: Exclude<ViewKind, "replacements">,
   key: string,
   props: unknown,
-  defaultView: unknown = nothing,
   presented: PresentationValue = true,
 ) {
   return html`<openclaw-plugin-view
     .kind=${kind}
     .contributionKey=${key}
     .props=${props}
-    .defaultView=${defaultView}
     .presented=${livePresentation(presented)}
   ></openclaw-plugin-view>`;
 }

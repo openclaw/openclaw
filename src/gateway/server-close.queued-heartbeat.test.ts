@@ -5,6 +5,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellation.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { executeJobCoreWithTimeout } from "../cron/service/timer-job-runner.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import {
@@ -31,7 +32,7 @@ afterEach(() => vi.useRealTimers());
 it("settles queued heartbeat cron work before joining its shutdown drain", async () => {
   vi.useFakeTimers();
   const stateDir = tempDirs.make("gateway-close-queued-heartbeat-");
-  const cfg = { cron: { enabled: false }, agents: { list: [{ id: "main" }] } };
+  const cfg = { cron: { enabled: false }, agents: { entries: { main: {} } } };
   const scheduler = createTestGatewayScheduler();
   const { cron } = buildGatewayCronService({
     scheduler,
@@ -102,6 +103,11 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
   // The real wake is pending at the zero-drain restart admission fence, not
   // an embedded model run that reply cancellation could already settle.
   markGatewayRestartDraining();
+  await vi.advanceTimersByTimeAsync(0);
+  // The CLI joins process activity before server close can stop the runner.
+  // Only the executing sibling may still hold that boundary.
+  const heartbeatSettledBeforeClose = heartbeatSettled;
+  const beforeClose = await waitForGatewayActiveWork(0);
   const drainEntered = createDeferredCore();
   const stopAndDrain = cron.stopAndDrain!.bind(cron);
   vi.spyOn(cron, "stopAndDrain").mockImplementation(() => {
@@ -126,6 +132,8 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
     });
   try {
     await drainEntered.promise;
+    expect(heartbeatSettledBeforeClose).toBe(true);
+    expect(beforeClose.snapshot.counts.cronRuns).toBe(1);
     // Preserve the real 10s cron drain. A queued wake must not consume it
     // waiting for a heartbeat stop that close has placed after its own join.
     await vi.advanceTimersByTimeAsync(9_999);
@@ -135,7 +143,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
     expect(runOnce).not.toHaveBeenCalled();
     await expect(running).resolves.toMatchObject({
       status: "skipped",
-      error: "heartbeat skipped: handler-unavailable",
+      error: "heartbeat skipped: gateway-draining",
     });
     // Cancellation may project a result, but the admitted sibling's actual
     // core must still join before shared resources close.

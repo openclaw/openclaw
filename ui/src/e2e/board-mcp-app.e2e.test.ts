@@ -90,7 +90,7 @@ function appViewPayload() {
 
 async function waitForMountedApp(page: Page): Promise<void> {
   await page.waitForFunction(
-    () => Boolean(document.querySelector("mcp-app-view")?.shadowRoot?.querySelector("iframe")),
+    () => Boolean(document.querySelector("mcp-app-view")?.querySelector("iframe")),
     undefined,
     { timeout: 15_000 },
   );
@@ -101,14 +101,20 @@ async function cycleBoardProviderConnection(page: Page): Promise<void> {
     const surface = document.querySelector(".board-session-surface");
     const pane = surface?.closest("openclaw-chat-pane");
     const lease = pane ? Reflect.get(pane, "boardProviderLease") : undefined;
-    const scopedProvider = lease?.provider;
-    const transport = scopedProvider ? Reflect.get(scopedProvider, "transport") : undefined;
-    const client = transport ? Reflect.get(transport, "client") : undefined;
-    if (!transport || !client || typeof transport.attachClient !== "function") {
+    const context = pane ? Reflect.get(pane, "context") : undefined;
+    const client = context?.gateway.snapshot.client;
+    const provider = lease?.provider;
+    if (!lease || !provider || !client) {
       throw new Error("Dashboard Gateway provider is unavailable");
     }
-    transport.attachClient(client, false);
-    transport.attachClient(client, true);
+    const capabilities = {
+      canPinWidgets: provider.canPinWidgets,
+      canPinMcpApps: provider.canPinMcpApps,
+      canMutate: provider.canMutate,
+      canGrant: provider.canGrant,
+    };
+    lease.update(client, false, capabilities);
+    lease.update(client, true, capabilities);
   });
 }
 
@@ -118,7 +124,7 @@ async function captureBoardIdentity(page: Page): Promise<void> {
     const board = surface?.querySelector("openclaw-board-view");
     const cell = board?.querySelector("openclaw-board-widget-cell");
     const appView = cell?.querySelector("mcp-app-view");
-    const iframe = appView?.shadowRoot?.querySelector("iframe");
+    const iframe = appView?.querySelector("iframe");
     if (!surface || !board || !cell || !appView || !iframe) {
       throw new Error("Board MCP App identity is incomplete");
     }
@@ -139,7 +145,7 @@ async function readBoardIdentity(page: Page) {
     const board = surface?.querySelector("openclaw-board-view");
     const cell = board?.querySelector("openclaw-board-widget-cell");
     const appView = cell?.querySelector("mcp-app-view");
-    const iframe = appView?.shadowRoot?.querySelector("iframe");
+    const iframe = appView?.querySelector("iframe");
     return {
       connected: [stored.surface, stored.board, stored.cell, stored.appView, stored.iframe].every(
         (element) => element.isConnected,
@@ -293,7 +299,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       const widgetElement = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
       const frame = document
         .querySelector("mcp-app-view")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+        ?.querySelector<HTMLIFrameElement>("iframe");
       if (!widgetElement || !frame) {
         throw new Error("dashboard MCP App frame is missing");
       }
@@ -483,7 +489,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       page.evaluate(() => {
         const board = document.querySelector("openclaw-board-view");
         const body = board?.querySelector(".board-widget__body");
-        const frame = board?.querySelector("mcp-app-view")?.shadowRoot?.querySelector("iframe");
+        const frame = board?.querySelector("mcp-app-view")?.querySelector("iframe");
         if (!board || !body || !frame) {
           throw new Error("Dashboard MCP App layout is unavailable");
         }
@@ -524,10 +530,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
             reported?.width === size.width && reported?.height === size.height,
         );
     };
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await page.setViewportSize({ width: 1440, height: 1000 });
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await expectRetainedBoardPresentation(page, "expanded");
     if (artifactDir) {
@@ -540,7 +546,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       .getByRole("button", { name: "Restore split", exact: true })
       .click();
     await expectRetainedBoardPresentation(page, "split");
-    expect((await frameInsets()).bodyHeightGap).toBe(0);
+    await expect.poll(async () => (await frameInsets()).bodyHeightGap).toBe(0);
     await expectHostDimensions();
     await restoreChatAsMain(page);
 

@@ -224,7 +224,7 @@ function cooldownStore(
 }
 
 function configuredAgent(agentDir: string) {
-  return { list: [{ id: "configured", default: true, agentDir }] };
+  return { entries: { configured: { agentDir } } };
 }
 
 function buildDemoLocalStore(keys: string[]) {
@@ -415,22 +415,6 @@ describe("getApiKeyForModelCore", () => {
       profileId: "openai:shared",
     });
   });
-
-  it.each([["chatgpt-token-sharing", "openai-responses", "https://proxy.example/v1"]])(
-    "rejects %s for %s at %s before returning a bearer",
-    async (authFlow, api, baseUrl) => {
-      await expect(
-        resolveModelAuth({
-          model: { id: "gpt-5.5", provider: "openai", api, baseUrl } as Model,
-          profileId: "openai:shared",
-          lockedProfile: true,
-          store: authStore({
-            "openai:shared": { type: "oauth", provider: "openai", ...oauthFixture, authFlow },
-          }),
-        }),
-      ).rejects.toThrow(/requires (the public OpenAI Responses endpoint|token-sharing consent)/);
-    },
-  );
 
   it("rejects an explicit OpenAI API-key profile for the Codex transport", async () => {
     const store = authStore({

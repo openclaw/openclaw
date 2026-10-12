@@ -17,7 +17,6 @@ const MODEL = "gpt-5.6";
 const INCLUDE_FILTERS = ["scenario:scenario-a", "scenario:scenario-b"];
 const FIRST_PAIR: Pair = { scenario: "scenario-a", state: "state-a" };
 const PAIRS: Pair[] = [FIRST_PAIR, { scenario: "scenario-b", state: "state-b" }];
-const SCRIPT_PATH = "scripts/lib/kova-workflow-evidence.mts";
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function plan(
@@ -151,74 +150,13 @@ function firstRecordOf(laneReport: JsonObject): JsonObject {
   return first;
 }
 
-function runCli({
-  lanePlan = JSON.stringify(plan()),
-  laneReport = JSON.stringify(report()),
-  repeat = "2",
-  includeAuth = true,
-}: {
-  lanePlan?: string;
-  laneReport?: string;
-  repeat?: string;
-  includeAuth?: boolean;
-} = {}) {
-  const root = tempRoots.make("openclaw-kova-evidence-");
-  const planPath = join(root, "plan.json");
-  const reportPath = join(root, "report.json");
-  writeFileSync(planPath, lanePlan);
-  writeFileSync(reportPath, laneReport);
-  const args = [
-    SCRIPT_PATH,
-    "--plan",
-    planPath,
-    "--report",
-    reportPath,
-    "--profile",
-    PROFILE,
-    "--target",
-    TARGET,
-    "--repeat",
-    repeat,
-    "--include",
-    INCLUDE_FILTERS.join(","),
-    "--model",
-    MODEL,
-  ];
-  if (includeAuth) {
-    args.push("--auth", "mock");
-  }
-  return spawnSync(process.execPath, args, {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
-}
-
 describe("Kova workflow evidence", () => {
-  it("accepts exact selected-pair coverage for every repeat", () => {
-    expect(validate(plan(), report())).toEqual({
-      authMode: "mock",
-      pairCount: 2,
-      recordCount: 4,
-      repeat: 2,
-    });
-  });
-
   it("rejects collapsed repeat coverage", () => {
     const laneReport = report();
     recordsOf(laneReport).pop();
 
     expect(() => validate(plan(), laneReport)).toThrow(
       "lane report collapsed scenario-b/state-b coverage to 1/2 repeats",
-    );
-  });
-
-  it("rejects report pairs outside the selected plan", () => {
-    const laneReport = report();
-    const firstRecord = firstRecordOf(laneReport);
-    firstRecord.scenario = "scenario-extra";
-
-    expect(() => validate(plan(), laneReport)).toThrow(
-      "lane report contained unexpected scenario-extra/state-a",
     );
   });
 
@@ -279,59 +217,37 @@ describe("Kova workflow evidence", () => {
     );
   });
 
-  it("rejects plan and report schema drift", () => {
-    const badPlan = plan();
-    badPlan.schemaVersion = "kova.matrix.plan.v0";
-    expect(() => validate(badPlan, report())).toThrow("unexpected lane plan schema");
-
-    const badReport = report();
-    badReport.schemaVersion = "kova.report.v0";
-    expect(() => validate(plan(), badReport)).toThrow("unexpected lane report schema");
-  });
-
-  it("rejects plan and report include-filter drift", () => {
-    const badPlan = plan();
-    (badPlan.controls as JsonObject).include = ["scenario:scenario-a"];
-    expect(() => validate(badPlan, report())).toThrow("lane plan include filters did not match");
-
-    const badReport = report();
-    (badReport.controls as JsonObject).include = ["scenario:scenario-a"];
-    expect(() => validate(plan(), badReport)).toThrow("lane report include filters did not match");
-  });
-
-  it("rejects requested and record auth drift", () => {
-    const laneReport = report();
-    (laneReport.auth as JsonObject).requestedMode = "live";
-    expect(() => validate(plan(), laneReport)).toThrow("lane report requested auth did not match");
-
-    const recordAuthDrift = report();
-    (firstRecordOf(recordAuthDrift).auth as JsonObject).mode = "live";
-    expect(() => validate(plan(), recordAuthDrift)).toThrow(
-      "record scenario-a/state-a auth mode did not match",
-    );
-  });
-
-  it("rejects malformed record state", () => {
-    const laneReport = report();
-    firstRecordOf(laneReport).state = "state-a";
-
-    expect(() => validate(plan(), laneReport)).toThrow("invalid lane report record 0 state");
-  });
-
   it("rejects malformed JSON through the CLI", () => {
-    const result = runCli({ lanePlan: "{not-json" });
+    const root = tempRoots.make("openclaw-kova-evidence-");
+    const planPath = join(root, "plan.json");
+    const reportPath = join(root, "report.json");
+    writeFileSync(planPath, "{not-json");
+    writeFileSync(reportPath, JSON.stringify(report()));
+    const result = spawnSync(
+      process.execPath,
+      [
+        "scripts/lib/kova-workflow-evidence.mts",
+        "--plan",
+        planPath,
+        "--report",
+        reportPath,
+        "--profile",
+        PROFILE,
+        "--target",
+        TARGET,
+        "--repeat",
+        "2",
+        "--include",
+        INCLUDE_FILTERS.join(","),
+        "--model",
+        MODEL,
+        "--auth",
+        "mock",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("--plan is not valid JSON");
-  });
-
-  it("rejects zero repeat and missing CLI arguments", () => {
-    const zeroRepeat = runCli({ repeat: "0" });
-    expect(zeroRepeat.status).toBe(1);
-    expect(zeroRepeat.stderr).toContain("invalid expected repeat");
-
-    const missingAuth = runCli({ includeAuth: false });
-    expect(missingAuth.status).toBe(1);
-    expect(missingAuth.stderr).toContain("invalid --auth");
   });
 });

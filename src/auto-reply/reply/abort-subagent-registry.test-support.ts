@@ -20,7 +20,7 @@ export async function addSubagentFixture({
   ...run
 }: SubagentRunFixture) {
   await registerSubagentRun({ requesterAgentId: "main", ...run });
-  const entry = getSubagentRunByChildSessionKey(run.childSessionKey);
+  const entry = await getSubagentRunByChildSessionKey(run.childSessionKey);
   if (!entry || entry.runId !== run.runId) {
     throw new Error(`Subagent fixture registration did not publish ${run.runId}`);
   }

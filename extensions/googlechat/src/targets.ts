@@ -71,7 +71,7 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
   account: ResolvedGoogleChatAccount;
   target: string;
   assertDirectAdapterHandoff?: () => void;
-}): Promise<{ name: string; resource?: GoogleChatSpace }> {
+}) {
   const normalized = normalizeGoogleChatTarget(params.target);
   if (!normalized) {
     throw new Error("Missing Google Chat target.");
@@ -91,11 +91,9 @@ async function resolveGoogleChatOutboundSpaceDetails(params: {
   return { name: base };
 }
 
-export async function resolveGoogleChatOutboundSpace(params: {
-  account: ResolvedGoogleChatAccount;
-  target: string;
-  assertDirectAdapterHandoff?: () => void;
-}): Promise<string> {
+export async function resolveGoogleChatOutboundSpace(
+  params: Parameters<typeof resolveGoogleChatOutboundSpaceDetails>[0],
+): Promise<string> {
   return (await resolveGoogleChatOutboundSpaceDetails(params)).name;
 }
 

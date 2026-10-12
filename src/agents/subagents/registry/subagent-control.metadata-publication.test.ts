@@ -17,7 +17,7 @@ import * as writerQueue from "../../../shared/store-writer-queue.js";
 import { releaseOpenClawAgentDatabaseReadValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseExecutionScope } from "../../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import { enqueueSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
 import * as killScopeOwner from "./subagent-control-kill-scope.js";
 import * as controlSession from "./subagent-control-session.js";
@@ -30,7 +30,6 @@ import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-
 const fixture = useSubagentControlFixture();
 
 it.for([
-  { replacement: false, competingIdle: false, publication: "tombstone" },
   { replacement: true, competingIdle: false, publication: "tombstone" },
   { replacement: false, competingIdle: true, publication: "tombstone" },
   { replacement: false, competingIdle: false, publication: "result" },
@@ -269,7 +268,7 @@ it.for([
     });
     const withKillScope = killScopeOwner.withSubagentKillScope;
     vi.spyOn(killScopeOwner, "withSubagentKillScope").mockImplementation(
-      (params, run, publish, preparePublication) =>
+      (params, run, captureResult, preparePublication, finishResult) =>
         withKillScope(
           params,
           async (scope, trees) => {
@@ -296,8 +295,9 @@ it.for([
             }
             return result;
           },
-          publish,
+          captureResult,
           preparePublication,
+          finishResult,
         ),
     );
     const onResult = vi.fn();

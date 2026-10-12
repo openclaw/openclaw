@@ -7,9 +7,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -122,7 +122,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     let holdEndedMutation = !completed;
     const mutation = vi
       .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
-      .mockImplementation(async (params) => {
+      .mockImplementation(async (operation, params) => {
         if (
           holdEndedMutation &&
           "scope" in params &&
@@ -135,7 +135,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           endedMutationEntered.resolve();
           await resumeEndedMutation.promise;
         }
-        return await mutateSession(params);
+        return await mutateSession(operation, params);
       });
     const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
       if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {

@@ -33,16 +33,14 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
+import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import {
-  getEmbeddedSessionPromptState,
-  type ToolResultPromptProjectionState,
-} from "../session-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -58,11 +56,11 @@ import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
-  formatEmbeddedRunStageSummary,
-  shouldWarnEmbeddedRunStageSummary,
+  logEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
-import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
+import { hydratePromptMediaMessages } from "./images.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { checkMidTurnPrecheck } from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
@@ -98,22 +96,13 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     if (summary.stages.length === 0) {
       return;
     }
-    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary, {
-      totalThresholdMs: 5_000,
-      stageThresholdMs: 2_000,
-    });
-    if (!shouldWarn && !log.isEnabled("trace")) {
-      return;
-    }
-    const message = formatEmbeddedRunStageSummary(
-      `[trace:embedded-run] core-plugin-tool stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+    logEmbeddedRunStageSummary(
       summary,
+      log,
+      () =>
+        `[trace:embedded-run] core-plugin-tool stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+      { totalThresholdMs: 5_000, stageThresholdMs: 2_000 },
     );
-    if (shouldWarn) {
-      log.warn(message);
-    } else {
-      log.trace(message);
-    }
   };
 
   const workspace = await resolveAttemptWorkspaceSandbox(params);
@@ -192,12 +181,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   sessionManager: ReturnType<typeof guardSessionManager>;
   settingsManager: AgentSession["settingsManager"];
   sandbox?: SandboxContext | null;
-}): {
-  getAfterTurnCheckpoint: () => number | null;
-  recordCacheTouch: (startedAt: number) => void;
-  remove: () => void;
-  takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null;
-} {
+}) {
   const { activeContextEngine, activeSession, attempt, settingsManager } = input;
   const contextTokenBudget = Math.max(
     1,
@@ -213,28 +197,6 @@ export function installEmbeddedAttemptContextGuards(input: {
   });
   let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
   let afterTurnCheckpoint: number | null = null;
-  const midTurnPrecheckOptions =
-    attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true
-      ? {
-          midTurnPrecheck: {
-            enabled: true,
-            getReplay: () => ({
-              model: attempt.model,
-              sessionId: attempt.sessionId,
-              authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
-              enabled: input.getCompactionReplayEnabled(),
-            }),
-            contextTokenBudget,
-            reserveTokens: () => settingsManager.getCompactionReserveTokens(),
-            toolResultMaxChars,
-            getSystemPrompt: input.getSystemPrompt,
-            getPrePromptMessageCount: input.getPrePromptMessageCount,
-            onMidTurnPrecheck: (request: MidTurnPrecheckRequest) => {
-              pendingMidTurnPrecheckRequest = request;
-            },
-          },
-        }
-      : {};
 
   const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
@@ -300,6 +262,8 @@ export function installEmbeddedAttemptContextGuards(input: {
       sessionTarget: attempt.sessionTarget,
       sessionFile: attempt.sessionFile,
       tokenBudget: attempt.contextTokenBudget,
+      reserveTokens: () => settingsManager.getCompactionReserveTokens(),
+      getSystemPrompt: input.getSystemPrompt,
       modelId: attempt.modelId,
       ...(input.repairToolUseResultPairing
         ? {
@@ -346,12 +310,11 @@ export function installEmbeddedAttemptContextGuards(input: {
   const removeToolResultGuard = installToolResultContextGuard({
     agent: activeSession.agent,
     contextWindowTokens: contextTokenBudget,
-    ...midTurnPrecheckOptions,
   });
 
-  const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
-    activeSession.agent,
-    {
+  const previousContextTransform = activeSession.agent.transformContext;
+  activeSession.agent.transformContext = async (messages, signal) => {
+    const hydrated = await hydratePromptMediaMessages(messages, {
       workspaceDir: input.effectiveWorkspace,
       agentWorkspaceDir: attempt.workspaceDir,
       model: attempt.model,
@@ -366,23 +329,10 @@ export function installEmbeddedAttemptContextGuards(input: {
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
           : undefined,
       onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
-    },
-    (pruned) => {
-      const promptState = getEmbeddedSessionPromptState(attempt.sessionId);
-      const keys = new Set(
-        [...pruned].map(([index, message]) => `${index}:${message.role}:${message.timestamp}`),
-      );
-      if ([...keys].some((key) => !promptState.prunedImageMessages?.has(key))) {
-        declarePromptHistoryRewrite({ ...attempt, reason: "imageCleanup" });
-      }
-      promptState.prunedImageMessages = keys;
-    },
-  );
-  const previousComputerFrameTransform = activeSession.agent.transformContext;
-  activeSession.agent.transformContext = async (messages, signal) => {
-    const modelContext = previousComputerFrameTransform
-      ? await previousComputerFrameTransform.call(activeSession.agent, messages, signal)
-      : messages;
+    });
+    const modelContext = previousContextTransform
+      ? await previousContextTransform.call(activeSession.agent, hydrated, signal)
+      : hydrated;
     invalidateComputerFrameIfMissing({
       contextEpoch: input.computerContextEpoch,
       messages: modelContext,
@@ -392,13 +342,39 @@ export function installEmbeddedAttemptContextGuards(input: {
   };
 
   return {
+    checkMidTurnPrecheck: (
+      request: Pick<Parameters<typeof checkMidTurnPrecheck>[0], "context" | "previousRequest">,
+    ) => {
+      // Compaction ownership does not waive host admission at the provider boundary.
+      if (
+        activeSession[agentSessionDeferThresholdCompaction] ||
+        (!activeContextEngine?.info.ownsCompaction &&
+          attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled !== true)
+      ) {
+        return;
+      }
+      checkMidTurnPrecheck({
+        ...request,
+        contextTokenBudget,
+        reserveTokens: settingsManager.getCompactionReserveTokens(),
+        toolResultMaxChars,
+        replay: {
+          model: attempt.model,
+          sessionId: attempt.sessionId,
+          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
+          enabled: input.getCompactionReplayEnabled(),
+        },
+        onPrecheck: (precheck) => {
+          pendingMidTurnPrecheckRequest = precheck;
+        },
+      });
+    },
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
-    recordCacheTouch: (startedAt) => {
+    recordCacheTouch: (startedAt: number) => {
       lastCacheTouchAt = startedAt;
     },
     remove: () => {
-      activeSession.agent.transformContext = previousComputerFrameTransform;
-      removeHistoryImagePruneContextTransform();
+      activeSession.agent.transformContext = previousContextTransform;
       removeToolResultGuard();
       removeContextEngineLoopHook?.();
       activeSession.agent.transformContext = previousCacheTtlTransform;
@@ -417,11 +393,7 @@ export type EmitDiagnosticRunCompleted = (
   extra?: { blockedBy?: string },
 ) => void;
 
-export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams): {
-  diagnosticTrace: ReturnType<typeof freezeDiagnosticTraceContext>;
-  runTrace: ReturnType<typeof freezeDiagnosticTraceContext>;
-  emitCompleted: EmitDiagnosticRunCompleted;
-} {
+export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams) {
   const diagnosticTrace = freezeDiagnosticTraceContext(
     getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
   );

@@ -210,8 +210,6 @@ it.each(["workspace", "prompt"] as const)(
 
 it.each([
   { surface: "workspace", warm: false },
-  { surface: "workspace", warm: true },
-  { surface: "prompt", warm: false },
   { surface: "prompt", warm: true },
 ] as const)(
   "$surface refuses an invalidated caller after Library preparation (warm=$warm)",

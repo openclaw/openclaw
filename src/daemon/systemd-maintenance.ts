@@ -2,6 +2,7 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { reconcileGatewayServiceDefinition } from "./service-reconciliation.js";
 import {
@@ -24,10 +25,12 @@ import { preserveSystemdUnitPolicy, refreshSystemdUnitPolicy } from "./systemd-u
 /** Read the effective native policy; absence is a diagnostic, not a stop refusal. */
 export async function readSystemdGatewayStopTimeout(state: GatewayServiceState) {
   const unit = `${resolveSystemdServiceName(state.env)}.service`;
-  const result = await execSystemctlUser(
-    state.env,
-    ["show", unit, "--no-page", "--property", "LoadState,TimeoutStopUSec"],
-    10_000,
+  const result = await withServiceInspectionBudget(() =>
+    execSystemctlUser(
+      state.env,
+      ["show", unit, "--no-page", "--property", "LoadState,TimeoutStopUSec"],
+      10_000,
+    ),
   );
   const properties = parseKeyValueOutput(result.stdout, "=");
   const timeout = parseSystemdTimeSpanMs(properties.timeoutstopusec ?? "");

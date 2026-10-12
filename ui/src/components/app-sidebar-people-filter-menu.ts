@@ -24,7 +24,7 @@ export function renderSidebarPeopleFilterMenuForController(controller: SidebarMe
       return;
     }
     update();
-    controller.closePeopleFilterMenu({ restoreFocus: true });
+    controller.closePositionedMenu("peopleFilter", { restoreFocus: true });
   };
   const sheet = isMobileNavLayout();
   const changed = people.statusFilter !== "all" || people.sortMode !== "presence";
@@ -35,11 +35,7 @@ export function renderSidebarPeopleFilterMenuForController(controller: SidebarMe
       .anchor=${controller.peopleFilterMenuTrigger}
       .label=${t("presence.filters.label")}
       .initialFocusSelector=${"#sidebar-people-status"}
-      .onClose=${(restoreFocus: boolean) => {
-        if (controller.peopleFilterMenuPosition === position) {
-          controller.closePeopleFilterMenu({ restoreFocus });
-        }
-      }}
+      .onClose=${controller.positionedMenuHandlers("peopleFilter").onClose}
       .content=${html`
         <div class="sidebar-session-menu-section">
           ${renderPicker({

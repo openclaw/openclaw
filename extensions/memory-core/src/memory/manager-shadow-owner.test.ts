@@ -3,10 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  configureMemorySqliteWalMaintenance,
-  ensureMemoryIndexSchema,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -27,11 +23,9 @@ afterEach(async () => {
 async function createShadow(filename: string) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-shadow-owner-"));
   directories.push(directory);
-  const owner = MemoryIndexDatabase.openShadow(path.join(directory, filename), false);
+  const owner = await MemoryIndexDatabase.openShadow(path.join(directory, filename), false);
   owners.push(owner);
-  ensureMemoryIndexSchema({ db: owner.db, cacheEnabled: false, ftsEnabled: true });
-  owner.fts.enabled = true;
-  owner.fts.available = true;
+  await owner.admitSchema({ cacheEnabled: false, ftsEnabled: true });
   return owner;
 }
 
@@ -60,17 +54,24 @@ function sessionReplacement(sessionId: string, text: string): MemorySourceIndexR
 }
 
 describe("private shadow admission", () => {
-  it("joins the WAL owner before closing a shadow database", async () => {
-    const owner = await createShadow("retiring.sqlite");
-    const maintenance = configureMemorySqliteWalMaintenance(owner.db);
-    const stop = maintenance.stop;
+  it("joins its retained worker before releasing the read-only shadow handle", async () => {
     const entered = createDeferred<void>();
     const released = createDeferred<void>();
-    vi.spyOn(maintenance, "stop").mockImplementationOnce(async () => {
-      entered.resolve();
-      await released.promise;
-      await stop();
+    const open = sqliteRuntime.openSqliteWorkerStore;
+    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
+      const store = await open(options);
+      if (store) {
+        const close = store.close.bind(store);
+        vi.spyOn(store, "close").mockImplementationOnce(async () => {
+          entered.resolve();
+          await released.promise;
+          await close();
+        });
+      }
+      return store;
     });
+    const owner = await createShadow("retiring.sqlite");
+    expect(() => owner.db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
     const closing = owner.closeShadow();
     try {
       await entered.promise;
@@ -116,10 +117,12 @@ describe("private shadow admission", () => {
 
   it("retains SQLite failure codes and rolls back the failed Worker callback", async () => {
     const owner = await createShadow("shadow # unicode é.sqlite");
-    owner.db.exec(
+    using writer = new DatabaseSync(owner.db.location()!);
+    writer.exec(
       "CREATE TRIGGER refuse_source BEFORE INSERT ON memory_index_sources BEGIN SELECT RAISE(ABORT, 'source refused'); END",
     );
     const replacement = sessionReplacement("one", "retained text");
+    await owner.closePublicationWorker();
     const refusedOpen = new Error("controlled publication open refusal");
     vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockRejectedValueOnce(refusedOpen);
     await expect(
@@ -143,7 +146,7 @@ describe("private shadow admission", () => {
     });
     expect(owner.db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
     expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
-    owner.db.exec("DROP TRIGGER refuse_source");
+    writer.exec("DROP TRIGGER refuse_source");
     await expect(
       owner.replaceSource(
         replacement,
@@ -153,6 +156,7 @@ describe("private shadow admission", () => {
     ).resolves.toEqual({
       beforeRevision: expect.any(Number),
       databaseRevision: expect.any(Number),
+      retainedDrift: false,
     });
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
       { text: "retained text" },
@@ -160,7 +164,6 @@ describe("private shadow admission", () => {
   });
 
   it("retains committed data when the publication worker reports a close failure", async () => {
-    const owner = await createShadow("shadow # committed.sqlite");
     const open = sqliteRuntime.openSqliteWorkerStore;
     vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
       const store = await open(options);
@@ -173,6 +176,7 @@ describe("private shadow admission", () => {
       }
       return store;
     });
+    const owner = await createShadow("shadow # committed.sqlite");
     await owner.replaceSource(
       sessionReplacement("committed", "committed text"),
       () => undefined,

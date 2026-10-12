@@ -1,21 +1,25 @@
 import { randomUUID, createHash } from "node:crypto";
-import type { SessionGitHubStatusResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import type { PersonalPublicationSelector } from "../state/github-publication-worker.types.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolvePersonalGitHubOwner } from "../state/user-github-connections.js";
 import { createGitHubPublicationExecutionEffects } from "./github-publication-execution-effects.js";
-import { projectGitHubPublicationResult } from "./github-publication-store.js";
+import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 
 export type PersonalGitHubPublicationRow = DB["github_personal_publication_requests"];
 const table = "github_personal_publication_requests";
@@ -54,8 +58,8 @@ export function personalGitHubRequestDigest(row: PersonalGitHubPublicationRow): 
     .digest("hex");
 }
 
-function assertOwner(owner: string): void {
-  if (resolvePersonalGitHubOwner(owner) !== owner) {
+function assertOwner(db: DatabaseSync, owner: string): void {
+  if (resolvePersonalGitHubOwner(owner, db) !== owner) {
     throw new Error("My GitHub publication owner changed.");
   }
 }
@@ -63,13 +67,17 @@ function assertOwner(owner: string): void {
 /** Ownership is checked before every lookup; request IDs and digests are never bearer authority. */
 export function readPersonalGitHubPublication(
   owner: string,
-  request:
-    | { requestId: string }
-    | { sessionId: string; idempotencyKey: string }
-    | { sessionKey: string; agentId: string },
+  request: Parameters<typeof readPersonalGitHubPublicationInDatabase>[2],
 ): PersonalGitHubPublicationRow | undefined {
-  assertOwner(owner);
-  const db = openOpenClawStateDatabase().db;
+  return readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, request);
+}
+
+export function readPersonalGitHubPublicationInDatabase(
+  db: DatabaseSync,
+  owner: string,
+  request: PersonalPublicationSelector,
+): PersonalGitHubPublicationRow | undefined {
+  assertOwner(db, owner);
   if (!tableExists(db, table)) {
     return undefined;
   }
@@ -98,92 +106,107 @@ export function readPersonalGitHubPublication(
   return row;
 }
 
-export function personalGitHubPublicationStatus(
-  row: PersonalGitHubPublicationRow,
-  executing: boolean,
-): SessionGitHubStatusResult {
-  const unfinished = row.status === "requested" || row.status === "publishing";
-  const projected = unfinished && !executing ? { ...row, status: "needs_confirmation" } : row;
-  return {
-    result: projectGitHubPublicationResult(projected),
-    confirmation:
-      projected.status !== "needs_confirmation"
-        ? null
-        : {
-            requestDigest: row.request_digest,
-            generation: row.connection_generation,
-            account: { accountId: row.identity_account_id, login: row.identity_login },
-            pushRepository: row.push_repository,
-            repository: row.repository,
-            branch: row.branch,
-            baseBranch: row.base_branch,
-            sourceHeadCommit: row.source_head_commit,
-            sourceIndexTree: row.source_index_tree,
-            workspaceTree: row.workspace_tree,
-          },
-  };
-}
-
+/** @deprecated Use insertPersonalGitHubPublicationAsync; removed in the next Plugin SDK major. */
 export function insertPersonalGitHubPublication(
   row: PersonalGitHubPublicationRow,
   lifecycleRevision: string | null,
   assertCurrent: () => void,
 ): PersonalGitHubPublicationRow {
+  warnPluginSdkDeprecation({
+    family: "github-publication",
+    method: "insertPersonalGitHubPublication",
+    replacement: "insertPersonalGitHubPublicationAsync",
+  });
   return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      assertCurrent();
-      assertOwner(row.owner_profile_id);
-      ensurePersonalGitHubPublicationSchema(db);
-      executeSqliteQuerySync(db, query(db).insertInto(table).values(row));
-      insertGitHubPublicationSessionLifecycle(db, {
-        publicationKind: "personal",
-        requestId: row.request_id,
-        lifecycleRevision,
-      });
-      return row;
-    },
+    (database) =>
+      insertPersonalGitHubPublicationInDatabase(database, row, lifecycleRevision, assertCurrent),
     undefined,
     { operationLabel: "github-personal-publication.request" },
   );
 }
 
+export function insertPersonalGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
+  row: PersonalGitHubPublicationRow,
+  lifecycleRevision: string | null,
+  assertCurrent: () => void,
+): PersonalGitHubPublicationRow {
+  const { db } = database;
+  assertCurrent();
+  assertOwner(db, row.owner_profile_id);
+  ensurePersonalGitHubPublicationSchema(db);
+  executeSqliteQuerySync(db, query(db).insertInto(table).values(row));
+  insertGitHubPublicationSessionLifecycle(db, {
+    publicationKind: "personal",
+    requestId: row.request_id,
+    lifecycleRevision,
+  });
+  githubPublicationReceipts.stageRow(db, "personal", row);
+  return row;
+}
+
+export function claimPersonalGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
+  row: PersonalGitHubPublicationRow,
+  instanceId: string,
+  executionId: string,
+  assertCurrent: () => void,
+) {
+  const { db } = database;
+  assertCurrent();
+  assertOwner(db, row.owner_profile_id);
+  const update = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .updateTable(table)
+      .set({
+        status: "publishing",
+        gateway_instance_id: instanceId,
+        execution_id: executionId,
+        updated_at_ms: Date.now(),
+      })
+      .where("owner_profile_id", "=", row.owner_profile_id)
+      .where("request_id", "=", row.request_id)
+      .where("request_digest", "=", row.request_digest)
+      .where("status", "=", row.status)
+      .where("execution_id", row.execution_id === null ? "is" : "=", row.execution_id)
+      .returningAll(),
+  );
+  if (!update) {
+    throw new Error("My GitHub publication execution changed.");
+  }
+  if (
+    update.identity_source !== "personal" ||
+    update.request_digest !== personalGitHubRequestDigest(update)
+  ) {
+    throw new Error("My GitHub publication receipt changed during execution.");
+  }
+  githubPublicationReceipts.stageRow(db, "personal", update);
+  return { ...update, gateway_instance_id: instanceId, execution_id: executionId };
+}
+
 /** One execution closure owns writes; a later socket must explicitly confirm before claiming. */
+/** @deprecated Use claimPersonalGitHubPublicationAsync; removed in the next Plugin SDK major. */
 export function claimPersonalGitHubPublication(
   row: PersonalGitHubPublicationRow,
   instanceId: string,
   assertCurrent: () => void,
 ) {
+  warnPluginSdkDeprecation({
+    family: "github-publication",
+    method: "claimPersonalGitHubPublication",
+    replacement: "claimPersonalGitHubPublicationAsync",
+  });
   const executionId = randomUUID();
   const claimed = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      assertCurrent();
-      assertOwner(row.owner_profile_id);
-      const update = executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({
-            status: "publishing",
-            gateway_instance_id: instanceId,
-            execution_id: executionId,
-            updated_at_ms: Date.now(),
-          })
-          .where("owner_profile_id", "=", row.owner_profile_id)
-          .where("request_id", "=", row.request_id)
-          .where("request_digest", "=", row.request_digest)
-          .where("status", "=", row.status)
-          .where("execution_id", row.execution_id === null ? "is" : "=", row.execution_id),
-      );
-      if (update.numAffectedRows !== 1n) {
-        throw new Error("My GitHub publication execution changed.");
-      }
-      return {
-        ...row,
-        status: "publishing",
-        gateway_instance_id: instanceId,
-        execution_id: executionId,
-      };
-    },
+    (database) =>
+      claimPersonalGitHubPublicationInDatabase(
+        database,
+        row,
+        instanceId,
+        executionId,
+        assertCurrent,
+      ),
     undefined,
     { operationLabel: "github-personal-publication.claim" },
   );
@@ -203,42 +226,16 @@ export function claimPersonalGitHubPublication(
     requireAction: boolean,
   ): PersonalGitHubPublicationRow =>
     runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        if (requireAction) {
-          assertCurrent();
-        }
-        const current = executeSqliteQueryTakeFirstSync(
-          db,
-          query(db)
-            .selectFrom(table)
-            .selectAll()
-            .where("owner_profile_id", "=", row.owner_profile_id)
-            .where("request_id", "=", row.request_id),
-        );
-        if (
-          !current ||
-          current.request_digest !== row.request_digest ||
-          personalGitHubRequestDigest(current) !== row.request_digest
-        ) {
-          throw new Error("My GitHub publication receipt changed during execution.");
-        }
-        const updated = executeSqliteQueryTakeFirstSync(
-          db,
-          query(db)
-            .updateTable(table)
-            .set({ ...values, updated_at_ms: Date.now() })
-            .where("owner_profile_id", "=", row.owner_profile_id)
-            .where("request_id", "=", row.request_id)
-            .where("status", "=", "publishing")
-            .where("gateway_instance_id", "=", instanceId)
-            .where("execution_id", "=", executionId)
-            .returningAll(),
-        );
-        if (!updated) {
-          throw new Error("My GitHub publication execution is no longer current.");
-        }
-        return updated;
-      },
+      (database) =>
+        writePersonalGitHubPublicationInDatabase(
+          database,
+          row,
+          instanceId,
+          executionId,
+          values,
+          requireAction,
+          assertCurrent,
+        ),
       undefined,
       { operationLabel: "github-personal-publication.record" },
     );
@@ -249,34 +246,83 @@ export function claimPersonalGitHubPublication(
   };
 }
 
-export function requirePersonalGitHubPublicationConfirmation(instanceId: string): void {
-  const database = openOpenClawStateDatabase();
-  if (!tableExists(database.db, table)) {
-    return;
+export function writePersonalGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
+  row: PersonalGitHubPublicationRow,
+  instanceId: string,
+  executionId: string,
+  values: Partial<PersonalGitHubPublicationRow>,
+  requireAction: boolean,
+  assertCurrent: () => void,
+): PersonalGitHubPublicationRow {
+  const { db } = database;
+  if (requireAction) {
+    assertCurrent();
   }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({ status: "needs_confirmation", updated_at_ms: Date.now() })
-          .where("status", "in", ["requested", "publishing"])
-          .where((eb) =>
-            eb.or([
-              eb("gateway_instance_id", "is", null),
-              eb("gateway_instance_id", "!=", instanceId),
-            ]),
-          ),
-      );
-    },
-    undefined,
-    { operationLabel: "github-personal-publication.restart" },
+  const current = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom(table)
+      .selectAll()
+      .where("owner_profile_id", "=", row.owner_profile_id)
+      .where("request_id", "=", row.request_id),
   );
+  if (
+    !current ||
+    current.request_digest !== row.request_digest ||
+    personalGitHubRequestDigest(current) !== row.request_digest
+  ) {
+    throw new Error("My GitHub publication receipt changed during execution.");
+  }
+  const updated = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .updateTable(table)
+      .set({ ...values, updated_at_ms: Date.now() })
+      .where("owner_profile_id", "=", row.owner_profile_id)
+      .where("request_id", "=", row.request_id)
+      .where("status", "=", "publishing")
+      .where("gateway_instance_id", "=", instanceId)
+      .where("execution_id", "=", executionId)
+      .returningAll(),
+  );
+  if (!updated) {
+    throw new Error("My GitHub publication execution is no longer current.");
+  }
+  githubPublicationReceipts.stageRow(db, "personal", updated);
+  return updated;
+}
+
+export function requirePersonalGitHubPublicationConfirmationInDatabase(
+  database: OpenClawStateDatabase,
+  instanceId: string,
+): PersonalGitHubPublicationRow[] {
+  if (!tableExists(database.db, table)) {
+    return [];
+  }
+  const { db } = database;
+  const rows = executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable(table)
+      .set({ status: "needs_confirmation", updated_at_ms: Date.now() })
+      .where("status", "in", ["requested", "publishing"])
+      .where((eb) =>
+        eb.or([eb("gateway_instance_id", "is", null), eb("gateway_instance_id", "!=", instanceId)]),
+      )
+      .returningAll(),
+  ).rows;
+  for (const row of rows) {
+    githubPublicationReceipts.stageRow(db, "personal", row);
+  }
+  return rows;
 }
 
 export function listUnreportedPersonalGitHubPublications() {
-  const db = openOpenClawStateDatabase().db;
+  return listUnreportedPersonalGitHubPublicationsInDatabase(openOpenClawStateDatabase().db);
+}
+
+export function listUnreportedPersonalGitHubPublicationsInDatabase(db: DatabaseSync) {
   if (!tableExists(db, table)) {
     return [];
   }
@@ -303,23 +349,25 @@ export function listUnreportedPersonalGitHubPublications() {
   });
 }
 
-export function markPersonalGitHubPublicationReported(requestId: string): void {
-  const database = openOpenClawStateDatabase();
+export function markPersonalGitHubPublicationReportedInDatabase(
+  database: OpenClawStateDatabase,
+  requestId: string,
+): PersonalGitHubPublicationRow | undefined {
   if (!tableExists(database.db, table)) {
-    return;
+    return undefined;
   }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({ reported_at_ms: Date.now() })
-          .where("request_id", "=", requestId)
-          .where("status", "in", ["published", "failed"]),
-      );
-    },
-    undefined,
-    { operationLabel: "github-personal-publication.report" },
+  const { db } = database;
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .updateTable(table)
+      .set({ reported_at_ms: Date.now() })
+      .where("request_id", "=", requestId)
+      .where("status", "in", ["published", "failed"])
+      .returningAll(),
   );
+  if (row) {
+    githubPublicationReceipts.stageRow(db, "personal", row);
+  }
+  return row;
 }

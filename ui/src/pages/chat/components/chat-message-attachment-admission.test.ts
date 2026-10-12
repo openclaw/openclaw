@@ -2,7 +2,8 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderMessageAttachment } from "./chat-message-attachments.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import {
   releaseChatMediaResourceSubscriber,
   type AttachmentItem,
@@ -66,13 +67,12 @@ function mount(
   let current = item;
   const update = () =>
     render(
-      renderMessageAttachment(
-        current,
-        { ...options, onRequestUpdate: update },
+      solidContent(MessageAttachment, {
+        item: current,
+        options: { ...options, onRequestUpdate: update },
         onOpenSidebar,
-        undefined,
         presentation,
-      ),
+      }),
       container,
     );
   subscribers.add(update);
@@ -98,43 +98,42 @@ function localAttachment(
 
 describe("nonimage attachment source admission", () => {
   it.each([
-    ["document", "notes.pdf", "inline"],
-    ["audio", "recording.mp3", "card"],
-    ["video", "recording.mp4", "card"],
+    ["document", "notes.pdf", "inline", true],
+    ["audio", "recording.mp3", "card", true],
+    ["video", "recording.mp4", "card", true],
+    ["audio", "recording.mp3", "inline", false],
+    ["video", "recording.mp4", "inline", false],
+    ["video", "preview.mp4", "preview", false],
+    ["document", "drawing.svg", "card", false],
   ] as const)(
-    "defers a local %s metadata read until its %s %s card is near the viewport",
-    async (kind, label, presentation) => {
+    "routes %s %s %s metadata through its source owner (deferred=%s)",
+    async (kind, label, presentation, deferred) => {
       const fetchMock = vi.fn<typeof fetch>(async () =>
-        Response.json({ available: false, reason: "Fixture missing", retryable: false }),
+        Response.json(
+          deferred
+            ? { available: false, reason: "Fixture missing", retryable: false }
+            : { available: false },
+        ),
       );
       vi.stubGlobal("fetch", fetchMock);
       const first = mount(localAttachment(kind, label), {}, undefined, presentation);
-      mount(localAttachment(kind, `other-${label}`), {}, undefined, presentation);
+      if (deferred) {
+        mount(localAttachment(kind, `other-${label}`), {}, undefined, presentation);
+      }
       await settle();
-
-      expect(first.container.textContent).toContain(label);
-      expect(fetchMock).not.toHaveBeenCalled();
-      const observation = observations.find(({ element }) => first.container.contains(element));
-      expect(observation).toBeDefined();
-      observation?.show();
-      await settle();
+      if (deferred) {
+        expect(first.container.textContent).toContain(label);
+        expect(fetchMock).not.toHaveBeenCalled();
+        const observation = observations.find(({ element }) => first.container.contains(element));
+        expect(observation).toBeDefined();
+        observation?.show();
+        await settle();
+      } else {
+        expect(observations).toHaveLength(0);
+      }
       expect(fetchMock).toHaveBeenCalledOnce();
     },
   );
-
-  it.each([
-    ["audio", "recording.mp3", "inline"],
-    ["video", "recording.mp4", "inline"],
-    ["video", "preview.mp4", "preview"],
-    ["document", "drawing.svg", "card"],
-  ] as const)("preserves the existing %s %s %s source owner", async (kind, label, presentation) => {
-    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ available: false }));
-    vi.stubGlobal("fetch", fetchMock);
-    mount(localAttachment(kind, label), {}, undefined, presentation);
-    await settle();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(observations).toHaveLength(0);
-  });
 
   it("defers a managed ticket without delaying the admitted download", async () => {
     const url = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
@@ -173,6 +172,7 @@ describe("nonimage attachment source admission", () => {
 
     const current = observations.at(-1);
     render(null, view.container);
+    await settle();
     current?.show();
     await settle();
     expect(fetchMock).not.toHaveBeenCalled();

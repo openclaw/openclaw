@@ -8,27 +8,27 @@ import {
   trimCallReplayKeys,
 } from "./replay-keys.js";
 
-export const CALL_RECORD_EVENTS_NAMESPACE = "call-record-events";
-export const CALL_RECORD_EVENT_CHUNKS_NAMESPACE = "call-record-event-chunks";
+const CALL_RECORD_EVENTS_NAMESPACE = "call-record-events";
+const CALL_RECORD_EVENT_CHUNKS_NAMESPACE = "call-record-event-chunks";
 export const MAX_CALL_RECORD_EVENTS = 1000;
 /** Extra metadata entries retained so pruning can safely trim oldest rows. */
-export const CALL_RECORD_EVENT_META_MAX_ENTRIES = MAX_CALL_RECORD_EVENTS + 100;
+const CALL_RECORD_EVENT_META_MAX_ENTRIES = MAX_CALL_RECORD_EVENTS + 100;
 const MAX_CHUNKS_PER_CALL_RECORD_EVENT = 48;
-export const CALL_RECORD_CHUNK_MAX_ENTRIES =
+const CALL_RECORD_CHUNK_MAX_ENTRIES =
   MAX_CALL_RECORD_EVENTS * MAX_CHUNKS_PER_CALL_RECORD_EVENT + MAX_CHUNKS_PER_CALL_RECORD_EVENT;
 /** Raw UTF-8 bytes stored per call record chunk before base64 encoding. */
 const RAW_CALL_RECORD_CHUNK_BYTES = 47 * 1024;
 const CALL_RECORD_READ_BATCH_KEYS = 128;
 let callRecordEventSequence = 0;
 
-export type CallRecordEventMeta = {
+type CallRecordEventMeta = {
   chunkCount: number;
   byteLength: number;
   persistedAt?: number;
   sequence?: number;
 };
 
-export type CallRecordEventChunk = {
+type CallRecordEventChunk = {
   index: number;
   dataBase64: string;
 };
@@ -86,7 +86,7 @@ function tryCreateCallRecordStateStores(
   }
 }
 
-export function buildChunkKey(eventKey: string, index: number): string {
+function buildChunkKey(eventKey: string, index: number): string {
   return `${eventKey}:chunk:${String(index).padStart(4, "0")}`;
 }
 
@@ -158,7 +158,7 @@ function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
 }
 
 /** Encode one bounded record; chunks are produced only when requested by the writer. */
-export function encodeCallRecordEvent(call: CallRecord) {
+function encodeCallRecordEvent(call: CallRecord) {
   const serialized = JSON.stringify(prepareVoiceCallRecordForStorage(call));
   const buffer = Buffer.from(serialized, "utf8");
   const chunkCount = Math.max(1, Math.ceil(buffer.byteLength / RAW_CALL_RECORD_CHUNK_BYTES));
@@ -179,16 +179,20 @@ export function encodeCallRecordEvent(call: CallRecord) {
   };
 }
 
-async function pruneCallRecordEvents(stores: CallRecordStateStores): Promise<void> {
-  if (stores.events.count && (await stores.events.count()) <= MAX_CALL_RECORD_EVENTS) {
+async function pruneCallRecordEvents(
+  stores: CallRecordStateStores,
+  incomingEntries = 0,
+): Promise<void> {
+  const retainedLimit = Math.max(0, MAX_CALL_RECORD_EVENTS - incomingEntries);
+  if (stores.events.count && (await stores.events.count()) <= retainedLimit) {
     return;
   }
   const rows = await stores.events.entries();
-  if (rows.length <= MAX_CALL_RECORD_EVENTS) {
+  if (rows.length <= retainedLimit) {
     return;
   }
   const sorted = rows.toSorted((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
-  for (const row of sorted.slice(0, rows.length - MAX_CALL_RECORD_EVENTS)) {
+  for (const row of sorted.slice(0, rows.length - retainedLimit)) {
     const meta = await stores.events.lookup(row.key);
     await stores.events.delete(row.key);
     if (meta) {
@@ -300,6 +304,7 @@ export async function persistCallRecord(
   storePath: string,
   call: CallRecord,
   stateRuntime?: VoiceCallStateRuntime["state"],
+  options?: { assertCurrent?: () => void },
 ): Promise<void> {
   try {
     const stores = createCallRecordStateStores(storePath, stateRuntime);
@@ -310,20 +315,30 @@ export async function persistCallRecord(
     for (let index = 0; index < encoded.meta.chunkCount; index += 1) {
       await stores.chunks.register(buildChunkKey(eventKey, index), encoded.chunk(index));
     }
-    await stores.events.register(eventKey, { ...encoded.meta, ...order });
-    await pruneCallRecordEvents(stores);
+    if (options?.assertCurrent) {
+      // Keep guarded registration as the final await. Its caller can install the same snapshot in
+      // memory without an authority gap after durable write admission.
+      await pruneCallRecordEvents(stores, 1);
+      await stores.events.register(eventKey, { ...encoded.meta, ...order }, options);
+    } else {
+      // Existing callers publish before pruning and surface pruning failures with that snapshot
+      // still readable. Preserve that recovery contract for ordinary call-state writes.
+      await stores.events.register(eventKey, { ...encoded.meta, ...order });
+      await pruneCallRecordEvents(stores);
+    }
   } catch (err) {
     console.error("[voice-call] Failed to persist call record:", err);
     throw err;
   }
 }
 
-/** Restore nonterminal active calls and event indexes from persisted records. */
+/** Restore active calls, interrupted deliveries, and event indexes from persisted records. */
 export async function loadActiveCallsFromStore(
   storePath: string,
   stateRuntime?: VoiceCallStateRuntime["state"],
 ): Promise<{
   activeCalls: Map<CallId, CallRecord>;
+  interruptedDeliveries: CallRecord[];
   processedEventIds: Set<string>;
 }> {
   const stores = tryCreateCallRecordStateStores(storePath, stateRuntime);
@@ -341,6 +356,7 @@ export async function loadActiveCallsFromStore(
   }
 
   const activeCalls = new Map<CallId, CallRecord>();
+  const interruptedDeliveries: CallRecord[] = [];
   const processedEventIds = new Set<string>();
 
   for (const [callId, call] of callMap) {
@@ -348,13 +364,24 @@ export async function loadActiveCallsFromStore(
     for (const eventId of call.processedEventIds) {
       rememberManagerReplayKey(processedEventIds, eventId);
     }
+    if (
+      [call.metadata?.callReport, call.metadata?.liveTranscriptDelivery].some(
+        (status) =>
+          status !== null &&
+          typeof status === "object" &&
+          "status" in status &&
+          status.status === "pending",
+      )
+    ) {
+      interruptedDeliveries.push(call);
+    }
     if (TerminalStates.has(call.state)) {
       continue;
     }
     activeCalls.set(callId, call);
   }
 
-  return { activeCalls, processedEventIds };
+  return { activeCalls, interruptedDeliveries, processedEventIds };
 }
 
 /** Resolve an internal ID or retained provider alias to its newest logical call snapshot. */

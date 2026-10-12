@@ -1,7 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readRootJsonObjectSync } from "../../infra/json-files.js";
-import type { OpenClawSkillMetadata, ParsedSkillFrontmatter } from "../types.js";
 import { resolveSkillInvocationPolicy, resolveSkillManifestMetadata } from "./frontmatter.js";
 import { SKILL_SOURCE_ORIGIN_RELATIVE_PATH } from "./skill-entry-metadata-path.js";
 import { tryRealpath } from "./symlink-targets.js";
@@ -38,21 +37,6 @@ function readSourceInstallSkillKey(skillDir: string): string | undefined {
   }
 }
 
-function resolveSkillEntryMetadata(params: {
-  frontmatter: ParsedSkillFrontmatter;
-  skillDir: string;
-}): OpenClawSkillMetadata | undefined {
-  const metadata = resolveSkillManifestMetadata(params.frontmatter);
-  if (metadata?.skillKey) {
-    return metadata;
-  }
-  const sourceInstallSkillKey = readSourceInstallSkillKey(params.skillDir);
-  if (!sourceInstallSkillKey) {
-    return metadata;
-  }
-  return { ...metadata, skillKey: sourceInstallSkillKey };
-}
-
 export function createSkillEntry(
   record: Pick<
     WorkspaceSkillSources["entries"][number],
@@ -61,23 +45,25 @@ export function createSkillEntry(
 ): WorkspaceSkillSources["entries"][number] {
   const { skill, frontmatter } = record;
   const invocation = resolveSkillInvocationPolicy(frontmatter);
-  const entry: WorkspaceSkillSources["entries"][number] = {
+  let metadata = resolveSkillManifestMetadata(frontmatter);
+  if (!metadata?.skillKey) {
+    const skillKey = readSourceInstallSkillKey(skill.baseDir);
+    if (skillKey) {
+      metadata = { ...metadata, skillKey };
+    }
+  }
+  return {
     ...(record.sourceOrder !== undefined ? { sourceOrder: record.sourceOrder } : {}),
     skill,
     frontmatter,
-    metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
+    metadata,
     invocation,
     exposure: {
       includeInRuntimeRegistry: true,
       includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
       userInvocable: invocation.userInvocable ?? true,
     },
+    ...(record.syncSourceDir !== undefined ? { syncSourceDir: record.syncSourceDir } : {}),
+    ...(record.syncDirName !== undefined ? { syncDirName: record.syncDirName } : {}),
   };
-  if (record.syncSourceDir !== undefined) {
-    entry.syncSourceDir = record.syncSourceDir;
-  }
-  if (record.syncDirName !== undefined) {
-    entry.syncDirName = record.syncDirName;
-  }
-  return entry;
 }

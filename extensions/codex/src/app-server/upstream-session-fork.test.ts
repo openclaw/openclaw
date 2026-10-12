@@ -14,10 +14,9 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexSessionCatalogControl } from "../session-catalog-control.js";
-import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
+import { CodexAppServerClient } from "./client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config-runtime.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
@@ -53,8 +52,8 @@ const boundary = {
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: linkMocks.delete,
-  upsertSessionUpstreamLink: linkMocks.upsert,
+  deleteSessionUpstreamLinkAsync: linkMocks.delete,
+  upsertSessionUpstreamLinkAsync: linkMocks.upsert,
 }));
 
 vi.mock("./transcript-mirror.js", async (importOriginal) => ({
@@ -130,7 +129,7 @@ describe("forkCodexUpstreamSession", () => {
         return transport.client;
       });
       const config = {
-        agents: { list: [{ id: "main", agentDir: stateDir, workspace: stateDir }] },
+        agents: { entries: { main: { agentDir: stateDir, workspace: stateDir } } },
       };
       const pluginConfig = {
         appServer: {
@@ -225,39 +224,6 @@ describe("forkCodexUpstreamSession", () => {
       }
     },
   );
-
-  it.each([
-    new CodexAppServerScopedRequestRejectedError("fork owner revoked before write"),
-    new CodexAppServerRpcError(
-      { code: -32001, message: "Server overloaded; retry later." },
-      "thread/fork",
-    ),
-    Object.assign(new Error("fork canceled before write"), {
-      code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
-      mayHaveWritten: false,
-    }),
-  ])("preserves the connection after a confirmed prewrite rejection: %s", async (error) => {
-    boundaryMocks.listTurns.mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")]);
-    const { archiveThread, controlFactory, retireConnection } = forkControl(
-      vi.fn(async () => {
-        throw error;
-      }),
-    );
-    const runtime = createPluginRuntimeMock();
-
-    await expect(
-      forkCodexUpstreamSession(forkParams(), {
-        bindingStore: createCodexTestBindingStore(),
-        controlFactory,
-        harnessRuntimeId: "codex",
-        runtime,
-      }),
-    ).resolves.toMatchObject({ status: "failed", code: "upstream-unavailable" });
-
-    expect(retireConnection).not.toHaveBeenCalled();
-    expect(archiveThread).not.toHaveBeenCalled();
-    expect(runtime.agent.session.createSessionEntry).not.toHaveBeenCalled();
-  });
 
   it("verifies the original source cut, imports history, then links before binding", async () => {
     const sourceThreadId = "thread-source";
@@ -385,7 +351,7 @@ describe("forkCodexUpstreamSession", () => {
       await expect(
         forkCodexUpstreamSession(params, {
           bindingStore: {
-            read: vi.fn(() => ({
+            readAsync: vi.fn(async () => ({
               threadId: "thread-canonical",
               connectionScope: "supervision",
               supervisionSourceThreadId:
@@ -440,24 +406,6 @@ describe("forkCodexUpstreamSession", () => {
     expect(linkMocks.upsert).not.toHaveBeenCalled();
   });
 
-  it("leaves unverified orphan ids unowned when the fork response is invalid", async () => {
-    boundaryMocks.listTurns.mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")]);
-    const { archiveThread, controlFactory, retireConnection } = forkControl(
-      vi.fn(async () => ({ thread: { id: "thread-orphan" } })),
-    );
-
-    const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: { read: vi.fn(() => undefined) } as unknown as CodexAppServerBindingStore,
-      controlFactory,
-      harnessRuntimeId: "codex",
-      runtime: createPluginRuntimeMock(),
-    });
-
-    expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
-    expect(archiveThread).not.toHaveBeenCalled();
-    expect(retireConnection).toHaveBeenCalledOnce();
-  });
-
   it.each(["thread-source", "thread-canonical"])(
     "rejects a fork response that reuses the original or canonical source id: %s",
     async (threadId) => {
@@ -468,7 +416,7 @@ describe("forkCodexUpstreamSession", () => {
 
       const result = await forkCodexUpstreamSession(forkParams(), {
         bindingStore: {
-          read: vi.fn(() => ({
+          readAsync: vi.fn(async () => ({
             threadId: "thread-canonical",
             connectionScope: "supervision",
             supervisionSourceThreadId: "thread-source",

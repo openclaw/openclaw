@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
@@ -10,22 +11,23 @@ import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js
 import {
   assertSqliteSchemaContains,
   getCanonicalSqliteTableNames,
-  readSqliteSchemaCookie,
+  type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
-import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import {
+  assertTransactionUsable,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
+import { createStateSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
-import {
-  assertExistingOpenClawStateRuntimeMetadata,
-  assertExistingOpenClawStateRuntimeSchema,
-} from "./openclaw-state-db-existing-schema.js";
+import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
   assertOpenClawStateSchemaRepairAllowed,
@@ -38,8 +40,9 @@ import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
 type ExistingWriteOptions = OpenClawStateDatabaseOptions & { busyTimeoutMs?: number };
-type ExistingWriteContract = {
+type ExistingWriteContract = Pick<SqliteTransactionOptions, "beginLockFailureReporting"> & {
   schemaSql: string;
+  schemaCompatibility?: SqliteSchemaCompatibility;
   operationLabel: string;
   busyTimeoutMs?: number;
 };
@@ -53,11 +56,7 @@ type ExistingWriteOperation<T> = (database: {
   recoveryChanges: string[];
 }) => T;
 
-export type ExistingOpenClawStateWriter = {
-  run<T>(operation: ExistingWriteOperation<T>, options: ExistingWriteOptions): T;
-  assertSettled(): void;
-  close(): void;
-};
+export type ExistingOpenClawStateWriter = ReturnType<typeof createExistingOpenClawStateWriter>;
 
 function assertExistingOpenClawStateSchemaMetadata(
   db: DatabaseSync,
@@ -77,11 +76,12 @@ function assertExistingOpenClawStateSchema(
   db: DatabaseSync,
   pathname: string,
   schemaSql: string,
+  compatibility?: SqliteSchemaCompatibility,
 ): number {
   const version = assertSupportedStateSchemaVersion(db, pathname);
   assertExistingOpenClawStateSchemaMetadata(db, pathname, version);
-  assertSqliteIntegrity(db, pathname);
-  assertSqliteSchemaContains(db, pathname, schemaSql);
+  assertStateDatabaseIntegrityOnce(db, pathname);
+  assertSqliteSchemaContains(db, pathname, schemaSql, compatibility);
   return version;
 }
 
@@ -144,7 +144,7 @@ function prepareExistingOpenClawStateWriter(
 function createExistingOpenClawStateWriter(
   { env, pathname, original }: ReturnType<typeof prepareExistingOpenClawStateWriter>,
   contract: OneShotWriteContract,
-): ExistingOpenClawStateWriter {
+) {
   const assertSameFile = () => {
     const current = fs.lstatSync(pathname);
     if (!current.isFile() || current.dev !== original.dev || current.ino !== original.ino) {
@@ -158,10 +158,15 @@ function createExistingOpenClawStateWriter(
     // Match Doctor: inbound dependents must fail validation, never cascade away.
     ...(contract.recoverTaskDeliveryOrphans ? { enableForeignKeyConstraints: false } : {}),
   });
+  const admission = createStateSchemaAdmission(
+    `state.subset:${createHash("sha256")
+      .update(JSON.stringify([contract.schemaSql, contract.schemaCompatibility]))
+      .digest("hex")}`,
+    (value) => (typeof value === "number" ? value : undefined),
+  );
   let closed = false;
-  let admitted: { version: number; cookie: number; existingSchema: boolean } | undefined;
   return {
-    run(operation, currentOptions) {
+    run<T>(operation: ExistingWriteOperation<T>, currentOptions: ExistingWriteOptions) {
       if (closed || !db.isOpen) {
         throw new Error("Existing-state writer is closed.");
       }
@@ -174,18 +179,10 @@ function createExistingOpenClawStateWriter(
       }
       assertSameFile();
       const existingSchema = isExistingOpenClawStateSchema(pathname);
-      if (admitted && existingSchema !== admitted.existingSchema) {
-        throw new Error("Existing-state writer schema admission changed.");
-      }
-      // Facts rebuilt outside BEGIN survive ordinary transaction commits.
-      if (admitted) {
-        getAdmittedSqliteSchemaFacts(db);
-      }
       const busyTimeoutMs =
         currentOptions.busyTimeoutMs ?? contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
       setSqliteBusyTimeout(db, busyTimeoutMs);
-      let pendingAdmission: typeof admitted;
-      const result = runManagedStateTransaction(
+      return runManagedStateTransaction(
         db,
         () => {
           assertSameFile();
@@ -194,33 +191,22 @@ function createExistingOpenClawStateWriter(
             databasePath: pathname,
             env: currentEnv,
           });
-          let needsAdmission = !admitted;
-          if (admitted) {
-            const facts = getAdmittedSqliteSchemaFacts(db);
-            if (!facts) {
-              throw new Error("Existing-state writer schema facts are unavailable.");
-            }
-            needsAdmission =
-              facts.userVersion !== admitted.version || facts.schemaVersion !== admitted.cookie;
-          }
-          if (needsAdmission && existingSchema) {
+          const priorVersion = admission.get(db);
+          const needsAdmission = priorVersion === undefined;
+          if (existingSchema) {
             assertExistingOpenClawStateRuntimeSchema(db, pathname);
           }
           const validate = () =>
             assertExistingOpenClawStateSchema(
               db,
               pathname,
-              !admitted && contract.initializeAdditiveSchema ? "" : contract.schemaSql,
+              needsAdmission && contract.initializeAdditiveSchema ? "" : contract.schemaSql,
+              contract.schemaCompatibility,
             );
           let version: number;
           let recoveryChanges: string[] = [];
-          if (admitted && !needsAdmission) {
-            if (existingSchema) {
-              version = assertExistingOpenClawStateRuntimeMetadata(db, pathname);
-            } else {
-              version = assertSupportedStateSchemaVersion(db, pathname);
-              assertExistingOpenClawStateSchemaMetadata(db, pathname, version);
-            }
+          if (priorVersion !== undefined) {
+            version = priorVersion;
           } else {
             try {
               version = validate();
@@ -235,46 +221,40 @@ function createExistingOpenClawStateWriter(
               version = validate();
             }
           }
-          if (!admitted && contract.initializeAdditiveSchema) {
+          if (needsAdmission && contract.initializeAdditiveSchema) {
             // Validate present objects before first use: CREATE IF NOT EXISTS
             // must not hide drift or repair an incomplete existing table.
             assertSqliteSchemaContains(db, pathname, contract.schemaSql, {
+              ...contract.schemaCompatibility,
               allowedMissingTables: getCanonicalSqliteTableNames(contract.schemaSql),
             });
             db.exec(contract.schemaSql); // sqlite-allow-raw -- Declared canonical feature-local additive DDL only.
-            assertSqliteSchemaContains(db, pathname, contract.schemaSql);
-          }
-          const schemaVersion = readSqliteSchemaCookie(db);
-          if (typeof schemaVersion !== "number") {
-            throw new Error("Existing-state schema version is unavailable.");
+            assertSqliteSchemaContains(
+              db,
+              pathname,
+              contract.schemaSql,
+              contract.schemaCompatibility,
+            );
           }
           if (needsAdmission) {
             admitSqliteSchema(db);
-            pendingAdmission = { version, cookie: schemaVersion, existingSchema };
+            admission.publish(db, version);
           }
+          // Internal callers own their declared schema and only mutate its rows here.
           const value = operation({ db, path: pathname, recoveryChanges });
           assertSameFile();
-          if (
-            readSqliteUserVersion(db) !== version ||
-            readSqliteSchemaCookie(db) !== schemaVersion
-          ) {
-            throw new Error("Existing-state transaction cannot migrate schema.");
-          }
           if (contract.recoverTaskDeliveryOrphans) {
             assertSqliteIntegrity(db, pathname);
           }
           return value;
         },
         {
+          beginLockFailureReporting: contract.beginLockFailureReporting,
           busyTimeoutMs,
           databaseLabel: pathname,
           operationLabel: contract.operationLabel,
         },
       );
-      if (pendingAdmission) {
-        admitted = pendingAdmission;
-      }
-      return result;
     },
     assertSettled() {
       assertSameFile();

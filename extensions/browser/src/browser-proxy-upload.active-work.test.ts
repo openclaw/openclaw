@@ -11,7 +11,7 @@ import {
 } from "./browser-proxy-upload.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const RETRY_MS = 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 const MARKER = ".openclaw-browser-proxy-upload-v1";
 const chmodFaultUnavailable = process.platform === "win32" || process.getuid?.() === 0;
 
@@ -52,7 +52,7 @@ it("keeps filesystem operations busy without treating retained files as active w
 
     staged = await stage(uploadDir);
     const retainedDirectory = staged.directory!;
-    await vi.advanceTimersByTimeAsync(24 * RETRY_MS);
+    await vi.advanceTimersByTimeAsync(24 * HOUR_MS);
     await vi.waitFor(async () => {
       await expect(fs.stat(retainedDirectory)).rejects.toHaveProperty("code", "ENOENT");
       expect(hasBrowserProxyUploadWork()).toBe(false);
@@ -66,7 +66,7 @@ it("keeps filesystem operations busy without treating retained files as active w
 });
 
 it.skipIf(chmodFaultUnavailable)(
-  "paces failed recovery and retries repaired storage before upload admission",
+  "caches failed recovery and retries repaired storage on the next upload",
   async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const uploadDir = tempDirs.make("openclaw-browser-upload-recovery-");
@@ -74,7 +74,7 @@ it.skipIf(chmodFaultUnavailable)(
     const expired = path.join(stagingRoot, "upload-expired");
     await fs.mkdir(expired, { recursive: true });
     await fs.writeFile(path.join(expired, MARKER), "openclaw-browser-proxy-upload-v1\n");
-    const past = new Date(Date.now() - 25 * RETRY_MS);
+    const past = new Date(Date.now() - 25 * HOUR_MS);
     await fs.utimes(expired, past, past);
     await fs.chmod(stagingRoot, 0o000);
     const reads = vi.spyOn(fs, "readdir");
@@ -86,13 +86,6 @@ it.skipIf(chmodFaultUnavailable)(
       }
       expect(recoveryReads()).toBe(1);
       expect(hasBrowserProxyUploadWork()).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(RETRY_MS);
-      await vi.waitFor(() => expect(hasBrowserProxyUploadWork()).toBe(false));
-      for (let attempt = 0; attempt < 5; attempt++) {
-        await ensureBrowserProxyUploadCleanup({ uploadDir });
-      }
-      expect(recoveryReads()).toBe(2);
 
       await fs.chmod(stagingRoot, 0o700);
       const staged = await stage(uploadDir);
@@ -112,7 +105,7 @@ it.skipIf(chmodFaultUnavailable)(
 );
 
 it.skipIf(chmodFaultUnavailable)(
-  "keeps failed deletion recoverable and retries without blocking idle admission",
+  "keeps failed deletion recoverable without blocking idle admission",
   async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const uploadDir = tempDirs.make("openclaw-browser-upload-cleanup-");
@@ -131,11 +124,9 @@ it.skipIf(chmodFaultUnavailable)(
       expect(hasBrowserProxyUploadWork()).toBe(false);
 
       await fs.chmod(child, 0o700);
-      await vi.advanceTimersByTimeAsync(RETRY_MS);
-      await vi.waitFor(async () => {
-        await expect(fs.stat(directory)).rejects.toHaveProperty("code", "ENOENT");
-        expect(hasBrowserProxyUploadWork()).toBe(false);
-      });
+      await discardStagedBrowserProxyUpload(staged);
+      await expect(fs.stat(directory)).rejects.toHaveProperty("code", "ENOENT");
+      expect(hasBrowserProxyUploadWork()).toBe(false);
     } finally {
       await fs.chmod(child, 0o700).catch(() => {});
       await discardStagedBrowserProxyUpload(staged);

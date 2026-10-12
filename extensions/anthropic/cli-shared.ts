@@ -1,13 +1,19 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
+import {
+  requiresClaudeMandatoryAdaptiveThinking,
+  resolveClaudeHaiku55ModelIdentity,
+} from "openclaw/plugin-sdk/claude-model-runtime";
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeSortedUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CLAUDE_CLI_BACKEND_ID, OPENCLAW_MCP_TOOL_PREFIX } from "./cli-constants.js";
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
@@ -31,7 +37,6 @@ const CLAUDE_NO_SESSION_PERSISTENCE_ARG = "--no-session-persistence";
 const CLAUDE_MAX_TURNS_ARG = "--max-turns";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 const CLAUDE_RESTRICTED_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
@@ -68,7 +73,10 @@ export function resolveClaudeCliThinkingEnv(
   thinkingLevel: CliBackendResolveExecutionArgsContext["thinkingLevel"],
   modelId?: string,
 ): Record<string, string> | undefined {
-  if (requiresClaudeMandatoryAdaptiveThinking({ id: modelId })) {
+  if (
+    requiresClaudeMandatoryAdaptiveThinking({ id: modelId }) ||
+    (thinkingLevel !== "off" && resolveClaudeHaiku55ModelIdentity({ id: modelId }))
+  ) {
     return undefined;
   }
   switch (thinkingLevel) {
@@ -420,12 +428,10 @@ function resolveClaudeCliRestrictedExecutionArgs(
       availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
     );
   }
-  const denials = [
-    ...new Set([
-      ...preservedDenials.map((entry) => entry.trim()).filter(Boolean),
-      ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
-    ]),
-  ].toSorted();
+  const denials = normalizeSortedUniqueTrimmedStringList([
+    ...preservedDenials,
+    ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
+  ]);
   if (denials.length > 0) {
     normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, denials.join(","));
   }

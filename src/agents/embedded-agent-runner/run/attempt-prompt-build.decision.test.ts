@@ -32,7 +32,7 @@ import { leasePendingAgentSteeringItems } from "../../subagents/registry/subagen
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
@@ -153,8 +153,10 @@ async function fixture(
     forceToolNames: ["message", "denied"],
   });
   const admission = prepareSystemAgentRunAdmission(cfg, runId, agentId, "prefilter-test");
+  const promptStateLease = retainEmbeddedSessionPromptState(runId);
   onTestFinished(() => {
     admission.close();
+    promptStateLease[Symbol.dispose]();
     forgetPromptBuildDrainCacheForRun(runId);
     clearEmbeddedSessionPromptStates([runId]);
   });
@@ -201,8 +203,8 @@ async function fixture(
     assembly: Awaited<ReturnType<typeof assemble>>,
     persistToolResultProjections: () => Promise<void>,
   ) => {
-    const state = getEmbeddedSessionPromptState(runId);
-    return submitEmbeddedAttemptPrompt({
+    const state = promptStateLease.state;
+    return await submitEmbeddedAttemptPrompt({
       attempt,
       activeSession: session,
       contextTokenBudget: 8000,
@@ -211,7 +213,6 @@ async function fixture(
       transcriptPrompt: assembly.effectivePrompt,
       systemPrompt: session.agent.state.systemPrompt,
       runtimeOnly: false,
-      sessionPromptState: state,
       toolResultPromptProjectionState: state.toolResults,
       toolResultMaxChars: 4000,
       toolResultAggregateMaxChars: 8000,
@@ -233,28 +234,33 @@ async function fixture(
 }
 
 describe("prompt assembly with registered Decision runtime", () => {
-  it.each([
-    [false, false],
-    [false, true],
-    [true, false],
-    [true, true],
-  ] as const)("opt-in %s, model %s", async (enabled, selected) => {
-    const call = register();
-    const f = await fixture(config(enabled, selected));
-    await f.assemble();
-    expect(call).toHaveBeenCalledTimes(enabled && selected ? 1 : 0);
-    expect(f.policy.current.tools.map((t) => t.name)).toEqual(
-      enabled && selected ? ["message"] : ["inspect_file", "message", "decision_evaluate"],
-    );
-  });
-  it.each([undefined, false])(
-    "unknown/unsupported harness %s dispatches nothing",
-    async (support) => {
+  it.each<[string, OpenClawConfig, string, boolean | undefined, boolean]>([
+    ["missing referent", config(), "main", true, false],
+    ["disabled", config(false), "main", true, false],
+    ["no model", config(true, false), "main", true, false],
+    ["enabled", config(), "main", true, true],
+    ["unknown harness", config(), "main", undefined, false],
+    ["unsupported harness", config(), "main", false, false],
+    ["agent opt-out", config(), "quiet", true, false],
+  ])(
+    "admits Decision inference only when eligible: %s",
+    async (name, cfg, agentId, support, prune) => {
+      const missingReferent = name === "missing referent";
       const call = register();
-      const f = await fixture();
-      await f.assemble({ supportsTurnScopedToolRestrictions: support });
-      expect(call).not.toHaveBeenCalled();
-      expect(f.policy.current.tools).toHaveLength(3);
+      const f = await fixture(cfg, "structured", agentId);
+      if (missingReferent) {
+        f.session.agent.state.messages = [
+          createAssistant(testModel, [{ type: "text", text: "Should I edit the file?" }]),
+        ];
+      }
+      await f.assemble({
+        supportsTurnScopedToolRestrictions: support,
+        ...(missingReferent ? { prompt: "Go ahead." } : {}),
+      });
+      expect(call).toHaveBeenCalledTimes(prune ? 1 : 0);
+      expect(f.policy.current.tools.map((t) => t.name)).toEqual(
+        prune ? ["message"] : ["inspect_file", "message", "decision_evaluate"],
+      );
     },
   );
   it.each(["structured", "search", "code"] as const)(
@@ -307,13 +313,6 @@ describe("prompt assembly with registered Decision runtime", () => {
     },
   );
 
-  it("keeps another agent's empty override independent", async () => {
-    const call = register();
-    const quiet = await fixture(config(), "structured", "quiet");
-    await quiet.assemble();
-    expect(call).not.toHaveBeenCalled();
-    expect(quiet.policy.current.tools).toHaveLength(3);
-  });
   it.each(["opt-out", "owner-close", "abort"])(
     "handles a pending evaluation after %s",
     async (change) => {
@@ -393,16 +392,6 @@ describe("prompt assembly with registered Decision runtime", () => {
     },
   );
 
-  it("preserves tools for approvals that depend on earlier assistant work", async () => {
-    const call = register();
-    const f = await fixture();
-    f.session.agent.state.messages = [
-      createAssistant(testModel, [{ type: "text", text: "Should I edit the file?" }]),
-    ];
-    await f.assemble({ prompt: "Go ahead." });
-    expect(call).not.toHaveBeenCalled();
-    expect(f.policy.current.tools).toHaveLength(3);
-  });
   it.each(["structured", "search", "code"] as const)(
     "submits the second-turn restriction and next-action restoration in %s mode",
     async (mode) => {

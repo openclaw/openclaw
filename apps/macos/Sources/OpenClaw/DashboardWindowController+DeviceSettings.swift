@@ -197,9 +197,8 @@ extension DashboardWindowController {
             state.cookieSyncIntoProfile = value.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "imported"
         case .microphone:
             let devices = VoiceWakeDeviceOptions.microphones()
-            guard devices.contains(where: { $0.id == value }) else { return }
-            state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
-                selectedID: value, in: devices, uid: \.id, name: \.name)
+            guard let device = devices.first(where: { $0.id == value }) else { return }
+            state.voiceWakeMicName = value.isEmpty ? "" : device.name
             state.voiceWakeMicID = value
         case .localePrimary:
             guard VoiceWakeDeviceOptions.locales().contains(where: { $0.id == value }) else { return }

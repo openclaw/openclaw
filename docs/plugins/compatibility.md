@@ -113,7 +113,7 @@ This does not authorize removal or claim a completed published-reader sweep.
 | `plugin-sdk-provider-owned-helper-shims`      | Move each deprecated provider helper to its provider-local API and prove no published reader remains.  | 2026-10-01    |
 | `message-presentation-legacy-bridges`         | Move reply producers and official channel packages to `MessagePresentation`.                           | 2026-10-01    |
 | `plugin-sdk-focused-compat-aliases`           | Prove every enumerated alias has no bundled or published reader.                                       | 2026-10-01    |
-| `agent-harness-terminal-result-aliases`       | Move published harnesses to `terminal`, then prove the legacy result fields are unused.                | 2026-10-01    |
+| `agent-harness-terminal-result-aliases`       | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.     | 2026-10-01    |
 | `official-plugin-export-aliases`              | Move channel presentation and Discord timeout consumers to canonical APIs and clear published readers. | 2026-10-01    |
 | `memory-host-compatibility-aliases`           | Verify canonical memory tables and preserved legacy data before retiring overrides.                    | 2026-10-01    |
 | `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.               | 2026-10-01    |
@@ -127,11 +127,11 @@ cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
 
-The `sourceVisibleReplies` harness delivery-default alias has been removed
-after its October 1 window; use
-[`deliveryDefaults.visibleReplies`](/plugins/sdk-agent-harness/sessions-and-results#harness-delivery-defaults).
-Terminal-result aliases remain supported because published harnesses, including
-`openclaw-deepseek-harness@0.2.0`, still return those fields.
+The deprecated `sourceVisibleReplies` harness field remains supported because
+July 2026 releases of `@openclaw/codex` still produce it. Use
+[`deliveryDefaults.visibleReplies`](/plugins/sdk-agent-harness/sessions-and-results#harness-delivery-defaults)
+in new plugins. Terminal-result aliases also remain supported for published
+producers, including `openclaw-deepseek-harness@0.2.0`.
 
 ### Session-store bridge retirement
 
@@ -156,10 +156,11 @@ and legacy-state import and Doctor migrations remain unchanged.
 ### Synchronous plugin state
 
 `plugin-state-sync-keyed-store` names the existing synchronous keyed-store adapter.
-Its September 11, 2026 deprecation uses the `next-plugin-sdk-major` removal gate,
-with editor annotations and documentation rather than new runtime warnings.
+Its September 11, 2026 deprecation uses the `next-plugin-sdk-major` removal gate.
+Actual legacy calls emit one diagnostic per plugin and capability family per
+Gateway process; module imports remain silent.
 Existing synchronous methods, plugin trust eligibility, and transactional callback
-semantics remain unchanged. Migrate to awaited `openKeyedStore` operations using
+semantics remain unchanged. Migrate to data-only `openKeyedStoreV2` operations using
 the [state-store migration guide](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
 Removal still requires a supported external-plugin migration and explicit
 breaking-release approval.

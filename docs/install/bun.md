@@ -11,6 +11,13 @@ title: "Bun"
 Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ builds that provide WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
 </Warning>
 
+Desktop apps manage their own runtime: the native macOS app and fresh local
+Tauri installations on Linux use the same pinned OpenClaw Bun fork. Existing
+Linux Tauri installations retain their runtime across startup and app updates
+until you explicitly choose **Use bundled runtime…**. macOS Tauri keeps its
+existing behavior, separate from the native macOS app. See
+[Linux companion](/platforms/linux#adopt-the-bundled-runtime).
+
 Bun remains usable as an optional package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it, and current Bun versions fail to resolve this repo's `pnpm-workspace.yaml` layout during `bun install`, so dependency installs should use `pnpm install`.
 
 ## Install
@@ -62,7 +69,34 @@ directly, as shown above.
 
 ## Bun-only global install
 
-With a supported [OpenClaw Bun fork](/install/bun-compatibility) executable:
+The recommended Bun-only installation on macOS and glibc Linux (arm64 or x64) is:
+
+```sh
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --runtime bun
+```
+
+Node remains the default when `--runtime` is omitted. The Bun path installs no
+Node runtime: it resolves the published OpenClaw version, downloads that release's
+pinned [OpenClaw Bun fork](/install/bun-compatibility), and verifies the archive,
+executable, revision, and installed package pin. On macOS it installs Homebrew
+SQLite if needed, or uses `OPENCLAW_SQLITE_LIBRARY`. Published releases that predate the packaged Bun pin, including `2026.10.1`,
+use the verified pin from their exact release tag and must report the requested
+version through the generated launcher. Custom packages must include their pin.
+
+Use `--version <version-or-dist-tag>` to select a release, `--dry-run` to inspect
+its runtime plan (only metadata is fetched), or `--no-onboard` to skip setup.
+The installer pins existing Gateway services to the selected Bun. Fresh
+onboarding installs the Gateway with Bun and records its exact runtime path.
+`--no-onboard` does not create a service on a fresh installation.
+
+With an existing fork executable, add `--bun-path /absolute/path/to/bun` or set
+`OPENCLAW_BUN_PATH`. Its filename must be `bun` or `bun.exe` (case-insensitive) so
+Gateway services can pin it. Published versions require the exact pinned executable;
+custom package specs also require `--bun-path` and are checked against the
+installed package's pin before running the CLI. Stock Bun, git-checkout builds,
+Windows, and musl/Alpine are unsupported by this installer path.
+
+For a manual install with a supported fork executable:
 
 ```sh
 OPENCLAW_PACKAGE_BUN_LAUNCHER=/absolute/path/to/bun /absolute/path/to/bun add -g --trust openclaw
@@ -95,13 +129,46 @@ bun pm trust baileys protobufjs
 
 ## Caveats
 
-On macOS, run `brew install sqlite` for native vector search. Bun 1.4.2 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
+On macOS, run `brew install sqlite` first: OpenClaw on Bun refuses Apple's system SQLite, which also lacks native vector search. Bun 1.4.2 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
+
+Repository npm packaging helpers run the packaged npm CLI directly under Bun,
+including on Windows. They do not require npm beside the Bun executable. An
+explicitly selected Node toolchain still uses its own adjacent npm installation.
 
 Gateway process inspection recognizes Bun's `--watch` and `--hot` flags. ACP bridge detection recognizes Bun and the current runtime executable, including custom filenames. Portable cloud worker archives target Node when built with either runtime, and worker inference errors omit runtime stack properties from their bounded diagnostic messages.
 
 ## Known limitations
+
+### Updating from 2026.9.9 with a Bun Gateway
+
+The 2026.9.9 updater checks a Bun-hosted Gateway's runtime as if it were Node.
+After you pin the Gateway service to Bun, `openclaw update` from 2026.9.9 fails
+at the package swap with `global-install-failed` ("Recovery requires a supported
+external Node executable") and leaves the existing install and Gateway running.
+Updates driven by **2026.10.1** and later recognize the Bun runtime.
+
+For this one update, return the Gateway to Node, update, then pin Bun again with
+the updated CLI. The verified sequence updated a published 2026.9.9 npm-global
+install to 2026.10.1 on macOS:
+
+```sh
+node=/path/to/node-24/bin/node
+bun=/path/to/openclaw-bun
+package=/path/to/lib/node_modules/openclaw
+
+"$node" "$package/openclaw.mjs" gateway install --runtime node --runtime-path "$node" --force --json
+"$node" "$package/openclaw.mjs" update --yes
+"$bun" --no-install "$package/openclaw.mjs" gateway install --runtime bun --runtime-path "$bun" --force --json
+```
+
+Wait for each Gateway restart to report ready before the next command. On macOS,
+run the last command from a shell with Homebrew `sqlite` installed or
+`OPENCLAW_SQLITE_LIBRARY` set (see
+[SQLite library selection](/install/bun-compatibility#sqlite-library-selection));
+the service keeps that selection. The re-pinned service includes `--no-install`,
+which 2026.10.1 adds to Bun service commands.
 
 ### Updating from 2026.9.7 with an older system Node
 

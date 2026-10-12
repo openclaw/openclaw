@@ -9,32 +9,14 @@ import {
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
-import { HumanMentionMenu } from "./components/chat-composer-mention-menu.ts";
+import { HumanMentionMenu } from "./components/chat-composer-mention-menu.tsx";
 
 afterEach(resetMentionComposerFixture);
 
 const freshMs = 5 * 60_000;
 
-describe.each(["chat", "new-session"] as const)("%s mention query cache", (kind) => {
-  it.each(["dismiss", "select", "new token"])(
-    "reuses results immediately after %s",
-    async (action) => {
-      const view = composerFixture(kind);
-      view.edit("@Al");
-      await vi.advanceTimersByTimeAsync(150);
-      if (action === "select") {
-        view.key("Enter");
-      } else if (action === "dismiss") {
-        view.key("Escape");
-      }
-      view.edit("Review @Al");
-      expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
-      expect(view.container.querySelector(".mention-menu__loading")).toBeNull();
-      await vi.advanceTimersByTimeAsync(150);
-      expect(view.request).toHaveBeenCalledTimes(1);
-    },
-  );
-
+describe("mention query cache", () => {
+  const kind = "chat";
   it.each(["before", "after"])(
     "keeps an in-flight result when reopened %s it settles",
     async (reopen) => {

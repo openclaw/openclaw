@@ -51,9 +51,10 @@ import fs from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import workerThreads from 'node:worker_threads';
 import { createManagedHandoffTestBinding } from ${JSON.stringify(new URL("../helpers/managed-handoff-isolation.ts", import.meta.url).href)};
 const binding = createManagedHandoffTestBinding(${JSON.stringify(storeRoot)});
-assert(fs.readdirSync(binding.directory).some(name => {
+if (workerThreads.isMainThread) assert(fs.readdirSync(binding.directory).some(name => {
   if (!name.startsWith('preflight-' + process.pid + '-0-')) return false;
   const witness = JSON.parse(fs.readFileSync(path.join(binding.directory, name), 'utf8'));
   return witness.phase === 'preload' && witness.databasePath === binding.databasePath;
@@ -62,11 +63,14 @@ const repository = ${JSON.stringify(repository)};
 const stateDatabase = ${JSON.stringify(stateDatabase)};
 const observations = ${JSON.stringify(observations)};
 const entry = process.argv[1];
-const provisioner = entry?.endsWith('/scripts/pr-lib/worktree-provision.mts');
-const sourceRoot = provisioner ? path.resolve(path.dirname(fs.realpathSync(entry)), '../..') : null;
-let phase = 'preflight';
+const observerParams = new URL(import.meta.url).searchParams;
+const provisioner = workerThreads.isMainThread && entry?.endsWith('/scripts/pr-lib/worktree-provision.mts');
+const sourceRoot = provisioner
+  ? path.resolve(path.dirname(fs.realpathSync(entry)), '../..') : observerParams.get('sourceRoot');
+let phase = observerParams.get('phase') ?? 'preflight';
 function observe(kind, databasePath) {
-  fs.appendFileSync(observations, JSON.stringify({kind, phase, pid: process.pid, sourceRoot, databasePath}) + '\\n');
+  fs.appendFileSync(observations, JSON.stringify({kind, phase, pid: process.pid,
+    threadId: workerThreads.threadId, sourceRoot, databasePath}) + '\\n');
 }
 function assertPrivateState(location) {
   // Check spelling before even stat'ing a path: negatives never inspect live stores.
@@ -116,6 +120,19 @@ sqlite.DatabaseSync = new Proxy(sqlite.DatabaseSync, {
     return database;
   },
 });
+// SQLite workers intentionally replace execArgv. Observe their real constructor
+// without changing worker data, environment, SQL, or the selected state path.
+if (provisioner) workerThreads.Worker = new Proxy(workerThreads.Worker, {
+  construct(target, [filename, options = {}], newTarget) {
+    const observer = new URL(import.meta.url);
+    observer.searchParams.set('sourceRoot', sourceRoot);
+    observer.searchParams.set('phase', phase);
+    return Reflect.construct(target, [filename, {
+      ...options,
+      execArgv: [...(options.execArgv ?? process.execArgv), '--import=' + observer.href],
+    }], newTarget);
+  },
+});
 syncBuiltinESMExports();
 if (provisioner) {
   assert.equal(fs.realpathSync(process.argv[2]), repository);
@@ -141,8 +158,8 @@ if (provisioner) {
   fs.unlinkSync(config);
   observe('store-and-config-custody-verified', binding.databasePath);
 }
-phase = 'workload';
 if (provisioner) {
+  phase = 'workload';
   try {
     await import(pathToFileURL(entry).href);
   } finally {
@@ -180,6 +197,8 @@ if (provisioner) {
           rows.some(
             (row) =>
               row.pid === pid &&
+              row.threadId > 0 &&
+              row.sourceRoot === probe.sourceRoot &&
               row.phase === "workload" &&
               row.kind === "sqlite-open" &&
               row.databasePath === stateDatabase,

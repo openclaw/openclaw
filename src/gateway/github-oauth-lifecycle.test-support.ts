@@ -1,3 +1,4 @@
+import type { ToolsGitHubStatusResult } from "../../packages/gateway-protocol/src/index.js";
 import type { GitHubIdentityScope, GitHubOAuthRecord } from "../agents/github-oauth-records.js";
 import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -38,6 +39,46 @@ export function configForScope(
         tools: { github: identity(OTHER_PROFILE) },
         agents: { entries: { main: { tools: selected ? { github: selected } : {} } } },
       };
+}
+
+export function configWithSelectedIdentity(
+  config: OpenClawConfig,
+  scope: GitHubIdentityScope,
+  agentId: string,
+  nextIdentity: GitHubToolIdentityConfig,
+): OpenClawConfig {
+  const next = structuredClone(config);
+  if (scope === "system") {
+    next.tools ??= {};
+    next.tools.github = structuredClone(nextIdentity);
+  } else {
+    next.agents ??= {};
+    next.agents.entries ??= {};
+    const entry = (next.agents.entries[agentId] ??= {});
+    entry.tools ??= {};
+    entry.tools.github = structuredClone(nextIdentity);
+  }
+  return next;
+}
+
+export function statusResult(scope: GitHubIdentityScope): ToolsGitHubStatusResult {
+  return {
+    agentId: "main",
+    selectedScope: scope,
+    selected: { scope, configured: true, identity: null },
+    effective: {
+      source: scope === "agent" ? "agent-override" : "system-configured",
+      credentialKind: "managed-oauth",
+      credentialState: "available",
+      account: { login: ACCOUNT.login },
+      gitAuthor: { name: ACCOUNT.login, email: null },
+      evidence: "github-api",
+      accessExpiresAtMs: NOW + TOKENS.expiresInSeconds * 1_000,
+      refreshState: "available",
+      oauthScopes: [...TOKENS.scopes],
+      repositoryGrants: "unknown",
+    },
+  };
 }
 
 export function oauthRecord(

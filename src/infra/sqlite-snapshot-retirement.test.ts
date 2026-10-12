@@ -1,13 +1,10 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import {
-  releaseSnapshotTempDirectory,
   removeTempDirectory,
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
@@ -37,7 +34,7 @@ function createFixture() {
 }
 
 function assertReadable(location: string) {
-  const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
+  const database = nodeSqlite.openNodeSqliteDatabase(location, { readOnly: true });
   try {
     expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
   } finally {
@@ -62,118 +59,46 @@ it("preserves a live nested snapshot when its parent starts cleanup first", asyn
   }
 });
 
-it.skipIf(process.platform === "win32").each(["", "openclaw"])(
-  "cleans an interrupted allocation beneath an exclusively owned parent (%s)",
-  async (layout) => {
-    const { cache, source } = createFixture();
-    const parent = createSqliteSnapshotStagingDirectorySync(cache);
-    const payload = path.join(parent, "database.sqlite");
-    fs.copyFileSync(source, payload);
-    const root = layout ? path.join(parent, layout) : parent;
-    if (layout) {
-      fs.mkdirSync(root);
-    }
-    const child = spawn(
-      process.execPath,
-      [
-        "--import",
-        import.meta.resolve("tsx"),
-        "--input-type=module",
-        "-e",
-        `import fs from 'node:fs'; import path from 'node:path';
-         import { prepareSqliteReadOnlyLocationSyncInProcess } from ${JSON.stringify(new URL("./sqlite-readonly-location.ts", import.meta.url).href)};
-         const make = fs.mkdtempSync;
-         fs.mkdtempSync = (...args) => {
-           const directory = make(...args);
-           if (path.dirname(directory) === ${JSON.stringify(root)}) {
-             fs.writeSync(1, 'allocated');
-             process.kill(process.pid, 'SIGSTOP');
-           }
-           return directory;
-         };
-         prepareSqliteReadOnlyLocationSyncInProcess(${JSON.stringify(source)}, ${JSON.stringify(root)});`,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    let stderr = "";
-    child.stderr.on("data", (data) => {
-      stderr += String(data);
-    });
-    const closed = once(child, "close");
-    let allocated: string | undefined;
-    try {
-      await Promise.race([
-        once(child.stdout, "data"),
-        closed.then(() => {
-          throw new Error(`Snapshot child closed before allocation: ${stderr}`);
-        }),
-      ]);
-      const directories = fs
-        .readdirSync(root, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory());
-      expect(directories).toHaveLength(1);
-      allocated = path.join(root, directories[0]!.name);
-      expect(fs.readdirSync(allocated)).toEqual([]);
-      expect(await removeTempDirectoryAsync(parent)).toBe(false);
-      assertReadable(payload);
-      child.kill("SIGKILL");
-      expect(await closed).toEqual([null, "SIGKILL"]);
-      expect(await removeTempDirectoryAsync(parent)).toBe(true);
-      expect(fs.existsSync(parent)).toBe(false);
-      assertReadable(source);
-    } finally {
-      child.kill("SIGKILL");
-      await closed;
-      if (allocated && fs.existsSync(allocated) && fs.readdirSync(allocated).length === 0) {
-        fs.rmdirSync(allocated);
-      }
-      await removeTempDirectoryAsync(parent);
-    }
-  },
-);
-
 it.each([
   {
     parentName: "openclaw-sqlite-readonly-v2-Parent",
     layout: "",
     artifact: "owner.sqlite-journal",
+    nested: true,
   },
-  { parentName: "openclaw-sqlite-readonly-v2-Parent", layout: "other", artifact: undefined },
-  { parentName: "generic", layout: "", artifact: undefined },
+  { parentName: "openclaw-sqlite-readonly-v2-Parent", layout: "other", nested: true },
+  { parentName: "generic", layout: "", nested: true },
+  { parentName: "openclaw-sqlite-readonly-v2-Orphan", layout: "", nested: false },
 ])(
-  "retains an unowned nested directory ($parentName/$layout, $artifact)",
-  ({ parentName, layout, artifact }) => {
+  "refuses retirement without ownership ($parentName/$layout, $artifact)",
+  ({ parentName, layout, artifact, nested }) => {
     const { cache, source } = createFixture();
     const parent = path.join(cache, parentName);
-    const orphan = path.join(parent, layout, "openclaw-sqlite-readonly-v2-Orphan");
+    const orphan = nested
+      ? path.join(parent, layout, "openclaw-sqlite-readonly-v2-Orphan")
+      : parent;
     fs.mkdirSync(orphan, { recursive: true });
     const payload = path.join(parent, "database.sqlite");
-    fs.copyFileSync(source, payload);
+    if (nested) {
+      fs.copyFileSync(source, payload);
+    }
     if (artifact) {
       fs.writeFileSync(path.join(orphan, artifact), "retain");
     }
-    const token = acquireSqliteStagingToken(parent, "create");
+    const token = nested ? acquireSqliteStagingToken(parent, "create") : undefined;
     try {
       expect(() => beginSqliteSnapshotRetirement(parent, { token })).toThrow(
         "SQLite snapshot token ownership is unknown",
       );
-      assertReadable(payload);
+      if (nested) {
+        assertReadable(payload);
+      }
       expect(fs.existsSync(orphan)).toBe(true);
     } finally {
-      token();
+      token?.();
     }
   },
 );
-
-it("requires ownership of an empty retirement root", () => {
-  const { cache } = createFixture();
-  const directory = path.join(cache, "openclaw-sqlite-readonly-v2-Orphan");
-  fs.mkdirSync(directory);
-  expect(() => beginSqliteSnapshotRetirement(directory)).toThrow(
-    "SQLite snapshot token ownership is unknown",
-  );
-  expect(fs.existsSync(directory)).toBe(true);
-});
 
 it.each([false, true])(
   "cleans a fresh owned legacy staging directory (async: %s)",
@@ -193,206 +118,29 @@ it.each([false, true])(
   },
 );
 
-it("rechecks retirement after a competing owner wins the exclusive-upgrade gap", () => {
+it.each([
+  "directory",
+  "token",
+  ...(process.platform === "win32" ? (["unknown"] as const) : []),
+] as const)("preserves payload when the %s identity changes before retirement", (kind) => {
   const { cache, source } = createFixture();
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  let raced = false;
-  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const db = open(...args);
-    const prepare = db.prepare.bind(db);
-    vi.spyOn(db, "prepare").mockImplementation((statement) => {
-      const query = prepare(statement);
-      if (statement === "ROLLBACK" && !raced) {
-        const run = query.run.bind(query);
-        vi.spyOn(query, "run").mockImplementation((...parameters) => {
-          const result = run(...parameters);
-          raced = true;
-          acquireSqliteStagingToken(directory, "reclaim")(true);
-          return result;
-        });
-      }
-      return query;
-    });
-    return db;
-  });
   const directory = createSqliteSnapshotStagingDirectorySync(cache);
   const location = path.join(directory, "database.sqlite");
   fs.copyFileSync(source, location);
+  const target = kind === "token" ? path.join(directory, "owner.sqlite") : directory;
+  const lstat = fs.lstatSync;
+  const changed = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+    const stat = lstat(...args);
+    if (stat && String(args[0]) === target && typeof stat.ino === "bigint") {
+      Object.defineProperty(stat, "ino", { value: kind === "unknown" ? 0n : stat.ino + 1n });
+    }
+    return stat;
+  });
   try {
     expect(removeTempDirectory(directory)).toBe(false);
-    expect(raced).toBe(true);
     assertReadable(location);
+  } finally {
+    changed.mockRestore();
     expect(removeTempDirectory(directory)).toBe(true);
-  } finally {
-    vi.restoreAllMocks();
-    releaseSnapshotTempDirectory(directory);
-    removeTempDirectory(directory);
   }
 });
-
-it("reacquires every child fence after SQLite rolls back a failed retirement", () => {
-  const { cache, source } = createFixture();
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  let failed = false;
-  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const db = open(...args);
-    const prepare = db.prepare.bind(db);
-    vi.spyOn(db, "prepare").mockImplementation((statement) => {
-      const query = prepare(statement);
-      if (statement === "COMMIT" && !failed) {
-        vi.spyOn(query, "run").mockImplementationOnce(() => {
-          failed = true;
-          db.exec("ROLLBACK");
-          throw Object.assign(new Error("database or disk is full"), { errcode: 13 });
-        });
-      }
-      return query;
-    });
-    return db;
-  });
-  const parent = createSqliteSnapshotStagingDirectorySync(cache);
-  fs.copyFileSync(source, path.join(parent, "first"));
-  let child: string | undefined;
-  try {
-    expect(removeTempDirectory(parent)).toBe(false);
-    expect(failed).toBe(true);
-    expect(fs.existsSync(path.join(parent, "first"))).toBe(false);
-    expect(fs.existsSync(path.join(parent, "owner.sqlite"))).toBe(true);
-    child = createSqliteSnapshotStagingDirectorySync(parent);
-    const location = path.join(child, "database.sqlite");
-    fs.copyFileSync(source, location);
-    expect(removeTempDirectory(parent)).toBe(false);
-    assertReadable(location);
-    expect(removeTempDirectory(child)).toBe(true);
-    expect(removeTempDirectory(parent)).toBe(true);
-  } finally {
-    vi.restoreAllMocks();
-    if (child) {
-      removeTempDirectory(child);
-    }
-    removeTempDirectory(parent);
-  }
-});
-
-it("retries native close without rewriting a committed retirement marker", () => {
-  const { cache, source } = createFixture();
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  let markerWrites = 0;
-  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const db = open(...args);
-    const prepare = db.prepare.bind(db);
-    vi.spyOn(db, "prepare").mockImplementation((statement) => {
-      if (statement === "PRAGMA user_version=1") {
-        markerWrites++;
-      }
-      return prepare(statement);
-    });
-    vi.spyOn(db, "close").mockImplementationOnce(() => {
-      throw new Error("native close did not finish");
-    });
-    return db;
-  });
-  const directory = createSqliteSnapshotStagingDirectorySync(cache);
-  fs.copyFileSync(source, path.join(directory, "database.sqlite"));
-  try {
-    expect(removeTempDirectory(directory)).toBe(false);
-    expect(fs.existsSync(path.join(directory, "database.sqlite"))).toBe(false);
-    expect(fs.existsSync(path.join(directory, "owner.sqlite"))).toBe(true);
-    expect(removeTempDirectory(directory)).toBe(true);
-    expect(markerWrites).toBe(1);
-  } finally {
-    vi.restoreAllMocks();
-    removeTempDirectory(directory);
-  }
-});
-
-it.each(process.platform === "win32" ? [false] : [false, true])(
-  "retains a descendant's failed native close until ordinary retry (root removed: %s)",
-  (removed) => {
-    const { cache, source } = createFixture();
-    const parent = createSqliteSnapshotStagingDirectorySync(cache);
-    const child = createSqliteSnapshotStagingDirectorySync(parent);
-    fs.copyFileSync(source, path.join(child, "database.sqlite"));
-    releaseSnapshotTempDirectory(child);
-    const open = nodeSqlite.openNodeSqliteDatabase;
-    let retained: ReturnType<typeof open> | undefined;
-    const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-      const db = open(...args);
-      retained ??= db;
-      vi.spyOn(db, "close")
-        .mockImplementationOnce(() => {
-          throw new Error("native close did not finish");
-        })
-        .mockImplementationOnce(() => {
-          throw new Error("native close still pending");
-        });
-      return db;
-    });
-    try {
-      expect(removeTempDirectory(parent)).toBe(false);
-      expect(retained?.isOpen).toBe(true);
-      expect(fs.existsSync(path.join(child, "database.sqlite"))).toBe(false);
-      opened.mockRestore();
-      if (removed) {
-        // POSIX permits unlinking an open database; the process still owns its native handle.
-        fs.rmSync(parent, { recursive: true });
-      }
-      expect(removeTempDirectory(parent)).toBe(true);
-      expect(retained?.isOpen).toBe(false);
-    } finally {
-      vi.restoreAllMocks();
-      removeTempDirectory(parent);
-    }
-  },
-);
-
-it.each(["directory", "token"] as const)(
-  "preserves payload when the %s identity changes before retirement",
-  (kind) => {
-    const { cache, source } = createFixture();
-    const directory = createSqliteSnapshotStagingDirectorySync(cache);
-    const location = path.join(directory, "database.sqlite");
-    fs.copyFileSync(source, location);
-    const target = kind === "directory" ? directory : path.join(directory, "owner.sqlite");
-    const lstat = fs.lstatSync;
-    const changed = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-      const stat = lstat(...args);
-      if (stat && String(args[0]) === target && typeof stat.ino === "bigint") {
-        Object.defineProperty(stat, "ino", { value: stat.ino + 1n });
-      }
-      return stat;
-    });
-    try {
-      expect(removeTempDirectory(directory)).toBe(false);
-      assertReadable(location);
-    } finally {
-      changed.mockRestore();
-      expect(removeTempDirectory(directory)).toBe(true);
-    }
-  },
-);
-
-it.runIf(process.platform === "win32")(
-  "rejects unknown Windows identities before selecting snapshot payload",
-  () => {
-    const { cache, source } = createFixture();
-    const directory = createSqliteSnapshotStagingDirectorySync(cache);
-    const location = path.join(directory, "database.sqlite");
-    fs.copyFileSync(source, location);
-    const lstat = fs.lstatSync;
-    const unknown = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-      const stat = lstat(...args);
-      if (stat && String(args[0]) === directory && typeof stat.ino === "bigint") {
-        Object.defineProperty(stat, "ino", { value: 0n });
-      }
-      return stat;
-    });
-    try {
-      expect(removeTempDirectory(directory)).toBe(false);
-      assertReadable(location);
-    } finally {
-      unknown.mockRestore();
-      expect(removeTempDirectory(directory)).toBe(true);
-    }
-  },
-);

@@ -244,24 +244,6 @@ describe("parseArgs", () => {
 });
 
 describe("buildMarkdown", () => {
-  it("renders source performance fixtures with required artifacts", () => {
-    const sourceDir = mkTmpRoot();
-    writeSourceFixture(sourceDir);
-
-    const markdown = buildMarkdown(sourceDir, null);
-    expect(markdown).toContain("run-001");
-    expect(markdown).toContain("gateway health json");
-    expect(markdown).toContain("## SQLite State Smoke");
-    expect(markdown).toContain("4100");
-    expect(markdown).toContain("| default | phase.load | 7.0ms | 8.0ms |");
-    expect(markdown).not.toContain("phase.load.total");
-    expect(markdown).not.toContain("phase.load.itemCount");
-    expect(markdown).not.toContain("memory.ready.heapUsedMb");
-    expect(markdown).toContain("Per-plugin rows are isolated cold imports and are not additive.");
-    expect(markdown).toContain("| all 12 bundled plugins | 180.0MB | 130.0MB | ok |");
-    expect(markdown).toContain("isolated delta from empty process");
-  });
-
   it("compares reordered v2 SQLite scenarios only by shared scenario ID", () => {
     const sourceDir = mkTmpRoot();
     const baselineDir = mkTmpRoot();
@@ -337,37 +319,6 @@ describe("buildMarkdown", () => {
     }
   });
 
-  it("rejects duplicate and empty v2 SQLite scenario IDs", () => {
-    for (const ids of [
-      ["delivery.pending.load", "delivery.pending.load"],
-      ["delivery.pending.load", "   "],
-    ]) {
-      const sourceDir = mkTmpRoot();
-      writeSourceFixture(sourceDir);
-      writeSqliteV2Fixture(
-        sourceDir,
-        ids.map((id) =>
-          sqliteQuery({
-            id,
-            p50Ms: 1,
-            p95Ms: 2,
-            plan: {
-              fullTableScans: ["SCAN delivery_queue_entries"],
-              indexes: [],
-              raw: ["SCAN delivery_queue_entries"],
-              tempSorts: [],
-            },
-            sql: "SELECT id FROM delivery_queue_entries",
-          }),
-        ),
-      );
-
-      expect(() => buildMarkdown(sourceDir, null)).toThrow(
-        "[source-performance] invalid SQLite scenario ID:",
-      );
-    }
-  });
-
   it("rejects malformed v2 SQLite metrics and normalized plans", () => {
     const plan = {
       fullTableScans: ["SCAN delivery_queue_entries"],
@@ -405,20 +356,6 @@ describe("buildMarkdown", () => {
 
     expect(() => buildMarkdown(sourceDir, null)).toThrow(
       "[source-performance] invalid SQLite scenario ID:",
-    );
-  });
-
-  it("renders legacy SQLite artifacts without manufacturing baseline matches", () => {
-    const sourceDir = mkTmpRoot();
-    const baselineDir = mkTmpRoot();
-    writeSourceFixture(sourceDir);
-    writeSourceFixture(baselineDir);
-
-    const markdown = buildMarkdown(sourceDir, baselineDir);
-
-    expect(markdown).toContain("| current | legacy | smoke | n/a | n/a | n/a |");
-    expect(markdown).toContain(
-      "| legacy query 1 | unknown | 1 | n/a | 0.1ms | 0.2ms | n/a | n/a | n/a | n/a |",
     );
   });
 

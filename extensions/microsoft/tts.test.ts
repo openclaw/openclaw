@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { EdgeTTS } from "node-edge-tts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { edgeTTS } from "./tts.js";
 
@@ -21,6 +22,7 @@ describe("edgeTTS empty audio validation", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
       tempDir = undefined;
@@ -31,15 +33,13 @@ describe("edgeTTS empty audio validation", () => {
     ttsPromise: (text: string, filePath: string) => Promise<void>,
     text = "Hello",
   ) {
-    return edgeTTS(
-      {
-        text,
-        outputPath,
-        config: baseEdgeConfig,
-        timeoutMs: 10000,
-      },
-      { ttsPromise },
-    );
+    vi.spyOn(EdgeTTS.prototype, "ttsPromise").mockImplementation(ttsPromise);
+    return edgeTTS({
+      text,
+      outputPath,
+      config: baseEdgeConfig,
+      timeoutMs: 10000,
+    });
   }
 
   it("rejects blank text before calling Edge TTS", async () => {

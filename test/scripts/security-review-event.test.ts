@@ -227,7 +227,7 @@ describe("automatic security review event resolution", () => {
       const result = evaluate({
         eventName,
         event: {
-          action: "created",
+          action: eventName === "issue_comment" ? "created" : "opened",
           pull_request: { number: 42 },
           issue: { number: 42, pull_request: {} },
           comment: { body: "/allow-dependencies-change" },
@@ -369,79 +369,98 @@ describe("automatic security review event resolution", () => {
     expect(result.requests).toHaveLength(2);
   });
 
-  it("fails a PR refresh when recorded PR identities cannot be read", () => {
-    expect(
-      evaluate({
+  it.each([
+    {
+      name: "recorded PR identities",
+      options: {
         eventName: "pull_request_target",
         event: { action: "closed", pull_request: { number: 42 } },
         pullRequest: { state: "closed" },
-        responses: {
-          [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
-            status: 403,
-            body: { message: "Forbidden" },
-          },
-        },
-      }),
-    ).toMatchObject({ status: 1, output: "" });
+      },
+      route: `${prefix}/commits/${head}/statuses?per_page=100&page=1`,
+    },
+    {
+      name: "commit associations",
+      options: { run: { pull_requests: [] } },
+      route: `${prefix}/commits/${head}/pulls?per_page=100&page=1`,
+    },
+  ])("fails closed when $name cannot be read", ({ options, route }) => {
+    const result = evaluate({
+      ...options,
+      responses: { [route]: { status: 403, body: { message: "Forbidden" } } },
+    });
+    expect(result).toMatchObject({ status: 1, output: "" });
+    expect(result.requests.at(-1)?.path).toBe(route);
   });
 
-  it.each([
-    {
-      action: "created",
-      body: " \r\n /allow-dependencies-change \r\n/allow-security-sensitive-change\n",
-    },
-    { action: "edited", body: "Removed", previousBody: "/allow-dependencies-change" },
-    { action: "edited", body: "/allow-dependencies-change", previousBody: "Thanks" },
-    { action: "deleted", body: "/allow-security-sensitive-change" },
-  ])("reevaluates approval comment activity: %j", ({ action, body, previousBody }) => {
-    expect(
-      evaluate({
+  it.each<{
+    action: string;
+    body: string | null;
+    previousBody?: string;
+    issueOnly?: boolean;
+    selected: boolean;
+  }>([
+    ...[
+      {
+        action: "created",
+        body: " \r\n /allow-dependencies-change \r\n/allow-security-sensitive-change\n",
+      },
+      { action: "edited", body: "Removed", previousBody: "/allow-dependencies-change" },
+      { action: "edited", body: "/allow-dependencies-change", previousBody: "Thanks" },
+      { action: "deleted", body: "/allow-security-sensitive-change" },
+    ].map(({ action, body, previousBody }) => ({ action, body, previousBody, selected: true })),
+    ...[
+      { action: "created", body: "Thanks" },
+      { action: "deleted", body: "Thanks" },
+      { action: "created", body: "/allow-dependencies-change-extra" },
+      { action: "created", body: "/allow-dependencies-change\nThanks" },
+      { action: "created", body: "> /allow-dependencies-change" },
+      { action: "created", body: "```text\n/allow-security-sensitive-change\n```" },
+      { action: "edited", body: "Removed", previousBody: "Please post /allow-dependencies-change" },
+      { action: "created", body: "/ALLOW-DEPENDENCIES-CHANGE" },
+      { action: "created", body: " \r\n " },
+      { action: "deleted", body: null },
+      { action: "created", body: "/allow-security-sensitive-change", issueOnly: true },
+    ].map(({ action, body, previousBody, issueOnly }) => ({
+      action,
+      body,
+      previousBody,
+      issueOnly,
+      selected: false,
+    })),
+  ])(
+    "selects only approval command activity: %j",
+    ({ action, body, previousBody, issueOnly, selected }) => {
+      const result = evaluate({
         eventName: "issue_comment",
         event: {
           action,
-          issue: { number: 42, pull_request: {} },
+          issue: { number: 42, ...(issueOnly ? {} : { pull_request: {} }) },
           comment: { body },
           changes: { body: { from: previousBody } },
         },
-      }),
-    ).toMatchObject({
-      status: 0,
-      matrix: { include: [{ pr: 42, head }] },
-      published: [{ body: { context: "openclaw/ci-gate", state: "pending" } }],
-    });
-  });
-
-  it.each([
-    { action: "created", body: "Thanks" },
-    { action: "deleted", body: "Thanks" },
-    { action: "created", body: "/allow-dependencies-change-extra" },
-    { action: "created", body: "/allow-dependencies-change\nThanks" },
-    { action: "edited", body: "Removed", previousBody: "Please post /allow-dependencies-change" },
-    { action: "created", body: "/ALLOW-DEPENDENCIES-CHANGE" },
-    { action: "created", body: " \r\n " },
-    { action: "deleted", body: null },
-    { action: "created", body: "/allow-security-sensitive-change", issueOnly: true },
-  ])(
-    "ignores non-approval comments without API reads or status writes: %j",
-    ({ action, body, previousBody, issueOnly }) => {
-      expect(
-        evaluate({
-          eventName: "issue_comment",
-          event: {
-            action,
-            issue: { number: 42, ...(issueOnly ? {} : { pull_request: {} }) },
-            comment: { body },
-            changes: { body: { from: previousBody } },
-          },
-        }),
-      ).toMatchObject({ status: 0, matrix: { include: [] }, requests: [] });
+      });
+      expect(result).toMatchObject({
+        status: 0,
+        matrix: { include: selected ? [{ pr: 42, head }] : [] },
+      });
+      if (selected) {
+        expect(result.published).toMatchObject([
+          { body: { context: "openclaw/ci-gate", state: "pending" } },
+        ]);
+      } else {
+        expect(result.requests).toEqual([]);
+      }
     },
   );
 
-  it("rejects manual dispatch before making any API request", () => {
+  it.each([
+    { id: 1, login: "maintainer", type: "User" },
+    { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+  ])("rejects a dispatch from $login ($type, $id) before any API request", (sender) => {
     const result = evaluate({
       eventName: "workflow_dispatch",
-      event: { inputs: { pr_number: "42" } },
+      event: { inputs: { pull_request: "42" }, sender },
     });
     expect(result).toMatchObject({
       status: 1,
@@ -451,41 +470,44 @@ describe("automatic security review event resolution", () => {
     });
   });
 
-  it.each(["success", "failure"])(
-    "reevaluates %s CI completion against live workflow and head",
-    (conclusion) => {
-      const result = evaluate({ run: { conclusion } });
-      expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-      expect(result.requests.map((request) => request.path)).toEqual([
-        `${prefix}/actions/runs/123`,
-        `${prefix}/actions/workflows/ci.yml`,
-        `${prefix}/pulls/42`,
-        `${prefix}/statuses/${head}`,
-      ]);
-      expect(result.requests.slice(0, -1).every((request) => request.method === "GET")).toBe(true);
-      expect(result.published).toHaveLength(1);
-      expect(result.published[0]?.body?.state).toBe("pending");
+  it.each([
+    { name: "successful CI", changedRun: { conclusion: "success" }, associated: false },
+    { name: "failed CI", changedRun: { conclusion: "failure" }, associated: false },
+    {
+      name: "release fallback",
+      changedRun: { event: "workflow_dispatch", display_title: `CI release gate ${head}` },
+      associated: false,
     },
-  );
-
-  it("refreshes automatically after the supported exact-head release CI fallback", () => {
-    expect(
-      evaluate({
-        run: { event: "workflow_dispatch", display_title: `CI release gate ${head}` },
-      }),
-    ).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
+    { name: "fork association", changedRun: { pull_requests: [] }, associated: true },
+  ])("reevaluates $name against the live head", ({ changedRun, associated }) => {
+    const result = evaluate({ run: changedRun });
+    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
+    expect(result.requests.map((request) => request.path)).toEqual([
+      `${prefix}/actions/runs/123`,
+      `${prefix}/actions/workflows/ci.yml`,
+      ...(associated ? [`${prefix}/commits/${head}/pulls?per_page=100&page=1`] : []),
+      `${prefix}/pulls/42`,
+      `${prefix}/statuses/${head}`,
+    ]);
+    expect(result.requests.slice(0, -1).every((request) => request.method === "GET")).toBe(true);
+    expect(result.published).toHaveLength(1);
+    expect(result.published[0]?.body?.state).toBe("pending");
   });
 
-  it.each(["CI", `CI release gate ${"b".repeat(40)}`])(
-    "ignores unrelated manual CI builds named %s",
-    (displayTitle) => {
-      expect(
-        evaluate({
-          run: { event: "workflow_dispatch", display_title: displayTitle },
-        }),
-      ).toMatchObject({ status: 0, matrix: { include: [] } });
-    },
-  );
+  it.each<Options>([
+    ...["CI", `CI release gate ${"b".repeat(40)}`].map((display_title) => ({
+      run: { event: "workflow_dispatch", display_title },
+    })),
+    ...[
+      { draft: true },
+      { state: "closed" },
+      { base: { ref: "release/1", repo: repository } },
+      { head: { ...pullRequest.head, sha: "b".repeat(40) } },
+      { head: { ...pullRequest.head, repo: { id: 100 } } },
+    ].map((value) => ({ pullRequest: value })),
+  ])("does not retarget unrelated CI or PR states: %j", (options) => {
+    expect(evaluate(options)).toMatchObject({ status: 0, matrix: { include: [] } });
+  });
 
   it.each([
     { workflow_id: 789 },
@@ -497,30 +519,6 @@ describe("automatic security review event resolution", () => {
     expect(result.status).toBe(1);
     expect(result.output).toBe("");
     expect(result.requests).not.toContainEqual({ path: `${prefix}/pulls/42`, method: "GET" });
-  });
-
-  it.each([
-    { draft: true },
-    { state: "closed" },
-    { base: { ref: "release/1", repo: repository } },
-    { head: { ...pullRequest.head, sha: "b".repeat(40) } },
-    { head: { ...pullRequest.head, repo: { id: 100 } } },
-  ])("does not retarget completed CI onto another current PR state: %j", (changedPull) => {
-    expect(evaluate({ pullRequest: changedPull })).toMatchObject({
-      status: 0,
-      matrix: { include: [] },
-    });
-  });
-
-  it("uses associated commits for fork runs with empty workflow associations", () => {
-    expect(
-      evaluate({
-        run: { pull_requests: [] },
-        responses: {
-          [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: { body: [{ number: 42 }] },
-        },
-      }),
-    ).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
   });
 
   it.each([200, 404, 422])(
@@ -544,21 +542,6 @@ describe("automatic security review event resolution", () => {
       ).toBe(false);
     },
   );
-
-  it("does not turn API authorization failure into an empty or broader PR selection", () => {
-    const result = evaluate({
-      run: { pull_requests: [] },
-      responses: {
-        [`${prefix}/commits/${head}/pulls?per_page=100&page=1`]: {
-          status: 403,
-          body: { message: "Forbidden" },
-        },
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.output).toBe("");
-    expect(result.requests.at(-1)?.path).toContain(`/commits/${head}/pulls?`);
-  });
 });
 
 describe("scheduled reconciliation", () => {
@@ -588,13 +571,52 @@ describe("scheduled reconciliation", () => {
     ]);
   });
 
-  it("schedules a stale pending head before publishing its matrix", () => {
-    const result = evaluate({ eventName: "schedule" });
+  it.each([
+    {
+      name: "stale success",
+      statuses: [
+        { ...recordedPullRequest(42), state: "success", created_at: "2026-01-01T23:30:00Z" },
+      ],
+    },
+    {
+      name: "pending after completion",
+      statuses: [
+        {
+          ...recordedPullRequest(42),
+          state: "pending",
+          created_at: "2026-01-01T23:41:00Z",
+          description: "PR #42: Review scheduled; CI and security review have not completed",
+        },
+      ],
+    },
+    { name: "missing gate", statuses: [{ context: "unrelated/status", state: "success" }] },
+    {
+      name: "foreign successes",
+      statuses: [
+        {
+          ...recordedPullRequest(42),
+          state: "success",
+          created_at: "2026-01-01T23:45:00Z",
+          creator: { login: "foreign-bot[bot]", type: "Bot" },
+        },
+        {
+          ...recordedPullRequest(42),
+          state: "success",
+          created_at: "2026-01-01T23:44:00Z",
+          creator: { login: "github-actions[bot]", type: "User" },
+        },
+        { ...recordedPullRequest(42), state: "pending", created_at: "2026-01-01T23:41:00Z" },
+        { ...recordedPullRequest(42), state: "success", created_at: "2026-01-01T23:20:00Z" },
+      ],
+    },
+  ])("schedules $name before publishing its matrix", ({ statuses }) => {
+    const result = reconcileStatuses(statuses);
     expect(result.status, result.error).toBe(0);
     expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
     expect(result.output).toBe(
       `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
     );
+    expect(result.published).toHaveLength(1);
     expect(result.published).toMatchObject([
       {
         path: `${prefix}/statuses/${head}`,
@@ -613,119 +635,83 @@ describe("scheduled reconciliation", () => {
   });
 
   it.each([
-    { state: "pending", created_at: "2026-01-01T23:41:00Z" },
-    { state: "success", created_at: "2026-01-01T23:30:00Z" },
-  ])("ignores newer foreign successes before the newest Actions status: %j", (owned) => {
-    const result = reconcileStatuses([
-      {
-        ...recordedPullRequest(42),
-        state: "success",
-        created_at: "2026-01-01T23:45:00Z",
-        creator: { login: "foreign-bot[bot]", type: "Bot" },
-      },
-      {
-        ...recordedPullRequest(42),
-        state: "success",
-        created_at: "2026-01-01T23:44:00Z",
-        creator: { login: "github-actions[bot]", type: "User" },
-      },
-      { ...recordedPullRequest(42), ...owned },
-      { ...recordedPullRequest(42), state: "success", created_at: "2026-01-01T23:20:00Z" },
-    ]);
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.published).toHaveLength(1);
-  });
-
-  it.each([
-    { state: "success", created_at: "2026-01-01T23:41:00Z" },
-    { state: "success", created_at: completedRun.updated_at },
-  ])("does not reselect a result settled at or after CI completion: %j", (status) => {
-    const result = reconcileStatuses([
-      { ...recordedPullRequest(42), context: "OpenClaw/CI-Gate", ...status },
-    ]);
-    expect(result).toMatchObject({ status: 0, matrix: { include: [] }, published: [] });
-    expect(result.requests.some(({ path }) => path.includes("/pulls/"))).toBe(false);
-  });
-
-  it.each([
-    { state: "success", created_at: "2026-01-01T23:30:00Z" },
-    {
-      state: "pending",
-      created_at: "2026-01-01T23:41:00Z",
-      description: "PR #42: Review scheduled; CI and security review have not completed",
-    },
-    {
-      state: "pending",
-      created_at: completedRun.updated_at,
-      description: "PR #42: CI and security review have not completed",
-    },
-  ])("reselects a result older than the latest rerun or any pending status: %j", (status) => {
-    const result = reconcileStatuses([{ ...recordedPullRequest(42), ...status }]);
-    expect(result.status, result.error).toBe(0);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
-    expect(result.published).toHaveLength(1);
-    expect(result.output).toBe(
-      `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
-    );
-  });
-
-  it.each([
-    { updated_at: "2026-01-01T23:56:00Z" },
-    { updated_at: "2026-01-01T22:59:59Z" },
-    { conclusion: "skipped" },
-    { status: "in_progress" },
+    ...["2026-01-01T23:00:00Z", "2026-01-01T23:55:00Z"].map((updated_at) => ({
+      changedRun: { updated_at },
+      selected: true,
+    })),
+    ...[
+      { updated_at: "2026-01-01T23:56:00Z" },
+      { updated_at: "2026-01-01T22:59:59Z" },
+      { conclusion: "skipped" },
+      { status: "in_progress" },
+    ].map((changedRun) => ({ changedRun, selected: false })),
   ])(
-    "ignores CI outside the completion window or without substantive completion: %j",
-    (changedRun) => {
-      const result = evaluate({ eventName: "schedule", run: changedRun });
-      expect(result).toMatchObject({ status: 0, matrix: { include: [] }, published: [] });
-      expect(result.requests).toEqual([
-        { path: scheduledRunsPath, method: "GET" },
-        { path: ciRunsPath, method: "GET" },
-      ]);
+    "selects substantive CI inside the inclusive completion window: $changedRun",
+    ({ changedRun, selected }) => {
+      const result = evaluate({
+        eventName: "schedule",
+        run: changedRun,
+        responses: { [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: [] } },
+      });
+      expect(result).toMatchObject({
+        status: 0,
+        matrix: { include: selected ? [{ pr: 42, head }] : [] },
+      });
+      if (!selected) {
+        expect(result.published).toEqual([]);
+        expect(result.requests).toEqual([
+          { path: scheduledRunsPath, method: "GET" },
+          { path: ciRunsPath, method: "GET" },
+        ]);
+      }
     },
   );
 
-  it("selects a head with no ci-gate status", () => {
-    const result = reconcileStatuses([{ context: "unrelated/status", state: "success" }]);
-    expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
-    expect(result.published).toHaveLength(1);
-  });
-
   it.each([
+    ...["2026-01-01T23:41:00Z", completedRun.updated_at].map((created_at) => ({
+      name: `settled ${created_at}`,
+      statuses: [
+        { ...recordedPullRequest(42), context: "OpenClaw/CI-Gate", state: "success", created_at },
+      ],
+      paged: false,
+      selected: false,
+    })),
     {
-      gate: "settled",
+      name: "paginated settled gate",
       statuses: [
         { ...recordedPullRequest(42), state: "success", created_at: completedRun.updated_at },
       ],
+      paged: true,
       selected: false,
     },
-    { gate: "missing", statuses: [], selected: true },
-  ])("reads remaining commit-status pages for a $gate gate", ({ statuses, selected }) => {
+    { name: "paginated missing gate", statuses: [], paged: true, selected: true },
+  ])("reads the newest owned result for $name", ({ statuses, paged, selected }) => {
+    const statusPath = `${prefix}/commits/${head}/statuses?per_page=100&page=`;
     const result = evaluate({
       eventName: "schedule",
       responses: {
-        [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: {
-          body: Array.from({ length: 100 }, () => ({
-            ...recordedPullRequest(42),
-            state: "success",
-            created_at: "2026-01-01T23:45:00Z",
-            creator: { login: "foreign-bot[bot]", type: "Bot" },
-          })),
+        [statusPath + "1"]: {
+          body: paged
+            ? Array.from({ length: 100 }, () => ({
+                ...recordedPullRequest(42),
+                state: "success",
+                created_at: "2026-01-01T23:45:00Z",
+                creator: { login: "foreign-bot[bot]", type: "Bot" },
+              }))
+            : statuses,
         },
-        [`${prefix}/commits/${head}/statuses?per_page=100&page=2`]: {
-          body: statuses,
-        },
+        ...(paged ? { [statusPath + "2"]: { body: statuses } } : {}),
       },
     });
     expect(result.status, result.error).toBe(0);
     expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
     expect(result.published).toHaveLength(selected ? 1 : 0);
-    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual([
-      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=1`, method: "GET" },
-      { path: `${prefix}/commits/${head}/statuses?per_page=100&page=2`, method: "GET" },
-    ]);
+    if (!selected) {
+      expect(result.requests.some(({ path }) => path.includes("/pulls/"))).toBe(false);
+    }
+    expect(result.requests.filter(({ path }) => path.includes("/statuses?"))).toEqual(
+      (paged ? [1, 2] : [1]).map((page) => ({ path: statusPath + page, method: "GET" })),
+    );
   });
 
   it("dedupes reruns by the highest run id before reading the head status", () => {
@@ -829,17 +815,6 @@ describe("scheduled reconciliation", () => {
     },
   );
 
-  it("fails a leaf with fewer distinct run IDs than its reported total", () => {
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [ciRunsPath]: { body: { total_count: 2, workflow_runs: [completedRun, completedRun] } },
-      },
-    });
-    expect(result).toMatchObject({ status: 1, output: "", published: [] });
-    expect(result.error).toContain("covered window does not advance");
-  });
-
   it("fails an overfull sub-ten-minute slice before status publication or matrix output", () => {
     const ends = [
       "2026-01-02T00:00:00.000Z",
@@ -878,15 +853,26 @@ describe("scheduled reconciliation", () => {
     expect(result.published).toEqual([]);
   });
 
-  it.each([undefined, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
-    "rejects an invalid listing total %s before publishing",
-    (total_count) => {
+  it.each([
+    ...[undefined, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((total_count) => ({
+      total_count,
+      workflow_runs: [completedRun],
+      error: "invalid total_count",
+    })),
+    {
+      total_count: 2,
+      workflow_runs: [completedRun, completedRun],
+      error: "covered window does not advance",
+    },
+  ])(
+    "rejects incomplete or invalid listing totals: $total_count",
+    ({ total_count, workflow_runs, error }) => {
       const result = evaluate({
         eventName: "schedule",
-        responses: { [ciRunsPath]: { body: { total_count, workflow_runs: [completedRun] } } },
+        responses: { [ciRunsPath]: { body: { total_count, workflow_runs } } },
       });
       expect(result).toMatchObject({ status: 1, output: "", published: [] });
-      expect(result.error).toContain("invalid total_count");
+      expect(result.error).toContain(error);
     },
   );
 
@@ -909,21 +895,6 @@ describe("scheduled reconciliation", () => {
       expect(result.status, result.error).toBe(0);
       expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
       expect(result.requests.some(({ path }) => path.includes("/statuses?"))).toBe(selected);
-    },
-  );
-
-  it.each(["2026-01-01T23:00:00Z", "2026-01-01T23:55:00Z"])(
-    "includes completion at the fallback window boundary %s",
-    (updated_at) => {
-      expect(
-        evaluate({
-          eventName: "schedule",
-          run: { updated_at },
-          responses: {
-            [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: [] },
-          },
-        }),
-      ).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
     },
   );
 

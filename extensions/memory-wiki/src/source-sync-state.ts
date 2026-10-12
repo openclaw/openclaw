@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
@@ -21,7 +20,7 @@ type MemoryWikiImportedSourceStateEntry = {
   renderFingerprint: string;
 };
 
-type MemoryWikiImportedSourceState = {
+export type MemoryWikiImportedSourceState = {
   version: 1;
   entries: Record<string, MemoryWikiImportedSourceStateEntry>;
 };
@@ -56,26 +55,11 @@ const MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES = 16 * 1024 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES = 64 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_SCAN_BYTES = 32 * 1024 * 1024;
 
-const EMPTY_STATE: MemoryWikiImportedSourceState = {
-  version: 1,
-  entries: {},
-};
-
 let configuredSourceSyncStore: MemoryWikiSourceSyncStateStore | undefined;
-const memorySourceSyncStateByVault = new Map<string, MemoryWikiImportedSourceState>();
 const sourceSyncStateChanges = new WeakMap<
   MemoryWikiImportedSourceState,
   MemoryWikiSourceSyncStateChanges
 >();
-
-function cloneSourceSyncState(state: MemoryWikiImportedSourceState): MemoryWikiImportedSourceState {
-  return {
-    version: 1,
-    entries: Object.fromEntries(
-      Object.entries(state.entries).map(([key, value]) => [key, { ...value }]),
-    ),
-  };
-}
 
 function normalizeSourceSyncEntry(value: unknown): MemoryWikiImportedSourceStateEntry | null {
   const entry = asNullableRecord(value);
@@ -100,41 +84,12 @@ function normalizeSourceSyncEntry(value: unknown): MemoryWikiImportedSourceState
   };
 }
 
-function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
-  const parsed = asNullableRecord(value);
-  if (parsed?.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
-    return EMPTY_STATE;
-  }
-  const entries: Record<string, MemoryWikiImportedSourceStateEntry> = {};
-  for (const [syncKey, rawEntry] of Object.entries(parsed.entries)) {
-    const entry = normalizeSourceSyncEntry(rawEntry);
-    if (entry) {
-      entries[syncKey] = entry;
-    }
-  }
-  return { version: 1, entries };
-}
-
 function resolveVaultRootKey(vaultRoot: string): string {
   return createHash("sha256").update(path.resolve(vaultRoot), "utf8").digest("hex").slice(0, 32);
 }
 
 function resolveStateEntryKey(vaultRootKey: string, syncKey: string): string {
   return createHash("sha256").update(`${vaultRootKey}\0${syncKey}`, "utf8").digest("hex");
-}
-
-function createMemoryFallbackStateStore(): MemoryWikiSourceSyncStateStore {
-  return {
-    async read(vaultRoot) {
-      const vaultRootKey = resolveVaultRootKey(vaultRoot);
-      return cloneSourceSyncState(memorySourceSyncStateByVault.get(vaultRootKey) ?? EMPTY_STATE);
-    },
-    async write(vaultRoot, state) {
-      assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
-      const vaultRootKey = resolveVaultRootKey(vaultRoot);
-      memorySourceSyncStateByVault.set(vaultRootKey, cloneSourceSyncState(state));
-    },
-  };
 }
 
 function assertSourceSyncStateWithinLimit(count: number): void {
@@ -186,17 +141,13 @@ export function createMemoryWikiSourceSyncStateStore(
       assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       const store = openStore();
-      let nextState = state;
       if (plan) {
         for (const syncKey of plan.deleteKeys) {
           await store.delete(resolveStateEntryKey(vaultRootKey, syncKey));
         }
       } else {
-        nextState = normalizeSourceSyncState(state);
         const nextKeys = new Set(
-          Object.keys(nextState.entries).map((syncKey) =>
-            resolveStateEntryKey(vaultRootKey, syncKey),
-          ),
+          Object.keys(state.entries).map((syncKey) => resolveStateEntryKey(vaultRootKey, syncKey)),
         );
         for (const row of await store.entries()) {
           if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
@@ -204,8 +155,8 @@ export function createMemoryWikiSourceSyncStateStore(
           }
         }
       }
-      for (const syncKey of plan?.upsertKeys ?? Object.keys(nextState.entries)) {
-        const entry = nextState.entries[syncKey];
+      for (const syncKey of plan?.upsertKeys ?? Object.keys(state.entries)) {
+        const entry = state.entries[syncKey];
         if (!entry) {
           throw new Error(`Missing tracked Memory Wiki source sync entry: ${syncKey}`);
         }
@@ -225,10 +176,11 @@ export function configureMemoryWikiSourceSyncStateStore(
   configuredSourceSyncStore = store;
 }
 
-function resolveSourceSyncStore(
-  store?: MemoryWikiSourceSyncStateStore,
-): MemoryWikiSourceSyncStateStore {
-  return store ?? configuredSourceSyncStore ?? createMemoryFallbackStateStore();
+function resolveSourceSyncStore(store = configuredSourceSyncStore): MemoryWikiSourceSyncStateStore {
+  if (!store) {
+    throw new Error("Memory Wiki source sync state store is not configured.");
+  }
+  return store;
 }
 
 export async function readMemoryWikiSourceSyncState(
@@ -258,36 +210,6 @@ export async function writeMemoryWikiSourceSyncState(
   await resolveSourceSyncStore(store).write(vaultRoot, state, plan);
   changes?.upsertKeys.clear();
   changes?.deleteKeys.clear();
-}
-
-export async function shouldSkipImportedSourceWrite(params: {
-  vaultRoot: string;
-  syncKey: string;
-  expectedPagePath: string;
-  expectedSourcePath: string;
-  sourceUpdatedAtMs: number;
-  sourceSize: number;
-  renderFingerprint: string;
-  state: MemoryWikiImportedSourceState;
-}): Promise<boolean> {
-  const entry = params.state.entries[params.syncKey];
-  if (!entry) {
-    return false;
-  }
-  if (
-    entry.pagePath !== params.expectedPagePath ||
-    entry.sourcePath !== params.expectedSourcePath ||
-    entry.sourceUpdatedAtMs !== params.sourceUpdatedAtMs ||
-    entry.sourceSize !== params.sourceSize ||
-    entry.renderFingerprint !== params.renderFingerprint
-  ) {
-    return false;
-  }
-  const pagePath = path.join(params.vaultRoot, params.expectedPagePath);
-  return await fs
-    .access(pagePath)
-    .then(() => true)
-    .catch(() => false);
 }
 
 function removeImportedSourceStateEntry(

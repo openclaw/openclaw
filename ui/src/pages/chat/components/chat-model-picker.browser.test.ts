@@ -5,8 +5,9 @@ import { page, userEvent } from "vitest/browser";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
 import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
-import { renderChatModelPicker } from "./chat-model-picker.ts";
+import { ChatModelPicker } from "./chat-model-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
 
 const container = document.createElement("div");
@@ -27,11 +28,11 @@ function mountPicker() {
     sessionModelPinned: true,
     sessionKey: "main",
     triggerModelLabel: "Alpha",
-    modelOptions: ["Alpha", "Beta"].map((label) => ({
+    modelOptions: ["Alpha", "Beta", "Gamma"].map((label) => ({
       label,
-      value: "example/" + label.toLowerCase(),
-      commitValue: "example/" + label.toLowerCase(),
-      provider: "example",
+      value: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
+      commitValue: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
+      provider: label === "Gamma" ? "other" : "example",
       isDefault: false,
     })),
     onModelSelect: vi.fn(async () => {}),
@@ -46,7 +47,7 @@ function mountPicker() {
           @keydown=${(event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(container, event)}
         >
           <div class="agent-chat__composer-combobox"><textarea></textarea></div>
-          ${renderChatModelPicker(params)}
+          ${solidTemplate(ChatModelPicker, params)}
         </div>
       `,
       container,
@@ -69,8 +70,8 @@ function mountPicker() {
   return { params, update, picker, trigger, search, composer, toggle };
 }
 
-it("focuses the filter after clicking the model label without changing the chat draft", async () => {
-  const { search, composer, toggle } = mountPicker();
+it("keeps typing in the filter and preserves focus and query across catalog rerenders", async () => {
+  const { search, composer, toggle, params, update, trigger } = mountPicker();
   composer.value = "Keep this draft";
   composer.focus();
   await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
@@ -84,6 +85,19 @@ it("focuses the filter after clicking the model label without changing the chat 
   expect(
     container.querySelector<HTMLButtonElement>('[data-chat-model-option="example/beta"]')!.hidden,
   ).toBe(false);
+  const option = container.querySelector<HTMLButtonElement>(
+    '[data-chat-model-option="example/beta"]',
+  )!;
+  expect(option.checkVisibility()).toBe(true);
+  option.focus();
+  expect(document.activeElement).toBe(option);
+  update();
+  await Promise.resolve();
+  expect(document.activeElement).toBe(option);
+  expect(search.value).toBe("beta");
+  trigger.focus();
+  await userEvent.keyboard("1");
+  expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
 });
 
 it("focuses the filter on keyboard open and reopen, and returns Escape to the trigger", async () => {
@@ -125,22 +139,56 @@ it.each(["closed", "removed", "focus moved"])(
   },
 );
 
-it("does not steal focus from a picker control on catalog rerender", async () => {
-  const { params, update, trigger, search, toggle } = mountPicker();
-  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-  await userEvent.keyboard("beta");
-  // Filtering hides provider headings; move focus to a visible result instead.
-  const option = container.querySelector<HTMLButtonElement>(
-    '[data-chat-model-option="example/beta"]',
-  )!;
-  expect(option.checkVisibility()).toBe(true);
-  option.focus();
-  expect(document.activeElement).toBe(option);
-  update();
-  await Promise.resolve();
-  expect(document.activeElement).toBe(option);
-  expect(search.value).toBe("beta");
-  trigger.focus();
-  await userEvent.keyboard("1");
-  expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
-});
+it.each(["trigger", "Escape", "selection"])(
+  "retains provider toggles after closing through %s",
+  async (close) => {
+    const { picker, trigger, search, toggle, update, params } = mountPicker();
+    const selectedToggle = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-provider-group="example"] [data-chat-model-provider-toggle]',
+    )!;
+    const otherToggle = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
+    )!;
+    await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
+    await userEvent.click(selectedToggle);
+    await userEvent.click(otherToggle);
+    expect(selectedToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(otherToggle.getAttribute("aria-expanded")).toBe("true");
+    // Search reveals matching rows temporarily without changing group intent.
+    await userEvent.click(search);
+    await userEvent.keyboard("beta");
+    expect(
+      picker.querySelector<HTMLButtonElement>('[data-chat-model-option="example/beta"]')!.hidden,
+    ).toBe(false);
+    update();
+    await Promise.resolve();
+    if (close === "trigger") {
+      await toggle(() => userEvent.click(trigger));
+    } else if (close === "Escape") {
+      await userEvent.keyboard("{Escape}");
+      await toggle(() => userEvent.keyboard("{Escape}"));
+    } else {
+      await toggle(() => page.getByText("Beta", { exact: true }).click());
+      expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
+    }
+    expect(picker.open).toBe(false);
+    expect(search.value).toBe("");
+    update();
+    await toggle(() => userEvent.click(trigger));
+    expect(selectedToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(otherToggle.getAttribute("aria-expanded")).toBe("true");
+    const hidden = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="example/beta"]',
+    )!;
+    const visible = picker.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="other/gamma"]',
+    )!;
+    expect(hidden.hidden).toBe(true);
+    expect(hidden.checkVisibility()).toBe(false);
+    expect(visible.hidden).toBe(false);
+    expect(visible.checkVisibility()).toBe(true);
+    trigger.focus();
+    await toggle(() => userEvent.keyboard("1"));
+    expect(params.onModelSelect).toHaveBeenLastCalledWith("other/gamma", "main", undefined);
+  },
+);

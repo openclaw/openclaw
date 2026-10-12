@@ -17,8 +17,10 @@ import {
   preparePackageActivation,
   runPackageActivationRecovery,
 } from "./package-update-activation.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import * as integrity from "./package-update-integrity.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as capability from "./update-post-core-capability.js";
 
@@ -40,8 +42,18 @@ afterEach(async () => {
   }
 });
 
-it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidate"] as const)(
-  "reuses settled preparation digests while refusing changed publication bytes (%s)",
+it
+  .skipIf(process.platform === "win32")
+  .each([
+    "unchanged",
+    "initially-fresh",
+    "previous",
+    "candidate",
+    "candidate-version",
+    "candidate-directory",
+    "interrupted",
+  ] as const)(
+  "reuses the previous digest and trusts freshly prepared candidate contents (%s)",
   (changed) =>
     fixture.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
@@ -49,7 +61,8 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       const previousRoot = path.join(anchor, "previous");
       const candidateRoot = path.join(anchor, "candidate");
-      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+      let now = Date.now() + (changed === "initially-fresh" ? 0 : 6_000);
+      vi.spyOn(Date, "now").mockImplementation(() => now);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
         const reader = integrity.createPackageIntegrityReader();
@@ -69,13 +82,33 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
           ],
         });
         expect(prepared).toBeDefined();
+        if (changed === "interrupted") {
+          const failure = new Error("package helper read interrupted");
+          const read = vi.spyOn(fsp, "readFile").mockRejectedValueOnce(failure);
+          await expect(prepared!.publish(false)).rejects.toBe(failure);
+          read.mockRestore();
+        }
         const tampered = path.join(
           changed === "previous" ? f.packageRoot : candidateRoot,
           "dist/index.js",
         );
-        if (changed !== "unchanged") {
+        if (changed === "candidate-version") {
+          await fsp.writeFile(
+            path.join(candidateRoot, "package.json"),
+            '{"name":"openclaw","version":"3.0.0"}',
+          );
+        } else if (changed === "candidate-directory") {
+          await fsp.rename(candidateRoot, path.join(root, "displaced-candidate"));
+          await fsp.mkdir(candidateRoot);
+          await fsp.writeFile(
+            path.join(candidateRoot, "package.json"),
+            '{"name":"openclaw","version":"2.0.0"}',
+          );
+        } else if (changed === "previous" || changed === "candidate" || changed === "interrupted") {
           await fsp.writeFile(tampered, `changed ${changed} package content\n`);
         }
+        now += 6_000;
+        const hash = interceptPackageFileHashes();
         const packageOpens: string[] = [];
         const open = fsp.open.bind(fsp);
         vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
@@ -91,20 +124,45 @@ it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidat
           return open(...args);
         });
         const publishing = prepared!.publish(false);
-        if (changed !== "unchanged") {
+        if (changed === "candidate-version" || changed === "candidate-directory") {
+          await expect(publishing).rejects.toThrow("Package publication object changed");
+          expect(hash).not.toHaveBeenCalled();
+          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+          return;
+        }
+        if (changed === "previous" || changed === "interrupted") {
           await expect(publishing).rejects.toBeInstanceOf(integrity.PackageIntegrityMismatchError);
-          expect(packageOpens).toContain(tampered);
+          expect(hash.mock.calls.map(([file]) => file)).toEqual([tampered]);
           expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
           return;
         }
         await expect(publishing).resolves.toMatchObject({ phase: "publication-complete" });
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-        // Each of the four remaining content walks still reads its manifest version.
-        expect(packageOpens).toHaveLength(4);
-        expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        if (changed === "initially-fresh") {
+          // Re-read recent previous-package bytes once after they settle;
+          // the private candidate does not enter the content verifier.
+          expect(hash.mock.calls.length).toBeGreaterThan(0);
+          expect(
+            hash.mock.calls.every(([file]) => file.startsWith(`${f.packageRoot}${path.sep}`)),
+          ).toBe(true);
+          expect(new Set(hash.mock.calls.map(([, stat]) => `${stat.dev}:${stat.ino}`)).size).toBe(
+            hash.mock.calls.length,
+          );
+          hash.mockClear();
+        } else {
+          expect(hash).not.toHaveBeenCalled();
+        }
+        // Version checks still read manifests without rescanning candidate payloads.
+        if (changed !== "initially-fresh") {
+          expect(packageOpens).toHaveLength(4);
+          expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        }
         await expect(prepared!.retire()).resolves.toMatchObject({ phase: "complete" });
-        expect(packageOpens).toHaveLength(5);
-        expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        expect(hash).not.toHaveBeenCalled();
+        if (changed !== "initially-fresh") {
+          expect(packageOpens).toHaveLength(5);
+          expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        }
         expect(fs.existsSync(anchor)).toBe(false);
       });
     }),

@@ -1,155 +1,144 @@
 import { randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
-  OpenKeyedStoreOptions,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Import from defining modules, not the protocol barrel: index.js re-exports
 // guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
-import { base64url, fromBase64url } from "../protocol/encoding.js";
-import { generateIdentity } from "../protocol/identity.js";
+import { fromBase64url } from "../protocol/encoding.js";
 import type { ReviewApproval, ReviewRequest } from "../protocol/pipeline.js";
 import { openReefAuditStore } from "./audit-state.js";
 import {
-  parseReefIdentityBinding,
-  REEF_REGISTRATION_IDENTITY_KEY,
   REEF_REGISTRATION_NAMESPACE,
   REEF_REGISTRATION_MAX_ENTRIES,
   type ReefIdentityBinding,
 } from "./registration-state.js";
 import { ReefSqliteReplayStore, REEF_REPLAY_TTL_MS } from "./replay-store.js";
+import {
+  REEF_KEYS_NAMESPACE,
+  REEF_KEYS_MAX_ENTRIES,
+  REEF_KEYS_MIGRATION_NAMESPACE,
+  REEF_KEYS_MIGRATION_MAX_ENTRIES,
+  REEF_DURABLE_MIGRATION_NAMESPACE,
+  REEF_DURABLE_MIGRATION_MAX_ENTRIES,
+  REEF_REVIEWS_NAMESPACE,
+  REEF_REVIEWS_MAX_ENTRIES,
+  type ReefReviewRecord,
+  type ReefIdentityMigrationRecord,
+  type ReefDurableMigrationRecord,
+} from "./state-format.js";
+import {
+  REEF_INBOX_CURSOR_KEY,
+  requireReefInboxCursorRecord,
+  type ReefInboxCursorRecord,
+  type ReefStateOperations,
+} from "./state-operation.js";
+import {
+  assertLegacyReefIdentityMigrationComplete,
+  generateAndStoreLegacyKeys,
+  loadLegacyKeys,
+  LegacyReviewApprovalStore,
+} from "./state.legacy.js";
 import type { ReefKeys } from "./types.js";
 
 export * from "./audit-state.js";
 export * from "./registration-state.js";
+export * from "./state-format.js";
 
-export const REEF_KEYS_NAMESPACE = "identity";
-export const REEF_KEYS_KEY = "keys";
-export const REEF_KEYS_MAX_ENTRIES = 1;
-export const REEF_KEYS_MIGRATION_NAMESPACE = "identity-migration";
-export const REEF_KEYS_MIGRATION_KEY = "keys-json";
-export const REEF_KEYS_MIGRATION_MAX_ENTRIES = 1;
-export const REEF_DURABLE_MIGRATION_NAMESPACE = "durable-migration";
-export const REEF_DURABLE_MIGRATION_KEY = "legacy-files";
-export const REEF_DURABLE_MIGRATION_MAX_ENTRIES = 1;
-export const REEF_REVIEWS_NAMESPACE = "reviews";
-export const REEF_REVIEWS_MAX_ENTRIES = 2_000;
 export const REEF_DELIVERED_NAMESPACE = "delivered";
 export const REEF_DELIVERED_MAX_ENTRIES = 5_000;
 export const REEF_DELIVERED_TTL_MS = REEF_REPLAY_TTL_MS;
 const REEF_INBOX_CURSOR_NAMESPACE = "inbox-cursor";
-const REEF_INBOX_CURSOR_KEY = "current";
 const REEF_INBOX_CURSOR_MAX_ENTRIES = 1;
 
-export type ReefReviewRecord = { review: ReviewRequest; approved?: boolean };
-
-export type ReefIdentityMigrationRecord = {
-  pending: true;
-  identityBindingRequired: boolean;
+const stateOperationHandler = {
+  moduleName: "state-operation-api.js",
+  exportName: "runReefStateOperation",
 };
-export type ReefDurableMigrationRecord = { pending: true };
 
-export function parseReefKeys(value: unknown): ReefKeys {
-  if (!value || typeof value !== "object") {
-    throw new Error("invalid Reef keys");
-  }
-  const keys = value as ReefKeys;
-  if (
-    fromBase64url(keys.signing?.publicKey ?? "").length !== 32 ||
-    fromBase64url(keys.signing?.secretKey ?? "").length !== 32 ||
-    fromBase64url(keys.encryption?.publicKey ?? "").length !== 32 ||
-    fromBase64url(keys.encryption?.secretKey ?? "").length !== 32 ||
-    fromBase64url(keys.auditKey ?? "").length !== 32 ||
-    fromBase64url(keys.replayKey ?? "").length !== 32 ||
-    !Number.isSafeInteger(keys.keyEpoch) ||
-    keys.keyEpoch < 1
-  ) {
-    throw new Error("invalid Reef keys");
-  }
-  return structuredClone(keys);
-}
-
-function openKeysStore(runtime: PluginRuntime): PluginStateSyncKeyedStore<ReefKeys> {
-  return runtime.state.openSyncKeyedStore<ReefKeys>({
-    namespace: REEF_KEYS_NAMESPACE,
-    maxEntries: REEF_KEYS_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-  });
-}
-
-function assertReefIdentityMigrationComplete(runtime: PluginRuntime): void {
-  const durableMigration = runtime.state.openSyncKeyedStore<ReefDurableMigrationRecord>({
-    namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
-    maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-  });
-  if (durableMigration.lookup(REEF_DURABLE_MIGRATION_KEY)) {
-    throw new Error(
-      "Reef durable state migration is incomplete; repair the legacy state files and rerun openclaw doctor --fix",
-    );
-  }
-  const migration = runtime.state.openSyncKeyedStore<ReefIdentityMigrationRecord>({
-    namespace: REEF_KEYS_MIGRATION_NAMESPACE,
-    maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-  });
-  if (migration.lookup(REEF_KEYS_MIGRATION_KEY)) {
-    throw new Error(
-      "Reef identity migration is incomplete; repair the legacy identity files and rerun openclaw doctor --fix",
-    );
-  }
-}
-
-export async function generateAndStoreKeys(runtime: PluginRuntime): Promise<ReefKeys> {
-  assertReefIdentityMigrationComplete(runtime);
-  // Key creation retains its uninterrupted native guard-and-insert path until
-  // the storage owner can compare the migration and binding rows with the insert.
-  const binding = parseReefIdentityBinding(
-    runtime.state
-      .openSyncKeyedStore<ReefIdentityBinding>({
-        namespace: REEF_REGISTRATION_NAMESPACE,
-        maxEntries: REEF_REGISTRATION_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      })
-      .lookup(REEF_REGISTRATION_IDENTITY_KEY),
+function openIdentityState(runtime: PluginRuntime, assertCurrent?: () => void) {
+  const stores = [
+    runtime.state.openKeyedStore<ReefDurableMigrationRecord>({
+      namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
+      maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    }),
+    runtime.state.openKeyedStore<ReefIdentityMigrationRecord>({
+      namespace: REEF_KEYS_MIGRATION_NAMESPACE,
+      maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    }),
+    runtime.state.openKeyedStore<ReefKeys>({
+      namespace: REEF_KEYS_NAMESPACE,
+      maxEntries: REEF_KEYS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    }),
+    runtime.state.openKeyedStore<ReefIdentityBinding>({
+      namespace: REEF_REGISTRATION_NAMESPACE,
+      maxEntries: REEF_REGISTRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    }),
+  ];
+  return stores[0]!.createOperation?.<ReefStateOperations>(
+    stores,
+    stateOperationHandler,
+    assertCurrent ? { assertCurrent } : undefined,
   );
-  if (binding) {
-    throw new Error(
-      `Reef identity @${binding.handle} on ${binding.relayUrl} has no canonical keys; restore the original keys before registration`,
-    );
-  }
-  const identity = generateIdentity();
-  const random = (length: number) => crypto.getRandomValues(new Uint8Array(length));
-  const keys: ReefKeys = {
-    ...identity,
-    auditKey: base64url(random(32)),
-    replayKey: base64url(random(32)),
-    keyEpoch: 1,
-  };
-  if (!openKeysStore(runtime).registerIfAbsent(REEF_KEYS_KEY, keys)) {
-    throw new Error("Reef keys already exist in plugin state");
-  }
-  return keys;
 }
 
-export async function loadKeys(runtime: PluginRuntime): Promise<ReefKeys> {
-  assertReefIdentityMigrationComplete(runtime);
-  const value = openKeysStore(runtime).lookup(REEF_KEYS_KEY);
-  if (!value) {
-    const error = new Error("Reef keys are missing from plugin state") as Error & {
-      code?: string;
-    };
-    error.code = "ENOENT";
-    throw error;
+export async function generateAndStoreKeys(
+  runtime: PluginRuntime,
+  assertCurrent?: () => void,
+): Promise<ReefKeys> {
+  const state = openIdentityState(runtime, assertCurrent);
+  if (!state) {
+    assertCurrent?.();
+    return generateAndStoreLegacyKeys(runtime);
   }
-  return parseReefKeys(value);
+  const receipt = await state.execute(
+    { type: "identity.generate", input: undefined },
+    { writeStores: [2] },
+  );
+  return receipt.value;
+}
+
+export async function loadKeys(
+  runtime: PluginRuntime,
+  assertCurrent?: () => void,
+): Promise<ReefKeys> {
+  const state = openIdentityState(runtime, assertCurrent);
+  if (!state) {
+    assertCurrent?.();
+    return loadLegacyKeys(runtime);
+  }
+  const receipt = await state.execute(
+    { type: "identity.load", input: undefined },
+    { writeStores: [], watchStores: [0, 1, 2], missingValue: undefined },
+  );
+  receipt.assertCurrent();
+  if (!receipt.value) {
+    throw Object.assign(new Error("Reef keys are missing from plugin state"), { code: "ENOENT" });
+  }
+  return receipt.value;
+}
+
+type ReefReviewOperationState = {
+  store: PluginStateKeyedStore<ReefReviewRecord>;
+  maxEntries: number;
+};
+const reviewOperationStates = new WeakMap<ReviewApprovalStore, ReefReviewOperationState>();
+
+export function getReefReviewOperationState(
+  reviews: ReviewApprovalStore,
+): ReefReviewOperationState | undefined {
+  return reviewOperationStates.get(reviews);
 }
 
 export class ReviewApprovalStore {
-  readonly #store: PluginStateSyncKeyedStore<ReefReviewRecord>;
-  readonly #reader: PluginStateKeyedStore<ReefReviewRecord>;
+  readonly #store: PluginStateKeyedStore<ReefReviewRecord>;
   readonly #maxEntries: number;
+  readonly #legacy?: LegacyReviewApprovalStore;
 
   constructor(
     runtime: PluginRuntime,
@@ -157,68 +146,53 @@ export class ReviewApprovalStore {
     private readonly authoritySignal?: AbortSignal,
   ) {
     this.#maxEntries = maxEntries;
-    const options: OpenKeyedStoreOptions = {
+    this.#store = runtime.state.openKeyedStore<ReefReviewRecord>({
       namespace: REEF_REVIEWS_NAMESPACE,
       maxEntries,
       overflowPolicy: "reject-new",
-    };
-    // Mutations must remain uninterrupted after the live channel-authority check.
-    this.#store = runtime.state.openSyncKeyedStore<ReefReviewRecord>(options);
-    this.#reader = runtime.state.openKeyedStore<ReefReviewRecord>(options);
+    });
+    if (!this.#store.createOperation) {
+      this.#legacy = new LegacyReviewApprovalStore(runtime, maxEntries, authoritySignal);
+    } else {
+      reviewOperationStates.set(this, { store: this.#store, maxEntries });
+    }
   }
 
-  #makeRoomForPendingReview(): void {
-    const deleteIf = this.#store.deleteIf;
-    if (!deleteIf) {
-      throw new Error("Reef review retention requires atomic plugin-state deleteIf");
-    }
-    while (true) {
-      if (this.#store.count && this.#store.count() < this.#maxEntries) {
-        return;
-      }
-      const entries = this.#store.entries();
-      if (entries.length < this.#maxEntries) {
-        return;
-      }
-      const completed = entries
-        .filter((entry) => entry.value.approved !== undefined)
-        .toSorted((left, right) => left.createdAt - right.createdAt)[0];
-      if (!completed) {
-        throw new Error("Reef pending review capacity is exhausted");
-      }
-      deleteIf(completed.key, (current) => current.approved !== undefined);
-    }
+  #operation(assertOwnerCurrent?: () => void) {
+    return this.#store.createOperation!<ReefStateOperations>([this.#store], stateOperationHandler, {
+      assertCurrent: () => {
+        this.authoritySignal?.throwIfAborted();
+        assertOwnerCurrent?.();
+      },
+    });
   }
 
   async request(review: ReviewRequest): Promise<ReviewApproval | undefined> {
-    this.authoritySignal?.throwIfAborted();
-    const current = this.#store.lookup(review.approvalDigest);
-    if (current?.approved !== undefined) {
-      return { approved: current.approved, approvalDigest: review.approvalDigest };
+    if (this.#legacy) {
+      return this.#legacy.request(review);
     }
-    if (!current) {
-      this.#makeRoomForPendingReview();
-    }
-    this.#store.registerIfAbsent(review.approvalDigest, { review: structuredClone(review) });
-    const persisted = this.#store.lookup(review.approvalDigest);
-    if (!persisted) {
-      throw new Error("Failed persisting Reef pending review");
-    }
-    return persisted?.approved === undefined
-      ? undefined
-      : { approved: persisted.approved, approvalDigest: review.approvalDigest };
+    const captured = structuredClone(review);
+    const operation = this.#operation();
+    const receipt = await operation.execute(
+      { type: "review.request", input: { review: captured, maxEntries: this.#maxEntries } },
+      { writeStores: [0] },
+    );
+    return receipt.value;
   }
 
   async lookupDecision(
     approvalDigest: string,
   ): Promise<"none" | "pending" | { approved: boolean }> {
-    this.authoritySignal?.throwIfAborted();
-    const current = await this.#reader.lookup(approvalDigest);
-    this.authoritySignal?.throwIfAborted();
-    if (!current) {
-      return "none";
+    if (this.#legacy) {
+      return this.#legacy.lookupDecision(approvalDigest);
     }
-    return current.approved === undefined ? "pending" : { approved: current.approved };
+    const operation = this.#operation();
+    const receipt = await operation.execute(
+      { type: "review.lookup", input: { digest: approvalDigest } },
+      { writeStores: [], watchStores: [0], missingValue: "none" },
+    );
+    receipt.assertCurrent();
+    return receipt.value;
   }
 
   async decide(
@@ -226,30 +200,28 @@ export class ReviewApprovalStore {
     approved: boolean,
     assertOwnerCurrent?: () => void,
   ): Promise<ReviewRequest | undefined> {
-    const update = this.#store.update;
-    if (!update) {
-      throw new Error("Reef review state requires atomic plugin-state updates");
+    if (this.#legacy) {
+      return this.#legacy.decide(digest, approved, assertOwnerCurrent);
     }
-    let decided: ReviewRequest | undefined;
-    this.authoritySignal?.throwIfAborted();
-    assertOwnerCurrent?.();
-    update(digest, (current) => {
-      if (!current) {
-        return undefined;
-      }
-      decided = structuredClone(current.review);
-      return { ...current, approved };
-    });
-    return decided;
+    const operation = this.#operation(assertOwnerCurrent);
+    const receipt = await operation.execute(
+      { type: "review.decide", input: { digest, approved } },
+      { writeStores: [0] },
+    );
+    return receipt.value;
   }
 
   async list(): Promise<ReviewRequest[]> {
-    this.authoritySignal?.throwIfAborted();
-    const entries = await this.#reader.entries();
-    this.authoritySignal?.throwIfAborted();
-    return entries
-      .filter((entry) => entry.value.approved === undefined)
-      .map((entry) => structuredClone(entry.value.review));
+    if (this.#legacy) {
+      return this.#legacy.list();
+    }
+    const operation = this.#operation();
+    const receipt = await operation.execute(
+      { type: "review.list", input: undefined },
+      { writeStores: [], watchStores: [0], missingValue: [] },
+    );
+    receipt.assertCurrent();
+    return receipt.value;
   }
 }
 
@@ -279,32 +251,18 @@ export class ReefDeliveredStore {
   }
 }
 
-type ReefInboxCursorRecord = ReefIdentityBinding & { cursor: number };
-
-function parseReefInboxCursorRecord(value: unknown): ReefInboxCursorRecord | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Partial<ReefInboxCursorRecord>;
-  return typeof record.handle === "string" &&
-    record.handle.length > 0 &&
-    typeof record.relayUrl === "string" &&
-    record.relayUrl.length > 0 &&
-    Number.isSafeInteger(record.cursor) &&
-    (record.cursor ?? -1) >= 0
-    ? { handle: record.handle, relayUrl: record.relayUrl, cursor: record.cursor! }
-    : undefined;
-}
-
 /** Durable relay progress for the single Reef identity bound to this state DB. */
 export class ReefInboxCursorStore {
   readonly #store: PluginStateKeyedStore<ReefInboxCursorRecord>;
   readonly #openLegacy: () => PluginStateSyncKeyedStore<ReefInboxCursorRecord>;
+  readonly #binding: ReefIdentityBinding;
 
   constructor(
     runtime: PluginRuntime,
-    readonly binding: ReefIdentityBinding,
+    binding: ReefIdentityBinding,
+    private readonly authoritySignal?: AbortSignal,
   ) {
+    this.#binding = { ...binding };
     const options = {
       namespace: REEF_INBOX_CURSOR_NAMESPACE,
       maxEntries: REEF_INBOX_CURSOR_MAX_ENTRIES,
@@ -314,95 +272,65 @@ export class ReefInboxCursorStore {
     this.#openLegacy = () => runtime.state.openSyncKeyedStore<ReefInboxCursorRecord>(options);
   }
 
+  #operation() {
+    return this.#store.createOperation?.<ReefStateOperations>(
+      [this.#store],
+      stateOperationHandler,
+      { assertCurrent: () => this.authoritySignal?.throwIfAborted() },
+    );
+  }
+
   async load(): Promise<number> {
-    const value = await this.#store.lookup(REEF_INBOX_CURSOR_KEY);
-    if (value === undefined) {
-      return 0;
+    this.authoritySignal?.throwIfAborted();
+    const operation = this.#operation();
+    if (operation) {
+      const receipt = await operation.execute(
+        { type: "cursor.load", input: this.#binding },
+        { writeStores: [], watchStores: [0], missingValue: 0 },
+      );
+      receipt.assertCurrent();
+      return receipt.value;
     }
-    return this.#requireBoundRecord(value).cursor;
+    const value = await this.#store.lookup(REEF_INBOX_CURSOR_KEY);
+    this.authoritySignal?.throwIfAborted();
+    return value === undefined ? 0 : requireReefInboxCursorRecord(value, this.#binding).cursor;
   }
 
   async advance(cursor: number): Promise<void> {
+    this.authoritySignal?.throwIfAborted();
     if (!Number.isSafeInteger(cursor) || cursor < 0) {
       throw new Error("invalid Reef inbox cursor");
     }
-    const { observe, compareAndApply } = this.#store;
-    if (observe && compareAndApply) {
-      let observation = await observe(REEF_INBOX_CURSOR_KEY);
-      for (;;) {
-        let existing: ReefInboxCursorRecord | undefined;
-        try {
-          existing =
-            observation.value === undefined
-              ? undefined
-              : this.#requireBoundRecord(observation.value);
-        } catch (error) {
-          // Refuse only a still-current invalid row; a concurrent repair must
-          // be revalidated before publishing the observed domain error.
-          const result = await compareAndApply(REEF_INBOX_CURSOR_KEY, observation.comparison, {
-            operation: "update",
-            action: "keep",
-          });
-          if (result.status !== "conflict") {
-            throw error;
-          }
-          observation = result.current;
-          continue;
-        }
-        const value = existing
-          ? cursor > existing.cursor
-            ? { ...existing, cursor }
-            : existing
-          : { ...this.binding, cursor };
-        const result = await compareAndApply(REEF_INBOX_CURSOR_KEY, observation.comparison, {
-          operation: "update",
-          action: "set",
-          value,
-        });
-        if (result.status !== "conflict") {
-          break;
-        }
-        observation = result.current;
-      }
-      const persisted = await this.#store.lookup(REEF_INBOX_CURSOR_KEY);
-      if (!persisted || this.#requireBoundRecord(persisted).cursor < cursor) {
-        throw new Error("failed persisting Reef inbox cursor");
-      }
+    const operation = this.#operation();
+    if (operation) {
+      await operation.execute(
+        { type: "cursor.advance", input: { ...this.#binding, cursor } },
+        { writeStores: [0] },
+      );
       return;
     }
-    // Older supported hosts keep the original atomic update. Select this path
-    // before awaiting; worker failures must never retry through native storage.
+    // Released hosts without operation commands retain their atomic native update.
     const store = this.#openLegacy();
     const update = store.update;
     if (!update) {
       throw new Error("Reef inbox cursor requires atomic plugin-state updates");
     }
-    update(REEF_INBOX_CURSOR_KEY, (current) => {
+    this.authoritySignal?.throwIfAborted();
+    update.call(store, REEF_INBOX_CURSOR_KEY, (current) => {
       if (current === undefined) {
-        return { ...this.binding, cursor };
+        return { ...this.#binding, cursor };
       }
-      const existing = this.#requireBoundRecord(current);
+      const existing = requireReefInboxCursorRecord(current, this.#binding);
       return cursor > existing.cursor ? { ...existing, cursor } : existing;
     });
     const persisted = store.lookup(REEF_INBOX_CURSOR_KEY);
-    if (!persisted || this.#requireBoundRecord(persisted).cursor < cursor) {
+    if (!persisted || requireReefInboxCursorRecord(persisted, this.#binding).cursor < cursor) {
       throw new Error("failed persisting Reef inbox cursor");
     }
   }
-
-  #requireBoundRecord(value: unknown): ReefInboxCursorRecord {
-    const record = parseReefInboxCursorRecord(value);
-    if (!record) {
-      throw new Error("invalid Reef inbox cursor state");
-    }
-    if (record.handle !== this.binding.handle || record.relayUrl !== this.binding.relayUrl) {
-      throw new Error("Reef inbox cursor belongs to a different identity");
-    }
-    return record;
-  }
 }
 
-export function openStores(
+export async function openStores(
   runtime: PluginRuntime,
   keys: ReefKeys,
   options: {
@@ -412,9 +340,20 @@ export function openStores(
     authoritySignal?: AbortSignal;
   } = {},
 ) {
-  assertReefIdentityMigrationComplete(runtime);
-  return {
-    audit: openReefAuditStore(runtime, fromBase64url(keys.auditKey), options.auditMaxEntries),
+  const { authoritySignal } = options;
+  const assertCurrent = () => authoritySignal?.throwIfAborted();
+  const state = openIdentityState(runtime, assertCurrent);
+  if (!state) {
+    assertCurrent();
+    assertLegacyReefIdentityMigrationComplete(runtime);
+  }
+  const stores = {
+    audit: openReefAuditStore(
+      runtime,
+      fromBase64url(keys.auditKey),
+      options.auditMaxEntries,
+      options.authoritySignal,
+    ),
     replay: new ReefSqliteReplayStore(
       runtime,
       fromBase64url(keys.replayKey),
@@ -424,4 +363,12 @@ export function openStores(
     reviews: new ReviewApprovalStore(runtime, undefined, options.authoritySignal),
     delivered: new ReefDeliveredStore(runtime, options.deliveredMaxEntries),
   };
+  if (state) {
+    const receipt = await state.execute(
+      { type: "identity.admit", input: undefined },
+      { writeStores: [], watchStores: [0, 1], missingValue: undefined },
+    );
+    receipt.assertCurrent();
+  }
+  return stores;
 }

@@ -71,7 +71,7 @@ suite.define(() => {
       assistantName: "Roboclaw",
       cliAgentsEnabled: true,
       defaultAgentId: "roboclaw",
-      deferredMethods: ["agents.list"],
+      deferredRequests: [{ method: "agents.list" }],
       featureMethods: [...TERMINAL_START_FEATURE_METHODS],
       methodResponses: {
         "sessions.catalog.list": {

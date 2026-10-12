@@ -4,17 +4,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   findLiveRegistryWorktreeByOwner,
   getRegistryWorktree,
   listRegistryWorktrees,
-} from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+} from "../agents/worktrees/registry.test-support.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { soloClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -40,48 +42,6 @@ const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(asyn
 });
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-test("sessions.create atomically arms a private workspace diff claim", async () => {
-  const root = tempDirs.make("openclaw-session-diff-baseline-");
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
-  await fs.appendFile(path.join(workspace, "README.md"), "dirty at session start\n");
-  const { storePath } = await createSessionStoreDir();
-  sessionDiffBaselineMocks.useReal = true;
-  const { ws } = await openClient({
-    browserOrigin: "http://127.0.0.1",
-    client: {
-      id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      version: "dev",
-      platform: "web",
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    },
-  });
-  try {
-    const created = await rpcReq<{
-      entry?: Record<string, unknown>;
-      key?: string;
-      sessionId?: string;
-    }>(ws, "sessions.create", { agentId: "main", cwd: workspace });
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    const sessionKey = requireNonEmptyString(created.payload?.key, "baseline session key");
-    const sessionId = requireNonEmptyString(created.payload?.sessionId, "baseline session id");
-    expect(created.payload?.entry).not.toHaveProperty("sessionDiffBaselineCapture");
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId,
-      spawnedCwd: workspace,
-      sessionDiffBaselineCapture: {
-        version: 1,
-        captureId: expect.any(String),
-        status: "pending",
-      },
-    });
-    expect(sessionDiffBaselineMocks.ensure).not.toHaveBeenCalled();
-    expect(sessionDiffBaselineMocks.capture).not.toHaveBeenCalled();
-  } finally {
-    sessionDiffBaselineMocks.useReal = false;
-    ws.close();
-  }
-});
 
 test("sessions.create fences the first workspace write behind its diff baseline", async () => {
   const root = tempDirs.make("openclaw-session-diff-first-write-");
@@ -145,6 +105,7 @@ test("sessions.create fences the first workspace write behind its diff baseline"
       ok: true,
       payload: { runStarted: true, sessionId: expect.any(String) },
     });
+    expect(created.payload).not.toHaveProperty("entry.sessionDiffBaselineCapture");
     await captureStarted.promise;
     await expect(fs.stat(path.join(workspace, "first-turn.txt"))).rejects.toThrow();
 
@@ -168,29 +129,28 @@ test("sessions.create fences the first workspace write behind its diff baseline"
 });
 
 test("sessions.create rolls back failed provisioning before a same-key creator proceeds", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-rollback-",
-  });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
+  const root = tempDirs.make("openclaw-session-worktree-rollback-");
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   testState.agentConfig = { workspace };
   testState.sessionConfig = { sharing: { drafts: false } };
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:worktree-rollback";
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
-  const originalRollback = managedWorktrees.rollbackPreparation.bind(managedWorktrees);
+  const originalRollback = captureMethodCall("rollbackPreparation")(
+    ManagedWorktreeService.prototype,
+  );
   let failedWorktreeId: string | undefined;
   let successorWorktreeId: string | undefined;
   const { promise: rollbackGate, resolve: releaseRollback } = createDeferredCore();
   const { promise: rollbackStarted, resolve: markRollbackStarted } = createDeferredCore();
   const rollbackSpy = vi
-    .spyOn(managedWorktrees, "rollbackPreparation")
-    .mockImplementation(async (record, withRollback) => {
+    .spyOn(ManagedWorktreeService.prototype, "rollbackPreparation")
+    .mockImplementation(async function (this: ManagedWorktreeService, record, withRollback) {
       failedWorktreeId = record.id;
       markRollbackStarted();
       expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
       await rollbackGate;
-      await originalRollback(record, withRollback);
+      await originalRollback(this, record, withRollback);
     });
   try {
     const failedPromise = directSessionReq(
@@ -284,7 +244,6 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
-    await openClawState.cleanup();
   }
 });
 
@@ -296,12 +255,9 @@ test.each([
 ] as const)(
   "sessions.create rolls back only its own allocation after concurrent $source worktree $change",
   async ({ source, change }) => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-session-worktree-allocation-outcome-",
-    });
-    const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-    const disk = fsSync.statfsSync(openClawState.root);
+    const root = tempDirs.make("openclaw-session-worktree-allocation-outcome-");
+    const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
+    const disk = fsSync.statfsSync(root);
     const diskSpace = vi.spyOn(fsSync, "statfsSync").mockReturnValue({
       type: disk.type,
       files: disk.files,
@@ -333,19 +289,21 @@ test.each([
       entered.resolve();
       await proceed.promise;
     };
-    const create = managedWorktrees.createWithOutcome.bind(managedWorktrees);
-    const createEmpty = managedWorktrees.createEmptyWithOutcome.bind(managedWorktrees);
+    const create = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
+    const createEmpty = captureMethodCall("createEmptyWithOutcome")(
+      ManagedWorktreeService.prototype,
+    );
     const createSpy = vi
-      .spyOn(managedWorktrees, "createWithOutcome")
-      .mockImplementationOnce(async (params) => {
+      .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
         await beforeAllocation();
-        return await create(params);
+        return await create(this, params);
       });
     const createEmptySpy = vi
-      .spyOn(managedWorktrees, "createEmptyWithOutcome")
-      .mockImplementationOnce(async (params) => {
+      .spyOn(ManagedWorktreeService.prototype, "createEmptyWithOutcome")
+      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
         await beforeAllocation();
-        return await createEmpty(params);
+        return await createEmpty(this, params);
       });
     const client = soloClient();
     client.connect.scopes = ["operator.admin"];
@@ -415,26 +373,22 @@ test.each([
       await disposeSessionReadContexts();
       testState.agentConfig = undefined;
       testState.sessionConfig = undefined;
-      await openClawState.cleanup();
     }
   },
 );
 
 test("sessions.create provisions and reuses a session worktree for later runs", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-",
-  });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
+  const root = tempDirs.make("openclaw-session-worktree-");
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
   testState.agentConfig = { workspace };
   const { dir, storePath } = await createSessionStoreDir();
-  const originalCreate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+  const originalCreate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
-    .mockImplementation(async (params) => {
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockImplementation(async function (this: ManagedWorktreeService, params) {
       expect(isSessionLifecycleMutationActive(storePath, [params.ownerId])).toBe(true);
-      return await originalCreate(params);
+      return await originalCreate(this, params);
     });
   let sessionKey: string | undefined;
   try {
@@ -530,23 +484,14 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     createSpy.mockRestore();
     await removeSessionWorktree(sessionKey);
     testState.agentConfig = undefined;
-    await openClawState.cleanup();
   }
 });
 
 test("sessions.create runs an existing managed worktree cwd for initial and follow-up turns", async () => {
-  const openClawState = await createOpenClawTestState({
-    // The shared Gateway retains its startup state root.
-    applyEnv: false,
-    layout: "state-only",
-    prefix: "openclaw-session-existing-worktree-cwd-",
-  });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
+  const root = tempDirs.make("openclaw-session-existing-worktree-cwd-");
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   testState.agentsConfig = {
-    list: [
-      { id: "main", default: true },
-      { id: "roboclaw", workspace },
-    ],
+    entries: { main: {}, roboclaw: { workspace } },
   };
   const { dir, storePath } = await createSessionStoreDir();
   const worktree = await managedWorktrees.create({
@@ -588,16 +533,48 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
         },
         defaultRuntime,
       );
+      const terminalPersisted = createDeferredCore();
+      const stopTerminalObserver = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === sessionKey) {
+          const entry = loadSessionEntry({ agentId: "roboclaw", sessionKey, storePath });
+          if (entry?.status === "done" && entry.lastRunId === prepared.runId) {
+            terminalPersisted.resolve();
+          }
+        }
+      });
       try {
+        opts?.onSessionPrepared?.({
+          sessionKey: prepared.sessionKey,
+          sessionId: prepared.sessionId,
+          storePath: prepared.storePath,
+          lifecycleRevision: prepared.sessionEntry?.lifecycleRevision,
+        });
+        opts?.onAgentRunStart?.(prepared.runId);
+        // Completed mock turns must settle the same recovery custody as the real runtime.
+        const lifecycle = {
+          runId: prepared.runId,
+          sessionKey: prepared.sessionKey,
+          sessionId: prepared.sessionId,
+          agentId: prepared.sessionAgentId,
+        };
+        const startedAt = Date.now();
+        emitAgentEvent({ ...lifecycle, stream: "lifecycle", data: { phase: "start", startedAt } });
         preparedRuntime({ cwd: prepared.cwd, workspaceDir: prepared.workspaceDir });
+        emitAgentEvent({
+          ...lifecycle,
+          stream: "lifecycle",
+          data: { phase: "end", startedAt, endedAt: Date.now() },
+        });
+        await terminalPersisted.promise;
       } finally {
+        stopTerminalObserver();
         await prepared.runLease?.release();
       }
       return { text: "ok" };
     });
   const { ws } = await openClient({
     scopes: ["operator.admin"],
-    deviceIdentityPath: path.join(openClawState.root, "roboclaw-device.json"),
+    deviceIdentityPath: path.join(root, "roboclaw-device.json"),
   });
 
   try {
@@ -683,16 +660,12 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     await disposeSessionReadContexts();
     await releaseGatewaySessionStoreFixture(dir);
     testState.agentsConfig = undefined;
-    await openClawState.cleanup();
   }
 });
 
 test("sessions.create preserves pending worktree intent when initial-turn admission fails", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-post-commit-failure-",
-  });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
+  const root = tempDirs.make("openclaw-session-worktree-post-commit-failure-");
+  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:post-commit-worktree";
@@ -734,6 +707,5 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
   } finally {
     await disposeSessionReadContexts();
     testState.agentConfig = undefined;
-    await openClawState.cleanup();
   }
 });

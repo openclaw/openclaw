@@ -1,16 +1,16 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type {
-  LegacyMemoryReadResult,
-  MemoryReadResult,
-  MemorySearchManager,
-} from "../memory-host-sdk/host/types.js";
-import { resolveUserPath } from "../utils.js";
+import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
-import { assertMemoryCallerCurrent, isHostMemoryAudience } from "./memory-audience.js";
+import {
+  assertMemoryCallerCurrent,
+  isHostMemoryAudience,
+  prepareMemoryCallerRead,
+} from "./memory-audience.js";
 import { adaptLegacyMemoryProvider, bindMemoryProvider } from "./memory-provider-adapter.js";
 import type {
   ActiveMemoryProviderResult,
@@ -28,6 +28,7 @@ import {
 } from "./memory-state.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type {
   MemoryPluginRuntime,
   MemoryProviderRuntime,
@@ -63,15 +64,6 @@ const registeredMemoryManagerAdapters = new WeakMap<
   MemorySearchManager
 >();
 
-function normalizeRegisteredMemoryReadResult(
-  result: LegacyMemoryReadResult | MemoryReadResult,
-): MemoryReadResult {
-  if (result.status === "ok" || result.status === "not_found") {
-    return result;
-  }
-  return { ...result, status: "ok" };
-}
-
 function normalizeRegisteredMemoryManager(
   manager: RegisteredMemorySearchManager,
 ): MemorySearchManager {
@@ -79,8 +71,12 @@ function normalizeRegisteredMemoryManager(
   if (existing) {
     return existing;
   }
-  const readFile: MemorySearchManager["readFile"] = async (params) =>
-    normalizeRegisteredMemoryReadResult(await manager.readFile(params));
+  const readFile: MemorySearchManager["readFile"] = async (params) => {
+    const result = await manager.readFile(params);
+    return result.status === "ok" || result.status === "not_found"
+      ? result
+      : { ...result, status: "ok" };
+  };
   // A neutral target permits wrapped methods even when the manager is frozen.
   const adapter = new Proxy(
     { readFile },
@@ -110,38 +106,24 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   if (!plugins.enabled || !pluginId) {
     return [];
   }
-  if (plugins.deny.includes(pluginId) || plugins.entries[pluginId]?.enabled === false) {
+  const policyId = normalizePluginPolicyId(pluginId);
+  if (plugins.deny.includes(policyId) || plugins.entries[policyId]?.enabled === false) {
     return [];
   }
   return [pluginId];
 }
 
-function resolveMemoryRuntimeWorkspaceDir(
-  cfg: OpenClawConfig,
-  agentId: string,
-): string | undefined {
-  const dir = resolveAgentWorkspaceDir(cfg, agentId);
-  if (typeof dir !== "string" || !dir.trim()) {
-    return undefined;
-  }
-  return resolveUserPath(dir);
-}
-
 function listCurrentMemoryRuntimes(): AnyMemoryRuntime[] {
   const runtimes = new Set(standaloneMemoryRegistrySlot?.retiredRuntimes);
-  const current = getMemoryRuntime();
-  if (current) {
-    runtimes.add(current);
-  }
-  const providerRuntime = getMemoryProviderRuntime();
-  if (providerRuntime) {
-    runtimes.add(providerRuntime);
-  }
-  if (standaloneMemoryRegistrySlot?.providerRuntime) {
-    runtimes.add(standaloneMemoryRegistrySlot.providerRuntime);
-  }
-  if (standaloneMemoryRegistrySlot?.runtime) {
-    runtimes.add(standaloneMemoryRegistrySlot.runtime);
+  for (const runtime of [
+    getMemoryRuntime(),
+    getMemoryProviderRuntime(),
+    standaloneMemoryRegistrySlot?.providerRuntime,
+    standaloneMemoryRegistrySlot?.runtime,
+  ]) {
+    if (runtime) {
+      runtimes.add(runtime);
+    }
   }
   return [...runtimes];
 }
@@ -166,28 +148,26 @@ function isValidMemoryProviderCapabilities(
   );
 }
 
-function ensureMemoryRuntime(params?: {
+function ensureMemoryRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): MemoryRuntimeOwner | undefined {
   const current = getMemoryRuntime();
   const currentProviderRuntime = getMemoryProviderRuntime();
   assertMemoryProviderRuntime(currentProviderRuntime);
-  if (current || currentProviderRuntime || !params) {
-    return current || currentProviderRuntime
-      ? {
-          runtime: current,
-          providerRuntime: currentProviderRuntime,
-          providerId: getMemoryCapabilityRegistration()?.pluginId,
-          searchRuntimeRegistered: true,
-        }
-      : undefined;
+  if (current || currentProviderRuntime) {
+    return {
+      runtime: current,
+      providerRuntime: currentProviderRuntime,
+      providerId: getMemoryCapabilityRegistration()?.pluginId,
+      searchRuntimeRegistered: true,
+    };
   }
   const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
   if (onlyPluginIds.length === 0) {
     return undefined;
   }
-  const workspaceDir = resolveMemoryRuntimeWorkspaceDir(params.cfg, params.agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
     onlyPluginIds,
@@ -225,11 +205,10 @@ function ensureMemoryRuntime(params?: {
     return owner;
   }
   const retiredRuntimes = new Set(previousSlot?.retiredRuntimes);
-  if (previousSlot?.runtime) {
-    retiredRuntimes.add(previousSlot.runtime);
-  }
-  if (previousSlot?.providerRuntime) {
-    retiredRuntimes.add(previousSlot.providerRuntime);
+  for (const retiredRuntime of [previousSlot?.runtime, previousSlot?.providerRuntime]) {
+    if (retiredRuntime) {
+      retiredRuntimes.add(retiredRuntime);
+    }
   }
   standaloneMemoryRegistrySlot = {
     runtime,
@@ -285,6 +264,9 @@ export async function getActiveMemorySearchManagerCore(params: {
   return {
     ...result,
     manager: result.manager ? normalizeRegisteredMemoryManager(result.manager) : null,
+    ...(owner.runtime.searchForCli
+      ? { searchForCli: owner.runtime.searchForCli.bind(owner.runtime) }
+      : {}),
     searchRuntimeRegistered: true,
   };
 }
@@ -334,6 +316,10 @@ export async function getActiveMemoryProviderCore(
     assertCurrent: () => assertMemoryCallerCurrent(params.context),
   };
   const openParams: MemoryProviderOpenParams = { ...params, context };
+  const before = prepareMemoryCallerRead(context);
+  if (before) {
+    await racePromiseWithAbortSignal(before, context.signal);
+  }
   context.assertCurrent();
   const owner = ensureMemoryRuntime(params);
   if (!owner?.runtime && !owner?.providerRuntime) {
@@ -351,6 +337,10 @@ export async function getActiveMemoryProviderCore(
     ? await owner.providerRuntime.open(openParams)
     : await adaptLegacyMemoryProvider(owner.runtime!, providerId, openParams);
   try {
+    const after = prepareMemoryCallerRead(context);
+    if (after) {
+      await racePromiseWithAbortSignal(after, context.signal);
+    }
     context.assertCurrent();
     if (
       result.provider &&
@@ -569,10 +559,35 @@ export function prepareMemoryRuntimeReload(
     }
     return cleanup;
   };
+  // Reload retires capability caches too; managers can hold adapters absent from this registry.
+  const retainedPluginIds = new Set(
+    previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+      [capability.runtime, capability.providerRuntime].some(
+        (runtime) => runtime !== undefined && nextRuntimes.has(runtime),
+      )
+        ? [pluginId]
+        : [],
+    ),
+  );
   return {
+    retainedPluginIds,
     drain: () => withPluginHostCleanupTimeout("memory managers", close),
     close,
     commit: (retained = nextRegistry) => resume(true, retained),
-    rollback: () => resume(false),
+    rollback: () => {
+      resume(false);
+      // Admission can be prepared without draining; only drained owners need service restart.
+      return new Set(
+        previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+          cleanup &&
+          prepared.some(
+            ({ runtime }) =>
+              runtime === capability.runtime || runtime === capability.providerRuntime,
+          )
+            ? [pluginId]
+            : [],
+        ),
+      );
+    },
   };
 }

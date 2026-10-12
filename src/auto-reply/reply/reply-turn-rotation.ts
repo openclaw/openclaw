@@ -4,7 +4,6 @@ import {
   isReplyOperationAbortedForRestart,
   lifecycleAdmissionByOperation,
   mergeReplyRunAdmissionSource,
-  observeReplyRunCompletions,
   type ReplyRunAdmissionSource,
 } from "./reply-run-registry.state.js";
 
@@ -18,7 +17,6 @@ export function createReplyTurnRotationEvidence(params: {
   activeAtAdmission?: ReplyOperation;
 }) {
   const waitedRotations = new Map<ReplyRotationSource["databaseIdentity"], ReplyRotationSource>();
-  const observedOperations = new Map<ReplyOperation, OpenClawAgentDatabaseIdentity | undefined>();
   // Barrier snapshots retain their source lane after rekeying; active owners do not.
   const isCurrent = (source: ReplyRotationSource) =>
     !isReplyOperationAbortedForRestart(source.operation) &&
@@ -47,87 +45,46 @@ export function createReplyTurnRotationEvidence(params: {
       );
     }
   };
+  const recordCompletedOperation = (
+    operation: ReplyOperation,
+    databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
+  ) => {
+    if (lifecycleAdmissionByOperation.get(operation)?.databaseIdentity !== databaseIdentity) {
+      return;
+    }
+    waitedRotations.set(
+      databaseIdentity,
+      mergeWaitedRotation({
+        operation,
+        sessionId: operation.sessionId,
+        sessionIds: operation.captureOwnedSessionIds(),
+        databaseIdentity,
+        fromBarrier: false,
+      }),
+    );
+  };
 
   return {
-    capturePreparation() {
-      const registered = replyRunRegistry.get(params.sessionKey);
-      // A newly observed predecessor may complete before preparation retries.
-      // Retain its original store, not an association acquired by later adoption.
-      if (registered && !observedOperations.has(registered)) {
-        observedOperations.set(
-          registered,
-          lifecycleAdmissionByOperation.get(registered)?.databaseIdentity,
-        );
-      }
-      const observations = [
-        ...new Set([
-          ...(params.expectedActiveOperations ?? []),
-          params.activeAtAdmission,
-          ...observedOperations.keys(),
-          registered,
-          ...Array.from(waitedRotations.values(), (source) => source.operation),
-        ]),
-      ].flatMap((operation) =>
-        operation
-          ? [
-              {
-                operation,
-                key: operation.key,
-                sessionId: operation.sessionId,
-                result: operation.result,
-                databaseIdentity: lifecycleAdmissionByOperation.get(operation)?.databaseIdentity,
-              },
-            ]
-          : [],
-      );
-      // These values invalidate a delayed row, never authorize a new logical ID.
-      // In particular, observing a rekey must not extend immutable barrier history.
-      return () =>
-        replyRunRegistry.get(params.sessionKey) === registered &&
-        observations.every(
-          ({ operation, key, sessionId, result, databaseIdentity }) =>
-            operation.key === key &&
-            operation.sessionId === sessionId &&
-            operation.result === result &&
-            lifecycleAdmissionByOperation.get(operation)?.databaseIdentity === databaseIdentity,
-        );
-    },
     recordBarrierSources(sources: ReplyRunAdmissionSource[] = []) {
       recordSources(sources, true);
     },
     observeAdmission() {
-      const completions = observeReplyRunCompletions(params.sessionKey);
       const initialOperation = replyRunRegistry.get(params.sessionKey);
+      const recordCompletions = () => {
+        if (initialOperation?.result) {
+          recordCompletedOperation(
+            initialOperation,
+            lifecycleAdmissionByOperation.get(initialOperation)?.databaseIdentity,
+          );
+        }
+      };
       return {
-        recordCompletions: () => recordSources(completions.read() ?? [], false),
-        changed: () =>
-          completions.read() !== undefined ||
-          initialOperation !== replyRunRegistry.get(params.sessionKey),
-        dispose: () => {
-          const sources = completions.read();
-          completions.dispose();
-          recordSources(sources ?? [], false);
-        },
+        recordCompletions,
+        changed: () => initialOperation !== replyRunRegistry.get(params.sessionKey),
+        dispose: recordCompletions,
       };
     },
-    recordCompletedOperation(
-      operation: ReplyOperation,
-      databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
-    ) {
-      if (lifecycleAdmissionByOperation.get(operation)?.databaseIdentity !== databaseIdentity) {
-        return;
-      }
-      waitedRotations.set(
-        databaseIdentity,
-        mergeWaitedRotation({
-          operation,
-          sessionId: operation.sessionId,
-          sessionIds: operation.captureOwnedSessionIds(),
-          databaseIdentity,
-          fromBarrier: false,
-        }),
-      );
-    },
+    recordCompletedOperation,
     takeStorelessRotation(): { sessionId: string; sessionIds: ReadonlySet<string> } | undefined {
       const source = waitedRotations.get(undefined);
       waitedRotations.delete(undefined);
@@ -143,23 +100,14 @@ export function createReplyTurnRotationEvidence(params: {
       for (const candidate of new Set([
         ...(params.expectedActiveOperations ?? []),
         params.activeAtAdmission,
-        ...observedOperations.keys(),
         registeredOperation,
       ])) {
         if (candidate) {
-          const currentDatabaseIdentity =
-            lifecycleAdmissionByOperation.get(candidate)?.databaseIdentity;
-          const databaseIdentity = observedOperations.has(candidate)
-            ? observedOperations.get(candidate)
-            : currentDatabaseIdentity;
-          if (databaseIdentity !== currentDatabaseIdentity) {
-            continue;
-          }
           let source = mergeWaitedRotation({
             operation: candidate,
             sessionId: candidate.sessionId,
             sessionIds: candidate.captureOwnedSessionIds(),
-            databaseIdentity,
+            databaseIdentity: lifecycleAdmissionByOperation.get(candidate)?.databaseIdentity,
             fromBarrier: false,
           });
           if (!isCurrent(source)) {

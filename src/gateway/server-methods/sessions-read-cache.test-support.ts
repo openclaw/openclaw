@@ -23,8 +23,8 @@ import {
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import type { GatewaySessionRow } from "../session-utils.types.js";
-import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.js";
+import type { SessionsListResult } from "../session-utils.types.js";
+import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
@@ -144,29 +144,26 @@ export async function listSessions(params: {
   client: GatewayClient;
   context: GatewayRequestContext;
   request: SessionsListParams;
+  acceptsSerializedJson?: boolean;
 }) {
   await initializeSessionReadContext(params.context);
   const responses: Parameters<RespondFn>[] = [];
   await sessionReadHandlers["sessions.list"]?.({
     req: { type: "req", id: "session-list-test", method: "sessions.list" },
     params: params.request,
+    acceptsSerializedJson: params.acceptsSerializedJson,
     client: params.client,
     context: params.context,
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
   } as never);
   expect(responses).toHaveLength(1);
   expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1] as {
-    count: number;
-    nextOffset: number | null;
-    sessions: GatewaySessionRow[];
-    totalCount: number;
-  };
+  return responses[0]?.[1] as SessionsListResult;
 }
 
 export async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    agents: { entries: { main: {}, work: {} } },
   };
   for (const [agentId, name, updatedAt, owner, overrides] of [
     ["main", "active", 400, "owner@example.com", {}],

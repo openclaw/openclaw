@@ -17,7 +17,6 @@ function getOwnCommandFlagValue(
   return commands[key];
 }
 
-/** Returns true only when a command flag is explicitly enabled. */
 export function isCommandFlagEnabled(
   config: { commands?: unknown } | undefined,
   key: CommandFlagKey,

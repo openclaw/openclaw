@@ -20,14 +20,6 @@ function resolveDiscordChannelStringPropertySafe(
   return typeof value === "string" ? value : undefined;
 }
 
-function resolveDiscordChannelNumberPropertySafe(
-  channel: unknown,
-  key: string,
-): number | undefined {
-  const value = readDiscordChannelPropertySafe(channel, key);
-  return typeof value === "number" ? value : undefined;
-}
-
 function resolveDiscordChannelStringWithAliasSafe(
   channel: unknown,
   camelKey: string,
@@ -74,10 +66,13 @@ export function resolveDiscordChannelParentSafe(channel: unknown): unknown {
 
 export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelInfoSafe {
   const parent = resolveDiscordChannelParentSafe(channel);
+  const name = resolveDiscordChannelNameSafe(channel);
+  const topic = resolveDiscordChannelTopicSafe(channel);
+  const type = readDiscordChannelPropertySafe(channel, "type");
   return {
-    name: resolveDiscordChannelNameSafe(channel),
-    topic: resolveDiscordChannelTopicSafe(channel),
-    type: resolveDiscordChannelNumberPropertySafe(channel, "type"),
+    name,
+    topic,
+    type: typeof type === "number" ? type : undefined,
     parentId: resolveDiscordChannelParentIdSafe(channel),
     ownerId: resolveDiscordChannelStringWithAliasSafe(channel, "ownerId", "owner_id"),
     parentName: resolveDiscordChannelNameSafe(parent),

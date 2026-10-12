@@ -2,19 +2,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
-import {
-  parseWorkerLaunchDescriptor,
-  type WorkerLaunchDescriptor,
-  type WorkerLaunchPlan,
-} from "./launch-descriptor.js";
+import { parseWorkerLaunchDescriptor, type WorkerLaunchPlan } from "./launch-descriptor.js";
 import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
 import { WorkerAdmissionDeadlineResultSchema } from "./worker-connection-contract.js";
 import { WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES } from "./worker-connection-endpoint.js";
+import {
+  WorkerProcessObservationRequestSchema,
+  WorkerProcessObservationResultSchema,
+} from "./worker-process-observation.js";
 
 /** Private JSONL protocol between one node supervisor and its environment-owned worker. */
-export type WorkerProcessInput =
-  | { type: "turn"; turnId: string; descriptor: WorkerLaunchDescriptor; idleRetention?: true }
-  | { type: "cancel"; turnId: string };
+export type WorkerProcessInput = ReturnType<typeof parseWorkerProcessRequest>;
 
 export function buildWorkerProcessTurn<T extends WorkerLaunchPlan>(
   descriptor: T,
@@ -85,6 +83,7 @@ const ProcessResultSchema = workerProtocolObject({
     (!retainWorker || result.status === "completed" || result.status === "failed"),
 );
 const ProcessMessageSchema = z.union([
+  WorkerProcessObservationResultSchema,
   ProcessResultSchema,
   workerProtocolObject({
     type: z.literal("idle-ready"),
@@ -96,7 +95,11 @@ export type WorkerRuntimeResult = z.infer<typeof RuntimeResultSchema>;
 export type WorkerProcessResult = z.infer<typeof ProcessResultSchema>;
 export type WorkerProcessMessage = z.infer<typeof ProcessMessageSchema>;
 
-export function parseWorkerProcessRequest(value: unknown): WorkerProcessInput {
+export function parseWorkerProcessRequest(value: unknown) {
+  const observation = WorkerProcessObservationRequestSchema.safeParse(value);
+  if (observation.success) {
+    return observation.data;
+  }
   if (
     !isRecord(value) ||
     typeof value.turnId !== "string" ||
@@ -106,7 +109,7 @@ export function parseWorkerProcessRequest(value: unknown): WorkerProcessInput {
     throw new Error("invalid managed worker request");
   }
   if (value.type === "cancel" && hasExactOwnKeys(value, ["type", "turnId"])) {
-    return { type: "cancel", turnId: value.turnId };
+    return { type: "cancel" as const, turnId: value.turnId };
   }
   if (
     value.type === "turn" &&

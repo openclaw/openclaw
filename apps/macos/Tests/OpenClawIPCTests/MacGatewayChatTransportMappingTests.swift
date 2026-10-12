@@ -534,10 +534,7 @@ struct MacGatewayChatTransportMappingTests {
             let result: OpenClawChatModelPatchResult?
             if leased {
                 let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                result = try await lease.patchSessionSettings(
-                    sessionKey: "global",
-                    agentID: "reviewer",
-                    patch: patch)
+                result = try await lease.patchSessionSettings("global", "reviewer", patch)
             } else {
                 result = try await transport.patchSessionSettings(
                     sessionKey: "global",
@@ -577,7 +574,7 @@ struct MacGatewayChatTransportMappingTests {
             do {
                 if leased {
                     let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                    _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
+                    _ = try await lease.patchSessionSettings("global", nil, patch)
                 } else {
                     _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
                 }
@@ -605,7 +602,7 @@ struct MacGatewayChatTransportMappingTests {
             await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
                 if leased {
                     let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                    _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
+                    _ = try await lease.patchSessionSettings("global", nil, patch)
                 } else {
                     _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
                 }
@@ -622,7 +619,7 @@ struct MacGatewayChatTransportMappingTests {
                 fastMode: .some(.on), verboseLevel: .some("full"))
             if leased {
                 let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: "reviewer", patch: patch)
+                _ = try await lease.patchSessionSettings("global", "reviewer", patch)
             } else {
                 _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: "reviewer", patch: patch)
             }

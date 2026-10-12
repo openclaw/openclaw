@@ -11,17 +11,6 @@ import type { ExtensionRunner } from "./runner.js";
 import type { RegisteredTool } from "./types.js";
 
 /**
- * Wrap a RegisteredTool into an AgentTool.
- * Uses the runner's createContext() for consistent context across tools and event handlers.
- */
-export function wrapRegisteredTool(
-  registeredTool: RegisteredTool,
-  runner: ExtensionRunner,
-): AgentTool {
-  return wrapToolDefinition(registeredTool.definition, () => runner.createContext());
-}
-
-/**
  * Wrap all registered tools into AgentTools.
  * Uses the runner's createContext() for consistent context across tools and event handlers.
  */
@@ -29,5 +18,7 @@ export function wrapRegisteredTools(
   registeredTools: RegisteredTool[],
   runner: ExtensionRunner,
 ): AgentTool[] {
-  return registeredTools.map((tool) => wrapRegisteredTool(tool, runner));
+  return registeredTools.map((tool) =>
+    wrapToolDefinition(tool.definition, () => runner.createContext()),
+  );
 }

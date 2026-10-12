@@ -5,6 +5,7 @@ import type {
 import {
   DEFAULT_COMFY_MODEL,
   isComfyCapabilityConfigured,
+  isComfyCapabilityConfiguredAsync,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
@@ -36,6 +37,8 @@ export function buildComfyMusicGenerationProvider(): MusicGenerationProvider {
         agentDir,
         capability: "music",
       }),
+    isConfiguredAsync: ({ cfg, agentDir }) =>
+      isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "music" }),
     capabilities: {
       generate: {},
       edit: {
@@ -51,14 +54,8 @@ export function buildComfyMusicGenerationProvider(): MusicGenerationProvider {
       }
 
       const result = await runComfyWorkflow({
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        authStore: req.authStore,
-        prompt: req.prompt,
-        model: req.model,
-        timeoutMs: req.timeoutMs,
+        ...req,
         capability: "music",
-        outputKinds: ["audio"],
         inputImage: resolveInputImage(req.inputImages?.[0]),
       });
 
@@ -70,8 +67,7 @@ export function buildComfyMusicGenerationProvider(): MusicGenerationProvider {
         })),
         model: result.model,
         metadata: {
-          promptId: result.promptId,
-          outputNodeIds: result.outputNodeIds,
+          ...result.metadata,
           inputImageCount: req.inputImages?.length ?? 0,
         },
       };

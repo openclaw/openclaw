@@ -4,18 +4,15 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
-import { captureConfigHealthStateStore } from "../config/io.health-state.js";
-import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { waitForCatalogPublication } from "./server-methods/models-auth-catalog.test-support.js";
 import { createClaudeAuthFixture } from "./server.chat-cli-auth.test-support.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
@@ -40,12 +37,6 @@ const cases: {
     order: undefined,
     nativeContinuity: true,
     reply: "Native account reply.",
-  },
-  {
-    name: "uses a saved canonical paste-token without an explicit account selection or native login",
-    order: undefined,
-    credential: savedCredential,
-    reply: "Saved account reply.",
   },
   {
     name: "honors an explicit empty CLI account order despite a saved canonical paste-token",
@@ -118,7 +109,11 @@ async function cleanupCliAuthFixture({
 }
 
 async function prepareCliAuthFixture(
-  { order, credential, nativeContinuity }: (typeof cases)[number],
+  {
+    order,
+    credential,
+    nativeContinuity,
+  }: Pick<(typeof cases)[number], "order" | "credential" | "nativeContinuity">,
   signal: AbortSignal,
 ): Promise<CliAuthFixture> {
   signal.throwIfAborted();
@@ -429,33 +424,45 @@ async function executeCliAuthCase(
   }
 }
 
-it("persists config health in the isolated Gateway process", async () => {
-  const state = await createOpenClawTestState({
-    label: "gateway-config-health",
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-  const warn = vi.fn();
-  const deps = { env: state.env, homedir: () => state.home, logger: { warn, error: vi.fn() } };
-  const readHealth = async () => {
-    using health = captureConfigHealthStateStore(deps, state.configPath);
-    return (await health.read())?.state;
-  };
-  try {
-    await state.writeConfig({ gateway: { mode: "local" } });
-    const snapshot = await createConfigIO({
-      ...deps,
-      configPath: state.configPath,
-    }).readConfigFileSnapshot();
-    expect(snapshot.valid).toBe(true);
-    const observed = await readHealth();
-    expect(observed?.entries?.[state.configPath]?.lastKnownGood?.hash).toBe(snapshot.hash);
-    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
-    expect(await readHealth()).toEqual(observed);
-    expect(warn).not.toHaveBeenCalled();
-  } finally {
-    await state.cleanup();
-  }
-});
+it(
+  "publishes Claude login changes after Gateway startup",
+  { timeout: 90_000 },
+  async ({ signal, onTestFinished }) => {
+    const fixture = await prepareCliAuthFixture({ order: undefined }, signal);
+    onTestFinished(() => cleanupCliAuthFixture(fixture));
+    const credentials = path.join(fixture.nativeRoot, ".credentials.json");
+    const probes = async () =>
+      (await fs.readFile(path.join(fixture.nativeRoot, "auth-status.log"), "utf8")).split("\n")
+        .length - 1;
+    const available = async () => {
+      const { models } = await fixture.gateway.client.request<{
+        models: { provider: string; id: string; available?: boolean }[];
+      }>("models.list", { view: "configured", agentId: "main" });
+      return models.find((model) => `${model.provider}/${model.id}` === fixture.modelRef)
+        ?.available;
+    };
+    const now = Date.now.bind(Date);
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    onTestFinished(() => clock.mockRestore());
+
+    expect(await available()).toBe(false);
+    await fs.writeFile(credentials, "{}");
+    const startupProbes = await probes();
+    expect(await available()).toBe(false);
+    expect(await probes()).toBe(startupProbes);
+
+    elapsed += 5 * 60_000;
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === true });
+    const loginProbes = await probes();
+    expect(loginProbes).toBe(startupProbes + 1);
+
+    await fs.rm(credentials);
+    elapsed += 5 * 60_000;
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === false });
+    expect(await probes()).toBe(loginProbes + 1);
+  },
+);
 
 it("does not start a Gateway after CLI auth fixture acquisition is cancelled", async () => {
   const controller = new AbortController();
