@@ -4829,7 +4829,6 @@
 ["src/cli/route.test.ts","./program/config-guard.js","684fd4cd329ed27f46be8131cc8fcb6aa36997b8fd1356b779d9e7aa25754b04",1]
 ["src/cli/run-main.cleanup.test.ts","../config/io.js","4d8e1cab0ae4fccc9b946603c694840e40b5dacbfe3f40b2aeca7cfaab069957",1]
 ["src/cli/run-main.cleanup.test.ts","../entry.compile-cache.js","fbd69ccad7067bfc02d9d42387c84598178f83baa96d6d8f65f79dc99684790d",1]
-["src/cli/run-main.cleanup.test.ts","../entry.esm-resolve-fast-path.js","056d7b10892b33bd2e66d1f6aa9690cd7046a6a439d87ff0ad46ef61bc0f4cfb",1]
 ["src/cli/run-main.cleanup.test.ts","../entry.respawn.js","88ffe046e4b4f37c7344c504cd30b192e04be72acc0b6db0d6950288cbaccb92",1]
 ["src/cli/run-main.cleanup.test.ts","../entry.version-fast-path.js","916444afe67e232f2c807f36342d5848fbf4fc0d0474e5240a75747d6f20a053",1]
 ["src/cli/run-main.cleanup.test.ts","../infra/is-main.js","183f6f36b82cf93f6df235e97661544889eb020be8e4b2ba3fbf29476ec28618",1]
