@@ -1,8 +1,4 @@
-import type {
-  ContextEngineTurnOutboxPayload,
-  ContextEngineTurnOutboxWorkerOperations,
-} from "../../agents/harness/context-engine-turn-outbox.js";
-import type { HeartbeatOutcomeRow } from "../../infra/heartbeat-outcome-store.kernel.js";
+import type { ContextEngineTurnOutboxWorkerOperations } from "../../agents/harness/context-engine-turn-outbox.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import type { MessageToolRunOutcomeInsert } from "../../infra/message-tool-run-outcome-store.kernel.js";
 import type {
@@ -45,43 +41,4 @@ export type SessionActorMemorySideEffectsWrites = Omit<
   "session.heartbeat.claim": HeartbeatOutcomeWorkerOperations["claim"];
   "session.messageToolOutcome.record": { input: MessageToolRunOutcomeInsert; output: void };
   "session.trajectory.append": { input: SqliteTrajectoryRuntimeAppend; output: void };
-};
-
-export type SessionActorMemorySideEffectsQuery = {
-  [Key in keyof SessionActorMemorySideEffectsReads]: {
-    type: Key;
-    input: SessionActorMemorySideEffectsReads[Key]["input"];
-  };
-}[keyof SessionActorMemorySideEffectsReads];
-export type SessionActorMemorySideEffectsCommand = {
-  [Key in keyof SessionActorMemorySideEffectsWrites]: {
-    type: Key;
-    input: SessionActorMemorySideEffectsWrites[Key]["input"];
-  };
-}[keyof SessionActorMemorySideEffectsWrites];
-
-export type SessionActorMemoryOutboxRow = {
-  engineId: string;
-  ownerPluginId?: string;
-  payload: ContextEngineTurnOutboxPayload;
-  payloadJson: string;
-  sessionId: string;
-  attempts: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-};
-export type SessionActorMemoryTrajectoryRow = {
-  seq: number;
-  eventJson: string;
-  bytes: number;
-  createdAt: number;
-  runId: string | null;
-};
-
-/** These records belong to the logical session and survive transcript-window rotation. */
-export type SessionActorMemorySideEffectsState = {
-  outbox: Map<string, SessionActorMemoryOutboxRow>;
-  heartbeatOutcome?: HeartbeatOutcomeRow;
-  messageToolOutcomes: Array<MessageToolRunOutcomeInsert & { id: number }>;
-  trajectory: Map<string, SessionActorMemoryTrajectoryRow[]>;
 };
