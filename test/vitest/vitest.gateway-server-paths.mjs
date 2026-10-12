@@ -169,6 +169,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/models-manual-policy.integration.test.ts",
   "src/gateway/server-methods/native-hook-relay.test.ts",
   "src/gateway/server-methods/nodes.test.ts",
+  "src/gateway/server-methods/outside-workspace-discovery-turn.proof.test.ts",
   "src/gateway/server-methods/projects.test.ts",
   "src/gateway/server-methods/requester-cron-authority.integration.test.ts",
   "src/gateway/server-methods/send.scheduled-reads.integration.test.ts",
