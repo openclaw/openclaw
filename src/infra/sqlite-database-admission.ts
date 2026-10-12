@@ -79,13 +79,12 @@ export function invalidateSqliteDatabaseCleanClose(location: string): void {
 }
 
 export function readSqliteDatabaseIntegrityVerification(
-  location: string,
+  source: string | DatabaseSync,
 ): { verifiedAt: number } | undefined {
-  const verifiedAt = getOrLoadSqliteDatabaseAdmissionForPath(
-    location,
-    integrityVerificationKey,
-    () => undefined,
-  );
+  const verifiedAt =
+    typeof source === "string"
+      ? getOrLoadSqliteDatabaseAdmissionForPath(source, integrityVerificationKey, () => undefined)
+      : getSqliteDatabaseAdmission(source, integrityVerificationKey);
   return verifiedAt === undefined ? undefined : { verifiedAt };
 }
 

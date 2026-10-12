@@ -10,10 +10,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import {
-  readSqliteDatabaseIntegrityVerification,
-  revokeSqliteDatabaseAdmissionsForPath,
-} from "../infra/sqlite-database-admission.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
@@ -145,7 +142,6 @@ export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
 }
 
 export type OpenClawAgentIntegrityVerificationReceiver = (
-  record: ReturnType<typeof readSqliteDatabaseIntegrityVerification>,
   canReuseRuntimeIntegrity: boolean,
   invalidated: boolean,
   because?: string,
@@ -236,11 +232,7 @@ function claimAgentDatabaseLeaseInDatabase(
     }
   }
   const hasOtherOwner = hasAgentDatabasePathLease(database.db, owner.path, owner);
-  const verification = hasOtherOwner
-    ? undefined
-    : readSqliteDatabaseIntegrityVerification(owner.path);
   onVerification?.(
-    verification,
     !hasOtherOwner,
     invalidated,
     processDeathRefusal ?? (hasOtherOwner ? "live-or-unknown-owner" : undefined),

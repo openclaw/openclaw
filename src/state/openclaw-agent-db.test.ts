@@ -43,6 +43,7 @@ import {
   unregisterOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabases,
 } from "./openclaw-agent-db-registry.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,
@@ -2130,6 +2131,7 @@ describe("openclaw agent database", () => {
     expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
 
     // Retiring a claim during a real integrity read must precede index repair, not only exposure.
+    invalidateOpenClawAgentDatabaseValidation(databasePath);
     revokeSqliteDatabaseAdmissionsForPath(databasePath);
     const editor = nodeSqlite.openNodeSqliteDatabase(databasePath);
     try {

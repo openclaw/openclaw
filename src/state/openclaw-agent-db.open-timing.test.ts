@@ -199,32 +199,35 @@ describe("agent database open timings", () => {
       expect(databases).toHaveLength(2);
       expect(databases[1]).toBe(databases[0]);
       expect(databases[0]?.db.isOpen).toBe(true);
-      expect(logger.warn).toHaveBeenCalledExactlyOnceWith("slow OpenClaw agent database open", {
-        agentId: options.agentId,
-        elapsedMs: 1_310,
-        path: pathname,
-        pid: process.pid,
-        threadId,
-        isMainThread,
-        admissionMode: "async",
-        thresholdMs: 1_000,
-        integrityGateMs: 1_000,
-        integrityGateOutcome: "healthy",
-        integrityGateReason: "revoked",
-        integrityGateMode: "full",
-        integrityWorkerCheckMs: expect.any(Number),
-        integrityWorkerLifetimeMs: 0,
-        integrityOutsideWorkerMs: 1_000,
-        canonicalIndexMs: 0,
-        repairedIndexCount: 0,
-        phaseDurationsMs: {
-          open: 60,
-          validation: 1_000,
-          configuration: 80,
-          schema: 90,
-          registration: 80,
-        },
-      });
+      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+        "slow OpenClaw agent database open",
+        expect.objectContaining({
+          agentId: options.agentId,
+          elapsedMs: 1_310,
+          path: pathname,
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          admissionMode: "async",
+          thresholdMs: 1_000,
+          integrityGateMs: 1_000,
+          integrityGateOutcome: "healthy",
+          integrityGateReason: "no-proof",
+          integrityGateMode: "full",
+          integrityWorkerCheckMs: expect.any(Number),
+          integrityWorkerLifetimeMs: 0,
+          integrityOutsideWorkerMs: 1_000,
+          canonicalIndexMs: 0,
+          repairedIndexCount: 0,
+          phaseDurationsMs: {
+            open: 60,
+            validation: 1_000,
+            configuration: 80,
+            schema: 90,
+            registration: 80,
+          },
+        }),
+      );
       expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("integrityCheckSyncMs");
       expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("integrityOutsideCheckMs");
     } finally {

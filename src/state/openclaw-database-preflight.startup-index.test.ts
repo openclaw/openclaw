@@ -9,7 +9,10 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -88,6 +91,7 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
       writer.exec("DROP TABLE session_key_contract;");
     }
     writer.close();
+    retireSqliteDatabaseAdmissionForPath(agent.path);
   }
   return {
     env,

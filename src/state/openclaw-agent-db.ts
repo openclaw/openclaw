@@ -10,6 +10,7 @@ import {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   isTerminalSqliteIntegrityError,
@@ -316,18 +317,15 @@ function* openOpenClawAgentDatabaseSteps(
   ) {
     throw new Error("Prepared agent database lease belongs to another store");
   }
-  let verification: { verifiedAt: number } | undefined;
   let reuseIntegrity = false;
   let integrityRevoked = false;
   const diagnostics: SqliteIntegrityDiagnostics = {};
   const validation = pending?.validation ?? preparedLease?.validation;
   const captureVerification: OpenClawAgentIntegrityVerificationReceiver = (
-    record,
     runtimeIntegrityAllowed,
     invalidated,
     because,
   ) => {
-    verification = record;
     reuseIntegrity = runtimeIntegrityAllowed;
     // A host refusal may have no positive validation receipt to transfer.
     integrityRevoked = invalidated || preparedLease?.integrityRevoked === true;
@@ -439,13 +437,16 @@ function* openOpenClawAgentDatabaseSteps(
       diagnostics.because ??= integrityRevoked
         ? agentDatabaseAdmissionProvenanceRefusal(preparedLease?.provenance, pathname)
         : undefined;
+      let verification: { verifiedAt: number } | undefined;
       if (
         diagnostics.integrityGateReason === "revoked" ||
         diagnostics.integrityGateReason === "stale-lease-full"
       ) {
-        verification = undefined;
         isValidatedReopen = false;
         reusedSchema = false;
+      } else if (reuseIntegrity) {
+        // Path admission can precede replacement detection; borrow only this native file's proof.
+        verification = readSqliteDatabaseIntegrityVerification(db);
       }
       const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
         db,

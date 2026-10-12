@@ -388,11 +388,10 @@ export function closeCachedOpenClawAgentDatabase(
     // A reader-pinned WAL is healthy; only restart proof needs a completed checkpoint.
     retainRuntimeProof =
       !cache.failures.has(database.path) &&
-      isOpenClawAgentDatabasePathCurrent(database) &&
-      (checkpointed ||
-        (alreadyClosed
-          ? !priorCheckpointError
-          : database.walMaintenance.health?.state === "blocked"));
+      (alreadyClosed
+        ? !priorCheckpointError
+        : (checkpointed || database.walMaintenance.health?.state === "blocked") &&
+          isOpenClawAgentDatabasePathCurrent(database));
     if (database.db.isOpen) {
       database.db.close();
     }
