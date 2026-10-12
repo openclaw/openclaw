@@ -142,13 +142,15 @@ export const runRespawnedChild = (command, args, env) => {
         process.kill(process.pid, signal);
         return;
       }
+      // libuv cannot deliver SIGBREAK to a child; Windows reports that termination as SIGKILL.
+      const reportedSignal = firstForwardedSignal === "SIGBREAK" ? "SIGKILL" : firstForwardedSignal;
       const forwardedSignalExitCode =
-        !hardKillBackstopStarted && signal === firstForwardedSignal
-          ? signal === "SIGINT"
+        !hardKillBackstopStarted && signal === reportedSignal
+          ? firstForwardedSignal === "SIGINT"
             ? 130
-            : signal === "SIGTERM"
+            : firstForwardedSignal === "SIGTERM"
               ? 143
-              : signal === "SIGBREAK"
+              : firstForwardedSignal === "SIGBREAK"
                 ? 149
                 : undefined
           : undefined;

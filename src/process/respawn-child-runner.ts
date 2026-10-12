@@ -111,13 +111,17 @@ export function runRespawnChildWithSignalBridge(params: {
         process.kill(process.pid, signal);
         return;
       }
+      // libuv cannot deliver SIGBREAK to a child; Windows reports that termination as SIGKILL.
+      const reportedSignal = firstForwardedSignal === "SIGBREAK" ? "SIGKILL" : firstForwardedSignal;
       const forwardedSignalExitCode =
-        !hardKillBackstopStarted && signal === firstForwardedSignal
-          ? signal === "SIGINT"
+        !hardKillBackstopStarted && signal === reportedSignal
+          ? firstForwardedSignal === "SIGINT"
             ? 130
-            : signal === "SIGTERM"
+            : firstForwardedSignal === "SIGTERM"
               ? 143
-              : undefined
+              : firstForwardedSignal === "SIGBREAK"
+                ? 149
+                : undefined
           : undefined;
       runtime.exit(forwardedSignalExitCode ?? 1);
       return;

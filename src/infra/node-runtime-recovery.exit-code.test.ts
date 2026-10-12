@@ -11,9 +11,12 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 let child: ChildProcess;
 let exit: MockInstance<typeof process.exit>;
-let addedSignal: NodeJS.Signals | undefined;
-let addedListener: NodeJS.SignalsListener | undefined;
+const respawnSignals = ["SIGINT", "SIGTERM", "SIGBREAK"] as const;
+let baselineListeners: Map<NodeJS.Signals, Set<NodeJS.SignalsListener>>;
 beforeEach(() => {
+  baselineListeners = new Map(
+    respawnSignals.map((signal) => [signal, new Set(process.listeners(signal))]),
+  );
   vi.useFakeTimers();
   child = new ChildProcess();
   vi.spyOn(child, "kill").mockReturnValue(true);
@@ -22,38 +25,41 @@ beforeEach(() => {
   vi.spyOn(process, "kill").mockReturnValue(true);
 });
 afterEach(() => {
-  // Clean up even on assertion failure so a leaked listener can't affect later tests.
-  if (addedSignal && addedListener) {
-    process.off(addedSignal, addedListener);
+  // The supervisor registers every respawn signal and only detaches when the child exits,
+  // so drop everything it added even if a test failed before emitting the exit.
+  for (const [signal, baseline] of baselineListeners) {
+    for (const listener of process.listeners(signal)) {
+      if (!baseline.has(listener)) {
+        process.off(signal, listener);
+      }
+    }
   }
-  addedSignal = undefined;
-  addedListener = undefined;
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.resetModules();
 });
 
 it.each([
-  { signal: "SIGINT", code: 130 },
-  { signal: "SIGTERM", code: 143 },
-  { signal: "SIGBREAK", code: 149 },
+  { signal: "SIGINT", reported: "SIGINT", code: 130 },
+  { signal: "SIGTERM", reported: "SIGTERM", code: 143 },
+  // libuv has no SIGBREAK kill; Windows reports the terminated child as SIGKILL.
+  { signal: "SIGBREAK", reported: "SIGKILL", code: 149 },
 ] as const)(
   "maps a forwarded win32 $signal to exit code $code exactly once",
-  async ({ signal, code }) => {
+  async ({ signal, reported, code }) => {
     // respawnSignals is computed at module load from process.platform, so the mock
     // must be in place, and the module reimported, before evaluating its top level.
     vi.resetModules();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw.mjs", "gateway", "run"]);
     const { runRespawnedChild } = await import("../../node-runtime-recovery.mjs");
-    const previous = new Set(process.listeners(signal));
     runRespawnedChild("node", ["child.mjs"], {});
-    const listener = process.listeners(signal).find((candidate) => !previous.has(candidate));
+    const listener = process
+      .listeners(signal)
+      .find((candidate) => !baselineListeners.get(signal)!.has(candidate));
     expect(listener).toBeDefined();
-    addedSignal = signal;
-    addedListener = listener;
     listener!(signal);
-    child.emit("exit", null, signal);
+    child.emit("exit", null, reported);
     expect(exit).toHaveBeenCalledExactlyOnceWith(code);
   },
 );

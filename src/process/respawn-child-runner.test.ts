@@ -82,6 +82,13 @@ describe("runRespawnChildWithSignalBridge", () => {
       exitCode: 1,
     },
     { signal: "SIGKILL" as const, firstSignal: undefined, laterSignal: undefined, exitCode: 1 },
+    // Windows reports a child terminated by a forwarded SIGBREAK as SIGKILL.
+    {
+      signal: "SIGKILL" as const,
+      firstSignal: "SIGBREAK" as const,
+      laterSignal: undefined,
+      exitCode: 149,
+    },
   ])("preserves child $signal termination after first signal $firstSignal", (testCase) => {
     const { child } = createChild(2345);
     const exit = vi.fn<RespawnChildRuntime["exit"]>();
