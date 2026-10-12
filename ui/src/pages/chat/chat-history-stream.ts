@@ -1,5 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveSessionStartupErrorPresentation } from "../../../../src/shared/session-startup-error-presentation.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
@@ -170,7 +171,9 @@ export function applyHistoryRun(params: {
       const errorKind = failureKind === "state_contention" ? failureKind : undefined;
       const failureText = extractText(failureNotice?.message);
       const failureMessage =
-        errorKind && failureText && typeof failureDetails?.diagnostic === "string"
+        failureText &&
+        (errorKind || resolveSessionStartupErrorPresentation(failureText)) &&
+        typeof failureDetails?.diagnostic === "string"
           ? `${failureText}\n\n${failureDetails.diagnostic}`
           : failureText;
       const projection = reduceChatSessionProjection(state, {

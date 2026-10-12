@@ -515,6 +515,19 @@ describe("chat history run errors", () => {
     expect(getChatSessionProjection(state).runs.run?.errorMessage).toBe(diagnostic);
   });
 
+  it("recovers startup diagnostics without putting them in the visible history message", async () => {
+    const content =
+      "Conversation context is unavailable. Refresh and try again. If it still fails, start a new conversation with the context you need.";
+    const diagnostic = "thread not loaded: synthetic-thread";
+    const state = host({
+      messages: [notice(content, { diagnostic })],
+      sessionInfo: row({ lastRunError: content }),
+    });
+    await loadChatHistory(state);
+    expect(state.chatRunError?.summary).toBe(`${content}\n\n${diagnostic}`);
+    expect(state.chatMessages).toEqual([notice(content, { diagnostic })]);
+  });
+
   it("retires a recovered failure after a newer successful history and rejects its stale replay", async () => {
     const first = {
       role: "user",

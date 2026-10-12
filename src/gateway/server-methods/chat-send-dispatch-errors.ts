@@ -7,6 +7,7 @@ import { SessionGoalOperationError } from "../../config/sessions/goals-operation
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { resolveSessionStartupErrorPresentation } from "../../shared/session-startup-error-presentation.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -60,6 +61,7 @@ function formatChatSendError(error: unknown): string {
     resolveStateContentionPresentation(error)?.errorMessage ??
     renderAgentHarnessPreflightUserMessage(error) ??
     renderFailoverCodeUserCopy(describeFailoverError(error).code) ??
+    resolveSessionStartupErrorPresentation(String(error))?.display ??
     String(error)
   );
 }

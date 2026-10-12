@@ -49,6 +49,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { resolveSessionStartupErrorPresentation } from "../../shared/session-startup-error-presentation.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
@@ -352,7 +353,9 @@ export function buildExternalRunFailureReply(
     // Heartbeat-backed event turns remain visible even with generic wording.
     return buildUnclassifiedReply(options.includeDetails === true);
   }
-  const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
+  const codexAppServerFailure =
+    resolveSessionStartupErrorPresentation(normalizedMessage)?.message ??
+    renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }

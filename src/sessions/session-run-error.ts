@@ -10,7 +10,9 @@ import {
 import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { resolveSessionStartupErrorPresentation } from "../shared/session-startup-error-presentation.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
 const SESSION_RUN_ERROR_MAX_CHARS = 160;
@@ -35,15 +37,26 @@ export async function recordGatewaySessionRunFailure(
 ): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
+  const diagnostic = truncateUtf16Safe(
+    redactSensitiveText(formatErrorMessage(params.error), { mode: "tools" }),
+    512,
+  );
+  const startupFailure = resolveSessionStartupErrorPresentation(diagnostic);
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:
       params.errorKind === "state_contention"
         ? STATE_CONTENTION_SUMMARY
-        : (renderCodexAppServerFailureCopy(error) ??
+        : (startupFailure?.message ??
+          renderCodexAppServerFailureCopy(error) ??
           `Your request couldn't be completed: ${error}`),
     display: true,
-    details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
+    details: {
+      runId,
+      error,
+      ...(startupFailure ? { diagnostic } : {}),
+      ...(params.errorKind ? { errorKind: params.errorKind } : {}),
+    },
   };
   const result = await withSessionTranscriptWriteAssertion(
     params.target,

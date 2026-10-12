@@ -475,6 +475,32 @@ describe("session lifecycle state", () => {
     },
   );
 
+  it.each([
+    ["thread not loaded: synthetic-thread", "Conversation context is unavailable."],
+    [
+      "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+      "Workspace preparation was interrupted.",
+    ],
+  ])(
+    "persists startup recovery guidance rather than runtime identifiers: %s",
+    async (error, title) => {
+      const failed = await persistLifecycle(
+        { sessionId: "session-id", updatedAt: 1000 },
+        {
+          ts: 2000,
+          sessionId: "session-id",
+          data: { phase: "error", error, endedAt: 2000 },
+        },
+      );
+      expect(failed.status).toBe("failed");
+      expect(failed.lastRunError).toContain(title);
+      expect(failed.lastRunError).toContain("Refresh");
+      expect(failed.lastRunError?.length).toBeLessThanOrEqual(160);
+      expect(failed.lastRunError).not.toContain("lease");
+      expect(failed.lastRunError).not.toContain("synthetic-thread");
+    },
+  );
+
   it("persists a compact failure reason and clears it when a new run starts", async () => {
     const failed = await persistLifecycle(
       {

@@ -14,6 +14,44 @@ import {
 
 describe("failover user copy", () => {
   it.each([
+    [
+      "thread not loaded: synthetic-thread",
+      "Conversation context is unavailable. Refresh and try again. If it still fails, start a new conversation with the context you need.",
+    ],
+    [
+      "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+      "Workspace preparation was interrupted. Refresh to check its status before trying again. You can keep using this conversation.",
+    ],
+    [
+      "managed worktree allocation lease core:managed-worktrees:mutation/synthetic-worktree expired",
+      "Workspace preparation was interrupted. Refresh to check its status before trying again. You can keep using this conversation.",
+    ],
+  ])("gives recovery guidance without internal identifiers for %s", (raw, expected) => {
+    expect(renderSanitizedUserFacingText(raw, { errorContext: true })).toBe(expected);
+    expect(renderSanitizedUserFacingText(raw)).toBe(raw);
+  });
+
+  it("keeps normalized startup diagnostics out of the compact summary", () => {
+    const copy =
+      "Conversation context is unavailable. Refresh and try again. If it still fails, start a new conversation with the context you need.";
+    expect(
+      renderSanitizedUserFacingText(
+        `${copy}\n\nCodexAppServerRpcError: thread not loaded: synthetic-thread: code=-32600`,
+        { errorContext: true },
+      ),
+    ).toBe(copy);
+  });
+
+  it.each([
+    "thread not found: synthetic-thread",
+    "plugin lifecycle lease plugins/example was lost",
+    "managed worktree allocation lease operation was aborted",
+    "managed worktree allocation lease foreign/scope was lost",
+  ])("does not mislabel unrelated failures: %s", (raw) => {
+    expect(renderSanitizedUserFacingText(raw, { errorContext: true })).toBe(raw);
+  });
+
+  it.each([
     [undefined, "Troubleshooting: run `openclaw logs --follow` in a terminal."],
     ["", "Troubleshooting: run `openclaw logs --follow` in a terminal."],
     [

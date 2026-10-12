@@ -32,6 +32,38 @@ function createLifecycle(runId: string) {
 }
 
 describe("createAgentCommandLifecycle", () => {
+  it.each(["basic", "post-turn", "result"] as const)(
+    "publishes actionable startup guidance through %s errors",
+    (source) => {
+      emitAgentEvent.mockClear();
+      const lifecycle = createLifecycle("startup-failure");
+      const error = new Error("thread not loaded: synthetic-thread");
+      const terminal = {
+        metadata: {},
+        outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+      };
+      if (source === "basic") {
+        lifecycle.emitBasicError(error);
+      } else if (source === "post-turn") {
+        lifecycle.emitPostTurnError(error, terminal);
+      } else {
+        lifecycle.emitResultError(
+          {
+            payloads: [],
+            meta: { durationMs: 0, error: { kind: "compaction_failure", message: error.message } },
+          },
+          false,
+          terminal,
+        );
+      }
+      const published = emitAgentEvent.mock.calls[0]?.[0].data.error;
+      expect(published).toContain("Conversation context is unavailable.");
+      expect(published).toContain("Refresh and try again.");
+      expect(published).toContain(`\n\n${error.message}`);
+      expect(error.message).toBe("thread not loaded: synthetic-thread");
+    },
+  );
+
   it("publishes an outer timeout that arrives after a yielded result", () => {
     emitAgentEvent.mockClear();
     const controller = new AbortController();

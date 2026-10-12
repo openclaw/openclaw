@@ -3,6 +3,7 @@ import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
+import { resolveSessionStartupErrorPresentation } from "../../../../src/shared/session-startup-error-presentation.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
@@ -126,12 +127,13 @@ function renderErrorNotice(
   tone: "danger" | "warn" = "danger",
   summary?: string,
 ) {
+  const startup = resolveSessionStartupErrorPresentation(error);
   const lines = displayError
     .trim()
     .split(/\r?\n/u)
     .map((line) => line.replace(/\s+/gu, " ").trim());
   // Local action errors already contain recovery instructions; keep those visible.
-  const title = summary ?? clampText(lines[0] ?? "");
+  const title = startup?.title ?? summary ?? clampText(lines[0] ?? "");
   const hasDetails = lines.some((line) => line !== "" && line !== title);
   return html`
     <div
@@ -141,22 +143,29 @@ function renderErrorNotice(
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
         >${icons.alertTriangle}</span
       >
-      ${
-        hasDetails
-          ? html`<details class="chat-error__content">
-              <summary class="chat-error__summary">
-                <strong>${title}</strong>
-                <span>${t("chat.details")}</span>
-                <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
-                ${renderCopyButton(error, t("chat.copyError"))}
-              </summary>
-              <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
+      <div class="chat-error__content">
+        ${startup ? html`<div class="chat-composer-neighbor-card__copy"><strong>${startup.title}</strong><span>${startup.recovery}</span></div>` : nothing}
+        ${
+          hasDetails
+            ? html`<details class="chat-error__content">
+                <summary class="chat-error__summary">
+                  ${startup ? nothing : html`<strong>${title}</strong>`}
+                  <span>${t("chat.details")}</span>
+                  <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
+                  ${renderCopyButton(error, t("chat.copyError"))}
+                </summary>
+                <pre
+                  class="chat-error__diagnostic"
+                  tabindex="0"
+                  aria-label=${t("chat.errorDetails")}
+                >
 ${displayError}</pre>
-            </details>`
-          : html`<span class="chat-error__content"
-              ><strong>${title}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
-            >`
-      }
+              </details>`
+            : html`<span class="chat-error__content"
+                ><strong>${title}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
+              >`
+        }
+      </div>
       ${action}
     </div>
   `;

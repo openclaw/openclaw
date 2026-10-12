@@ -39,6 +39,7 @@ import {
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { resolveSessionRunError } from "../sessions/session-run-error.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
@@ -144,6 +145,25 @@ async function reports() {
 }
 
 describe("durable pre-reply run failure", () => {
+  it("retains startup diagnostics in history while keeping the session summary actionable", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seed();
+      const diagnostic = "thread not loaded: synthetic-thread";
+      await persistGatewaySessionLifecycleEvent({
+        ...target,
+        event: { ...event, data: { ...event.data, error: diagnostic } },
+      });
+      const [report] = await reports();
+      assert(isRecord(report));
+      expect(report.content).toContain("Conversation context is unavailable.");
+      expect(report.content).not.toContain("synthetic-thread");
+      expect(report.details).toMatchObject({ diagnostic });
+      const summary = resolveSessionRunError({ error: String(report.content) }, "failed");
+      expect(summary).toContain("Refresh and try again.");
+      expect(summary).not.toContain("synthetic-thread");
+    });
+  });
+
   it("publishes and persists one incomplete-turn notice after the model stops without an answer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed();

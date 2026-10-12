@@ -122,3 +122,24 @@ it.each([false, true])(
     });
   },
 );
+
+it.each([
+  ["thread not loaded: synthetic-thread", "Conversation context is unavailable."],
+  [
+    "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+    "Workspace preparation was interrupted.",
+  ],
+])("keeps startup recovery guidance and diagnostics in live chat: %s", async (error, title) => {
+  vi.useFakeTimers();
+  const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
+  onTestFinished(() => h.handler.dispose());
+  const runId = "startup-recovery-copy";
+  h.register(runId, "session-native-provider-error", runId);
+  const data = { phase: "error", error, startedAt: 100, endedAt: 200 };
+  await h.emit(runId, "lifecycle", data);
+  const live = h.chat().find(([, event]) => event.state === "error")?.[1];
+
+  expect(live?.errorMessage).toContain(title);
+  expect(live?.errorMessage).toContain("Refresh");
+  expect(live?.errorMessage).toContain(`\n\n${error}`);
+});
