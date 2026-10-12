@@ -13,16 +13,14 @@ import { formatDurationCompact } from "../../../infra/format-time/format-duratio
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
 import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
+import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import type { getLatestSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import type { SubagentRunReadRecord } from "../registry/subagent-registry-read.types.js";
 import { prepareSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { isRequesterCompletionCohortCurrent } from "../registry/subagent-requester-settle-identity.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import {
-  captureSubagentCompletionReplyUsing,
-  readLatestSubagentOutputWithRetryUsing,
-} from "./subagent-announce-capture.js";
 import {
   buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
@@ -35,7 +33,6 @@ import {
   getRuntimeConfig,
   readSubagentSessionEntry,
   readSessionMessagesAsync,
-  resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
 } from "./subagent-announce.runtime.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
@@ -128,8 +125,17 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
 export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
-  options?: { sessionTarget?: SessionTranscriptRuntimeTarget },
+  options?: { childAgentId?: string; sessionTarget?: SessionTranscriptRuntimeTarget },
 ): Promise<string | undefined> {
+  const agentId =
+    options?.sessionTarget?.agentId ??
+    resolveSubagentChildAgentId({
+      childSessionKey: sessionKey,
+      childAgentId: options?.childAgentId,
+    });
+  if (!agentId) {
+    return undefined;
+  }
   let messages: unknown[] | undefined;
   if (options?.sessionTarget) {
     messages = await readSessionMessagesAsync(options.sessionTarget, {
@@ -142,7 +148,7 @@ export async function readSubagentOutput(
     messages === undefined
       ? await callSubagentLifecycleGateway({
           method: "chat.history",
-          params: { sessionKey, limit: 100 },
+          params: { sessionKey, limit: 100, agentId },
         })
       : undefined;
   const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
@@ -161,27 +167,53 @@ export async function readSubagentOutput(
   return undefined;
 }
 
+async function readOutputWithRetry(
+  maxWaitMs: number,
+  retryIntervalMs: number,
+  readOutput: () => Promise<string | undefined>,
+): Promise<string | undefined> {
+  const waitMs = Math.max(0, Math.min(maxWaitMs, 15_000));
+  if (!(waitMs > 0)) {
+    return undefined;
+  }
+  const deadlineAt = performance.now() + waitMs;
+  for (;;) {
+    const result = await readOutput();
+    if (result?.trim()) {
+      return result;
+    }
+    const remainingMs = deadlineAt - performance.now();
+    if (remainingMs <= 0) {
+      return result;
+    }
+    await sleep(Math.min(retryIntervalMs, remainingMs));
+  }
+}
+
 export async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
+  childAgentId?: string;
   maxWaitMs: number;
   outcome?: SubagentRunOutcome;
 }): Promise<string | undefined> {
-  return await readLatestSubagentOutputWithRetryUsing({
-    ...params,
-    retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput,
-  });
+  return await readOutputWithRetry(
+    params.maxWaitMs,
+    isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    () =>
+      readSubagentOutput(params.sessionKey, params.outcome, { childAgentId: params.childAgentId }),
+  );
 }
 
 export async function readSubagentTimeoutProgress(
   sessionKey: string,
   maxWaitMs: number,
   outcome: SubagentRunOutcome,
+  childAgentId?: string,
 ): Promise<string | undefined> {
-  const initial = await readSubagentOutput(sessionKey, outcome);
+  const initial = await readSubagentOutput(sessionKey, outcome, { childAgentId });
   const progress = initial?.trim()
     ? initial
-    : await readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs, outcome });
+    : await readLatestSubagentOutputWithRetry({ sessionKey, childAgentId, maxWaitMs, outcome });
   return progress && !isSilentReplyText(progress, SILENT_REPLY_TOKEN) ? progress : undefined;
 }
 
@@ -193,16 +225,19 @@ export async function captureSubagentCompletionReply(
     sessionTarget?: SessionTranscriptRuntimeTarget;
   },
 ): Promise<string | undefined> {
-  return await captureSubagentCompletionReplyUsing({
-    sessionKey,
-    waitForReply: options?.waitForReply,
-    maxWaitMs: isFastTestRuntimeEnv() ? 50 : 1_500,
-    retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput: async (nextSessionKey) =>
-      await readSubagentOutput(nextSessionKey, options?.outcome, {
-        sessionTarget: options?.sessionTarget,
-      }),
-  });
+  const waitForReply = options?.waitForReply;
+  const maxWaitMs = isFastTestRuntimeEnv() ? 50 : 1_500;
+  const retryIntervalMs = isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100;
+  const readOutput = () =>
+    readSubagentOutput(sessionKey, options?.outcome, { sessionTarget: options?.sessionTarget });
+  const immediate = await readOutput();
+  if (immediate?.trim()) {
+    return immediate;
+  }
+  if (waitForReply === false) {
+    return undefined;
+  }
+  return await readOutputWithRetry(maxWaitMs, retryIntervalMs, readOutput);
 }
 
 type AnnounceRunReader = (runId: string) => SubagentRunRecord | undefined;
@@ -225,7 +260,6 @@ export async function readSubagentRunAnnounceResult(
     findSessionTranscriptArchiveEventReadOnly,
     getRuntimeConfig,
     readSubagentSessionEntry,
-    resolveAgentIdFromSessionKey,
     resolveSessionStorePathCore,
   });
 }
@@ -295,7 +329,10 @@ export function filterCurrentDirectChildCompletionRows<
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
-    getLatestSubagentRunByChildSessionKey: typeof getLatestSubagentRunByChildSessionKey;
+    getLatestSubagentRunByChildSessionKey: (
+      childSessionKey: string,
+      childAgentId?: string,
+    ) => SubagentRunReadRecord | null;
   },
 ): T[] {
   return children.filter((child) => {
@@ -314,6 +351,28 @@ export function filterCurrentDirectChildCompletionRows<
   });
 }
 
+export function selectCurrentRequesterCompletionRows(params: {
+  rows: SubagentRunRecord[];
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  frozenBatch: boolean;
+  latestForSession: Parameters<typeof isRequesterCompletionCohortCurrent>[1];
+}): SubagentRunRecord[] {
+  if (params.frozenBatch) {
+    return params.rows.filter((entry) =>
+      isRequesterCompletionCohortCurrent(entry, params.latestForSession),
+    );
+  }
+  return dedupeLatestChildCompletionRows(
+    filterCurrentDirectChildCompletionRows(params.rows, {
+      requesterSessionKey: params.requesterSessionKey,
+      requesterAgentId: params.requesterAgentId,
+      getLatestSubagentRunByChildSessionKey: (childSessionKey, childAgentId) =>
+        params.latestForSession(childSessionKey, undefined, childAgentId),
+    }),
+  );
+}
+
 function formatTokenCount(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "0";
@@ -323,18 +382,25 @@ function formatTokenCount(value?: number) {
 
 export async function buildCompactAnnounceStatsLine(params: {
   sessionKey: string;
+  childAgentId?: string;
   startedAt?: number;
   endedAt?: number;
 }) {
   const cfg = getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-    agentId,
+  const agentId = resolveSubagentChildAgentId({
+    childSessionKey: params.sessionKey,
+    childAgentId: params.childAgentId,
   });
-  let entry = readSubagentSessionEntry(storePath, params.sessionKey);
+  const storePath = agentId
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    : undefined;
+  let entry = storePath
+    ? await readSubagentSessionEntry(storePath, params.sessionKey, agentId)
+    : undefined;
   const tokenWaitAttempts = isFastTestRuntimeEnv() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     if (
+      !storePath ||
       typeof entry?.inputTokens === "number" ||
       typeof entry?.outputTokens === "number" ||
       resolveFreshSessionTotalTokens(entry) !== undefined
@@ -344,7 +410,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     if (!isFastTestRuntimeEnv()) {
       await sleep(150);
     }
-    entry = readSubagentSessionEntry(storePath, params.sessionKey);
+    entry = await readSubagentSessionEntry(storePath, params.sessionKey, agentId);
   }
 
   const input = entry?.inputTokens;

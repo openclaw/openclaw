@@ -12,6 +12,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
+import { stopProcessGroup } from "../stop-process-group.mjs";
 import { packNodeUpdateFixture } from "./package-fixtures.mjs";
 import { createNodeUpdateProofPlugin } from "./proof-plugin.mjs";
 
@@ -91,29 +93,8 @@ function start(label, executable, args, env, captureOutput = false) {
 }
 
 async function stop(processInfo) {
-  if (
-    !processInfo ||
-    processInfo.child.exitCode !== null ||
-    processInfo.child.signalCode !== null
-  ) {
-    return;
-  }
-  const child = processInfo.child;
-  const exited = once(child, "exit");
-  process.kill(-child.pid, "SIGTERM");
-  const deadline = setTimeout(() => {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch (error) {
-      if (error.code !== "ESRCH") {
-        throw error;
-      }
-    }
-  }, 15_000);
-  try {
-    await exited;
-  } finally {
-    clearTimeout(deadline);
+  if (processInfo) {
+    await stopProcessGroup(processInfo.child, { graceMs: 15_000 });
   }
 }
 
@@ -208,8 +189,11 @@ async function nodes() {
   return (await cli(`nodes-${Date.now()}`, ["nodes", "status"])).nodes;
 }
 
-async function nodeRow(name) {
-  return (await nodes()).find((row) => row.displayName === name && row.connected && row.paired);
+async function nodeRow(name, version) {
+  const row = (await nodes()).find(
+    (entry) => entry.displayName === name && entry.connected && entry.paired,
+  );
+  return version === undefined || row?.version === version ? row : null;
 }
 
 async function invoke(nodeId, action = "ping") {
@@ -528,10 +512,7 @@ try {
   assert(JSON.stringify(completed).includes("NODE_UPDATE_HOLD_COMPLETED"));
   const updated = await waitFor(
     "automatic version activation",
-    async () => {
-      const row = await nodeRow(positive.name);
-      return row?.version === versions[0] ? row : null;
-    },
+    () => nodeRow(positive.name, versions[0]),
     180_000,
     () => readNodeUpdateFailure(positive.logPath),
   );
@@ -695,11 +676,17 @@ try {
   const defaultPlugins = await startNode("node-default-plugins", proxyUrl, {
     defaultPlugins: true,
   });
+  const defaultRuntimeSelector = path.join(
+    defaultPlugins.env.OPENCLAW_STATE_DIR,
+    "node-runtime/current",
+  );
   const defaultUpdated = await waitFor(
     "default-plugin node activates while idle",
     async () => {
-      const row = await nodeRow(defaultPlugins.name);
-      return row?.version === versions[0] ? row : null;
+      const row = await nodeRow(defaultPlugins.name, versions[0]);
+      return row && fs.readlinkSync(defaultRuntimeSelector).includes(`${versions[0]}-`)
+        ? row
+        : null;
     },
     900_000,
     () => readNodeUpdateFailure(defaultPlugins.logPath),
@@ -709,11 +696,7 @@ try {
     await cli("default-plugins-identity-after-update", ["node", "identity"], defaultPlugins.env),
     defaultPlugins.identity,
   );
-  assert(
-    fs
-      .readlinkSync(path.join(defaultPlugins.env.OPENCLAW_STATE_DIR, "node-runtime/current"))
-      .includes(`${versions[0]}-`),
-  );
+  assert(fs.readlinkSync(defaultRuntimeSelector).includes(`${versions[0]}-`));
   record("default-plugins-idle-activation", {
     before: defaultPlugins.row.version,
     after: defaultUpdated.version,
@@ -783,10 +766,7 @@ try {
   metadataReleased = true;
   const sharedUpdated = await waitFor(
     "shared-state node activates independently",
-    async () => {
-      const row = await nodeRow(sharedNode.name);
-      return row?.version === versions[0] ? row : null;
-    },
+    () => nodeRow(sharedNode.name, versions[0]),
     900_000,
     () => readNodeUpdateFailure(sharedNode.logPath),
   );
@@ -851,14 +831,19 @@ try {
     PATH: `${publishedPrefix}/bin:${cleanEnv.PATH}`,
     OPENCLAW_ALLOW_ROOT: "1",
   });
-  const publishedIdentity = jsonOutput(
-    await command(
-      "published-driver-registry-identity",
-      "npm",
-      ["view", `openclaw@${publishedVersion}`, "version", "dist", "--json"],
-      publishedEnv,
+  const publishedIdentities = resolveNpmJsonEntries(
+    jsonOutput(
+      await command(
+        "published-driver-registry-identity",
+        "npm",
+        ["view", `openclaw@${publishedVersion}`, "version", "dist", "--json"],
+        publishedEnv,
+      ),
     ),
   );
+  assert.equal(publishedIdentities.length, 1);
+  const publishedIdentity = publishedIdentities[0];
+  assert(publishedIdentity && typeof publishedIdentity === "object");
   assert.equal(publishedIdentity.version, publishedVersion);
   assert(publishedIdentity.dist.integrity);
   await command(

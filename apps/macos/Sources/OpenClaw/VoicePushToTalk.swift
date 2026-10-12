@@ -1,8 +1,6 @@
 import AppKit
-import AVFoundation
 import IOKit.hidsystem
 import OSLog
-import Speech
 
 /// Observes right Option and starts a push-to-talk capture while it is held.
 @MainActor
@@ -120,13 +118,7 @@ final class VoicePushToTalk {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
 
-    private var recognizerCache = SpeechRecognizerCache()
-    // Lazily created on begin() to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
-    // headphones into the low-quality headset profile even if push-to-talk is never used.
-    private var audioEngine: AVAudioEngine?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
-    private var tapInstalled = false
+    private let capture = SpeechCaptureResources(mode: .pushToTalk)
     private var holdID: UUID?
     private var startupTask: Task<Void, Never>?
     private var pauseLease: UUID?
@@ -217,7 +209,15 @@ final class VoicePushToTalk {
             forwardEnabled: true)
 
         do {
-            try self.startRecognition(localeID: config.localeID, sessionID: sessionID)
+            try self.capture.start(localeID: config.localeID ?? Locale.current.identifier) { [weak self] update in
+                let message = update.error?.localizedDescription
+                Task { @MainActor [weak self] in
+                    if let message {
+                        self?.logger.debug("push-to-talk error: \(message, privacy: .public)")
+                    }
+                    self?.handle(transcript: update.transcript, isFinal: update.isFinal, sessionID: sessionID)
+                }
+            }
         } catch {
             self.logger.debug("push-to-talk failed to start: \(error.localizedDescription, privacy: .public)")
             self.finalize(transcriptOverride: nil, reason: "startFailed", forward: false)
@@ -238,11 +238,7 @@ final class VoicePushToTalk {
 
         // Stop feeding Speech buffers first, then end the request. Stopping the engine here can race with
         // Speech draining its converter chain (and we already stop/cancel in finalize).
-        if self.tapInstalled {
-            self.audioEngine?.inputNode.removeTap(onBus: 0)
-            self.tapInstalled = false
-        }
-        self.recognitionRequest?.endAudio()
+        self.capture.finishAudio()
 
         // If we captured nothing, dismiss immediately when the user lets go.
         if self.committed.isEmpty, self.volatile.isEmpty, self.adoptedPrefix.isEmpty {
@@ -258,70 +254,6 @@ final class VoicePushToTalk {
     }
 
     // MARK: - Private
-
-    private func startRecognition(localeID: String?, sessionID: UUID) throws {
-        let recognizer = self.recognizerCache.recognizer(localeID: localeID ?? Locale.current.identifier)
-        guard let recognizer, recognizer.isAvailable else {
-            throw NSError(
-                domain: "VoicePushToTalk",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
-        }
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest = request
-        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
-
-        // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
-        let audioEngine = self.audioEngine ?? AVAudioEngine()
-        self.audioEngine = audioEngine
-
-        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
-            self.audioEngine = nil
-            throw NSError(
-                domain: "VoicePushToTalk",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
-        }
-
-        Self.installTap(input: audioEngine.inputNode, request: request)
-        self.tapInstalled = true
-
-        audioEngine.prepare()
-        try audioEngine.start()
-
-        self.recognitionTask = Self.recognize(recognizer, request: request, owner: self, sessionID: sessionID)
-    }
-
-    private nonisolated static func installTap(
-        input: AVAudioInputNode,
-        request: SFSpeechAudioBufferRecognitionRequest)
-    {
-        // Construct the callback outside MainActor; PCM delivery must stay on the audio thread.
-        input
-            .installTap(onBus: 0, bufferSize: 2048, format: input.outputFormat(forBus: 0)) { [weak request] buffer, _ in
-                request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-            }
-    }
-
-    private nonisolated static func recognize(
-        _ recognizer: SFSpeechRecognizer,
-        request: SFSpeechAudioBufferRecognitionRequest,
-        owner: VoicePushToTalk,
-        sessionID: UUID) -> SFSpeechRecognitionTask
-    {
-        recognizer.recognitionTask(with: request) { [weak owner] result, error in
-            let transcript = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal ?? false
-            let message = error?.localizedDescription
-            Task { @MainActor [weak owner] in
-                if let message {
-                    owner?.logger.debug("push-to-talk error: \(message, privacy: .public)")
-                }
-                owner?.handle(transcript: transcript, isFinal: isFinal, sessionID: sessionID)
-            }
-        }
-    }
 
     private func handle(transcript: String?, isFinal: Bool, sessionID: UUID) {
         guard !self.finalized, sessionID == self.sessionID else {
@@ -386,19 +318,7 @@ final class VoicePushToTalk {
     private func retireCapture() {
         self.isCapturing = false
         SimpleTaskSupport.stop(task: &self.timeoutTask)
-        self.recognitionTask?.cancel()
-        self.recognitionRequest = nil
-        self.recognitionTask = nil
-        if self.tapInstalled {
-            self.audioEngine?.inputNode.removeTap(onBus: 0)
-            self.tapInstalled = false
-        }
-        if self.audioEngine?.isRunning == true {
-            self.audioEngine?.stop()
-            self.audioEngine?.reset()
-        }
-        // Release the engine so we also release its audio session/resources.
-        self.audioEngine = nil
+        self.capture.stop()
         self.committed = ""
         self.volatile = ""
         self.activeConfig = nil

@@ -22,7 +22,8 @@ vi.mock("./package-update-activation-immutable.js", () => ({
   assertImmutableInstallRecordCurrent: (_record: unknown, assertCurrent: () => void) =>
     assertCurrent(),
 }));
-vi.mock("./update-immutable-generation.js", () => ({
+vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-generation.js")>()),
   sealImmutableGeneration: vi.fn(async () => {}),
   verifyImmutableGeneration: vi.fn(),
 }));

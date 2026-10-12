@@ -2,18 +2,12 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
-import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import {
-  assertPreflightConfigUnchanged,
-  needsRefreshedPluginIndexPersistence,
-  persistRefreshedPluginIndex,
   readAdmittedConfigSnapshot,
   readConfigPreflightSnapshot,
   type ConfigPreflightSnapshotRead,
@@ -34,11 +28,7 @@ export type StartupConfigPreflightOptions = {
   beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
 };
 
-export type StartupConfigPreflightResult = {
-  snapshot: ConfigFileSnapshot;
-  baseConfig: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-};
+export type StartupConfigPreflightResult = ReturnType<typeof result>;
 
 /** Prepare current runtime state; legacy imports and repair receipts belong to Doctor. */
 export async function runStartupConfigPreflight(
@@ -56,21 +46,17 @@ export async function runStartupConfigPreflight(
 }
 
 function readStartupStateWarnings(env: NodeJS.ProcessEnv): string[] {
-  let warnings: string[] = [];
   try {
-    warnings = listAgentDatabaseAdmissionRefusals({ env }).map(
-      (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
-    );
     assertNoRetiredRuntimeStateFiles(resolveStateDir(env), env);
+    return [];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    warnings.push(
+    return [
       error instanceof RetiredStateFormatError && error.cause === undefined
         ? `Retired runtime state was left unchanged for Doctor; no import was attempted. ${message}`
         : `Could not inspect retired runtime state: ${message}; run openclaw doctor`,
-    );
+    ];
   }
-  return warnings;
 }
 
 async function prepareStartupConfig(
@@ -129,7 +115,7 @@ async function prepareStartupConfig(
     lease?.assertOwned();
   };
   try {
-    if (read.recovery || needsRefreshedPluginIndexPersistence(read)) {
+    if (read.recovery) {
       const { acquireStartupMigrationLeaseWithWait } =
         await import("../infra/startup-migration-checkpoint.js");
       lease = await measureDoctorConfigPreflightStep("migration-lease", () =>
@@ -147,34 +133,18 @@ async function prepareStartupConfig(
       }, 60_000);
       heartbeat.unref();
       const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
-      const startupLease = lease;
       await withPluginLifecycleLease(
         { env, assertCurrent: assertLeaseCurrent, processBound: true },
         async (pluginLease) => {
-          // Admit once after both writers settle; persistence consumes these prepared facts.
+          // Recovery must consume the current config after both writers settle.
           read = await readAdmitted();
           if (!read.snapshot.valid) {
             return;
           }
           assertLeaseCurrent();
           if (read.recovery) {
-            const recovered = read.snapshot;
             await read.recovery.apply(() => pluginLease.assertOwned());
             read = await readSnapshot();
-            assertPreflightConfigUnchanged(recovered, read.snapshot);
-          }
-          if (needsRefreshedPluginIndexPersistence(read)) {
-            const persisted = await measureDoctorConfigPreflightStep("plugin-index.refresh", () =>
-              persistRefreshedPluginIndex({
-                env,
-                lease: startupLease,
-                pluginLease,
-                measure,
-                readPersistedSnapshot: readSnapshot,
-                snapshotRead: read,
-              }),
-            );
-            read = persisted.snapshotRead;
           }
         },
       );
@@ -205,7 +175,6 @@ async function prepareStartupConfig(
       }
       if (migration.changes.length) {
         await beforeStatePreparation(read.snapshot);
-        assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
         assertLeaseCurrent();
         if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
           const { StartupMaintenanceRequiredError } =
@@ -244,7 +213,7 @@ async function prepareStartupConfig(
   }
 }
 
-function result(read: ConfigPreflightSnapshotRead): StartupConfigPreflightResult {
+function result(read: ConfigPreflightSnapshotRead) {
   return {
     snapshot: read.snapshot,
     baseConfig: read.snapshot.sourceConfig,

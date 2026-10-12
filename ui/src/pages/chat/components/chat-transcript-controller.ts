@@ -1,5 +1,5 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
-import type { ReactiveController, ReactiveControllerHost, TemplateResult } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   getChatSessionScrollPosition,
@@ -27,10 +27,7 @@ export class ChatTranscriptController implements ReactiveController {
     return this.activeSessionKey;
   }
 
-  renderSession(
-    sessionKey: string,
-    render: (transcript: ChatTranscriptSession) => TemplateResult,
-  ): TemplateResult {
+  renderSession<T>(sessionKey: string, render: (transcript: ChatTranscriptSession) => T): T {
     if (
       !this.sessionVirtualizer ||
       this.activeSessionKey === null ||
@@ -62,10 +59,6 @@ export class ChatTranscriptController implements ReactiveController {
 
   get isProgrammaticScroll(): boolean {
     return this.sessionVirtualizer?.isProgrammaticScroll ?? false;
-  }
-
-  get isManualScroll(): boolean {
-    return this.sessionVirtualizer?.isManualScroll ?? false;
   }
 
   scrollToEnd(options: ChatScrollToEndOptions = {}): boolean {

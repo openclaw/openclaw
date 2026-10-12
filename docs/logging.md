@@ -200,6 +200,16 @@ openclaw gateway --verbose --ws-log full
 
 ### Steering and input cancellation
 
+Ordinary channel reply routing logs
+`steering rejected; applying follow-up policy` at warning level when steering
+falls back. The fixed `reason` code distinguishes an unavailable owner or
+injection path, a pending source operation, changed authority, terminal-reply
+state, and runtime rejection.
+Records include the channel, opaque session ID, and input or active run IDs when
+supplied. `disposition` distinguishes a follow-up policy decision, confirmed
+or rejected queue admission, and a known queue-cap rejection; it does not confirm delivery.
+These records omit message text, attachments, session keys, and raw exceptions.
+
 When retained reply-delivery state prevents steering, the Gateway logs
 `chat steering rejected; falling back to follow-up dispatch`. Its structured
 fields distinguish the incoming input's `runId` from `activeRunId` and record
@@ -339,6 +349,11 @@ enabled.
 latency, and request fields such as method, URL, timeout, proxy, and policy)
 uses `debug` by default. Responses with a non-2xx status or at least one second
 of elapsed time remain at `info`, and transport failures remain warnings.
+`[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
+at `debug` (or `info` with the targeted flags), rather than as provider failures.
+The requesting layer owns the final cancellation or timeout outcome; an SDK can
+also abort its fetch when its own deadline expires. Explicit `TimeoutError`
+reasons and failures without a caller abort remain warnings.
 Elapsed time includes local-service preparation and waiting for response headers,
 but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
@@ -372,6 +387,24 @@ Talk lifecycle log records also flow to diagnostics-otel log export when
 OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
+
+### Chat-send startup
+
+The Gateway logs `slow chat send` when acknowledgement or startup takes at least
+one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
+agent execution starts. `replyInitialization` covers inbound dispatch through
+session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
+preparation belong to `preparation`, before the first model request.
+
+`detail.*` fields attribute those intervals using the existing reply and agent
+preparation spans, without enabling timeline file logging. They include session
+binding, cold transcript hydration, writer admission, snapshot reads, and commit,
+alongside workspace, Git baseline, hooks, and embedded preparation when used.
+`reply.session.writer` includes both queue waiting and `reply.session.initialize`;
+their difference indicates the writer wait. Parent and child spans overlap and
+must not be summed. Unfinished spans stop at the startup boundary; later model
+and tool latency does not extend them. Structured `chat.send.detail.*` phase
+events use the same durations when diagnostics are enabled.
 
 ### Embedded attempt preparation
 
@@ -609,13 +642,48 @@ Gateway `status` responses include `workerPools.transcriptReconciliation` and
 `workerPools.modelCatalog`. Each reports `maxWorkers`, `workers`, `workersCreated`,
 `activeTasks`, and `pendingTasks` from the pool owner. Both Gateway pools admit one
 worker at a time. Pending tasks include queued and executing work; creation counts
-belong to the current pool lifetime. The startup trace's `memory.ready` record also
-includes these pool counts.
+belong to the current pool lifetime. `workerPools.modelCatalog` also reports
+`workerFailures`: how many model-catalog workers have failed (run out of memory,
+exited, or timed out) since the Gateway started. A failed pool is replaced, so this
+count survives replacement. Each failure also logs one
+`model catalog worker failed` warning when it happens, with the worker's reason and
+the number of agent catalogs to republish on a new worker. A worker that exits while
+idle is counted and logged at once; the next catalog request replaces it.
+Shutdown and plugin retirement are not counted. The startup trace's `memory.ready`
+record also includes these pool counts.
 
 These figures describe worker and task counts. Process RSS includes every isolate
 and native allocation; Node's process heap flags can override a worker's requested
 heap limits. Use constructor or per-isolate measurements when attributing memory
 growth to a particular worker.
+
+### Slow Git content reads
+
+With process diagnostics and info-level logging enabled, `git/worker` emits
+`slow Git content read` after a diff, diff-baseline, or PR branch-facts operation
+lasting at least one second. The journal message includes the same fields as the
+structured file log. Records are limited to 60 per minute.
+
+`operation` identifies the caller family. `checkoutId` is a truncated SHA-256 of
+the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
+is `managed` when the caller supplies managed-index ownership, otherwise
+`unspecified`. Paths, refs, command arguments, and output contents are not logged.
+
+`workerQueueWaitMs` measures admission wait (null if never dispatched).
+`firstHostRequestMs` includes that wait plus worker startup and work before the
+first host request. `workerMs` covers subsequent worker and host work;
+`settlementMs` covers final cleanup. `summedGitQueueWaitMs` measures waiting for
+shared content-process slots, while `summedGitWallMs` sums command execution
+including process settlement. Concurrent commands overlap, so their sum can
+exceed operation duration; these are wall times, not CPU times.
+
+`gitCommandCount` counts started host command requests, not Git's own subprocesses.
+`gitStdoutBytes` and `gitStderrBytes` count captured bytes, excluding any truncated
+output. `gitTimeoutCount` counts returned timeouts; `slowestGitCommand` records
+the longest command's allowlisted name, diff mode when applicable, duration, and
+termination. An operation can return successfully after a command times out
+because optional statistics fall back to unknown. Artifact and maintenance
+operations contribute to aggregate Git worker metrics but do not emit this log.
 
 ### Slow worktree cleanup
 
@@ -787,9 +855,9 @@ errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
 Older builds report `session.reclamation.commit-settlement` for a parent-side
-synchronous SQLite probe after authorizing a reclamation or cold-storage commit.
+synchronous SQLite check after authorizing a reclamation or cold-storage commit.
 The parent now atomically accepts the commit after checking live authority and
-awaits settlement asynchronously, without that probe or its lock wait.
+awaits settlement asynchronously, without that check or its lock wait.
 
 Hot transcript reads identify their purpose in `operation`: `session transcript
 <purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,
@@ -965,6 +1033,22 @@ capturing raw prompt or response content:
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
 
+Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
+session's previous request) and `promptTokens` when reported by the provider.
+`providerPrefix` compares final encoded request segments against the last request
+with usable cache-read usage: system instructions, tools, history messages, and
+other request parameters. It names the first differing segment or `prefix-match`
+when the previous prefix is unchanged. A match does not prove provider cache
+availability or retention. Unsupported transports and missing baselines report
+`unavailable`.
+
+Only hashes are retained, within the existing 512-entry diagnostic tracker.
+History comparison keeps the first 512 message hashes and one remaining-tail
+hash. A changed tail reports `message-tail:512`; a growing or shrinking tail
+reports `unverified-after:512` because its earlier prefix cannot be verified.
+Background sessions sharing a provider cache key keep separate diagnostic
+baselines. No prompt content or digest values appear in these warnings.
+
 ### Console styles
 
 `logging.consoleStyle` accepts `pretty` or `json`:
@@ -979,46 +1063,27 @@ to `"pretty"`.
 
 ### Redaction
 
-OpenClaw can redact sensitive tokens before they hit console output, file logs,
-OTLP log records, persisted session transcript text, or Control UI tool
-event payloads (tool start args, partial/final result payloads, derived
-exec output, and patch summaries):
+OpenClaw masks sensitive values in console output, file logs, diagnostic and
+support exports, and OpenTelemetry output. Config snapshots, audit output, and
+credential-bearing URLs and command-line options retain their credential masking.
 
-- Sensitive-value redaction is always enabled.
-- `logging.redactPatterns`: list of regex strings that replaces the default string list for log/transcript output. Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply, including when this list is copied or customized. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
+`logging.redactPatterns` replaces the default regex string list for logs and
+diagnostics. Built-in structural protections for form bodies, structured
+authorization headers, and bare AWS secret access keys always apply, including
+when this list is customized. Redaction is best-effort; review diagnostic
+exports before sharing them.
 
-File logs use JSONL; active session transcripts live in the
-[per-agent SQLite database](/reference/database-schemas#database-layout). Matching
-secret values are masked before the line or message is persisted. Redaction is best-effort:
-it applies to text-bearing message content and log strings, not every
-identifier or binary payload field.
+Tool arguments and results are not secret-masked. This includes model context,
+session transcripts, tool events and summaries in the Control UI, session-history
+and search results, and reads of `.env` files. Source such as
+`API_TOKEN = computeToken()` reaches the model unchanged. Existing size limits,
+media handling, and history visibility rules still apply.
 
-Transcript redaction does not replace the live arguments used to execute tools.
-Canonical assistant tool-call IDs and matching tool-result IDs remain unchanged
-so stored history can correlate with live tool events. This exemption applies
-only to protocol metadata; the same values in arguments, results, or nested
-payloads still pass through redaction.
-
-In the OpenClaw harness, finalized tool-result text is masked after middleware,
-before entering live model context. This also covers exec output and tool errors;
-it preserves media bytes and the original arguments used to execute tools.
-Redaction happens when the result is added, keeping later prompt replay stable.
-Model-visible tool-result text uses narrower assignment matching so source code
-remains intact. Registered secrets and explicit credential forms, including
-structured fields, authorization headers, URL credentials, and known token
-formats, remain masked. Direct reads of `.env` files apply
-broader assignment masking before their content becomes a tool result. Other
-config and source reads preserve opaque values; register actual secrets instead
-of relying on key-name matching. Bare source assignments such as
-`token = timeObserverToken` remain unchanged.
-
-The built-in defaults cover common API credentials and payment-credential field
-names such as card number, CVC/CVV, shared payment token, and payment credential
-when they appear as JSON fields, URL parameters, CLI flags, or assignments.
-
-OpenClaw also redacts safety-boundary payloads shown to UI clients, support
-bundles, diagnostics observers, approval prompts, or agent tools. Custom
-`logging.redactPatterns` can add project-specific patterns on those surfaces.
+Active session transcripts live in the
+[per-agent SQLite database](/reference/database-schemas#database-layout).
+They can contain credentials and other private data returned by tools or supplied
+in conversation. Protect access to the state directory and review transcripts
+before sharing them. Already-masked historical content cannot be reconstructed.
 
 ## Diagnostics and OpenTelemetry
 

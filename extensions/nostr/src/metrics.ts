@@ -50,9 +50,7 @@ export interface MetricEvent {
   labels?: Record<string, string | number>;
 }
 
-type OnMetricCallback = (event: MetricEvent) => void;
-
-export function createMetrics(onMetric?: OnMetricCallback) {
+export function createMetrics(onMetric?: (event: MetricEvent) => void) {
   return {
     emit(name: MetricName, value = 1, labels?: Record<string, string | number>): void {
       onMetric?.({ name, value, timestamp: Date.now(), labels });

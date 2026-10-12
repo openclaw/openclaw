@@ -19,9 +19,7 @@ interface JsoncParseResult {
   readonly diagnostics: readonly Diagnostic[];
 }
 
-type LineMap = {
-  lineForOffset(offset: number): number;
-};
+type LineForOffset = (offset: number) => number;
 
 export function parseJsonc(raw: string): JsoncParseResult {
   const inputBytes = Buffer.byteLength(raw, "utf8");
@@ -50,12 +48,12 @@ export function parseJsonc(raw: string): JsoncParseResult {
     disallowComments: false,
     allowEmptyContent: true,
   });
-  const lineMap = createLineMap(raw);
-  const diagnostics = errors.map((error) => toDiagnostic(error, lineMap, tree));
+  const lineForOffset = createLineForOffset(raw);
+  const diagnostics = errors.map((error) => toDiagnostic(error, lineForOffset, tree));
   let root: JsoncValue | null = null;
   if (tree && diagnostics.every((d) => d.severity !== "error")) {
     try {
-      root = nodeToJsoncValue(tree, lineMap, 0);
+      root = nodeToJsoncValue(tree, lineForOffset, 0);
     } catch (err) {
       diagnostics.push({
         line: 1,
@@ -70,7 +68,7 @@ export function parseJsonc(raw: string): JsoncParseResult {
     ast: {
       kind: "jsonc",
       raw,
-      root: diagnostics.every((d) => d.severity !== "error") ? root : null,
+      root,
     },
     diagnostics,
   };
@@ -78,7 +76,7 @@ export function parseJsonc(raw: string): JsoncParseResult {
 
 function toDiagnostic(
   error: ParseError,
-  lineMap: LineMap,
+  lineForOffset: LineForOffset,
   tree: JsoncParserNode | undefined,
 ): Diagnostic {
   const treeEnd = tree ? tree.offset + tree.length : 0;
@@ -87,18 +85,22 @@ function toDiagnostic(
     errorCode === JSONC_PARSE_END_OF_FILE_EXPECTED ||
     (tree !== undefined && errorCode === JSONC_PARSE_INVALID_SYMBOL && error.offset >= treeEnd);
   return {
-    line: lineMap.lineForOffset(error.offset),
+    line: lineForOffset(error.offset),
     message: printParseErrorCode(error.error),
     severity: isTrailingInput ? "warning" : "error",
     code: isTrailingInput ? "OC_JSONC_TRAILING_INPUT" : "OC_JSONC_PARSE_FAILED",
   };
 }
 
-function nodeToJsoncValue(node: JsoncParserNode, lineMap: LineMap, depth: number): JsoncValue {
+function nodeToJsoncValue(
+  node: JsoncParserNode,
+  lineForOffset: LineForOffset,
+  depth: number,
+): JsoncValue {
   if (depth > MAX_PARSE_DEPTH) {
     throw new Error(`structural depth exceeded MAX_PARSE_DEPTH (${MAX_PARSE_DEPTH})`);
   }
-  const line = lineMap.lineForOffset(node.offset);
+  const line = lineForOffset(node.offset);
   switch (node.type) {
     case "object":
       return {
@@ -116,8 +118,8 @@ function nodeToJsoncValue(node: JsoncParserNode, lineMap: LineMap, depth: number
           return [
             {
               key: String(keyNode.value),
-              line: lineMap.lineForOffset(keyNode.offset),
-              value: nodeToJsoncValue(valueNode, lineMap, depth + 1),
+              line: lineForOffset(keyNode.offset),
+              value: nodeToJsoncValue(valueNode, lineForOffset, depth + 1),
             },
           ];
         }),
@@ -126,7 +128,9 @@ function nodeToJsoncValue(node: JsoncParserNode, lineMap: LineMap, depth: number
       return {
         kind: "array",
         line,
-        items: (node.children ?? []).map((child) => nodeToJsoncValue(child, lineMap, depth + 1)),
+        items: (node.children ?? []).map((child) =>
+          nodeToJsoncValue(child, lineForOffset, depth + 1),
+        ),
       };
     case "string":
       return { kind: "string", value: String(node.value), line };
@@ -141,27 +145,25 @@ function nodeToJsoncValue(node: JsoncParserNode, lineMap: LineMap, depth: number
   }
 }
 
-function createLineMap(raw: string): LineMap {
+function createLineForOffset(raw: string): LineForOffset {
   const starts = [0];
   for (let i = 0; i < raw.length; i++) {
     if (raw[i] === "\n") {
       starts.push(i + 1);
     }
   }
-  return {
-    lineForOffset(offset) {
-      let low = 0;
-      let high = starts.length - 1;
-      while (low <= high) {
-        const mid = Math.floor((low + high) / 2);
-        const start = starts[mid] ?? 0;
-        if (start <= offset) {
-          low = mid + 1;
-        } else {
-          high = mid - 1;
-        }
+  return (offset) => {
+    let low = 0;
+    let high = starts.length - 1;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const start = starts[mid] ?? 0;
+      if (start <= offset) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
       }
-      return Math.max(1, high + 1);
-    },
+    }
+    return Math.max(1, high + 1);
   };
 }

@@ -55,24 +55,22 @@ export function applySessionsPatchSubagentPolicy(params: {
       if (unsupported) {
         return unsupported;
       }
-      if (raw !== 1) {
-        return "invalid inheritedToolPolicyVersion (expected 1)";
-      }
       next.inheritedToolPolicyVersion = 1;
     }
   }
 
   for (const field of ["inheritedToolDeny", "inheritedToolAllow"] as const) {
     const raw = patch[field];
+    if (raw !== undefined) {
+      // An operator-modified ceiling cannot retain a spawn-owned exception to the old snapshot.
+      delete next.delegatedToolPolicy;
+    }
     if (raw === null) {
       delete next[field];
       continue;
     }
     if (raw === undefined) {
       continue;
-    }
-    if (!Array.isArray(raw)) {
-      return `invalid ${field} (use an array of tool names)`;
     }
     const unsupported = unsupportedField(field, storeKey);
     if (unsupported) {

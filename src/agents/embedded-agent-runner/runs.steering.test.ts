@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionWithdrawnError,
+} from "../../auto-reply/reply/message-injection-authority.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
@@ -169,7 +173,13 @@ describe("embedded-agent active-run steering", () => {
         await expect(queueGuarded(sessionId, "Green", options, () => true)).resolves.toMatchObject(
           input === "overlay"
             ? { queued: true }
-            : { queued: false, reason: "input_visibility_mismatch" },
+            : {
+                queued: false,
+                reason:
+                  input === "wrong-authority-overlay"
+                    ? "tool_authority_mismatch"
+                    : "input_visibility_mismatch",
+              },
         );
         expect(claim).toHaveBeenCalledTimes(authorized && !image ? 1 : 0);
         expect(cancel).toHaveBeenCalledTimes(image ? 1 : 0);
@@ -347,51 +357,44 @@ describe("embedded-agent active-run steering", () => {
     expect(handle.queueMessage).not.toHaveBeenCalled();
   });
 
-  it("reports async steering rejection", async () => {
-    start({
-      queueMessage: async () => {
-        throw new Error("cannot steer a compact turn");
-      },
-    });
-    const outcome = await queueAsync(sessionId, "continue");
-    expect(outcome).toEqual(failure("runtime_rejected", "cannot steer a compact turn"));
-    expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
-      "queue_message_failed reason=runtime_rejected sessionId=session gatewayHealth=live error=cannot steer a compact turn",
-    );
-  });
-
-  it.each([false, true])("does not replay pending input: unconfirmed=%s", async (unconfirmed) => {
-    const error = new QuestionAnswerUnconfirmedError(new Error("answer receipt unavailable"));
-    const claim = vi.fn(async () => {
+  it.each(["accepted", "wrapped-withdrawal"] as const)(
+    "does not replay pending input: %s",
+    async (disposition) => {
+      const unconfirmed = disposition !== "accepted";
+      const error = new QuestionAnswerUnconfirmedError(
+        new MessageInjectionWithdrawnError("exact queue input withdrawn"),
+      );
+      const claim = vi.fn(async () => {
+        if (unconfirmed) {
+          throw new Error("backend failed", { cause: error });
+        }
+        return true;
+      });
+      const handle = start({
+        toolAuthorityFingerprint: "fallback",
+        claimPendingUserInputAnswer: claim,
+      });
+      const options = {
+        isInboundUserMessage: true,
+        onQueueAccepted: vi.fn(),
+        onQueueSettled: vi.fn(),
+        pendingInputAuthorityFingerprint: "fallback",
+        toolAuthorityFingerprint: "default",
+      } as const;
+      const outcome = queueAsync(sessionId, "2", options);
       if (unconfirmed) {
-        throw error;
+        await expect(outcome).rejects.toBe(error);
+        expect(options.onQueueAccepted).not.toHaveBeenCalled();
+        expect(options.onQueueSettled).not.toHaveBeenCalled();
+      } else {
+        await expect(outcome).resolves.toMatchObject({ queued: true, target: "embedded_run" });
+        expect(options.onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+        expect(options.onQueueSettled).toHaveBeenCalledOnce();
       }
-      return true;
-    });
-    const handle = start({
-      toolAuthorityFingerprint: "fallback",
-      claimPendingUserInputAnswer: claim,
-    });
-    const options = {
-      isInboundUserMessage: true,
-      onQueueAccepted: vi.fn(),
-      onQueueSettled: vi.fn(),
-      pendingInputAuthorityFingerprint: "fallback",
-      toolAuthorityFingerprint: "default",
-    } as const;
-    const outcome = queueAsync(sessionId, "2", options);
-    if (unconfirmed) {
-      await expect(outcome).rejects.toBe(error);
-      expect(options.onQueueAccepted).not.toHaveBeenCalled();
-      expect(options.onQueueSettled).not.toHaveBeenCalled();
-    } else {
-      await expect(outcome).resolves.toMatchObject({ queued: true, target: "embedded_run" });
-      expect(options.onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
-      expect(options.onQueueSettled).toHaveBeenCalledOnce();
-    }
-    expect(claim).toHaveBeenCalledExactlyOnceWith("2", options);
-    expect(handle.queueMessage).not.toHaveBeenCalled();
-  });
+      expect(claim).toHaveBeenCalledExactlyOnceWith("2", options);
+      expect(handle.queueMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])("rejects unmatched authority: unproven image=%s", async (image) => {
     const claim = vi.fn(async () => image),
@@ -429,34 +432,109 @@ describe("embedded-agent active-run steering", () => {
     },
   );
 
-  it("preserves unconfirmed steering receipts", async () => {
-    const queueMessage = vi.fn(
-      async (_text: string, options?: EmbeddedAgentQueueMessageOptions) => {
-        options?.onQueueAccepted?.(true);
-        return { transcriptCommit: "unconfirmed" as const, errorMessage: "receipt unavailable" };
-      },
-    );
-    start({ toolAuthorityFingerprint: "same", supportsTranscriptCommitWait: true, queueMessage });
-    const onQueueAccepted = vi.fn();
-    await expect(
-      queueAsync(sessionId, "continue", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: "same",
-        waitForTranscriptCommit: true,
-        onQueueAccepted,
-      }),
-    ).resolves.toEqual({
-      queued: true,
-      sessionId,
-      target: "embedded_run",
-      gatewayHealth: "live",
-      transcriptCommit: "unconfirmed",
-      errorMessage: "receipt unavailable",
-      enqueuedAtMs: expect.any(Number),
-    });
-    expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
-    expect(queueMessage).toHaveBeenCalledOnce();
-  });
+  it.each(["receipt", "wrapped-cleanup-error"] as const)(
+    "preserves accepted steering custody after %s",
+    async (deliveryFailure) => {
+      const acceptedError = new MessageInjectionAcceptedUnconfirmedError({
+        cause: new Error("admission cleanup failed"),
+      });
+      const queueMessage = vi.fn(
+        async (_text: string, options?: EmbeddedAgentQueueMessageOptions) => {
+          if (deliveryFailure === "wrapped-cleanup-error") {
+            throw new Error("backend settlement failed", { cause: acceptedError });
+          }
+          options?.onQueueAccepted?.(true);
+          return { transcriptCommit: "unconfirmed" as const, errorMessage: "receipt unavailable" };
+        },
+      );
+      start({ toolAuthorityFingerprint: "same", supportsTranscriptCommitWait: true, queueMessage });
+      const onQueueAccepted = vi.fn();
+      await expect(
+        queueAsync(sessionId, "continue", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: "same",
+          waitForTranscriptCommit: true,
+          onQueueAccepted,
+        }),
+      ).resolves.toEqual({
+        queued: true,
+        sessionId,
+        target: "embedded_run",
+        gatewayHealth: "live",
+        transcriptCommit: "unconfirmed",
+        errorMessage: deliveryFailure === "receipt" ? "receipt unavailable" : acceptedError.message,
+        enqueuedAtMs: expect.any(Number),
+      });
+      if (deliveryFailure === "receipt") {
+        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      } else {
+        expect(onQueueAccepted).not.toHaveBeenCalled();
+      }
+      expect(queueMessage).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["completion", "observer", "before-acceptance"] as const)(
+    "retains prepared sink custody after %s failure",
+    async (failurePoint) => {
+      const completionError = new Error("backend completion failed");
+      const observerError = new Error("acceptance observer failed");
+      const onQueueAccepted = vi.fn(() => {
+        if (failurePoint === "observer") {
+          throw observerError;
+        }
+      });
+      const onQueueSettled = vi.fn();
+      const queueMessage = vi.fn(async () => {});
+      const queueMessageAsync = vi.fn<
+        NonNullable<
+          NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>["queueMessageAsync"]
+        >
+      >(async (_text, options, preparation) => {
+        await preparation.prepareCurrent();
+        preparation.assertCurrent();
+        if (failurePoint !== "before-acceptance") {
+          options?.onQueueAccepted?.(true);
+        }
+        throw completionError;
+      });
+      const handle = start({
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage,
+          queueMessageAsync,
+        },
+      });
+      const outcome = await queueGuarded(
+        sessionId,
+        "continue",
+        { onQueueAccepted, onQueueSettled },
+        () => true,
+        { assertCurrent: () => {}, prepareCurrent: async () => {} },
+      );
+      expect(queueMessageAsync).toHaveBeenCalledOnce();
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(onQueueSettled).not.toHaveBeenCalled();
+      if (failurePoint === "before-acceptance") {
+        expect(outcome).toEqual(failure("runtime_rejected", completionError.message));
+        expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
+          "queue_message_failed reason=runtime_rejected sessionId=session gatewayHealth=live error=backend completion failed",
+        );
+        expect(onQueueAccepted).not.toHaveBeenCalled();
+      } else {
+        expect(outcome).toMatchObject({
+          queued: true,
+          transcriptCommit: "unconfirmed",
+          errorMessage:
+            failurePoint === "observer" ? observerError.message : completionError.message,
+        });
+        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      }
+      clearActiveEmbeddedRun(sessionId, handle);
+      expect(onQueueSettled).toHaveBeenCalledTimes(failurePoint === "before-acceptance" ? 0 : 1);
+    },
+  );
 
   it("retains custody across a transcript wait retry", async () => {
     const queueMessage = vi.fn(async () => {}),

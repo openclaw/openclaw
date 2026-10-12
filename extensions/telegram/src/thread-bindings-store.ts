@@ -42,7 +42,7 @@ export type TelegramThreadBindingManager = {
     targetSessionKey: string,
     update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord,
   ) => Promise<TelegramThreadBindingRecord[]>;
-  /** Synchronous SDK compatibility only; bundled callers use queued mutations. */
+  /** @deprecated Use touchConversation or updateBySessionKey; removed in the next Plugin SDK major. */
   updateConversationSync: (
     conversationId: string,
     update: (entry: TelegramThreadBindingRecord) => TelegramThreadBindingRecord | undefined,
@@ -106,14 +106,11 @@ export function sanitizeStoredBinding(
   if (typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)) {
     record.maxAgeMs = Math.max(0, Math.floor(entry.maxAgeMs));
   }
-  if (typeof entry?.agentId === "string" && entry.agentId.trim()) {
-    record.agentId = entry.agentId.trim();
-  }
-  if (typeof entry?.label === "string" && entry.label.trim()) {
-    record.label = entry.label.trim();
-  }
-  if (typeof entry?.boundBy === "string" && entry.boundBy.trim()) {
-    record.boundBy = entry.boundBy.trim();
+  for (const field of ["agentId", "label", "boundBy"] as const) {
+    const value = entry?.[field];
+    if (typeof value === "string" && value.trim()) {
+      record[field] = value.trim();
+    }
   }
   const metadata = normalizeMetadataForStore(
     entry?.metadata && typeof entry.metadata === "object" ? { ...entry.metadata } : undefined,

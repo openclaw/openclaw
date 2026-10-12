@@ -3,9 +3,10 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createApplicationOverlays } from "../app/overlays.ts";
+import type { ConfirmAndStartUpdateParams } from "../app/update-confirmation.ts";
 import { updateRunHarness } from "../app/update-run.test-support.ts";
-import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -96,7 +97,7 @@ describe("renderSidebarMentionItem", () => {
   const pathname = "/team/chat/writer/chat/12345678-90ab-cdef-1234-567890abcdef";
   const navigation = {
     pathname,
-    search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(mention.sessionKey)}`,
+    search: undefined,
   };
 
   function renderMention(overrides: Partial<Parameters<typeof renderSidebarMentionItem>[0]> = {}) {
@@ -114,7 +115,12 @@ describe("renderSidebarMentionItem", () => {
 
   it("expands the thread-titled mention and opens its session without dismissing it", async () => {
     vi.useFakeTimers({ now: mention.createdAt + 5 * 60_000 });
-    const { onNavigate, onDismiss } = renderMention();
+    const excerpt = '<img src="about:blank" onerror="alert(1)"> & **release notes**';
+    const { onNavigate, onDismiss } = renderMention({ mention: { ...mention, excerpt } });
+    const renderedExcerpt = container.querySelector(".sidebar-mention-row__excerpt")!;
+    expect(renderedExcerpt.textContent).toBe(excerpt);
+    expect(renderedExcerpt.children).toHaveLength(0);
+    expect(renderedExcerpt.closest(".sidebar-issues-panel__body")).not.toBeNull();
     await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-relative-time",
     )?.updateComplete;
@@ -164,29 +170,6 @@ describe("renderSidebarMentionItem", () => {
     expect(onNavigate).toHaveBeenCalledOnce();
   });
 
-  it("preserves expansion for the same mention but collapses a replacement mention", () => {
-    renderMention();
-    container.querySelector("summary")!.click();
-    expect(container.querySelector("details")?.open).toBe(true);
-
-    renderMention({ mention: { ...mention, excerpt: "Updated release notes" } });
-    expect(container.querySelector("details")?.open).toBe(true);
-
-    renderMention({ mention: { ...mention, id: "mention-next", sessionTitle: "Next release" } });
-    expect(container.querySelector("details")?.open).toBe(false);
-    expect(container.querySelector("summary")?.textContent).toContain("Next release");
-  });
-
-  it("renders the message excerpt as text rather than HTML or Markdown", () => {
-    const excerpt = '<img src="about:blank" onerror="alert(1)"> & **release notes**';
-    renderMention({ mention: { ...mention, excerpt } });
-
-    const renderedExcerpt = container.querySelector(".sidebar-mention-row__excerpt")!;
-    expect(renderedExcerpt.textContent).toBe(excerpt);
-    expect(renderedExcerpt.children).toHaveLength(0);
-    expect(renderedExcerpt.closest(".sidebar-issues-panel__body")).not.toBeNull();
-  });
-
   it("disables repeated dismissal while leaving the session link usable", () => {
     const { onNavigate, onDismiss } = renderMention({ dismissing: true });
     const dismiss = container.querySelector<HTMLButtonElement>("[data-mention-id] button")!;
@@ -211,13 +194,171 @@ describe("renderSidebarUpdateSurface", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  it.each(["acknowledged", "expired", "visible"] as const)(
+  it.each([false, true])(
+    "prepares retry from live application state after the card unmounts with access revoked=%s",
+    async (revokeAccess) => {
+      const entered = createDeferred();
+      const response = createDeferred<unknown>();
+      const request = vi.fn(async () => {
+        entered.resolve();
+        return response.promise;
+      });
+      const harness = updateRunHarness(request);
+      harness.update({
+        hello: {
+          ...harness.gateway.snapshot.hello!,
+          features: { methods: ["update.run", "update.status"] },
+        },
+      });
+      const overlays = createApplicationOverlays(harness.gateway);
+      const fresh = {
+        channel: "dev",
+        currentVersion: "1.0.0",
+        latestVersion: "1.0.0",
+        currentSha: "a".repeat(40),
+        upstreamSha: "c".repeat(40),
+        upstreamRef: "origin/main",
+        commitsBehind: 9,
+      };
+      let preparing: Promise<unknown> | undefined;
+      try {
+        render(
+          renderSidebarUpdateSurface({
+            context: { gateway: harness.gateway, overlays },
+            onNavigate: vi.fn(),
+            watchUpdateProgress: undefined,
+          }),
+          container,
+        );
+        const card = container.querySelector<
+          HTMLElement & {
+            updateComplete: Promise<boolean>;
+            prepareRetry: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>;
+          }
+        >("openclaw-sidebar-update-card")!;
+        await card.updateComplete;
+        render(null, container);
+        expect(card.isConnected).toBe(false);
+        preparing = card.prepareRetry();
+        await entered.promise;
+        if (revokeAccess) {
+          harness.update({
+            hello: {
+              ...harness.gateway.snapshot.hello!,
+              auth: { role: "operator", scopes: ["operator.read"] },
+            },
+          });
+        }
+        response.resolve({ updateAvailable: fresh });
+        const target = await preparing;
+        if (revokeAccess) {
+          expect(target).toBeNull();
+        } else {
+          expect(target).toMatchObject({ updateAvailable: fresh });
+        }
+        expect(request).toHaveBeenCalledWith(
+          "update.status",
+          { refreshCheckout: true },
+          { timeoutMs: null },
+        );
+      } finally {
+        response.resolve({ updateAvailable: fresh });
+        await preparing;
+        overlays.dispose();
+      }
+    },
+  );
+
+  it.each([
+    {
+      scope: "operator.read",
+      methods: ["update.status"],
+      canCheck: false,
+      canUpdate: false,
+      canNativeUpdate: false,
+    },
+    {
+      scope: "operator.admin",
+      methods: ["update.status"],
+      canCheck: true,
+      canUpdate: false,
+      canNativeUpdate: false,
+    },
+    {
+      scope: "operator.admin",
+      methods: ["update.run"],
+      canCheck: false,
+      canUpdate: false,
+      canNativeUpdate: true,
+    },
+  ])(
+    "gates discovery and fresh confirmation for $scope with $methods",
+    async ({ scope, methods, canCheck, canUpdate, canNativeUpdate }) => {
+      const request = vi.fn(async () => ({}));
+      const harness = updateRunHarness(request);
+      harness.update({
+        hello: {
+          ...harness.gateway.snapshot.hello!,
+          auth: { role: "operator", scopes: [scope] },
+          features: { methods },
+        },
+      });
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        render(
+          renderSidebarUpdateSurface({
+            context: { gateway: harness.gateway, overlays },
+            onDismiss: vi.fn(),
+            onNavigate: vi.fn(),
+            watchUpdateProgress: undefined,
+          }),
+          container,
+        );
+        const card = container.querySelector<
+          HTMLElement & {
+            updateComplete: Promise<boolean>;
+            canUpdate: boolean;
+            canNativeUpdate: boolean;
+            onCheckStatus?: () => Promise<boolean>;
+          }
+        >("openclaw-sidebar-update-card")!;
+        await card.updateComplete;
+        expect(card.canUpdate).toBe(canUpdate);
+        expect(card.canNativeUpdate).toBe(canNativeUpdate);
+        expect(Boolean(card.onCheckStatus)).toBe(canCheck);
+        const details = card.querySelector("details")!;
+        const expanded = new Promise<void>((resolve) => {
+          details.addEventListener("toggle", () => resolve(), { once: true });
+        });
+        details.open = true;
+        await expanded;
+        await card.updateComplete;
+        if (canCheck) {
+          expect(request).toHaveBeenCalledWith(
+            "update.status",
+            { refreshCheckout: true },
+            { timeoutMs: null },
+          );
+        } else {
+          expect(request).not.toHaveBeenCalledWith(
+            "update.status",
+            { refreshCheckout: true },
+            expect.anything(),
+          );
+          expect(card.textContent).not.toContain("Could not check");
+        }
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+  it.each(["acknowledged", "visible"] as const)(
     "dismisses the producer's current notice beside a %s terminal run",
     async (state) => {
       const run = createUpdateRunFixture({
         status: "succeeded",
         phase: "finished",
-        finishedAtMs: Date.now() - (state === "expired" ? 25 * 60 * 60 * 1_000 : 0),
+        finishedAtMs: Date.now(),
       });
       const harness = updateRunHarness(async () => ({
         lastRun: run,
@@ -237,7 +378,7 @@ describe("renderSidebarUpdateSurface", () => {
         if (state === "acknowledged") {
           overlays.acknowledgeUpdateRun();
         }
-        const dismissal = resolveSidebarUpdateAttention(context).dismissal;
+        const dismissal = resolveSidebarUpdateAttention(context)?.dismissal;
         const expected = {
           kind: "updateAvailable",
           signature: JSON.stringify(

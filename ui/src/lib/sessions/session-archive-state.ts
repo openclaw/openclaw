@@ -1,13 +1,9 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionPatchResult } from "./patch.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import type { SessionArchiveVisibility } from "./session-capability.ts";
 import type { SessionArchiveFields } from "./session-pending-rows.ts";
-import {
-  mergeSessionFieldObservations,
-  type FieldObservation,
-  type createSessionRowProvenance,
-} from "./session-row-provenance.ts";
+import type { createSessionRowProvenance } from "./session-row-provenance.ts";
 
 export const projectSessionArchiveFields = (
   archived: boolean,
@@ -28,51 +24,41 @@ export const projectSessionArchiveFields = (
       }
     : { archived: false, archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
 
-type ArchiveMetadata = Pick<GatewaySessionRow, "archivedAt" | "archivedBy" | "archiveReason">;
+type ArchiveMetadata = Pick<
+  GatewaySessionRow,
+  "archivedAt" | "archivedBy" | "archiveReason" | "updatedAt"
+>;
 type ConfirmedArchiveState = ArchiveMetadata & {
   sessionId: string;
   archived: boolean;
-  observation: FieldObservation;
 };
 
 export function createSessionArchiveState(
   publishedRow: (key: string) => GatewaySessionRow | undefined,
   onChange: () => void,
-  provenance: Pick<
-    ReturnType<typeof createSessionRowProvenance>,
-    "fieldObservation" | "observeFields" | "inheritRow" | "mergeRow"
-  >,
+  provenance: Pick<ReturnType<typeof createSessionRowProvenance>, "inheritRow">,
 ) {
   const confirmed = new Map<string, ConfirmedArchiveState>();
   const record = (
     key: string,
     archived: boolean,
     row: ArchiveMetadata & { sessionId: string },
-    observation: FieldObservation,
   ): boolean => {
     const previous = confirmed.get(key);
+    const sameIncarnation = previous?.sessionId === row.sessionId ? previous : undefined;
     if (
-      previous &&
-      previous.sessionId !== row.sessionId &&
-      observation.source.revision <= previous.observation.source.revision
+      sameIncarnation?.updatedAt != null &&
+      row.updatedAt != null &&
+      row.updatedAt < sameIncarnation.updatedAt
     ) {
       return false;
-    }
-    const sameIncarnation = previous?.sessionId === row.sessionId ? previous : undefined;
-    const merged = mergeSessionFieldObservations(sameIncarnation?.observation, observation);
-    if (sameIncarnation && !merged.useOffered) {
-      if (merged.observation === sameIncarnation.observation) {
-        return false;
-      }
-      confirmed.set(key, { ...sameIncarnation, observation: merged.observation });
-      return true;
     }
     const sameArchive = sameIncarnation?.archived ? sameIncarnation : undefined;
     // Keep the restore receipt too: an older rowless acknowledgement must not recreate the archive.
     confirmed.set(key, {
       sessionId: row.sessionId,
       archived,
-      observation: merged.observation,
+      updatedAt: row.updatedAt ?? sameIncarnation?.updatedAt,
       ...(archived
         ? {
             archivedAt: row.archivedAt ?? sameArchive?.archivedAt,
@@ -93,18 +79,14 @@ export function createSessionArchiveState(
     if (!archive || !row.sessionId) {
       return row;
     }
-    // Only a newly admitted incarnation can replace the held receipt.
-    record(
-      row.key,
-      row.archived === true,
-      { ...row, sessionId: row.sessionId },
-      provenance.fieldObservation(row, "archived"),
-    );
     const current = confirmed.get(row.key);
     if (!current || current.sessionId !== row.sessionId) {
       return row;
     }
     const fields = projectSessionArchiveFields(current.archived);
+    if (!current.archived && row.archived === undefined) {
+      Reflect.deleteProperty(fields, "archived");
+    }
     if (current.archived) {
       if (current.archivedAt !== undefined) {
         fields.archivedAt = current.archivedAt;
@@ -119,17 +101,12 @@ export function createSessionArchiveState(
     const entries = Object.entries(fields);
     const values: Record<string, unknown> = row;
     if (
-      entries.every(([name, value]) => {
-        const observed = provenance.fieldObservation(row, name);
-        return (
-          values[name] === value &&
-          Object.hasOwn(values, name) === (value !== undefined) &&
-          mergeSessionFieldObservations(observed, current.observation).observation === observed
-        );
-      })
+      entries.every(
+        ([name, value]) =>
+          values[name] === value && Object.hasOwn(values, name) === (value !== undefined),
+      )
     ) {
-      // Preserve unrelated writer normalization through the existing self-merge owner.
-      return provenance.mergeRow(row, row);
+      return row;
     }
     const offered = provenance.inheritRow({ ...row, ...fields }, row);
     for (const [name, value] of entries) {
@@ -137,8 +114,17 @@ export function createSessionArchiveState(
         Reflect.deleteProperty(offered, name);
       }
     }
-    provenance.observeFields(offered, Object.keys(fields), current.observation);
-    return provenance.mergeRow(row, offered);
+    return offered;
+  };
+  const observe = (key: string, archived: boolean | null, row?: GatewaySessionRow): void => {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || archived === null || !row?.sessionId) {
+      return;
+    }
+    if (archived && pending.get(normalizedKey)?.sessionId === row.sessionId) {
+      pending.delete(normalizedKey);
+    }
+    record(normalizedKey, archived, { ...row, sessionId: row.sessionId });
   };
   return {
     clear,
@@ -146,7 +132,6 @@ export function createSessionArchiveState(
       key: string,
       archived: boolean,
       row: ArchiveMetadata & { sessionId: string },
-      observation: FieldObservation,
     ): boolean => {
       const normalizedKey = key.trim();
       const previous = confirmed.get(normalizedKey);
@@ -158,34 +143,24 @@ export function createSessionArchiveState(
         return false;
       }
       // Acknowledgements certify this incarnation; pending tokens keep their own lifetime.
-      return record(normalizedKey, archived, row, observation);
+      return record(normalizedKey, archived, row);
     },
     clearAll: () => {
       confirmed.clear();
       pending.clear();
     },
-    observe: (key: string, archived: boolean | null, row?: GatewaySessionRow): void => {
-      const normalizedKey = key.trim();
-      if (!normalizedKey || archived === null || !row?.sessionId) {
-        return;
+    observe,
+    observeRead(this: void, row: GatewaySessionRow) {
+      if (confirmed.has(row.key)) {
+        observe(row.key, row.archived === true, row);
       }
-      if (archived && pending.get(normalizedKey)?.sessionId === row.sessionId) {
-        pending.delete(normalizedKey);
-      }
-      record(
-        normalizedKey,
-        archived,
-        { ...row, sessionId: row.sessionId },
-        provenance.fieldObservation(row, "archived"),
-      );
     },
     applyRow,
     apply: (result: SessionsListResult | null): SessionsListResult | null => {
       if (!result || confirmed.size === 0) {
         return result;
       }
-      const sessions = result.sessions.map(applyRow);
-      return projectSessionResultRows(result, sessions);
+      return mapSessionResultRows(result, applyRow);
     },
     visibility: (key: string): SessionArchiveVisibility | undefined => {
       const normalizedKey = key.trim();

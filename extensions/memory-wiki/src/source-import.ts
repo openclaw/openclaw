@@ -9,15 +9,7 @@ import {
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-export type BridgeMemoryWikiResult = {
-  importedCount: number;
-  updatedCount: number;
-  skippedCount: number;
-  removedCount: number;
-  artifactCount: number;
-  workspaces: number;
-  pagePaths: string[];
-};
+export type BridgeMemoryWikiResult = Awaited<ReturnType<typeof syncImportedSourcePages>>;
 
 export function emptySourceImportResult(): BridgeMemoryWikiResult {
   return {
@@ -48,7 +40,7 @@ export async function syncImportedSourcePages(params: {
   }) => Promise<ImportedSourceBatch>;
   canPrune?: () => boolean;
   logDetails: Record<string, number>;
-}): Promise<BridgeMemoryWikiResult> {
+}) {
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   let initializePromise: ReturnType<typeof initializeMemoryWikiVault> | undefined;
   const prepareWrite = async () => {

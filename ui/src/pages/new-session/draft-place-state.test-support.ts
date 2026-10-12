@@ -86,5 +86,14 @@ export function createRepositoryFixture(
     () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
     { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
   );
-  return { state, browser, context, persistPreference, readPreference, request, requestUpdate };
+  return {
+    state,
+    browser,
+    context,
+    gateway,
+    persistPreference,
+    readPreference,
+    request,
+    requestUpdate,
+  };
 }

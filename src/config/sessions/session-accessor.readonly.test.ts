@@ -13,6 +13,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -134,7 +135,7 @@ describe("session accessor readonly listing", () => {
     replaceSessionEntrySync({ ...scope, sessionKey }, entry);
     closeOpenClawAgentDatabasesForTest();
 
-    const peer = new DatabaseSync(storePath);
+    const peer = openNodeSqliteDatabase(storePath);
     try {
       withSessionEntryReadOnlyScope(scope, () => {
         expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("shared");
@@ -314,10 +315,10 @@ describe("session accessor readonly listing", () => {
     listSessionEntriesReadOnly(scope);
     const database = openOpenClawAgentDatabase(scope);
     const update = database.db.prepare(
-      "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
+      "UPDATE session_nodes SET entry_json = ?, updated_at = ?, entry_valid = 0 WHERE session_key = ?",
     );
     update.run(
-      JSON.stringify({ sessionId: "pending-updated", updatedAt: 30, label: "fresh" }),
+      JSON.stringify({ sessionId: "pending", updatedAt: 30, label: "fresh" }),
       30,
       "agent:main:pending",
     );
@@ -349,7 +350,7 @@ describe("session accessor readonly listing", () => {
     expect(summary.count).toBe(7);
     expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(expectedKeys.slice(0, 3));
     expect(summary.recent[0]?.entry).toMatchObject({
-      sessionId: "pending-updated",
+      sessionId: "pending",
       label: "fresh",
     });
     expectDefined(summary.recent[0], "recent pending session").entry.label = "caller-owned";
@@ -367,7 +368,11 @@ describe("session accessor readonly listing", () => {
     };
     for (const projection of ["full", "list"] as const) {
       expect(loadExactSessionEntryReadOnly({ ...retainedScope, projection })).toBeUndefined();
-      for (const key of ["pending", "bad-json", "bad-timestamp"]) {
+      expect(
+        loadExactSessionEntryReadOnly({ ...scope, sessionKey: "agent:main:pending", projection })
+          ?.entry,
+      ).toMatchObject({ sessionId: "pending", updatedAt: 30, label: "fresh" });
+      for (const key of ["bad-json", "bad-timestamp"]) {
         expect(() =>
           loadExactSessionEntryReadOnly({ ...scope, sessionKey: `agent:main:${key}`, projection }),
         ).toThrow("openclaw doctor --fix");
@@ -393,7 +398,12 @@ describe("session accessor readonly listing", () => {
           ok: true,
           value: [{ sessionKey: "agent:main:tie-b", entry: { sessionId: "tie-b" } }],
         },
-        exactReadFailure,
+        {
+          ok: true,
+          value: [
+            { sessionKey: "agent:main:pending", entry: { sessionId: "pending", label: "fresh" } },
+          ],
+        },
         exactReadFailure,
         exactReadFailure,
         { ok: true, value: [{ sessionKey: "agent:main:tie-a", entry: { sessionId: "tie-a" } }] },

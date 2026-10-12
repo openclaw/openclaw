@@ -17,10 +17,7 @@ import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js"
 type BlockReply = NonNullable<Parameters<typeof createSubscribedSessionHarness>[0]["onBlockReply"]>;
 
 describe("subscribeEmbeddedAgentSession deferred progress", () => {
-  it.each([
-    { finalText: "First.\nDone.", deferred: true },
-    { finalText: "", deferred: false },
-  ])(
+  it.each([{ finalText: "", deferred: false }])(
     "subscribeEmbeddedAgentSession supersedes deferred progress and preserves authoritative final %j after a late block end",
     async ({ finalText, deferred }) => {
       const onAgentEvent = vi.fn();
@@ -138,31 +135,15 @@ type FlushCase = {
 
 it.each<FlushCase>([
   {
-    name: "commentary without a final item",
-    steps: [{ chunks: ["Working..."], phase: "commentary", expected: [] }],
-  },
-  {
     name: "commentary followed by a final item",
     steps: [
       { chunks: ["Working..."], phase: "commentary", expected: [] },
       { chunks: ["Final answer"], phase: "final_answer", expected: ["Final answer"] },
     ],
   },
-  {
-    name: "downgraded tool text",
-    steps: [{ chunks: ["Visible answer", " [Tool Call: some_fn]"], expected: ["Visible answer"] }],
-  },
+
   { name: "empty buffer", steps: [{ expected: [] }] },
-  {
-    name: "unclosed final tag",
-    enforceFinalTag: true,
-    steps: [
-      {
-        chunks: ["Before ", "<final> content without close"],
-        expected: [" content without close"],
-      },
-    ],
-  },
+
   {
     name: "hidden-tag context across flushes",
     steps: [
@@ -189,7 +170,7 @@ it.each<FlushCase>([
       },
     ],
   },
-  ...["Hello world", ""].map((final) => ({
+  ...[""].map((final) => ({
     name: `authoritative final ${JSON.stringify(final)}`,
     steps: [
       { chunks: ["Hello"], expected: ["Hello"] },

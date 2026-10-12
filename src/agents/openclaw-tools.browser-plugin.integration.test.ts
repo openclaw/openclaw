@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -22,10 +23,15 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import type { resolvePluginTools } from "../plugins/tools.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { jsonResult } from "./tools/common.js";
 
@@ -110,6 +116,10 @@ function authConfig(envName: string): OpenClawConfig {
 }
 
 beforeEach(() => {
+  // Exercise auth-source preparation even on hosts with configured search providers.
+  for (const name of listKnownProviderAuthEnvVarNamesCore({ config: {} })) {
+    vi.stubEnv(name, undefined);
+  }
   hoisted.resolvePluginTools.mockReturnValue([]);
 });
 afterEach(() => {
@@ -125,6 +135,57 @@ afterEach(() => {
 });
 
 describe("createOpenClawTools browser plugin integration", () => {
+  it("awaits account discovery before publishing message actions and schema", async () => {
+    const enteredDiscovery = createDeferred();
+    const releaseDiscovery = createDeferred();
+    const describeMessageTool = vi.fn(() => ({ actions: [] }));
+    const describeMessageToolAsync = vi.fn(async () => {
+      enteredDiscovery.resolve();
+      await releaseDiscovery.promise;
+      return {
+        actions: ["send", "react"] as const,
+        capabilities: ["delivery-pin"] as const,
+        schema: { properties: { reactionKind: Type.Optional(Type.String()) } },
+      };
+    });
+    installChannel({
+      ...createChannelTestPluginBase({ id: "matrix" }),
+      actions: {
+        describeMessageTool,
+        describeMessageToolAsync,
+      },
+    });
+    let published = false;
+    const pending = createOpenClawToolsAsync({
+      config: { tools: { web: { search: { enabled: false }, fetch: { enabled: false } } } },
+      agentChannel: "matrix",
+      agentAccountId: "work",
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    }).then((tools) => {
+      published = true;
+      return tools;
+    });
+    await awaitGateBeforeSettlement(
+      enteredDiscovery.promise,
+      pending,
+      "Message tool construction skipped asynchronous account discovery",
+    );
+    expect(published).toBe(false);
+    releaseDiscovery.resolve();
+    const message = (await pending).find((tool) => tool.name === "message");
+    expect(message?.description).toContain("react");
+    expect(message?.parameters).toMatchObject({
+      properties: {
+        action: { enum: expect.arrayContaining(["react"]) },
+        reactionKind: { type: "string" },
+        delivery: { type: "object", properties: { pin: expect.any(Object) } },
+      },
+    });
+    expect(describeMessageTool).not.toHaveBeenCalled();
+    expect(describeMessageToolAsync).toHaveBeenCalledOnce();
+  });
+
   it.each([SESSION_KEY, undefined])("binds delivery for %s", async (key) => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-delivery-"));
     const mediaUrl = path.join(workspaceDir, "photo.png");

@@ -23,22 +23,8 @@ type GitDeps = {
   ) => string;
 };
 
-type MobileReleaseOptions = {
-  androidPlan?: AndroidStorePlan;
-  build: string | null;
-  command: MobileReleaseCommand;
-  platform: MobileReleasePlatform;
-  remote: string;
-  rootDir: string;
-  sha: string;
-  version: string;
-  versionCode: string | null;
-};
-
-type RemoteRefState = {
-  ref: string;
-  sha: string;
-};
+type MobileReleaseOptions = ReturnType<typeof parseArgs>;
+type RemoteRefState = ReturnType<typeof readRemoteRefs>[number];
 
 const REF_PREFIX = "refs/openclaw/mobile-releases";
 const VERSION_RE = /^20\d{2}\.(?:[1-9]\d?)\.(?:[1-9]\d*)$/u;
@@ -134,7 +120,7 @@ function parseCommand(raw: string | undefined): MobileReleaseCommand {
   );
 }
 
-export function parseArgs(argv: string[]): MobileReleaseOptions {
+export function parseArgs(argv: string[]) {
   const command = parseCommand(argv[0]);
   const args: {
     build: string | null;
@@ -309,12 +295,7 @@ function readRemoteRef(
   return refs[0];
 }
 
-function readRemoteRefs(
-  remote: string,
-  pattern: string,
-  rootDir: string,
-  deps: GitDeps = {},
-): RemoteRefState[] {
+function readRemoteRefs(remote: string, pattern: string, rootDir: string, deps: GitDeps = {}) {
   const args = ["ls-remote", "--refs", remote, pattern];
   let result = gitAllowFailure(args, rootDir, deps);
   for (let retry = 0; waitForGitRetry(result, retry, `reading ${pattern}`); retry += 1) {

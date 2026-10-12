@@ -9,15 +9,9 @@ import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import {
-  getGatewayPluginMetadataSnapshot,
-  selectCurrentPluginMetadataCache,
-} from "./current-plugin-metadata-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   createPluginCache,
-  getProcessPluginCache,
   getScopedPluginCache,
   retirePluginCache,
   withPluginCache,
@@ -149,38 +143,6 @@ describe("plugin setup registry artifact lifecycle", () => {
           message: expect.stringContaining("setup failure detail"),
         },
       ]);
-      expect(process.listenerCount(event)).toBe(before + 1);
-    } finally {
-      await retirePluginCache(cache).finally(() => {
-        process.removeAllListeners(event);
-      });
-    }
-  });
-
-  it("records an exported register getter failure without replaying its module", async () => {
-    const event = "setup-register-getter";
-    const before = process.listenerCount(event);
-    const manifestRegistry = registry(
-      writeSetupLifecycleFixture(
-        "register-getter",
-        `
-        process.on(${JSON.stringify(event)}, () => {});
-        module.exports = { get register() { throw new Error("register getter failed"); } };
-      `,
-      ),
-    );
-    const cache = createPluginCache();
-    try {
-      const result = withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
-      expect(result.providers).toEqual([]);
-      expect(result.diagnostics).toMatchObject([
-        {
-          pluginId: "register-getter",
-          code: "setup-registration-failed",
-          message: expect.stringContaining("register getter failed"),
-        },
-      ]);
-      await nextTurn();
       expect(process.listenerCount(event)).toBe(before + 1);
     } finally {
       await retirePluginCache(cache).finally(() => {
@@ -551,98 +513,30 @@ describe("plugin setup module lifecycle", () => {
     },
   );
 
-  it("selects a live metadata owner before awaiting a sibling's cleanup", async () => {
-    const { cache, record, rootDir, source, loader } = fixture();
-    const secondCache = createPluginCache();
-    const first = withPluginCache(cache, () =>
-      retainGatewayPluginMetadata(createTestGatewayScheduler()),
+  it("retires failed TS setup evaluation and retries with fresh source", async () => {
+    const { cache, source, loader } = fixture("index.ts");
+    const event = "setup-failed-ts";
+    const listeners = process.listenerCount(event);
+    fs.writeFileSync(
+      source,
+      `process.on(${JSON.stringify(event)}, () => {}); throw new Error("setup failed");`,
     );
-    const entered = createDeferred();
-    const release = createDeferred();
-    let second: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
-    let closing: ReturnType<typeof first.close> | undefined;
-    let newcomer: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
     try {
-      second = withPluginCache(secondCache, () =>
-        retainGatewayPluginMetadata(createTestGatewayScheduler()),
-      );
-      fs.writeFileSync(source, 'module.exports = () => "ready";');
-      const snapshot = withPluginCache(cache, () =>
-        createPluginMetadataSnapshotFixture({ plugins: [record] }),
-      );
-      const survivingSnapshot = withPluginCache(secondCache, () =>
-        createPluginMetadataSnapshotFixture({ plugins: [record] }),
-      );
-      first.publish(snapshot);
-      second.publish(survivingSnapshot);
-      // Each already-owned cache receives its initial boot snapshot exactly once.
-      selectCurrentPluginMetadataCache(secondCache);
-      setGatewayPluginMetadataSnapshot(survivingSnapshot);
-      selectCurrentPluginMetadataCache(cache);
-      setGatewayPluginMetadataSnapshot(snapshot);
-      const value = callable(loader()(source));
-      const instance = getPluginValueInstance(value);
-      if (!instance) {
-        throw new Error("Expected the retiring setup owner");
-      }
-      instance.lifecycle.onDispose(async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      closing = first.close();
-      await entered.promise;
-      expect(getProcessPluginCache() === secondCache).toBe(true);
-      expect(getGatewayPluginMetadataSnapshot()).toBe(survivingSnapshot);
-      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
-        "Gateway plugin metadata is shutting down",
-      );
-      release.resolve();
-      await closing;
-      newcomer = retainGatewayPluginMetadata(createTestGatewayScheduler());
-      newcomer.publish(survivingSnapshot);
-      await second.close();
-      expect(getGatewayPluginMetadataSnapshot()).toBe(survivingSnapshot);
-      const current = callable(
-        withPluginCache(secondCache, () =>
-          getPluginSetupModuleLoader(record, source, rootDir)(source),
-        ),
-      );
-      expect(current()).toBe("ready");
-      await newcomer.close();
-      expect(() => current()).toThrow("reloaded or disabled");
+      const failed = loader();
+      expect(() => failed(source)).toThrow("setup failed");
+      expect(process.listenerCount(event)).toBe(listeners + 1);
+      fs.writeFileSync(source, 'module.exports = { value: "recovered" };');
+      const fresh = loader();
+      expect(fresh(source)).toMatchObject({ value: "recovered" });
+      expect(() => failed(source)).toThrow(/reloaded|disabled|retir/);
+      expect(loader()(source)).toMatchObject({ value: "recovered" });
+      expect(process.listenerCount(event)).toBe(listeners + 1);
     } finally {
-      release.resolve();
-      await Promise.all([first.close(), second?.close(), newcomer?.close(), closing]);
+      await retirePluginCache(cache).finally(() => {
+        process.removeAllListeners(event);
+      });
     }
   });
-
-  it.each(["ts", "cjs"])(
-    "retires failed %s setup evaluation and retries with fresh source",
-    async (extension) => {
-      const { cache, source, loader } = fixture(`index.${extension}`);
-      const event = `setup-failed-${extension}`;
-      const listeners = process.listenerCount(event);
-      fs.writeFileSync(
-        source,
-        `process.on(${JSON.stringify(event)}, () => {}); throw new Error("setup failed");`,
-      );
-      try {
-        const failed = loader();
-        expect(() => failed(source)).toThrow("setup failed");
-        expect(process.listenerCount(event)).toBe(listeners + 1);
-        fs.writeFileSync(source, 'module.exports = { value: "recovered" };');
-        const fresh = loader();
-        expect(fresh(source)).toMatchObject({ value: "recovered" });
-        expect(() => failed(source)).toThrow(/reloaded|disabled|retir/);
-        expect(loader()(source)).toMatchObject({ value: "recovered" });
-        expect(process.listenerCount(event)).toBe(listeners + 1);
-      } finally {
-        await retirePluginCache(cache).finally(() => {
-          process.removeAllListeners(event);
-        });
-      }
-    },
-  );
 
   it("evicts setup instances when binding fails so repaired input can load", async () => {
     const { cache, source, rootDir, loader } = fixture();

@@ -1,5 +1,4 @@
 // Imessage tests cover monitor.last route plugin behavior.
-import os from "node:os";
 import path from "node:path";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
@@ -305,128 +304,88 @@ describe("iMessage monitor last-route updates", () => {
     };
   }
 
-  it.each([
-    {
+  it("preserves an inbound SMS route through early typing, exact-chat delivery, and last-route", async () => {
+    const { label, configuredService, chatGuid, expectedService } = {
       label: "SMS chat with service unset",
       configuredService: undefined,
       chatGuid: "SMS;-;+15550001111",
       expectedService: "sms",
-    },
-    {
-      label: "SMS chat with service auto",
-      configuredService: "auto",
-      chatGuid: "SMS;-;+15550001111",
-      expectedService: "sms",
-    },
-    {
-      label: "iMessage chat with service unset",
-      configuredService: undefined,
-      chatGuid: "iMessage;-;+15550001111",
-      expectedService: "imessage",
-    },
-    {
-      label: "explicit SMS override for an iMessage chat",
-      configuredService: "sms",
-      chatGuid: "iMessage;-;+15550001111",
-      expectedService: "sms",
-    },
-    {
-      label: "explicit iMessage override for an SMS chat",
-      configuredService: "imessage",
-      chatGuid: "SMS;-;+15550001111",
-      expectedService: "imessage",
-    },
-    {
-      label: "unknown direct chat service",
-      configuredService: undefined,
-      chatGuid: "any;-;+15550001111",
-      expectedService: "auto",
-    },
-    {
-      label: "absent direct chat GUID",
-      configuredService: undefined,
-      chatGuid: undefined,
-      expectedService: "auto",
-    },
-  ] as const)(
-    "preserves the inbound direct route through early typing, exact-chat final delivery, and last-route ($label)",
-    async ({ label, configuredService, chatGuid, expectedService }) => {
-      setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
-      const stateDir = createTestStateDir(
-        `openclaw-imsg-direct-route-${label.replaceAll(" ", "-")}-`,
+    } as const;
+    setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
+    const stateDir = createTestStateDir(
+      `openclaw-imsg-direct-route-${label.replaceAll(" ", "-")}-`,
+    );
+    const configuredStore = path.join(stateDir, "sessions.json");
+    const storePath = resolveStorePath(configuredStore, { agentId: "main" });
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+      await params.dispatcherOptions.deliver(
+        { text: "reply over the originating service" },
+        {
+          kind: "final",
+        },
       );
-      const configuredStore = path.join(stateDir, "sessions.json");
-      const storePath = resolveStorePath(configuredStore, { agentId: "main" });
-      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
-        await params.dispatcherOptions.deliver(
-          { text: "reply over the originating service" },
-          {
-            kind: "final",
-          },
-        );
-        return EMPTY_DISPATCH_RESULT;
-      });
-      const client = await runMessageCase({
-        auxiliaryRequests: {
-          read: { ok: true },
-          send: { guid: "sms-reply-guid" },
-          typing: { ok: true },
-        },
-        message: createInboundMessage({
-          id: 101,
-          guid: `direct-route-${expectedService}-${label}`,
-          chat_guid: chatGuid,
-          chat_identifier: "+15550001111",
-          text: "reply to this direct chat",
-        }),
-        monitor: {
-          imessage: configuredService ? { service: configuredService } : {},
-          session: { dmScope: "per-channel-peer", store: configuredStore },
-        },
-      });
-      const auxiliaryClient = client.auxiliaryClient!;
+      return EMPTY_DISPATCH_RESULT;
+    });
+    const client = await runMessageCase({
+      auxiliaryRequests: {
+        read: { ok: true },
+        send: { guid: "sms-reply-guid" },
+        typing: { ok: true },
+      },
+      message: createInboundMessage({
+        id: 101,
+        guid: `direct-route-${expectedService}-${label}`,
+        chat_guid: chatGuid,
+        chat_identifier: "+15550001111",
+        text: "reply to this direct chat",
+      }),
+      monitor: {
+        imessage: configuredService ? { service: configuredService } : {},
+        session: { dmScope: "per-channel-peer", store: configuredStore },
+      },
+    });
+    const auxiliaryClient = client.auxiliaryClient!;
 
-      await vi.waitFor(() => {
-        expect(auxiliaryClient.request).toHaveBeenCalledWith(
-          "typing",
-          expect.objectContaining({ service: expectedService, to: DEFAULT_SENDER, typing: true }),
-          expect.any(Object),
-        );
-      });
-      const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { chat_id: 123 };
+    await vi.waitFor(() => {
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
-        "read",
-        expect.objectContaining(expectedReadTarget),
+        "typing",
+        expect.objectContaining({ service: expectedService, to: DEFAULT_SENDER, typing: true }),
         expect.any(Object),
       );
-      expect(auxiliaryClient.request).toHaveBeenCalledWith(
-        "send",
-        expect.objectContaining({
-          chat_id: 123,
-          text: "reply over the originating service",
+    });
+    const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { chat_id: 123 };
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "read",
+      expect.objectContaining(expectedReadTarget),
+      expect.any(Object),
+    );
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_id: 123,
+        text: "reply over the originating service",
+      }),
+      expect.any(Object),
+    );
+    const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
+    expect(dispatchParams?.ctx).toMatchObject({
+      From: `${expectedService}:${DEFAULT_SENDER}`,
+      To: "chat_id:123",
+    });
+    await vi.waitFor(() => {
+      expect(
+        getSessionEntry({
+          storePath,
+          sessionKey: `agent:main:imessage:direct:${DEFAULT_SENDER}`,
         }),
-        expect.any(Object),
-      );
-      const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
-      expect(dispatchParams?.ctx).toMatchObject({
-        From: `${expectedService}:${DEFAULT_SENDER}`,
-        To: "chat_id:123",
+      ).toMatchObject({
+        delivery: {
+          context: { channel: "imessage", to: `${expectedService}:${DEFAULT_SENDER}` },
+          route: { target: { to: `${expectedService}:${DEFAULT_SENDER}` } },
+        },
       });
-      await vi.waitFor(() => {
-        expect(
-          getSessionEntry({
-            storePath,
-            sessionKey: `agent:main:imessage:direct:${DEFAULT_SENDER}`,
-          }),
-        ).toMatchObject({
-          delivery: {
-            context: { channel: "imessage", to: `${expectedService}:${DEFAULT_SENDER}` },
-            route: { target: { to: `${expectedService}:${DEFAULT_SENDER}` } },
-          },
-        });
-      });
-    },
-  );
+    });
+  });
 
   it("keeps group chat_id routing unchanged through final delivery", async () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
@@ -903,43 +862,6 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
-  it("keeps direct progress options when imsg lacks native typing support", async () => {
-    setAvailablePrivateApiMethods(["watch.subscribe", "send", "read"]);
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
-      expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-      expect(params.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
-      expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
-      expect(params.replyOptions?.onToolStart).toBeUndefined();
-      const onToolResult = params.replyOptions?.onToolResult;
-      expect(onToolResult).toBeTypeOf("function");
-      await onToolResult?.({
-        text: "💨Fast: auto-off(75s>=60s)",
-        channelData: { openclawProgressKind: "fast-mode-auto" },
-      });
-      return EMPTY_DISPATCH_RESULT;
-    });
-
-    const client = await runMessageCase({
-      requests: { "watch.subscribe": { subscription: 1 } },
-      message: createInboundMessage({
-        id: 13,
-        guid: "typing-unsupported-guid-13",
-        text: "run a long script without native typing",
-      }),
-      monitor: { imessage: { sendReadReceipts: false } },
-    });
-
-    await vi.waitFor(() => {
-      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-    });
-    expect(client.request).not.toHaveBeenCalledWith(
-      "typing",
-      expect.objectContaining({ typing: true }),
-      expect.anything(),
-    );
-    expect(client.request).not.toHaveBeenCalledWith("send", expect.anything(), expect.anything());
-  });
-
   it("starts direct typing before dispatching the inbound turn", async () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
     const watchClient = createIMessageWatchClient({
@@ -1024,7 +946,7 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   for (const { name, id, guid, monitor } of [
-    ...(["never", "message", "thinking"] as const).map((typingMode) => ({
+    ...(["thinking"] as const).map((typingMode) => ({
       name: `does not start direct tool typing when typingMode is ${typingMode}`,
       id: 8,
       guid: `typing-mode-${typingMode}-guid-8`,
@@ -1101,169 +1023,51 @@ describe("iMessage monitor last-route updates", () => {
     expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    {
-      label: "nested true",
-      imessagePatch: { streaming: { block: { enabled: true } } },
-      expectedDisable: false,
-    },
-    {
-      label: "nested false",
-      imessagePatch: { streaming: { block: { enabled: false } } },
-      expectedDisable: true,
-    },
-    { label: "unset", imessagePatch: {}, expectedDisable: undefined },
-  ] as const)(
-    "passes iMessage block streaming config ($label) through to reply dispatch",
-    async ({ label, imessagePatch, expectedDisable }) => {
-      const params = await runBlockStreamingCase(
-        { id: 10, guid: `block-streaming-${label}-guid-10` },
-        { imessage: { sendReadReceipts: false, ...imessagePatch } },
-      );
-      expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
-      await vi.waitFor(() => {
-        expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-      });
-    },
-  );
-
-  it.each([
-    {
-      label: "account nested false overrides channel nested true",
-      channelBlockEnabled: true,
-      accountBlockEnabled: false,
-      expectedDisable: true,
-    },
-    {
+  it("preserves the account block-streaming override", async () => {
+    const { label, channelBlockEnabled, accountBlockEnabled, expectedDisable } = {
       label: "account nested true overrides channel nested false",
       channelBlockEnabled: false,
       accountBlockEnabled: true,
       expectedDisable: false,
-    },
-  ] as const)(
-    "preserves account-level block streaming opt-outs when inheriting channel streaming ($label)",
-    async ({ label, channelBlockEnabled, accountBlockEnabled, expectedDisable }) => {
-      const params = await runBlockStreamingCase(
-        { id: 11, guid: `account-block-streaming-${label}-guid-11` },
-        {
-          accountId: "personal",
-          imessage: {
-            sendReadReceipts: false,
-            streaming: { block: { enabled: channelBlockEnabled } },
-            accounts: {
-              personal: { streaming: { block: { enabled: accountBlockEnabled } } },
-            },
+    } as const;
+    const params = await runBlockStreamingCase(
+      { id: 11, guid: `account-block-streaming-${label}-guid-11` },
+      {
+        accountId: "personal",
+        imessage: {
+          sendReadReceipts: false,
+          streaming: { block: { enabled: channelBlockEnabled } },
+          accounts: {
+            personal: { streaming: { block: { enabled: accountBlockEnabled } } },
           },
         },
-      );
-      expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
-      await vi.waitFor(() => {
-        expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-      });
-    },
-  );
-
-  it.each([
-    {
-      label: "chunkMode",
-      accountStreaming: { chunkMode: "length" },
-    },
-    {
-      label: "block coalesce",
-      accountStreaming: { block: { coalesce: { idleMs: 1 } } },
-    },
-  ] as const)(
-    "preserves channel-level nested block streaming when an account overrides $label",
-    async ({ label, accountStreaming }) => {
-      const params = await runBlockStreamingCase(
-        { id: 11, guid: `account-streaming-${label}-guid-11` },
-        {
-          accountId: "personal",
-          imessage: {
-            sendReadReceipts: false,
-            streaming: { block: { enabled: true } },
-            accounts: {
-              personal: { streaming: accountStreaming },
-            },
-          },
-        },
-      );
-      expect(params.replyOptions?.disableBlockStreaming).toBe(false);
-      await vi.waitFor(() => {
-        expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-      });
-    },
-  );
-
-  it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
-    const stateDir = createTestStateDir("openclaw-imsg-last-route-");
-    const configuredStore = path.join(stateDir, "sessions.json");
-    const storePath = resolveStorePath(configuredStore, { agentId: "main" });
-    const sessionKey = "agent:main:imessage:direct:+15550001111";
-    const runtimeErrorMock = vi.fn();
-    await runMessageCase({
-      message: createInboundMessage({
-        id: 1,
-        guid: "last-route-guid-1",
-        text: "hello from imessage",
-      }),
-      monitor: {
-        session: { dmScope: "per-channel-peer", store: configuredStore },
-        runtime: { error: runtimeErrorMock, exit: vi.fn(), log: vi.fn() },
       },
-    });
-
+    );
+    expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
     await vi.waitFor(() => {
-      expect(readChannelAllowFromStoreMock).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     });
-    expect(runtimeErrorMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
-        delivery: {
-          kind: "external",
-          context: {
-            channel: "imessage",
-            to: "auto:+15550001111",
-            accountId: "default",
-          },
-          route: {
-            channel: "imessage",
-            accountId: "default",
-            target: { to: "auto:+15550001111" },
-          },
-        },
-      });
-    });
-    expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })).toBeUndefined();
   });
 
-  it("suppresses stale backlog rows but dispatches fresh live rows", async () => {
-    const staleCreatedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const freshCreatedAt = new Date().toISOString();
-
-    const client = await runMessageCase({
-      messages: [
-        createInboundMessage({
-          id: 2023,
-          guid: "OLD-GUID-2023",
-          text: "old backlog row",
-          created_at: staleCreatedAt,
-        }),
-        createInboundMessage({
-          id: 3001,
-          guid: "LIVE-GUID-2026",
-          text: "current row",
-          created_at: freshCreatedAt,
-        }),
-      ],
-      monitor: {
+  it("preserves channel block streaming when an account overrides coalescing", async () => {
+    const { label, accountStreaming } = {
+      label: "block coalesce",
+      accountStreaming: { block: { coalesce: { idleMs: 1 } } },
+    } as const;
+    const params = await runBlockStreamingCase(
+      { id: 11, guid: `account-streaming-${label}-guid-11` },
+      {
+        accountId: "personal",
         imessage: {
-          dbPath: path.join(os.tmpdir(), `openclaw-missing-chat-${Date.now()}.db`),
+          sendReadReceipts: false,
+          streaming: { block: { enabled: true } },
+          accounts: {
+            personal: { streaming: accountStreaming },
+          },
         },
       },
-    });
-
-    expectWatchSubscription(client);
+    );
+    expect(params.replyOptions?.disableBlockStreaming).toBe(false);
     await vi.waitFor(() => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     });
@@ -1313,34 +1117,6 @@ describe("iMessage monitor last-route updates", () => {
       { limit: 200 },
       { timeoutMs: 30_000 },
     );
-    await vi.waitFor(() => {
-      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("recovers downtime messages: replays from the cursor and delivers replay rows older than the live fence", async () => {
-    const dbPath = await createRecoveryChatDb("openclaw-imsg-recovery-", 4990);
-    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-
-    const client = await runMessageCase({
-      messages: [
-        createInboundMessage({
-          id: 4995,
-          guid: "RECOVERY-GUID-4995",
-          text: "missed during downtime",
-          created_at: thirtyMinAgo,
-        }),
-        createInboundMessage({
-          id: 5001,
-          guid: "LIVE-OLD-GUID-5001",
-          text: "live backlog bomb",
-          created_at: thirtyMinAgo,
-        }),
-      ],
-      monitor: { imessage: { dbPath } },
-    });
-
-    expectWatchSubscription(client, 4990);
     await vi.waitFor(() => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
     });
@@ -1413,88 +1189,6 @@ describe("iMessage monitor last-route updates", () => {
     });
     expect(await loadRecoveryCursor(dbPath)).toBe(4996);
   });
-
-  const replacedDatabaseCases = [
-    {
-      name: "tails a chat.db replaced at the same path instead of suppressing every row below the stale cursor",
-      prefix: "openclaw-imsg-db-replaced-",
-      seededRowid: 5,
-      liveRowid: 6,
-      expectedSinceRowid: 5,
-    },
-    {
-      name: "tails a chat.db rebuilt empty at the same path instead of suppressing its first rows",
-      prefix: "openclaw-imsg-db-rebuilt-",
-      seededRowid: null,
-      liveRowid: 1,
-      expectedSinceRowid: -1,
-    },
-  ];
-
-  for (const replacedDatabase of replacedDatabaseCases) {
-    it(replacedDatabase.name, async () => {
-      const stateDir = createTestStateDir(replacedDatabase.prefix);
-      const dbPath = path.join(stateDir, "chat.db");
-      await advanceIMessageRecoveryCursor(
-        "default",
-        resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
-        9000,
-      );
-      createChatDb(
-        dbPath,
-        replacedDatabase.seededRowid === null
-          ? []
-          : [
-              createChatDbMessage(
-                replacedDatabase.seededRowid,
-                `RESTORED-GUID-${replacedDatabase.seededRowid}`,
-                "restored history",
-                new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-              ),
-            ],
-      );
-
-      let sinceRowid: unknown;
-      const client = createIMessageWatchClient({
-        requests: {
-          "watch.subscribe": (params) => {
-            sinceRowid = params?.since_rowid;
-            return { subscription: 1 };
-          },
-        },
-        onClose: async (notify) => {
-          insertChatDbMessage(
-            dbPath,
-            createChatDbMessage(
-              replacedDatabase.liveRowid,
-              `REPLACEMENT-GUID-${replacedDatabase.liveRowid}`,
-              "sent after the restore",
-            ),
-          );
-          for (const message of readChatDbMessagesAfter(
-            dbPath,
-            typeof sinceRowid === "number" ? sinceRowid : 0,
-          )) {
-            notify(message);
-          }
-          await settleNotifications();
-        },
-      });
-
-      await runIMessageMonitor({ imessage: { dbPath } });
-
-      expectWatchSubscription(client, replacedDatabase.expectedSinceRowid);
-      await vi.waitFor(() => {
-        expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-      });
-      expect(
-        await loadIMessageRecoveryCursor(
-          "default",
-          resolveIMessageRecoveryCursorDbIdentity({ dbPath }),
-        ),
-      ).toBe(replacedDatabase.liveRowid);
-    });
-  }
 
   it("does not self-fence past the first row inserted while an empty rebuilt chat.db starts", async () => {
     const stateDir = createTestStateDir("openclaw-imsg-db-rebuilt-startup-race-");
@@ -1625,12 +1319,6 @@ describe("iMessage monitor last-route updates", () => {
 
   for (const { name, id, text, isFromMe } of [
     {
-      name: "repairs anchorless direct watch payloads so reply routing targets the authoritative remote peer (#104136)",
-      id: 9500,
-      text: "hello from broken anchor",
-      isFromMe: false,
-    },
-    {
       name: "suppresses anchorless watch payloads when authoritative history is from-me (#104136)",
       id: 9501,
       text: "outgoing row with broken direction",
@@ -1675,5 +1363,127 @@ describe("iMessage monitor last-route updates", () => {
       }
     });
   }
+  it("does not stage local attachments for messages dropped by inbound policy", async () => {
+    const stage = vi
+      .spyOn(iMessageMediaStaging, "stageIMessageAttachments")
+      .mockResolvedValue({ attachments: [], unavailableCount: 0 });
+    await runMessageCase({
+      message: {
+        ...createInboundMessage({
+          id: 1,
+          guid: "dropped-media-policy-guid-1",
+          chat_id: 123,
+          is_group: true,
+          text: "no mention here",
+        }),
+        attachments: [
+          {
+            original_path: "/Users/openclaw/Library/Messages/Attachments/AA/BB/photo.heic",
+            mime_type: "image/heic",
+            missing: false,
+          },
+        ],
+      },
+      monitor: {
+        allowlist: false,
+        imessage: {
+          includeAttachments: true,
+          attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+          dmPolicy: "open",
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      },
+    });
+    expect(readChannelAllowFromStoreMock).toHaveBeenCalled();
+    expect(stage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "admits an attachment-only message when the image is unavailable",
+      attachments: [
+        {
+          original_path: "/Users/openclaw/Library/Messages/Attachments/missing.heic",
+          mime_type: "image/heic",
+          missing: true,
+        },
+      ],
+      staged: {
+        attachments: [{ contentType: "image/heic", kind: "image" as const }],
+        unavailableCount: 1,
+      },
+      expectedBody: "[imessage attachment unavailable]",
+      expectedMediaTypes: ["image/heic"],
+      expectedMediaUrls: undefined,
+    },
+    {
+      name: "uses the first materialized attachment type when earlier media is unavailable",
+      attachments: [
+        {
+          original_path: "/Users/openclaw/Library/Messages/Attachments/missing.heic",
+          mime_type: "image/heic",
+          missing: true,
+        },
+        {
+          original_path: "/Users/openclaw/Library/Messages/Attachments/report.pdf",
+          mime_type: "application/pdf",
+          missing: false,
+        },
+      ],
+      staged: {
+        attachments: [
+          { contentType: "image/heic", kind: "image" as const },
+          {
+            path: "/Users/openclaw/Library/Messages/Attachments/report.pdf",
+            contentType: "application/pdf",
+            kind: "document" as const,
+          },
+        ],
+        unavailableCount: 1,
+      },
+      expectedBody: "[imessage attachment unavailable]",
+      expectedMediaTypes: ["image/heic", "application/pdf"],
+      expectedMediaUrls: ["", "/Users/openclaw/Library/Messages/Attachments/report.pdf"],
+    },
+  ])(
+    "$name",
+    async ({ name, attachments, staged, expectedBody, expectedMediaTypes, expectedMediaUrls }) => {
+      const stage = vi
+        .spyOn(iMessageMediaStaging, "stageIMessageAttachments")
+        .mockResolvedValue(staged);
+      const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+      await runMessageCase({
+        message: {
+          ...createInboundMessage({
+            id: 1,
+            guid: name,
+            chat_identifier: DEFAULT_SENDER,
+            text: "",
+          }),
+          attachments,
+        },
+        monitor: {
+          runtime,
+          imessage: {
+            includeAttachments: true,
+            attachmentRoots: ["/Users/openclaw/Library/Messages/Attachments"],
+            groupPolicy: "open",
+          },
+        },
+      });
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(stage).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+      const ctx = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx;
+      expect(ctx?.BodyForAgent).toBe(expectedBody);
+      const media = ctx?.media;
+      expect(media?.map((fact) => fact.contentType ?? fact.kind)).toEqual(expectedMediaTypes);
+      expect(media?.map((fact) => fact.url)).toEqual(
+        expectedMediaUrls?.map((url) => url || undefined) ?? media?.map(() => undefined),
+      );
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

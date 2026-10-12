@@ -4,6 +4,25 @@ import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js"
 export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFacts) {
   return {
     sessionId: entry.sessionId,
+    incognito: entry.incognito,
+    lifecycleRevision: entry.lifecycleRevision,
+    modelSelectionLocked: entry.modelSelectionLocked,
+    pluginOwnerId: entry.pluginOwnerId,
+    agentHarnessId: entry.agentHarnessId,
+    agentRuntimeOverride: entry.agentRuntimeOverride,
+    initializationPending: entry.initializationPending,
+    execHost: entry.execHost,
+    execNode: entry.execNode,
+    sandbox: entry.sandbox,
+    sandboxMode: entry.sandboxMode,
+    permissionMode: entry.permissionMode,
+    sessionRoot: entry.sessionRoot,
+    authProfileOverride: entry.authProfileOverride,
+    authProfileOverrideSource: entry.authProfileOverrideSource,
+    modelOverride: entry.modelOverride,
+    providerOverride: entry.providerOverride,
+    model: entry.model,
+    modelProvider: entry.modelProvider,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
     completionOwnerSessionKey: entry.completionOwnerSessionKey,
@@ -11,6 +30,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     subagentControlScope: entry.subagentControlScope,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolPolicySource: entry.inheritedToolPolicySource,
+    delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy),
     inheritedToolAllow: Array.isArray(entry.inheritedToolAllow)
       ? [...entry.inheritedToolAllow]
       : entry.inheritedToolAllow,

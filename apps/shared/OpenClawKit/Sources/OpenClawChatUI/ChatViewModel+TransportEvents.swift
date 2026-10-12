@@ -731,7 +731,7 @@ extension OpenClawChatViewModel {
         else {
             return
         }
-        self.applyLiveRunUsage(
+        self.acceptLiveRunSequence(
             runID: evt.runId,
             sequence: sequence,
             outputTokens: outputTokens)
@@ -900,30 +900,19 @@ extension OpenClawChatViewModel {
                 self.clearStreamingActivity()
                 return true
             }
-            if let timestamp,
-               self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
-            {
-                return false
-            }
-            if terminalState == .completed, allowNoOutputCompletion {
-                self.retirePendingRun(runId, hapticEvent: .runCompleted)
-                self.clearStreamingActivity()
-                return false
-            }
-            return true
+        }
+        guard !refresh.hasInFlightRun else { return true }
+        if let timestamp,
+           self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
+        {
+            return false
         }
         if refresh.applied, terminalState == .completed, allowNoOutputCompletion {
-            if let timestamp,
-               self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
-            {
-                return false
-            }
             self.retirePendingRun(runId, hapticEvent: .runCompleted)
             self.clearStreamingActivity()
             return false
         }
-        guard !refresh.hasInFlightRun, let timestamp else { return true }
-        return !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
+        return true
     }
 
     private func isCurrentPendingRunOwner(

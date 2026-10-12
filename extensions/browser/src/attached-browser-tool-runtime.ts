@@ -5,9 +5,9 @@
 import { randomBytes } from "node:crypto";
 import { chmod, copyFile } from "node:fs/promises";
 import path from "node:path";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { createBrowserTool } from "./browser-tool.js";
-import type { AnyAgentTool } from "./browser-tool.runtime.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./browser/bridge-server.js";
 import { resolveBrowserConfig } from "./browser/config.js";
 import { closePlaywrightBrowserConnection } from "./browser/pw-session.js";

@@ -69,7 +69,7 @@ function admitActivation(root, generation) {
       return;
     }
     if (
-      descriptor.version !== 2 ||
+      ![2, 3].includes(descriptor.version) ||
       descriptor.activationEnabled !== true ||
       !recordObject(descriptor.current) ||
       !/^[a-f0-9]{40}$/.test(descriptor.current.sha ?? "") ||
@@ -83,6 +83,16 @@ function admitActivation(root, generation) {
       throw new Error(
         "immutable activation descriptor does not authorize this physical generation",
       );
+    }
+    if (descriptor.version === 3) {
+      const manifestPath = path.join(generation, "package.json");
+      if (fs.statSync(manifestPath).size > 1048576) {
+        throw new Error("immutable bridge manifest exceeds its admission budget");
+      }
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (manifest?.openclaw?.immutableInstallDescriptorVersion !== 3) {
+        throw new Error("immutable generation cannot read version-3 control");
+      }
     }
     const row = db
       .prepare(

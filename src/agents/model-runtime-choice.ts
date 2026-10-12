@@ -55,7 +55,7 @@ export async function prepareModelChoice(params: {
     resolveModelRefFromString,
   } = await loadModelSelection();
   const { splitTrailingAuthProfile } = await loadModelRefProfile();
-  const { createModelCatalogDecisions, resolveCatalogDecisionRuntime } =
+  const { prepareModelCatalogDecisions, resolveCatalogDecisionRuntime } =
     await loadModelCatalogDecisions();
   const { getPreparedModelRuntimeAuthStore } = await loadPreparedRuntimeAuth();
   const { projectProviderModelRouteConfig } = await loadProviderModelRoute();
@@ -123,7 +123,7 @@ export async function prepareModelChoice(params: {
               : undefined;
           const key = modelKey(ref.provider, ref.model);
           const decide = async (snapshot: typeof owner.modelCatalog) => {
-            const decisions = createModelCatalogDecisions({
+            const decisions = await prepareModelCatalogDecisions({
               cfg: owner.config,
               agentId: params.agentId,
               agentDir: owner.agentDir,
@@ -149,15 +149,15 @@ export async function prepareModelChoice(params: {
             const variants = decisions.snapshot.routeVariants.filter(
               (row) => modelKey(row.provider, row.id) === key,
             );
-            const host = await decisions.evaluateEntry(entry, variants);
+            const host = decisions.evaluateEntry(entry, variants);
             return { decisions, entry, auth: decisions.evaluateNative(entry, host) };
           };
           let { decisions, entry, auth } = await decide(owner.modelCatalog);
           let renewalError: unknown;
-          // A native observation can outlive its runtime client (another agent's turn may
-          // replace it). Renew it once through the owner's native load; the gate is unchanged.
+          // Native readiness can be unknown before discovery or after its client retires.
+          // Acquire it once through the owner's native load before admitting the choice.
           if (
-            auth.availability === false &&
+            auth.availability !== true &&
             auth.runtimeAuth?.source === "native" &&
             owner.loadNativeModelCatalog
           ) {
@@ -184,7 +184,10 @@ export async function prepareModelChoice(params: {
           if (auth.routeResolution?.kind === "incompatible") {
             return { kind: "unavailable", error: auth.routeResolution.message };
           }
-          if ((profileId || auth.availabilityAuthoritative) && auth.availability === false) {
+          if (
+            (auth.runtimeAuth?.source === "native" && auth.availability !== true) ||
+            ((profileId || auth.availabilityAuthoritative) && auth.availability === false)
+          ) {
             // A failed renewal left the old observation in place; it says nothing about the account.
             return {
               kind: "unavailable",
@@ -313,7 +316,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
     await loadPreparedModelCatalog();
   const { getPreparedModelRuntimeAuthStore } = await loadPreparedRuntimeAuth();
-  const { createModelCatalogDecisions } = await loadModelCatalogDecisions();
+  const { prepareModelCatalogDecisions } = await loadModelCatalogDecisions();
   const published = getPublishedPreparedModelCatalogOwnerSnapshot({
     config: params.cfg,
     agentId: params.agentId,
@@ -328,7 +331,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   if (!authStore) {
     return { kind: "unavailable", message: unavailable };
   }
-  const decisions = createModelCatalogDecisions({
+  const decisions = await prepareModelCatalogDecisions({
     cfg: owner.config,
     agentId: owner.agentId ?? params.agentId,
     agentDir: owner.agentDir,
@@ -361,16 +364,12 @@ export async function preparePublishedModelRuntimeChoice(params: {
     const materializationRuntime =
       params.runtimeId ??
       (params.preferredRuntimeId &&
-      (await decisions.runtimeChoices(requestedEntry, [requestedEntry]))?.includes(
-        params.preferredRuntimeId,
-      )
+      decisions
+        .runtimeChoices(requestedEntry, [requestedEntry])
+        ?.includes(params.preferredRuntimeId)
         ? params.preferredRuntimeId
         : undefined);
-    const selectedAuth = await decisions.evaluateEntry(
-      requestedEntry,
-      undefined,
-      materializationRuntime,
-    );
+    const selectedAuth = decisions.evaluateEntry(requestedEntry, undefined, materializationRuntime);
     const authProfileMode = resolveProviderModelMaterializationAuthMode(
       selectedAuth.selectedAuthMode,
     );
@@ -405,7 +404,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   const variants = decisions.snapshot.routeVariants.filter(
     (row) => identityKey(row) === selectedIdentity,
   );
-  const choices = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
+  const choices = decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
   const runtimeId =
     params.runtimeId ??
     (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
@@ -414,11 +413,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   if (!runtimeId || !choices?.includes(runtimeId)) {
     return { kind: "unavailable", message: unavailable };
   }
-  const host = await decisions.evaluateEntry(
-    entry,
-    variants.length ? variants : [entry],
-    runtimeId,
-  );
+  const host = decisions.evaluateEntry(entry, variants.length ? variants : [entry], runtimeId);
   const validate = () =>
     decisions.isCurrent() && decisions.evaluateNative(entry, host, runtimeId).availability === true
       ? undefined

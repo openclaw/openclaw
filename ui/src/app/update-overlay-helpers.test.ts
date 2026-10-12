@@ -525,13 +525,16 @@ describe("update status localization", () => {
     },
   );
 
-  it("preserves unknown status details inside localized fallback guidance", () => {
-    const translate = vi.spyOn(i18n, "t");
+  it.each(["disk-read-only", "constructor", "__proto__", "toString"])(
+    "preserves unknown status %s inside localized fallback guidance",
+    (reason) => {
+      const translate = vi.spyOn(i18n, "t");
 
-    expect(resolveUpdateStatusBanner({ status: "error", reason: "disk-read-only" })).toEqual({
-      tone: "danger",
-      text: "Update error: disk-read-only. See the gateway logs for the exact failure and retry once the cause is fixed.",
-    });
-    expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
-  });
+      expect(resolveUpdateStatusBanner({ status: "error", reason })).toEqual({
+        tone: "danger",
+        text: `Update error: ${reason}. See the gateway logs for the exact failure and retry once the cause is fixed.`,
+      });
+      expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
+    },
+  );
 });

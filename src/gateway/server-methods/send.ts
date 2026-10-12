@@ -76,7 +76,7 @@ import {
   createGatewayInflightAuthorityFailure,
   createGatewayInflightResult,
   createGatewayInflightSuccess,
-  createGatewayInflightUnavailableFailure,
+  createGatewayInflightFailure,
   scheduleDeliveredSourceReplyTranscriptMirror,
 } from "./message-operation-result.js";
 import { withMessageOperationRoute } from "./message-operation-route.js";
@@ -244,7 +244,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               ) {
                 // Native sends could use account defaults without a target. Resolve that
                 // owner fact before core routing and source-reply receipts require it.
-                const target = resolveOutboundTarget({ channel, plugin, cfg, accountId });
+                const target = await resolveOutboundTarget({ channel, plugin, cfg, accountId });
                 if (!target.ok) {
                   throw target.error;
                 }
@@ -465,10 +465,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             },
           );
         } catch (err) {
-          if (!isChannelPartialDeliveryError(err) && !authorize()) {
-            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
-          }
-          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+          return createGatewayInflightFailure({ context, dedupeKey, channel, err }, authorize);
         }
       },
     });
@@ -552,7 +549,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
       work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize }) => {
         try {
-          const resolvedTarget = resolveGatewayOutboundTarget({
+          const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
             to,
             cfg,
@@ -589,21 +586,13 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (sessionOwner && !sessionOwner.ok) {
             return { ok: false, error: sessionOwner.error, meta: { channel } };
           }
-          const sessionAgentId = sessionOwner?.agentId;
-          const implicitAgent =
-            !explicitAgentId && !sessionAgentId
-              ? resolveRequestedSessionAgentId(cfg, "main")
-              : undefined;
-          if (implicitAgent && !implicitAgent.ok) {
-            return { ok: false, error: implicitAgent.error, meta: { channel } };
-          }
-          const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? implicitAgent?.agentId;
+          let effectiveAgentId = explicitAgentId ?? sessionOwner?.agentId;
           if (!effectiveAgentId) {
-            return {
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required"),
-              meta: { channel },
-            };
+            const implicitAgent = resolveRequestedSessionAgentId(cfg, "main");
+            if (!implicitAgent.ok) {
+              return { ok: false, error: implicitAgent.error, meta: { channel } };
+            }
+            effectiveAgentId = implicitAgent.agentId;
           }
           const sendArgs: Record<string, unknown> = {
             mediaUrl,
@@ -657,22 +646,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
               normalizeOptionalLowercaseString(providedSessionBaseKey) &&
             normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
-          // Message-scoped threads can refine an existing base session only after target lookup.
-          const outboundRoute = derivedRoute
-            ? providedSessionKey
-              ? shouldUseDerivedThreadSessionKey
-                ? {
-                    ...derivedRoute,
-                    baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey,
-                  }
-                : {
-                    ...derivedRoute,
-                    sessionKey: providedSessionKey,
-                    baseSessionKey: providedSessionKey,
-                  }
-              : derivedRoute
-            : null;
-          const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+          // sessionKey selects the transcript mirror, not the saved delivery route.
+          // Message-scoped threads may refine that mirror within the same base session.
+          const outboundSessionKey = shouldUseDerivedThreadSessionKey
+            ? derivedRoute?.sessionKey
+            : (providedSessionKey ?? derivedRoute?.sessionKey);
           if (outboundSessionKey) {
             const agentAccessError = authorizeGatewaySessionCreation({
               cfg,
@@ -703,7 +681,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           // the in-delivery transcript mirror so first contacts have a row.
           let outboundRoutePersisted = false;
           const commitOutboundSessionRoute = async () => {
-            if (outboundRoutePersisted || !outboundRoute) {
+            if (outboundRoutePersisted || !derivedRoute) {
               return;
             }
             outboundRoutePersisted = true;
@@ -711,7 +689,9 @@ export const sendHandlers: GatewayRequestHandlers = {
               cfg,
               channel,
               accountId,
-              route: outboundRoute,
+              route: derivedRoute,
+              mirrorSessionKey: outboundSessionKey,
+              workerGuard: { assertCurrent: commitAgentRuntimeAuthority },
               creation: resolveSandboxedSessionCreation(client, cfg),
               sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
             });
@@ -720,7 +700,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             agentId: effectiveAgentId,
             sessionKey: outboundSessionKey,
-            conversationType: outboundRoute?.chatType,
+            conversationType: derivedRoute?.chatType,
           });
           // Target, attachment, route, and session preparation may all yield.
           // The durable provider handoff is the final authority commit point.
@@ -740,7 +720,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               session: outboundSession,
               gifPlayback: request.gifPlayback,
               forceDocument: request.forceDocument,
-              threadId: outboundRoute?.threadId ?? threadId ?? null,
+              threadId: derivedRoute?.threadId ?? threadId ?? null,
               deps: outboundDeps,
               gatewayClientScopes: client?.connect?.scopes ?? [],
               silent: request.silent,
@@ -801,14 +781,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             channel,
           });
         } catch (err) {
-          if (
-            !isChannelPartialDeliveryError(err) &&
-            hasAgentRuntimeAuthority &&
-            !agentRuntimeAuthority.hasActive()
-          ) {
-            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
-          }
-          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+          return createGatewayInflightFailure(
+            { context, dedupeKey, channel, err },
+            () => !hasAgentRuntimeAuthority || agentRuntimeAuthority.hasActive(),
+          );
         }
       },
     });
@@ -854,31 +830,22 @@ export const sendHandlers: GatewayRequestHandlers = {
         const { cfg, channel } = resolved;
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const outbound = plugin?.outbound;
-        if (
-          typeof request.durationSeconds === "number" &&
-          outbound?.supportsPollDurationSeconds !== true
-        ) {
-          // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `durationSeconds is not supported for ${channel} polls`,
-            ),
-          );
-          return undefined;
-        }
-        if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `isAnonymous is not supported for ${channel} polls`,
-            ),
-          );
-          return undefined;
+        // Reject channel-specific options before normalization can silently truncate them.
+        for (const [parameter, capability] of [
+          ["durationSeconds", "supportsPollDurationSeconds"],
+          ["isAnonymous", "supportsAnonymousPolls"],
+        ] as const) {
+          if (request[parameter] !== undefined && outbound?.[capability] !== true) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `${parameter} is not supported for ${channel} polls`,
+              ),
+            );
+            return undefined;
+          }
         }
         if (!plugin || !outbound?.sendPoll) {
           respond(
@@ -900,7 +867,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         };
         const threadId = normalizeOptionalString(request.threadId);
         try {
-          const resolvedTarget = resolveGatewayOutboundTarget({
+          const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
             to: request.to.trim(),
             cfg,
@@ -932,14 +899,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
           return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
         } catch (err) {
-          if (
-            !isChannelPartialDeliveryError(err) &&
-            hasAgentRuntimeAuthority &&
-            !agentRuntimeAuthority.hasActive()
-          ) {
-            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
-          }
-          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+          return createGatewayInflightFailure(
+            { context, dedupeKey, channel, err },
+            () => !hasAgentRuntimeAuthority || agentRuntimeAuthority.hasActive(),
+          );
         }
       },
     });

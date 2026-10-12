@@ -15,7 +15,6 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "../prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
-import { rootedAgentRunParams } from "../rooted-run-params.js";
 import * as runtimePlugins from "../runtime-plugins.js";
 import { runEmbeddedAgent } from "./run-orchestrator.js";
 
@@ -51,14 +50,9 @@ async function readText(
 }
 
 it("reuses configured plugins for runs outside the canonical workspace", async () => {
-  const executionRoot = state.path("workshop-skills");
-  await fs.mkdir(executionRoot, { recursive: true });
-  await fs.writeFile(path.join(executionRoot, "inside.txt"), "rooted fixture");
   const taskWorkspace = state.path("cron-task");
   await fs.mkdir(taskWorkspace, { recursive: true });
   await fs.writeFile(path.join(taskWorkspace, "task.txt"), "task fixture");
-  const outsideFile = path.join(state.workspaceDir, "outside.txt");
-  await fs.writeFile(outsideFile, "canonical workspace fixture");
   const toolsAllow = ["read", "write", "session_status", "llm-task", "memory-core"];
   const config: OpenClawConfig = {
     agents: {
@@ -135,10 +129,7 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
     expect(attempt.preparedModelRuntime?.workspaceDir).toBe(state.workspaceDir);
     expect(toolBase.toolsRaw.some((tool) => tool.name === "llm-task")).toBe(true);
   };
-  const run = async (
-    name: string,
-    params: ReturnType<typeof rootedAgentRunParams> | { workspaceDir: string },
-  ) => {
+  const run = async (name: string, params: { workspaceDir: string }) => {
     const admission = prepareSystemAgentRunAdmission(config, name, "main", name);
     try {
       await expect(
@@ -166,24 +157,6 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
     }
   };
   try {
-    const rooted = rootedAgentRunParams(state.workspaceDir, executionRoot);
-    preparation.mockImplementationOnce(async (input) => {
-      expect(input.attempt).toMatchObject(rooted);
-      expectConfiguredGeneration(input);
-      expect(input.setup).toMatchObject({
-        effectiveWorkspace: executionRoot,
-        effectiveCwd: executionRoot,
-        effectiveFsWorkspaceOnly: true,
-        sessionPermissionRoot: executionRoot,
-      });
-      expect(await readText(input.toolBase.toolsRaw, "inside.txt")).toMatchObject({
-        content: [expect.objectContaining({ text: expect.stringContaining("rooted fixture") })],
-      });
-      await expect(readText(input.toolBase.toolsRaw, outsideFile)).rejects.toThrow(
-        /escapes sandbox root/,
-      );
-    });
-    await run("rooted-proof", rooted);
     // Cron and subagent workspaces without a bootstrap stay bound to their own directory.
     preparation.mockImplementationOnce(async (input) => {
       expect(input.attempt.workspaceDir).toBe(taskWorkspace);
@@ -194,7 +167,7 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
       });
     });
     await run("task-workspace-proof", { workspaceDir: taskWorkspace });
-    expect(preparation).toHaveBeenCalledTimes(2);
+    expect(preparation).toHaveBeenCalledTimes(1);
     expect(runtimeLoad).not.toHaveBeenCalled();
     expect(syncRuntimeLoad).not.toHaveBeenCalled();
     expect(load).not.toHaveBeenCalled();

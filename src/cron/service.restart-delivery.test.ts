@@ -1,17 +1,23 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sendGatewayCronWebhook } from "../gateway/server-cron-notifications.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration } from "./active-jobs.js";
 import { sendCronAnnouncePayloadStrict } from "./delivery.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
+import {
+  createCronServiceWithStateForTest,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
 import * as runtimeMutations from "./service/runtime-mutation.js";
 import type { CronServiceDeps } from "./service/state.js";
-import * as receipts from "./store/run-receipt-store.js";
+import { onTimer } from "./service/timer.test-support.js";
+import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
 
 const transports = vi.hoisted(() => ({
@@ -118,21 +124,21 @@ it.each([
           ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
         }),
     };
-    const first = new CronService(deps);
+    const { cron: first, state: firstState } = createCronServiceWithStateForTest(deps);
     const replacementClock = createGatewaySchedulerClock(Date.now() + 60_000);
-    const replacement = new CronService({
+    const { cron: replacement, state: replacementState } = createCronServiceWithStateForTest({
       ...deps,
       scheduler: createTestGatewayScheduler(replacementClock.clock),
       nowMs: replacementClock.clock.now,
     });
     const secondReplacementClock = createGatewaySchedulerClock(Date.now() + 240_000);
-    const secondReplacement = new CronService({
-      ...deps,
-      scheduler: createTestGatewayScheduler(secondReplacementClock.clock),
-      nowMs: secondReplacementClock.clock.now,
-    });
-    let tick: ReturnType<typeof clock.advanceTo> = undefined;
-    let restoreOwnerProbe: (() => void) | undefined;
+    const { cron: secondReplacement, state: secondReplacementState } =
+      createCronServiceWithStateForTest({
+        ...deps,
+        scheduler: createTestGatewayScheduler(secondReplacementClock.clock),
+        nowMs: secondReplacementClock.clock.now,
+      });
+    let tick: Promise<void> | undefined;
     try {
       await first.start();
       const job = await first.add({
@@ -148,36 +154,33 @@ it.each([
             ? { mode, channel: "telegram", to: "123" }
             : { mode, to: "http://127.0.0.1/completion" },
       });
-      tick = clock.advanceTo(job.state.nextRunAtMs!);
+      clock.setTime(job.state.nextRunAtMs!);
+      tick = onTimer(firstState);
       await reachedInterruption.promise;
       expect(received).toEqual(interrupted === "after-acceptance" ? ["scheduled result"] : []);
       const receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       expect(receipt).toBeDefined();
       expect((await first.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
 
-      // Simulate process death at the liveness probe. Admission, receipt identity,
-      // recovery CAS, catch-up, and finalization use their real persisted state.
-      const probe = receipts.isCronRunReceiptOwnerStale;
-      const ownerProbe = vi
-        .spyOn(receipts, "isCronRunReceiptOwnerStale")
-        .mockImplementation(
-          (candidate, nowMs) =>
-            candidate.receiptId === receipt?.receiptId || probe(candidate, nowMs),
-        );
-      restoreOwnerProbe = () => ownerProbe.mockRestore();
+      // Retire the old launcher while its payload remains unresolved; startup
+      // recovery consumes the real persisted request without replaying its effect.
       first.stop();
       advanceCronActiveJobGeneration();
       await replacement.start();
       await replacementClock.advanceBy(120_000);
+      await onTimer(replacementState);
 
-      expect(received).toEqual(["scheduled result"]);
+      const expectedDeliveries = interrupted === "after-acceptance" ? ["scheduled result"] : [];
+      expect(received).toEqual(expectedDeliveries);
+      expect(executionCount).toBe(1);
       const recovered = await replacement.readJob(job.id);
       expect(recovered).toMatchObject({
         enabled: false,
-        state:
-          interrupted === "after-acceptance"
-            ? { lastRunStatus: "error", lastDeliveryStatus: "unknown" }
-            : { lastRunStatus: "ok", lastDeliveryStatus: "delivered" },
+        state: {
+          lastRunStatus: "error",
+          lastError: "cron: job interrupted by gateway restart",
+          lastDeliveryStatus: "unknown",
+        },
       });
       expect(recovered?.state.nextRunAtMs).toBeUndefined();
       expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
@@ -185,23 +188,39 @@ it.each([
       if (interrupted === "after-acceptance") {
         expect(recovered?.deleteAfterRun).toBe(true);
       }
+      const readHistory = () =>
+        readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
+          .entries;
+      const history = readHistory();
+      expect(history).toEqual([
+        expect.objectContaining({
+          status: "error",
+          error: "cron: job interrupted by gateway restart",
+          runAtMs: receipt?.startedAtMs,
+          deliveryStatus: "unknown",
+        }),
+      ]);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+          .get(receipt!.receiptId),
+      ).toMatchObject({ status: "interrupted" });
 
       replacement.stop();
       advanceCronActiveJobGeneration();
       await secondReplacement.start();
       await secondReplacementClock.advanceBy(120_000);
-      expect(received).toEqual(["scheduled result"]);
+      await onTimer(secondReplacementState);
+      expect(received).toEqual(expectedDeliveries);
+      expect(executionCount).toBe(1);
       expect(await secondReplacement.readJob(job.id)).toEqual(recovered);
+      expect(readHistory()).toEqual(history);
     } finally {
       first.stop();
       replacement.stop();
       secondReplacement.stop();
       acknowledgment.resolve();
-      try {
-        await tick;
-      } finally {
-        restoreOwnerProbe?.();
-      }
+      await tick;
     }
   },
 );

@@ -1,8 +1,9 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
+import { FOLLOWUP_QUEUES, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -33,7 +34,7 @@ vi.mock("../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
 }));
 
-const { effects, factories, resetMocks } = await vi.hoisted(async () => {
+const { effects, factories, placementMocks, resetMocks } = await vi.hoisted(async () => {
   const { createModelSelectionMocks } =
     await import("./apply-session-model-selection.test-support.js");
   return createModelSelectionMocks();
@@ -191,6 +192,36 @@ describe("applySessionModelSelection", () => {
     expectNoSelectionEffects();
     expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "refreshes inherited thinking only with pending work=%s",
+    async (pending) => {
+      const params = createParams();
+      const observed = {
+        ...catalog[1]!,
+        reasoning: true,
+        thinkingLevelMap: { high: "high" },
+      } satisfies ModelCatalogEntry;
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([observed]);
+      if (pending) {
+        getFollowupQueue(params.sessionKey, { mode: "followup" }).droppedCount = 1;
+      }
+      try {
+        expect(await applySessionModelSelection(params)).toMatchObject({ status: "applied" });
+        expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledTimes(pending ? 1 : 0);
+        expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledWith(
+          expect.objectContaining({
+            nextThinking: expect.objectContaining({
+              level: undefined,
+              catalog: expect.arrayContaining([pending ? observed : catalog[1]]),
+            }),
+          }),
+        );
+      } finally {
+        FOLLOWUP_QUEUES.delete(params.sessionKey);
+      }
+    },
+  );
 
   it.each([undefined, { allow: ["openai/*"] }])(
     "persists an off-catalog selection under policy %j without credentials",
@@ -516,24 +547,44 @@ describe("applySessionModelSelection", () => {
     expectNoSelectionEffects();
   });
 
-  it.each([
-    {
-      name: "locked",
-      concurrent: createEntry({ modelSelectionLocked: true }),
-      outcome: { status: "rejected", reason: "locked" },
-    },
-    {
-      name: "replaced",
-      concurrent: createEntry({ sessionId: "session-2" }),
-      outcome: { status: "conflict" },
-    },
-  ])(
-    "preserves an in-memory session $name during metadata preparation",
-    async ({ concurrent, outcome }) => {
+  it.each(
+    [
+      {
+        name: "locked",
+        concurrent: createEntry({ modelSelectionLocked: true }),
+        outcome: { status: "rejected", reason: "locked" },
+      },
+      {
+        name: "replaced",
+        concurrent: createEntry({ sessionId: "session-2" }),
+        outcome: { status: "conflict" },
+      },
+    ].flatMap(({ name, concurrent, outcome }) =>
+      ["metadata", "placement"].map((phase) => ({ name, concurrent, outcome, phase })),
+    ),
+  )(
+    "preserves an in-memory session $name during $phase preparation",
+    async ({ concurrent, outcome, phase }) => {
+      const entered = createDeferred();
       const metadata = createDeferred<ModelCatalogEntry[]>();
-      vi.mocked(loadProviderScopedThinkingCatalog).mockReturnValueOnce(metadata.promise);
-      const params = createParams();
+      if (phase === "metadata") {
+        vi.mocked(loadProviderScopedThinkingCatalog).mockImplementationOnce(() => {
+          entered.resolve();
+          return metadata.promise;
+        });
+      } else {
+        placementMocks.getMany.mockImplementationOnce(() => {
+          entered.resolve();
+          return new Map();
+        });
+      }
+      const params = createParams({ thinkingCatalog: [] });
       const pending = applySessionModelSelection(params);
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        `Model selection did not enter ${phase} preparation`,
+      );
       params.sessionStore[params.sessionKey] = concurrent;
       metadata.resolve([]);
 
@@ -583,7 +634,7 @@ describe("applySessionModelSelection", () => {
     expectNoSelectionEffects();
   });
 
-  it("refreshes queued work when an idempotent selection only remaps thinking", async () => {
+  it("keeps requested thinking through an idempotent selection", async () => {
     const sessionEntry = createEntry({
       providerOverride: "openai",
       modelOverride: "gpt-4o",
@@ -597,16 +648,43 @@ describe("applySessionModelSelection", () => {
 
     expect(result).toMatchObject({
       status: "applied",
-      changed: true,
-      thinkingRemap: { from: "adaptive", to: "medium", provider: "openai", model: "gpt-4o" },
     });
-    expect(sessionEntry.thinkingLevel).toBe("medium");
-    expect(effects.triggerSessionPatchHook).toHaveBeenCalledOnce();
-    expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextThinking: expect.objectContaining({ level: "medium" }),
-      }),
-    );
+    expect(result).not.toHaveProperty("thinkingRemap");
+    expect(sessionEntry.thinkingLevel).toBe("adaptive");
+  });
+
+  it("preserves the persisted requested level across reasoning capability switches", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = "agent:main:dm:thinking-switch";
+    const sessionEntry = createEntry({ thinkingLevel: "high" });
+    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+    const reasoner = {
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+      name: "Reasoner",
+      reasoning: true,
+    };
+    const plain = { provider: "openai", id: "gpt-4o", name: "Plain", reasoning: false };
+    const thinkingCatalog = [reasoner, plain];
+    for (const [current, selected] of [
+      [reasoner, plain],
+      [plain, reasoner],
+    ] as const) {
+      const result = await applySessionModelSelection(
+        createParams({
+          sessionEntry,
+          sessionKey,
+          storePath,
+          modelCatalog: thinkingCatalog,
+          thinkingCatalog,
+          currentProvider: current.provider,
+          currentModel: current.id,
+          request: createRequest(selected.provider, selected.id),
+        }),
+      );
+      expect(result.status).toBe("applied");
+      expect(loadSessionEntryReadOnly({ sessionKey, storePath })?.thinkingLevel).toBe("high");
+    }
   });
 
   it.each([

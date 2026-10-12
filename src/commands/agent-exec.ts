@@ -41,14 +41,9 @@ function normalizeCodeMode(
   if (value === undefined) {
     return undefined;
   }
-  if (value === "direct") {
-    return false;
-  }
-  if (value === "auto") {
-    return "auto";
-  }
-  if (value === "code") {
-    return true;
+  const modes = { direct: false, auto: "auto", code: true } as const;
+  if (typeof value === "string" && Object.hasOwn(modes, value)) {
+    return modes[value];
   }
   throw new Error("--code-mode must be one of direct, auto, code.");
 }
@@ -393,6 +388,9 @@ export async function agentExecCommand(
           "Agent runtime cleanup did not settle; state ownership retained until this process exits",
         )
       : undefined;
+  const recordCleanupError = (error: unknown) => {
+    cleanupError = error;
+  };
   const stopAudit = async () => await stopLocalAuditWriter?.();
   await (temporaryDatabaseScope ? temporaryDatabaseScope.run(stopAudit) : stopAudit()).catch(
     () => undefined,
@@ -402,9 +400,7 @@ export async function agentExecCommand(
   if (!cleanupError && temporaryStateDir) {
     const { closeOpenClawAgentDatabasesAsync } =
       await import("../state/openclaw-agent-db-lifecycle.js");
-    await closeOpenClawAgentDatabasesAsync(temporaryStateDir).catch((error: unknown) => {
-      cleanupError = error;
-    });
+    await closeOpenClawAgentDatabasesAsync(temporaryStateDir).catch(recordCleanupError);
   }
   if (!cleanupError && temporaryStateDir) {
     const [{ closeOpenClawStateDatabaseByPathAsync }, { resolveOpenClawStateSqlitePath }] =
@@ -416,19 +412,13 @@ export async function agentExecCommand(
       ...process.env,
       OPENCLAW_STATE_DIR: temporaryStateDir,
     });
-    await closeOpenClawStateDatabaseByPathAsync(temporaryStatePath).catch((error: unknown) => {
-      cleanupError = error;
-    });
+    await closeOpenClawStateDatabaseByPathAsync(temporaryStatePath).catch(recordCleanupError);
   }
   if (!cleanupError) {
-    await temporaryDatabaseScope?.close().catch((error: unknown) => {
-      cleanupError = error;
-    });
+    await temporaryDatabaseScope?.close().catch(recordCleanupError);
   }
   if (!cleanupError) {
-    await stateLock?.release().catch((error: unknown) => {
-      cleanupError = error;
-    });
+    await stateLock?.release().catch(recordCleanupError);
   }
   const runCleanupStep = (step: () => void) => {
     try {

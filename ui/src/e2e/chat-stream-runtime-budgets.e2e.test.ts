@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
 import type { ApplicationContext } from "../app/context.ts";
+import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
@@ -34,17 +35,17 @@ type ChatFlowPage = Parameters<Parameters<ChatFlowSuite["withPage"]>[1]>[0]["pag
 const BURST_DELTA_COUNT = 240;
 // Sanity floor: the burst must invalidate the chat page host at least twice,
 // proving the probe observed the streaming path at all.
-const MIN_BURST_HOST_UPDATES = 2;
+const MIN_BURST_INVALIDATIONS = 2;
 // A direct update per delta produces at least 240 host invalidations. Keep the
 // burst below that count so frame scheduling alone cannot hide lost coalescing.
-const MAX_BURST_HOST_UPDATES = 180;
+const MAX_BURST_INVALIDATIONS = 180;
 // Minimum share of host invalidations that must execute inside an animation
 // frame callback. The queue guarantees this for every stream-driven update;
 // only rare timer-driven strays (poll controllers) fall outside frames.
 const FRAME_SCHEDULED_MIN_RATIO = 0.9;
 // Unrelated page timers can contribute one host update after the probe resets;
 // ordinary characters must not invalidate the pane themselves.
-const MAX_STEADY_COMPOSER_HOST_UPDATES = 1;
+const MAX_STEADY_COMPOSER_INVALIDATIONS = 1;
 
 // Shipped live-tool ceiling: ui/src/pages/chat/tool-stream.ts TOOL_STREAM_LIMIT.
 const TOOL_STREAM_LIMIT_CONTRACT = 50;
@@ -77,11 +78,11 @@ const IDLE_TASK_DURATION_CEILING_MS = 600;
 type StreamPerfProbe = {
   mutationBatches: number;
   rafCount: number;
-  hostUpdates: number;
-  hostUpdatesInsideFrame: number;
+  invalidations: number;
+  commits: number;
+  invalidationsInsideFrame: number;
   offFrameUpdates: Array<{
     host: "page" | "pane";
-    property: string;
     rafCount: number;
     phase: "burst" | "settling";
     callers: string[];
@@ -97,6 +98,7 @@ type ToolProjectionProbe = {
 };
 
 type ScopedWindow = Window & {
+  openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;
   ocStreamPerf?: StreamPerfProbe;
   ocIdleProbe?: { longTasks: number; longTaskMs: number };
   ocBurstDone?: boolean;
@@ -138,8 +140,9 @@ async function installRenderProbe(page: ChatFlowPage) {
     scope.ocStreamPerf = {
       mutationBatches: 0,
       rafCount: 0,
-      hostUpdates: 0,
-      hostUpdatesInsideFrame: 0,
+      invalidations: 0,
+      commits: 0,
+      invalidationsInsideFrame: 0,
       offFrameUpdates: [],
       droppedOffFrameUpdates: 0,
     };
@@ -161,33 +164,12 @@ async function installRenderProbe(page: ChatFlowPage) {
           insideFrame = previous;
         }
       });
-    // Walk to the Lit base that owns requestUpdate and shadow it there so
-    // every host invalidation (any element) is attributed to whether it ran
-    // inside an animation frame callback. Stream-driven updates dominate the
-    // window, so the frame-scheduled share stays representative.
-    let owner: object | null = Object.getPrototypeOf(chatPage);
-    while (owner && !Object.hasOwn(owner, "requestUpdate")) {
-      owner = Object.getPrototypeOf(owner);
-    }
-    if (!owner || typeof (owner as { requestUpdate?: unknown }).requestUpdate !== "function") {
-      throw new Error("requestUpdate owner not found on chat page prototype chain");
-    }
-    const ownerPrototype = owner as { requestUpdate: (...args: unknown[]) => unknown };
-    const originalRequestUpdate = ownerPrototype.requestUpdate;
-    const propertyNames = (
-      "data navDrawerOpen presented layout narrow mergedChrome dropIndicator " +
-      "paneId presentationId chatMessagesBySession sessionSnapshotStore sessionKey " +
-      "routeLoadingSkeleton agentId inputRegion compact workContext draft focusComposer " +
-      "dashboardExpanded routeFace onFaceChange onFocusPane onSessionDeleted paneTitle " +
-      "onboarding onOpenSplitView onSplitDown onSplitRight onClosePane boardProvider"
-    ).split(" ");
     const chunkNames = [
       "control-ui-boot-chat",
       "control-ui-boot-shared",
       "control-ui-boot-new",
       "control-ui-core",
       "control-ui-foundation",
-      "lit-runtime",
       "index",
     ];
     const sourceNames = new Set([
@@ -201,7 +183,6 @@ async function installRenderProbe(page: ChatFlowPage) {
       "chat-page-retained-sessions",
       "subscriptions-controller",
       "poll-controller",
-      "reactive-element",
     ]);
     const classifyCaller = (frame: string): string => {
       const location = frame.match(/\/([^/\s?#]+)\.(js|ts)(?:\?[^\s]*)?:(\d{1,7}):(\d{1,7})\)?$/);
@@ -215,32 +196,33 @@ async function installRenderProbe(page: ChatFlowPage) {
         ? `${name}.${location[2]}:${location[3]}:${location[4]}`
         : "unknown";
     };
-    ownerPrototype.requestUpdate = function patchedRequestUpdate(this: object, ...args: unknown[]) {
-      const probe = scope.ocStreamPerf!;
-      const tag = (this as HTMLElement).localName;
-      if (tag === "openclaw-chat-page" || tag === "openclaw-chat-pane") {
-        probe.hostUpdates += 1;
-        if (insideFrame) {
-          probe.hostUpdatesInsideFrame += 1;
-        } else if (probe.offFrameUpdates.length < 12) {
-          // Keep only known source/asset basenames and coordinates, never raw stacks or values.
-          // The asset suffix identifies the exact source map; RAF count counts callbacks.
-          const stack = new Error().stack ?? "";
-          probe.offFrameUpdates.push({
-            host: tag === "openclaw-chat-page" ? "page" : "pane",
-            property:
-              args[0] === undefined
-                ? "explicit"
-                : (propertyNames.find((name) => name === args[0]) ?? "other"),
-            rafCount: probe.rafCount,
-            phase: scope.ocBurstDone === true ? "settling" : "burst",
-            callers: stack.slice(0, 4096).split("\n").slice(2, 8).map(classifyCaller),
-          });
-        } else {
-          probe.droppedOffFrameUpdates += 1;
-        }
+    scope.openclawRenderLifecycleTestHook = (host, phase) => {
+      if (
+        !(host instanceof HTMLElement) ||
+        (host.localName !== "openclaw-chat-page" && host.localName !== "openclaw-chat-pane")
+      ) {
+        return;
       }
-      return originalRequestUpdate.apply(this, args);
+      const probe = scope.ocStreamPerf!;
+      if (phase === "commit") {
+        probe.commits += 1;
+        return;
+      }
+      probe.invalidations += 1;
+      if (insideFrame) {
+        probe.invalidationsInsideFrame += 1;
+      } else if (probe.offFrameUpdates.length < 12) {
+        // Keep only known source/asset basenames and coordinates, never raw stacks or values.
+        const stack = new Error().stack ?? "";
+        probe.offFrameUpdates.push({
+          host: host.localName === "openclaw-chat-page" ? "page" : "pane",
+          rafCount: probe.rafCount,
+          phase: scope.ocBurstDone === true ? "settling" : "burst",
+          callers: stack.slice(0, 4096).split("\n").slice(2, 8).map(classifyCaller),
+        });
+      } else {
+        probe.droppedOffFrameUpdates += 1;
+      }
     };
     // Frames queued before instrumentation run without the wrapper. Drain them
     // before callers reset the counters and begin the measured interaction.
@@ -256,8 +238,9 @@ async function resetRenderProbe(page: ChatFlowPage) {
     scope.ocStreamPerf = {
       mutationBatches: 0,
       rafCount: 0,
-      hostUpdates: 0,
-      hostUpdatesInsideFrame: 0,
+      invalidations: 0,
+      commits: 0,
+      invalidationsInsideFrame: 0,
       offFrameUpdates: [],
       droppedOffFrameUpdates: 0,
     };
@@ -670,14 +653,16 @@ suite.define(() => {
       await recordBudgetMetrics("delta-burst-commits", {
         mutationBatches: probe.mutationBatches,
         rafCount: probe.rafCount,
-        hostUpdates: probe.hostUpdates,
-        hostUpdatesInsideFrame: probe.hostUpdatesInsideFrame,
+        invalidations: probe.invalidations,
+        commits: probe.commits,
+        invalidationsInsideFrame: probe.invalidationsInsideFrame,
       });
 
-      expect(probe.hostUpdates).toBeGreaterThanOrEqual(MIN_BURST_HOST_UPDATES);
-      expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_BURST_HOST_UPDATES);
+      expect(probe.commits).toBeGreaterThan(0);
+      expect(probe.invalidations).toBeGreaterThanOrEqual(MIN_BURST_INVALIDATIONS);
+      expect(probe.invalidations).toBeLessThanOrEqual(MAX_BURST_INVALIDATIONS);
       expect(
-        probe.hostUpdatesInsideFrame / probe.hostUpdates,
+        probe.invalidationsInsideFrame / probe.invalidations,
         `frame-scheduled update budget: ${JSON.stringify(probe)}`,
       ).toBeGreaterThanOrEqual(FRAME_SCHEDULED_MIN_RATIO);
     });
@@ -825,7 +810,11 @@ suite.define(() => {
       expect(await composer.inputValue()).toBe(`seed${suffix}`);
       const probe = await readRenderProbe(page);
 
-      expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_HOST_UPDATES);
+      await recordBudgetMetrics(
+        scrollAwayAndBack ? "composer-after-scroll" : "composer-steady-state",
+        { invalidations: probe.invalidations, commits: probe.commits },
+      );
+      expect(probe.invalidations).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_INVALIDATIONS);
 
       const send = page.locator(".chat-send-btn--send");
       await composer.fill("");

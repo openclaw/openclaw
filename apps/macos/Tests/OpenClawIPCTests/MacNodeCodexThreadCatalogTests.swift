@@ -256,6 +256,34 @@ struct MacNodeCodexThreadCatalogTests {
             maxLineBytes: maxLineBytes).data
     }
 
+    private func withClient<T>(
+        _ operation: (CodexAppServerThreadClient) async throws -> T) async rethrows -> T
+    {
+        let client = CodexAppServerThreadClient()
+        do {
+            let result = try await operation(client)
+            await client.shutdown()
+            return result
+        } catch {
+            await client.shutdown()
+            throw error
+        }
+    }
+
+    private func listCatalog(
+        paramsJSON: String?,
+        executable: String,
+        arguments: [String]? = nil,
+        clearEnv: [String] = []) async throws -> String
+    {
+        var appServer: [String: Any] = ["command": executable, "clearEnv": clearEnv]
+        appServer["args"] = arguments ?? ["app-server", "--listen", "stdio://"]
+        let root = self.codexRoot(appServer: appServer)
+        return try await self.withClient { client in
+            try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON, loadRoot: { root }, client: client)
+        }
+    }
+
     @Test func `normalizes App Server metadata and drops sensitive thread fields`() throws {
         let raw: [String: Any] = [
             "data": [[
@@ -405,11 +433,10 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(resolved.cwd == nil)
         #expect(resolved.clearEnv == [clearEnvSentinel])
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: nil,
             executable: resolved.executable,
             arguments: resolved.arguments,
-            cwd: resolved.cwd,
             clearEnv: resolved.clearEnv)
         let response = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
@@ -468,109 +495,54 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(resolved.executable == fallback.executable.path)
     }
 
+    @Test(arguments: [
+        #"{"sessionCatalog":{"enabled":true,"homes":["/tmp/codex",{"path":"/tmp/other","label":"Other"}]},"supervision":{}}"#,
+        #"{"sessionCatalog":{},"supervision":{"enabled":false}}"#,
+        #"{}"#,
+    ])
+    func `canonical config without supervision`(_ json: String) throws {
+        var config = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        config["appServer"] = ["command": "/usr/bin/true", "args": ["app-server"]]
+        let root = self.codexRoot(config: config)
+        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
+        let invocation = try MacNodeCodexThreadCatalog.resolveInvocation(root: root, environment: [:], searchPaths: [])
+        #expect(invocation.executable == "/usr/bin/true")
+        #expect(invocation.arguments == ["app-server"])
+    }
+
+    @Test func `catalog defaults do not depend on plugin policy parsing`() throws {
+        for entry: [String: Any] in [
+            ["enabled": true],
+            ["enabled": true, "config": ["codexPlugins": 42]],
+        ] {
+            let root: [String: Any] = ["plugins": ["entries": ["codex": entry]]]
+            #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
+            let invocation = try MacNodeCodexThreadCatalog.resolveInvocation(
+                root: root,
+                environment: ["OPENCLAW_CODEX_APP_SERVER_BIN": "/usr/bin/true"],
+                searchPaths: [])
+            #expect(invocation.executable == "/usr/bin/true")
+        }
+    }
+
     @Test func `complete official plugin config remains eligible for the catalog`() throws {
-        let app = try makeFakeCodex("#!/bin/sh\nexit 0\n")
-        let root = self.codexRoot(config: [
-            "codexDynamicToolsLoading": "direct",
-            "codexDynamicToolsExclude": ["private_tool"],
-            "discovery": ["enabled": true, "timeoutMs": 1000],
-            "computerUse": [
-                "enabled": false,
-                "autoInstall": false,
-                "marketplaceDiscoveryTimeoutMs": 1000,
-                "marketplaceSource": "source",
-                "marketplacePath": "path",
-                "marketplaceName": "marketplace",
-                "pluginName": "plugin",
-                "mcpServerName": "server",
-            ],
-            // The TypeScript parser treats this subtree independently.
-            "codexPlugins": 42,
-            "supervision": [
-                "enabled": true,
-                "allowRawTranscripts": false,
-                "allowWriteControls": false,
-                "endpoints": [
-                    [
-                        "id": "local",
-                        "label": "Local",
-                        "transport": "stdio-proxy",
-                        "command": "codex",
-                        "args": ["app-server"],
-                        "cwd": "/tmp",
-                    ],
-                    [
-                        "id": "remote",
-                        "label": "Remote",
-                        "transport": "websocket",
-                        "url": "wss://codex.example.test",
-                        "authTokenEnv": "CODEX_TOKEN",
-                    ],
-                ],
-            ],
-            "appServer": [
-                "mode": "guardian",
-                "transport": "stdio",
-                "homeScope": "user",
-                "command": app.executable.path,
-                "args": ["app-server", "--listen", "stdio://"],
-                "url": "",
-                "authToken": [
-                    "source": "env",
-                    "provider": "default",
-                    "id": "CODEX_TOKEN",
-                ],
-                "headers": [
-                    "x-file": [
-                        "source": "file",
-                        "provider": "mounted-json",
-                        "id": "/codex/token~1value",
-                    ],
-                    "x-exec": [
-                        "source": "exec",
-                        "provider": "vault",
-                        "id": "codex/token#value",
-                    ],
-                ],
-                "clearEnv": ["OPENAI_API_KEY"],
-                "remoteWorkspaceRoot": "/workspaces",
-                "codeModeOnly": true,
-                "requestTimeoutMs": 1000,
-                "turnCompletionIdleTimeoutMs": 1000,
-                "postToolRawAssistantCompletionIdleTimeoutMs": 1000,
-                "approvalPolicy": "on-failure",
-                "sandbox": "workspace-write",
-                "approvalsReviewer": "user",
-                "serviceTier": "priority",
-                "networkProxy": [
-                    "enabled": true,
-                    "profileName": "openclaw",
-                    "baseProfile": "workspace",
-                    "mode": "limited",
-                    "domains": ["example.test": "allow"],
-                    "unixSockets": ["/tmp/service.sock": "allow"],
-                    "proxyUrl": "http://127.0.0.1:8080",
-                    "socksUrl": "socks5://127.0.0.1:1080",
-                    "enableSocks5": true,
-                    "enableSocks5Udp": false,
-                    "allowUpstreamProxy": false,
-                    "allowLocalBinding": false,
-                    "dangerouslyAllowNonLoopbackProxy": false,
-                    "dangerouslyAllowAllUnixSockets": false,
-                ],
-                "defaultWorkspaceDir": "",
-                "experimental": ["sandboxExecServer": false],
-            ],
-        ])
+        var repository = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 {
+            repository.deleteLastPathComponent()
+        }
+        let fixture = repository.appendingPathComponent(
+            "extensions/codex/src/app-server/fixtures/native-plugin-config.json")
+        let config = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        let root = self.codexRoot(config: config)
 
         #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
-        let invocation = try MacNodeCodexThreadCatalog.resolveInvocation(root: root, searchPaths: [])
-        #expect(invocation.executable == app.executable.path)
+        let invocation = try MacNodeCodexThreadCatalog.resolveInvocation(root: root, environment: [:], searchPaths: [])
+        #expect(invocation.executable == "/usr/bin/true")
+        #expect(invocation.arguments == ["app-server", "--listen", "stdio://"])
         #expect(invocation.clearEnv == ["OPENAI_API_KEY"])
     }
 
     @Test func `malformed or unknown official plugin config fails closed`() throws {
-        let app = try makeFakeCodex("#!/bin/sh\nexit 0\n")
         var malformedConfigs: [Any] = [
             "enabled",
             ["supervision": ["enabled": true], "unknown": true] as [String: Any],
@@ -578,6 +550,20 @@ struct MacNodeCodexThreadCatalogTests {
             ["supervision": ["enabled": true], "codexDynamicToolsExclude": ["tool", 42]] as [String: Any],
             ["supervision": ["enabled": true], "discovery": ["enabled": true, "unknown": true]] as [String: Any],
             ["supervision": ["enabled": true], "computerUse": ["timeoutMs": 1000]] as [String: Any],
+            ["sessionCatalog": ["enabled": 1]],
+            ["sessionCatalog": ["unknown": true]],
+            ["sessionCatalog": ["homes": "path"]],
+            ["sessionCatalog": ["homes": ["  "]]],
+            ["sessionCatalog": ["homes": [["label": "Missing path"]]]],
+            ["sessionCatalog": ["homes": [["path": "/tmp/codex", "label": " "]]]],
+            ["sessionCatalog": ["homes": [["path": "/tmp/codex", "unknown": true]]]],
+            ["computerUse": ["liveTestTimeoutMs": 0]],
+            ["computerUse": ["toolCallTimeoutMs": true]],
+            ["computerUse": ["healthCheckEnabled": 1]],
+            ["computerUse": ["healthCheckIntervalMinutes": 30.5]],
+            ["computerUse": ["pluginCacheMode": "other"]],
+            ["computerUse": ["strictReadiness": "true"]],
+            ["computerUse": ["autoRepair": 1]],
             ["supervision": "enabled"] as [String: Any],
             ["supervision": ["enabled": true, "unknown": true]] as [String: Any],
             ["supervision": ["enabled": true, "allowRawTranscripts": 1]] as [String: Any],
@@ -598,15 +584,23 @@ struct MacNodeCodexThreadCatalogTests {
             ["args": ["app-server", 42]] as [String: Any],
             ["url": 42] as [String: Any],
             ["authToken": ["source": "env", "provider": "default", "id": "lowercase"]] as [String: Any],
+            ["authToken": ["source": "store", "provider": "default", "id": "lowercase"]],
             ["headers": ["authorization": ["source": "exec", "provider": "vault", "id": "../token"]]] as [String: Any],
             ["clearEnv": true] as [String: Any],
             ["clearEnv": ["OPENAI_API_KEY", false]] as [String: Any],
             ["remoteWorkspaceRoot": "  "] as [String: Any],
             ["codeModeOnly": "true"] as [String: Any],
             ["requestTimeoutMs": 0] as [String: Any],
-            ["turnCompletionIdleTimeoutMs": "1000"] as [String: Any],
-            ["postToolRawAssistantCompletionIdleTimeoutMs": false] as [String: Any],
+            ["turnCompletionIdleTimeoutMs": 1000] as [String: Any],
+            ["postToolRawAssistantCompletionIdleTimeoutMs": 1000] as [String: Any],
             ["approvalPolicy": "always"] as [String: Any],
+            ["approvalPolicy": "untrusted"],
+            ["loopDetectionPreToolUseRelay": 1],
+            ["enableUltrafast": "true"],
+            ["cyberFailover": ["mode": "other"]],
+            ["cyberFailover": ["model": "  "]],
+            ["cyberFailover": ["cooloffMs": 0]],
+            ["cyberFailover": ["unknown": true]],
             ["sandbox": "full"] as [String: Any],
             ["approvalsReviewer": "agent"] as [String: Any],
             ["serviceTier": false] as [String: Any],
@@ -634,7 +628,7 @@ struct MacNodeCodexThreadCatalogTests {
                 try MacNodeCodexThreadCatalog.resolveInvocation(
                     root: root,
                     searchPaths: [],
-                    defaultMacOSAppExecutable: app.executable.path)
+                    defaultMacOSAppExecutable: "/usr/bin/true")
             }
         }
     }
@@ -655,9 +649,11 @@ struct MacNodeCodexThreadCatalogTests {
         let revoked = self.codexRoot(pluginPolicy: ["deny": ["codex"]])
         var loadCount = 0
 
-        let payload = try await MacNodeCodexThreadCatalog.list(paramsJSON: nil) {
-            loadCount += 1
-            return loadCount == 1 ? enabled : revoked
+        let payload = try await self.withClient { client in
+            try await MacNodeCodexThreadCatalog.list(paramsJSON: nil, loadRoot: {
+                loadCount += 1
+                return loadCount == 1 ? enabled : revoked
+            }, client: client)
         }
         let response = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
@@ -797,7 +793,7 @@ struct MacNodeCodexThreadCatalogTests {
             sleep 1
             """#)
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: #"{"agentId":"gateway-owner","cursor":" cursor ","limit":25,"searchTerm":" oNe ","cwd":" /work "}"#,
             executable: fake.executable.path)
         let response = try #require(
@@ -985,7 +981,7 @@ struct MacNodeCodexThreadCatalogTests {
         done
         """#)
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: #"{"limit":3,"searchTerm":"target"}"#,
             executable: fake.executable.path)
         let response = try #require(
@@ -1036,7 +1032,7 @@ struct MacNodeCodexThreadCatalogTests {
         done
         """#)
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: #"{"limit":40,"searchTerm":"target"}"#,
             executable: fake.executable.path)
         let response = try #require(
@@ -1071,7 +1067,7 @@ struct MacNodeCodexThreadCatalogTests {
         done
         """#)
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
+        let payload = try await self.listCatalog(
             paramsJSON: #"{"limit":40,"searchTerm":"target"}"#,
             executable: fake.executable.path)
         let response = try #require(
@@ -1509,10 +1505,13 @@ extension MacNodeCodexThreadCatalogTests {
         """#)
         defer { withExtendedLifetime(fake) {} }
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
-            paramsJSON: #"{"limit":50}"#,
-            executable: fake.executable.path,
-            timeoutSeconds: 10)
+        let data = try await self.withClient { client in
+            try await self.requestEmptyList(
+                client: client, executable: fake.executable, timeoutSeconds: 10, maxLineBytes: 5 * 1024 * 1024)
+        }
+        let payload = try MacNodeCodexThreadCatalog.normalize(
+            listResultData: data,
+            sourceHomeId: Self.fixtureSourceHomeId)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
         #expect((decoded["sessions"] as? [Any])?.count == 50)
@@ -1539,10 +1538,13 @@ extension MacNodeCodexThreadCatalogTests {
         """#)
         defer { withExtendedLifetime(fake) {} }
 
-        let payload = try await MacNodeCodexThreadCatalog.list(
-            paramsJSON: #"{"limit":100}"#,
-            executable: fake.executable.path,
-            timeoutSeconds: 10)
+        let data = try await self.withClient { client in
+            try await self.requestEmptyList(
+                client: client, executable: fake.executable, timeoutSeconds: 10, maxLineBytes: 5 * 1024 * 1024)
+        }
+        let payload = try MacNodeCodexThreadCatalog.normalize(
+            listResultData: data,
+            sourceHomeId: Self.fixtureSourceHomeId)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
         #expect((decoded["sessions"] as? [Any])?.count == 100)
@@ -1660,7 +1662,7 @@ extension MacNodeCodexThreadCatalogTests {
         ]
         for (paramsJSON, expected) in cases {
             do {
-                _ = try await MacNodeCodexThreadCatalog.list(
+                _ = try await self.listCatalog(
                     paramsJSON: paramsJSON,
                     executable: "/path/that/must/not/launch")
                 Issue.record("expected invalid params for \(paramsJSON)")
@@ -1717,10 +1719,9 @@ extension MacNodeCodexThreadCatalogTests {
         """#)
         defer { withExtendedLifetime(oversized) {} }
         do {
-            _ = try await MacNodeCodexThreadCatalog.list(
-                paramsJSON: nil,
-                executable: oversized.executable.path,
-                maxLineBytes: 128)
+            _ = try await self.withClient { client in
+                try await self.requestEmptyList(client: client, executable: oversized.executable, maxLineBytes: 128)
+            }
             Issue.record("expected oversized App Server response to fail")
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
             #expect(error == .responseTooLarge)
@@ -1733,10 +1734,9 @@ extension MacNodeCodexThreadCatalogTests {
         """#)
         defer { withExtendedLifetime(stalled) {} }
         do {
-            _ = try await MacNodeCodexThreadCatalog.list(
-                paramsJSON: nil,
-                executable: stalled.executable.path,
-                timeoutSeconds: 0.05)
+            _ = try await self.withClient { client in
+                try await self.requestEmptyList(client: client, executable: stalled.executable, timeoutSeconds: 0.05)
+            }
             Issue.record("expected stalled App Server response to time out")
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
             #expect(error == .timedOut)
@@ -1754,7 +1754,7 @@ extension MacNodeCodexThreadCatalogTests {
         defer { withExtendedLifetime(fake) {} }
 
         do {
-            _ = try await MacNodeCodexThreadCatalog.list(
+            _ = try await self.listCatalog(
                 paramsJSON: nil,
                 executable: fake.executable.path)
             Issue.record("expected fake App Server error")
@@ -1868,7 +1868,7 @@ extension MacNodeCodexThreadCatalogTests {
         printf '%s\n' "$request" > "${0}.unexpected-request"
         """#)
         await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable) {
-            try await MacNodeCodexThreadCatalog.list(paramsJSON: nil, executable: fake.executable.path)
+            try await self.listCatalog(paramsJSON: nil, executable: fake.executable.path)
         }
         #expect(!FileManager.default.fileExists(atPath: fake.executable.path + ".unexpected-request"))
     }

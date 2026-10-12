@@ -99,21 +99,15 @@ export function prepareTargetCodexAppServer(
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
   const targets = resolvePlannedMigrationTargets(ctx);
-  let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
   const ready = getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: 60_000,
     agentDir: targets.agentDir,
     config: ctx.config,
-  }).then(
-    (client) => {
-      warmedClient = client;
-    },
-    () => undefined,
-  );
+  }).catch(() => undefined);
   return {
     async dispose() {
-      await ready;
+      const warmedClient = await ready;
       if (warmedClient) {
         releaseLeasedSharedCodexAppServerClient(warmedClient);
       }
@@ -224,55 +218,41 @@ async function applyCodexPluginInstallItem(
       appCache: defaultCodexAppInventoryCache,
       appCacheKey,
     });
-    const baseDetails = {
-      ...item.details,
-      code: result.reason,
-      activationReason: result.reason,
-      ...PLUGIN_ACTIVATION_REPORT_STATE[result.reason],
-      installAttempted: result.installAttempted,
-      diagnostics: result.diagnostics.map((diagnostic) => diagnostic.message),
+    const applied: MigrationItem = {
+      ...item,
+      status: result.ok ? "migrated" : "error",
+      details: {
+        ...item.details,
+        code: result.reason,
+        activationReason: result.reason,
+        ...PLUGIN_ACTIVATION_REPORT_STATE[result.reason],
+        installAttempted: result.installAttempted,
+        diagnostics: result.diagnostics.map((diagnostic) => diagnostic.message),
+      },
     };
     if (result.ok) {
-      return {
-        ...item,
-        status: "migrated",
-        ...(result.reason === "already_active" ? { reason: "already active" } : {}),
-        details: baseDetails,
-      };
+      if (result.reason === "already_active") {
+        applied.reason = "already active";
+      }
+      return applied;
     }
+    applied.reason = result.reason;
     if (result.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON) {
-      return {
-        ...item,
-        status: "skipped",
-        reason: CODEX_PLUGIN_AUTH_REQUIRED_REASON,
-        details: {
-          ...baseDetails,
-          appsNeedingAuth: (result.installResponse?.appsNeedingAuth ?? []).map(({ id, name }) => ({
-            id,
-            name,
-            needsAuth: true,
-          })),
-        },
+      applied.status = "skipped";
+      applied.details = {
+        ...applied.details,
+        appsNeedingAuth: (result.installResponse?.appsNeedingAuth ?? []).map(({ id, name }) => ({
+          id,
+          name,
+          needsAuth: true,
+        })),
       };
+    } else if (result.reason === "plugin_missing" || result.reason === "marketplace_missing") {
+      applied.status = "warning";
+      applied.message = `Codex plugin "${policy.pluginName}" could not be migrated automatically`;
+      applied.details = { ...applied.details, warningReason: CODEX_PLUGIN_LOAD_WARNING };
     }
-    if (result.reason === "plugin_missing" || result.reason === "marketplace_missing") {
-      return {
-        ...item,
-        status: "warning",
-        reason: result.reason,
-        message: `Codex plugin "${policy.pluginName}" could not be migrated automatically`,
-        details: {
-          ...baseDetails,
-          warningReason: CODEX_PLUGIN_LOAD_WARNING,
-        },
-      };
-    }
-    return {
-      ...item,
-      status: "error",
-      reason: result.reason,
-      details: baseDetails,
-    };
+    return applied;
   } catch (error) {
     if (coerceErrorMessage(error).includes("codex app-server plugin/list timed out")) {
       return {
@@ -368,7 +348,7 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
   const targets = resolvePlannedMigrationTargets(ctx);
   const appServer = resolveTargetCodexAppServer(ctx);
-  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+  const authProfileId = await resolveCodexAppServerAuthProfileIdForAgent({
     agentDir: targets.agentDir,
     config: ctx.config,
   });

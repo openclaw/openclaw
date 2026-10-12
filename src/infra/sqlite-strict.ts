@@ -69,6 +69,11 @@ function readMainTableList(db: DatabaseSync): Array<TableListRow & { name: strin
   );
 }
 
+/** Canonical bootstrap needs no legacy rebuild when every ordinary table is already STRICT. */
+export function hasNonStrictSqliteTables(db: DatabaseSync): boolean {
+  return readMainTableList(db).some((row) => row.type === "table" && Number(row.strict) !== 1);
+}
+
 function readTableColumns(db: DatabaseSync, tableName: string): TableColumnRow[] {
   return db
     .prepare(`PRAGMA table_xinfo(${quoteSqliteIdentifier(tableName)})`)
@@ -298,14 +303,11 @@ export function migrateSqliteSchemaToStrictInTransaction(
   const preservedObjects = readPreservedSchemaObjects(db, names);
   // SQLite reparses every trigger and view during ALTER TABLE. Temporarily
   // remove them so a referenced table can be absent between DROP and RENAME.
-  for (const object of preservedObjects) {
-    if (object.type === "trigger") {
-      db.exec(`DROP TRIGGER ${quoteSqliteIdentifier(object.name)};`);
-    }
-  }
-  for (const object of preservedObjects) {
-    if (object.type === "view") {
-      db.exec(`DROP VIEW ${quoteSqliteIdentifier(object.name)};`);
+  for (const type of ["trigger", "view"] as const) {
+    for (const object of preservedObjects) {
+      if (object.type === type) {
+        db.exec(`DROP ${type.toUpperCase()} ${quoteSqliteIdentifier(object.name)};`);
+      }
     }
   }
   for (const [index, table] of tablesToMigrate.entries()) {

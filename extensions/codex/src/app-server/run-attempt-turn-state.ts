@@ -59,7 +59,6 @@ class CodexAttemptState {
   };
   terminalDynamicToolReleaseCheckScheduled = false;
   currentTurnHadNonTerminalDynamicToolResult = false;
-  currentTurnHadToolAuthoredFinalReply = false;
 }
 
 export function createCodexAttemptTurnState(resources: CodexAttemptResources) {

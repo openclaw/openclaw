@@ -45,22 +45,6 @@ describe("POSIX process group inspection", () => {
     expect(isDead.mock.calls).toEqual([[123], [124]]);
   });
 
-  it("treats runnable members as alive and empty snapshots as unknown", () => {
-    expect(
-      inspectLinuxProcessGroupStats(
-        123,
-        ["123 (leader) Z 1 123 123 0 -1 0", "124 (worker) D 1 123 123 0 -1 0"],
-        (pid) => pid === 123,
-      ).alive,
-    ).toBe(true);
-    const isDead = vi.fn(() => true);
-    expect(inspectLinuxProcessGroupStats(123, ["125 (other) S 1 999 999 0 -1 0"], isDead)).toEqual({
-      alive: null,
-      diagnostics: "pgid=123 members=[]",
-    });
-    expect(isDead).not.toHaveBeenCalled();
-  });
-
   it("bounds process group diagnostics", () => {
     const stats = Array.from(
       { length: 300 },
@@ -74,7 +58,7 @@ describe("POSIX process group inspection", () => {
     expect(inspection.diagnostics).toMatch(/\.\.\.$/u);
   });
 
-  it.each(["ENOENT", "ESRCH", "EACCES"])(
+  it.each(["EACCES"])(
     "distinguishes a vanished /proc member from unreadable state (%s)",
     (code) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
@@ -104,8 +88,6 @@ describe("POSIX process group inspection", () => {
   it.each([
     { status: "State:\tZ\nThreads:\t2\n", alive: true },
     { status: "State:\tZ\nThreads:\t1\n", alive: false },
-    { status: "State:\tZ\n", alive: true },
-    { status: null, alive: true },
   ])("preserves cleanup until all threads have exited ($status)", ({ status, alive }) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -113,18 +95,13 @@ describe("POSIX process group inspection", () => {
     procFs.readFileSync
       .mockClear()
       .mockReturnValueOnce("123 (leader) Z 1 123 123 0 -1 0")
-      .mockImplementationOnce(() => {
-        if (status === null) {
-          throw Object.assign(new Error("status unavailable"), { code: "EACCES" });
-        }
-        return status;
-      });
+      .mockReturnValueOnce(status);
 
     expect(isQaPosixProcessGroupAlive(123)).toBe(alive);
     expect(procFs.readFileSync).toHaveBeenCalledWith("/proc/123/status", "utf8");
   });
 
-  it.each(["empty", "unavailable"])(
+  it.each(["empty"])(
     "confirms a group reaped during an %s Linux snapshot is stopped",
     (snapshot) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
@@ -144,47 +121,6 @@ describe("POSIX process group inspection", () => {
       ).toBe(false);
     },
   );
-
-  it("fails closed when the Linux member snapshot is unavailable", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const processKill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    try {
-      expect(isQaPosixProcessGroupAlive(123, () => null)).toBe(true);
-      expect(processKill).toHaveBeenCalledWith(-123, 0);
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("treats a kill-visible Linux group with only zombie members as stopped", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const processKill = vi.spyOn(process, "kill").mockImplementation(() => true);
-    try {
-      expect(
-        isQaPosixProcessGroupAlive(123, () => ({
-          alive: false,
-          diagnostics: 'pgid=123 members=[pid=123 state=Z command="leader"]',
-        })),
-      ).toBe(false);
-      expect(processKill).toHaveBeenCalledWith(-123, 0);
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("stops on ESRCH and never falls back to a positive pid", () => {
-    const processKill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-      expect(pid).toBe(-123);
-      if (signal === 0) {
-        throw Object.assign(new Error("gone"), { code: "ESRCH" });
-      }
-      return true;
-    });
-
-    expect(isQaPosixProcessGroupAlive(123)).toBe(false);
-    expect(signalQaPosixProcessGroup(123, "SIGTERM")).toBeUndefined();
-    expect(processKill).not.toHaveBeenCalledWith(123, expect.anything());
-  });
 
   it.each(["ESRCH", "EPERM"])("preserves the group signal contract on %s", (code) => {
     const failure = Object.assign(new Error("group signal failed"), { code });

@@ -1,4 +1,3 @@
-// Line plugin module implements push retry policy behavior.
 import { HTTPFetchError } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";

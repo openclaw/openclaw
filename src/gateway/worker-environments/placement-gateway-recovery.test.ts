@@ -35,7 +35,7 @@ describe("failed placement Gateway recovery", () => {
           }),
         ).rejects.toThrow();
       });
-      const harness = createHarness(database, placementStore, { prepareGatewayMove });
+      const harness = await createHarness(database, placementStore, { prepareGatewayMove });
       const requested = await placementStore.startDispatch(REQUEST);
       const failed = await placementStore.fail({
         sessionId: REQUEST.sessionId,
@@ -101,7 +101,7 @@ describe("failed placement Gateway recovery", () => {
         });
       }
     });
-    const harness = createHarness(database, placementStore, { prepareGatewayMove });
+    const harness = await createHarness(database, placementStore, { prepareGatewayMove });
     const requested =
       failure === "pending cleanup"
         ? await harness.placements.seedStarting()

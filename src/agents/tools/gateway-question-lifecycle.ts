@@ -83,7 +83,7 @@ export function createGatewayQuestionCanceller(params: {
     | undefined;
   return (resolvedBy: string) => {
     params.beforeCancel?.();
-    cancellation ??= (async () => {
+    return (cancellation ??= (async () => {
       try {
         await params.gatewayCall(
           "question.resolve",
@@ -106,7 +106,6 @@ export function createGatewayQuestionCanceller(params: {
           return undefined;
         }
       }
-    })();
-    return cancellation;
+    })());
   };
 }

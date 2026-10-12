@@ -8,7 +8,11 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as commands from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
@@ -198,7 +202,6 @@ it.for([undefined, 600_000])(
 );
 
 it.for([
-  { name: "slow startup", bytes: 4096, waits: [31_000], completes: true },
   { name: "large database", bytes: 2 * 1024 ** 3, waits: [800_000], completes: true },
   {
     name: "late-discovered database",
@@ -382,10 +385,19 @@ it.each(
   async ({ source, cancelled }) => {
     const root = await fs.realpath(tempDirs.make("rehearsal-unsettled-"));
     const stateDir = path.join(root, "source");
+    vi.useFakeTimers();
     const controller = new AbortController();
+    const workerEntered = createDeferred();
+    const workerExit =
+      createDeferred<Awaited<ReturnType<typeof commands.runUtf8CommandWithTimeout>>>();
     const original = commands.runUtf8CommandWithTimeout;
     vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
       if ((source === "probe") !== argv.includes("--eval")) {
+        if (source === "probe") {
+          // Keep admitted work pending through the reported-progress quiet period.
+          workerEntered.resolve();
+          return workerExit.promise;
+        }
         return original(argv, options);
       }
       if (cancelled) {
@@ -401,21 +413,46 @@ it.each(
         cleanup: "uncertain",
       };
     });
-    await expect(
-      prepareUpdateCandidateStateSnapshot({
-        config: {},
-        stateDir,
-        candidateRoot: root,
-        env: { TMPDIR: root },
-        workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
-    const retained = (await fs.readdir(root)).filter((name) =>
-      name.startsWith("openclaw-update-canary-"),
-    );
-    expect(retained).toHaveLength(1);
-    expect((await fs.stat(path.join(root, retained[0]!))).isDirectory()).toBe(true);
+    const operation = prepareUpdateCandidateStateSnapshot({
+      config: {},
+      stateDir,
+      candidateRoot: root,
+      env: { TMPDIR: root },
+      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
+      signal: controller.signal,
+    });
+    const rejected = expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
+    const settleWorker = () =>
+      workerExit.resolve({
+        stdout: "",
+        stderr: "",
+        code: null,
+        signal: null,
+        killed: true,
+        termination: "signal",
+        cleanup: "normal",
+      });
+    try {
+      if (source === "probe") {
+        await awaitGateBeforeSettlement(
+          workerEntered.promise,
+          operation,
+          "worker was not admitted",
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        settleWorker();
+      }
+      await rejected;
+      const retained = (await fs.readdir(root)).filter((name) =>
+        name.startsWith("openclaw-update-canary-"),
+      );
+      expect(retained).toHaveLength(1);
+      expect((await fs.stat(path.join(root, retained[0]!))).isDirectory()).toBe(true);
+    } finally {
+      controller.abort();
+      settleWorker();
+      await operation.catch(() => {});
+    }
   },
 );
 

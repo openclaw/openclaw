@@ -15,6 +15,7 @@ const prepared: Parameters<typeof generateNarrationWithUtilityModel>[0]["prepare
   model: "gpt-test",
   authProfileId: undefined,
   outputTextPolicy: "strict-visible",
+  thinkLevel: "off",
   agentId: "main",
   agentDir: "/unused-narration-test",
 };
@@ -56,6 +57,11 @@ describe("progress narration completion cancellation", () => {
       });
 
       expect(complete).toHaveBeenCalledTimes(aborted ? 0 : 1);
+      if (!aborted) {
+        expect(complete).toHaveBeenCalledWith(
+          expect.objectContaining({ purpose: "progress-narration" }),
+        );
+      }
       expect(result.text).toBe(aborted ? null : "Working on the request.");
       expect(vi.getTimerCount()).toBe(0);
     },

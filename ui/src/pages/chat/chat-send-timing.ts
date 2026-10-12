@@ -70,7 +70,7 @@ export function recordChatSendTiming(
       sendState: item.sendState,
       ...extra,
     },
-    { console: false, maxBufferedEventsForType: 40 },
+    { maxBufferedEventsForType: 40 },
   );
 }
 
@@ -125,7 +125,7 @@ export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: un
       ...identity,
       ...(slow ? { slow: true } : {}),
     },
-    { console: slow, warn: slow, maxBufferedEventsForType: 40 },
+    { warn: slow, maxBufferedEventsForType: 40 },
   );
 }
 

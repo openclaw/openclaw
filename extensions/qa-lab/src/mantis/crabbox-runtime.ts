@@ -15,7 +15,7 @@ export type MantisCrabboxLeaseOptions = {
   ttl?: string;
 };
 
-export function resolveMantisCrabboxLeaseOptions(
+function resolveMantisCrabboxLeaseOptions(
   opts: MantisCrabboxLeaseOptions,
   env: NodeJS.ProcessEnv,
   defaults: { idleTimeout?: string; keepLease?: boolean; ttl?: string } = {},
@@ -130,18 +130,20 @@ export function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function createMantisCrabboxSession(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId?: string;
-  provider: string;
-  runner: CommandRunner;
-}) {
-  let leaseId = params.leaseId;
+export async function createMantisCrabboxSession(
+  opts: MantisCrabboxLeaseOptions & { crabboxBin?: string; commandRunner?: CommandRunner },
+  context: { repoRoot: string; env: NodeJS.ProcessEnv },
+  defaults?: Parameters<typeof resolveMantisCrabboxLeaseOptions>[2],
+) {
+  const { env, repoRoot } = context;
+  const crabboxBin = await resolveCrabboxBin({ env, explicit: opts.crabboxBin, repoRoot });
+  const options = resolveMantisCrabboxLeaseOptions(opts, env, defaults);
+  const runner = opts.commandRunner ?? defaultCommandRunner;
+  const { provider, keepLease } = options;
+  let leaseId = options.leaseId;
   const createdLease = leaseId === undefined;
   const run = (args: readonly string[], stdio: "inherit" | "pipe" = "pipe") =>
-    params.runner(params.crabboxBin, args, { cwd: params.cwd, env: params.env, stdio });
+    runner(crabboxBin, args, { cwd: repoRoot, env, stdio });
   const requireLeaseId = () => {
     if (!leaseId) {
       throw new Error("Crabbox lease id is unavailable before acquisition.");
@@ -149,16 +151,13 @@ export function createMantisCrabboxSession(params: {
     return leaseId;
   };
   return {
-    createdLease,
+    bin: crabboxBin,
+    provider,
+    runner,
     get leaseId() {
       return leaseId;
     },
-    async acquire(options: {
-      idleTimeout: string;
-      machineClass: string;
-      market?: string;
-      ttl: string;
-    }) {
+    async acquire(market?: string) {
       if (leaseId !== undefined) {
         return leaseId;
       }
@@ -166,12 +165,12 @@ export function createMantisCrabboxSession(params: {
         [
           "warmup",
           "--provider",
-          params.provider,
+          provider,
           "--desktop",
           "--browser",
           "--class",
           options.machineClass,
-          ...(options.market ? ["--market", options.market] : []),
+          ...(market ? ["--market", market] : []),
           "--idle-timeout",
           options.idleTimeout,
           "--ttl",
@@ -190,27 +189,47 @@ export function createMantisCrabboxSession(params: {
       const result = await run([
         "inspect",
         "--provider",
-        params.provider,
+        provider,
         "--id",
         requireLeaseId(),
         "--json",
       ]);
       return JSON.parse(result.stdout) as CrabboxInspect;
     },
+    runShell(script: string, flags: readonly string[]) {
+      return run(
+        [
+          "run",
+          "--provider",
+          provider,
+          "--id",
+          requireLeaseId(),
+          "--desktop",
+          "--browser",
+          ...flags,
+          "--shell",
+          "--",
+          script,
+        ],
+        "inherit",
+      );
+    },
     describe(inspected?: CrabboxInspect) {
       return {
-        bin: params.crabboxBin,
+        bin: crabboxBin,
         createdLease,
         id: leaseId ?? "unallocated",
-        provider: params.provider,
+        provider,
         ...(inspected ? { slug: inspected.slug, state: inspected.state } : {}),
         vncCommand: leaseId
-          ? `${params.crabboxBin} vnc --provider ${params.provider} --id ${leaseId} --open`
+          ? `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`
           : "unallocated",
       };
     },
-    async stop() {
-      await run(["stop", "--provider", params.provider, requireLeaseId()], "inherit");
+    async stopIfOwned() {
+      if (createdLease && leaseId && !keepLease) {
+        await run(["stop", "--provider", provider, leaseId], "inherit");
+      }
     },
   };
 }

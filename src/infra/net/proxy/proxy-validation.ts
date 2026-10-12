@@ -55,30 +55,6 @@ type ProxyValidationFetchCheckParams = {
   timeoutMs: number;
 };
 
-type ProxyValidationFetchCheckResult = {
-  ok: boolean;
-  status: number;
-  deniedCanaryToken?: string;
-};
-
-type ProxyValidationFetchCheck = (
-  params: ProxyValidationFetchCheckParams,
-) => Promise<ProxyValidationFetchCheckResult>;
-
-type ProxyValidationApnsCheckParams = Parameters<typeof probeApnsHttp2ReachabilityViaProxy>[0];
-
-type ProxyValidationApnsCheckResult = {
-  status: number;
-  /** Present when the response originated from a real APNs server (Apple always returns this UUID). */
-  apnsId?: string;
-  /** APNs JSON error reason. InvalidProviderToken proves the invalid-token probe reached APNs. */
-  apnsReason?: string;
-};
-
-type ProxyValidationApnsCheck = (
-  params: ProxyValidationApnsCheckParams,
-) => Promise<ProxyValidationApnsCheckResult>;
-
 type ResolveProxyValidationConfigOptions = {
   config?: ProxyConfig;
   env?: NodeJS.ProcessEnv | Partial<Record<"OPENCLAW_PROXY_URL", string | undefined>>;
@@ -90,10 +66,8 @@ type RunProxyValidationOptions = ResolveProxyValidationConfigOptions & {
   allowedUrls?: readonly string[];
   deniedUrls?: readonly string[];
   timeoutMs?: number;
-  fetchCheck?: ProxyValidationFetchCheck;
   apnsReachability?: boolean;
   apnsAuthority?: string;
-  apnsCheck?: ProxyValidationApnsCheck;
 };
 
 function validateProxyUrl(value: string | undefined): string[] {
@@ -147,12 +121,12 @@ function resolveProxyValidationConfig(
   };
 }
 
-async function defaultProxyValidationFetchCheck({
+async function fetchProxyValidationTarget({
   proxyUrl,
   proxyTls,
   targetUrl,
   timeoutMs,
-}: ProxyValidationFetchCheckParams): Promise<ProxyValidationFetchCheckResult> {
+}: ProxyValidationFetchCheckParams) {
   const dispatcher = createHttp1ProxyAgent(
     {
       uri: proxyUrl,
@@ -174,17 +148,6 @@ async function defaultProxyValidationFetchCheck({
   } finally {
     await dispatcher.close();
   }
-}
-
-async function defaultProxyValidationApnsCheck(
-  params: ProxyValidationApnsCheckParams,
-): Promise<ProxyValidationApnsCheckResult> {
-  const result = await probeApnsHttp2ReachabilityViaProxy(params);
-  return {
-    status: result.status,
-    apnsId: result.responseHeaders?.["apns-id"],
-    apnsReason: parseApnsErrorReason(result.body),
-  };
 }
 
 function parseApnsErrorReason(body: string): string | undefined {
@@ -316,8 +279,6 @@ export async function runProxyValidation(
       checks: [],
     };
   }
-  const fetchCheck = options.fetchCheck ?? defaultProxyValidationFetchCheck;
-  const apnsCheck = options.apnsCheck ?? defaultProxyValidationApnsCheck;
   const apnsAuthority = options.apnsAuthority ?? DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY;
   const allowedUrls = options.allowedUrls ?? DEFAULT_PROXY_VALIDATION_ALLOWED_URLS;
   let canary: LoopbackValidationCanary | undefined;
@@ -335,7 +296,7 @@ export async function runProxyValidation(
         return { ok: false, error: `Invalid ${kind} destination URL` };
       }
       try {
-        const result = await fetchCheck({
+        const result = await fetchProxyValidationTarget({
           proxyUrl,
           ...(proxyTls ? { proxyTls } : {}),
           targetUrl: target.url,
@@ -395,15 +356,16 @@ export async function runProxyValidation(
     if (options.apnsReachability === true) {
       checks.push(
         await runValidationCheck("apns", apnsAuthority, async () => {
-          const result = await apnsCheck({
+          const result = await probeApnsHttp2ReachabilityViaProxy({
             proxyUrl,
             ...(proxyTls ? { proxyTls } : {}),
             authority: apnsAuthority,
             timeoutMs,
           });
           // The invalid-token response proves the tunnel reached Apple without an apns-id header.
-          return result.apnsId ||
-            (result.status === 403 && result.apnsReason === APNS_REACHABILITY_REASON)
+          return result.responseHeaders["apns-id"] ||
+            (result.status === 403 &&
+              parseApnsErrorReason(result.body) === APNS_REACHABILITY_REASON)
             ? { ok: true, status: result.status }
             : {
                 ok: false,

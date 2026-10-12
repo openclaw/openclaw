@@ -7,7 +7,11 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
@@ -35,6 +39,7 @@ async function withStateDirEnv<T>(
   });
 }
 
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
@@ -79,16 +84,11 @@ function parentSession(sessionId: string, now: number): SessionEntry {
   return { sessionId, updatedAt: now };
 }
 
-function runningChildSession(
-  sessionId: string,
-  parentSessionKey: string,
-  now: number,
-): SessionEntry {
+function childSession(sessionId: string, parentSessionKey: string, now: number): SessionEntry {
   return {
     sessionId,
     parentSessionKey,
     updatedAt: now,
-    status: "running",
   };
 }
 
@@ -252,7 +252,7 @@ describe("single gateway session row child projections", () => {
           toolOverrides: { mcpToolsDeny: { synthetic: ["blocked"] } },
         },
         [childA]: {
-          ...runningChildSession("child-a", parentA, now),
+          ...childSession("child-a", parentA, now),
           ...retainedDetails(now, "child saved skill prompt"),
           systemPromptReport: {
             ...retainedDetails(now, "child saved skill prompt").systemPromptReport!,
@@ -264,7 +264,7 @@ describe("single gateway session row child projections", () => {
           },
         },
         [parentB]: parentSession("parent-b", now),
-        [childB]: runningChildSession("child-b", parentB, now),
+        [childB]: childSession("child-b", parentB, now),
       };
       await seedSessionEntries(storePath, store);
 
@@ -280,8 +280,9 @@ describe("single gateway session row child projections", () => {
       for (const projection of [undefined, "list"] as const) {
         const parse = vi.spyOn(JSON, "parse");
         try {
-          const loaded = loadGatewaySessionEntryReadOnly(parentA, {
-            clone: false,
+          const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: getRuntimeConfig(),
+            key: parentA,
             includeStoreChildEntries: true,
             projection,
           });
@@ -298,7 +299,6 @@ describe("single gateway session row child projections", () => {
           expect(loaded.store[childA]).toMatchObject({
             sessionId: "child-a",
             parentSessionKey: parentA,
-            status: "running",
           });
           expect(loaded.store[childA]?.skillsSnapshot).toBeUndefined();
           expect(loaded.store[childA]?.systemPromptReport).toBeUndefined();
@@ -355,7 +355,7 @@ describe("single gateway session row child projections", () => {
         [oldParent]: parentSession("old-parent", now),
         [newParent]: parentSession("new-parent", now),
         [navigation]: parentSession("navigation", now),
-        [child]: { ...runningChildSession("child", navigation, now), spawnedBy: oldParent },
+        [child]: { ...childSession("child", navigation, now), spawnedBy: oldParent },
       });
       await setSubagentControllerRun(child, oldParent, now);
       expect((await rowReader.row(navigation, { now }))?.childSessions).toEqual([child]);
@@ -386,7 +386,9 @@ describe("single gateway session row child projections", () => {
         await setSubagentControllerRun(childKey, parentKey, now);
         const parsed = vi.spyOn(JSON, "parse");
         try {
-          const loaded = loadGatewaySessionEntryReadOnly(parentKey, {
+          const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: getRuntimeConfig(),
+            key: parentKey,
             includeStoreChildEntries: true,
           });
           expect(loaded.store[childKey]).toMatchObject({ sessionId: "child", updatedAt: now });
@@ -409,9 +411,13 @@ describe("single gateway session row child projections", () => {
           target: { canonicalKey: childKey, storeKeys: [childKey] },
         });
         expect(
-          loadGatewaySessionEntryReadOnly(parentKey, { includeStoreChildEntries: true }).store[
-            childKey
-          ],
+          (
+            await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg: getRuntimeConfig(),
+              key: parentKey,
+              includeStoreChildEntries: true,
+            })
+          ).store[childKey],
         ).toBeUndefined();
         expect((await rowReader.row(parentKey, { now }))?.childSessions).toBeUndefined();
       });

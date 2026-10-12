@@ -8,7 +8,7 @@ import {
 import {
   applyAuthProfileConfig,
   coerceSecretRef,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
   resolveDefaultSecretProviderAlias,
@@ -91,8 +91,10 @@ function applyCopilotDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenCl
   };
 }
 
-function resolveExistingCopilotTokenProfileId(agentDir?: string): string | undefined {
-  const authStore = ensureAuthProfileStore(agentDir, {
+async function resolveExistingCopilotTokenProfileId(
+  agentDir?: string,
+): Promise<string | undefined> {
+  const authStore = await ensureAuthProfileStoreAsync(agentDir, {
     allowKeychainPrompt: false,
   });
   return listProfilesForProvider(authStore, PROVIDER_ID).find((profileId) => {
@@ -249,7 +251,7 @@ async function runGitHubCopilotNonInteractiveAuth(
       );
     }
   } else {
-    const existingProfileId = resolveExistingCopilotTokenProfileId(ctx.agentDir);
+    const existingProfileId = await resolveExistingCopilotTokenProfileId(ctx.agentDir);
     if (!existingProfileId) {
       throw new Error(
         "Missing --github-copilot-token (or COPILOT_GITHUB_TOKEN env var) for --auth-choice github-copilot.",

@@ -37,6 +37,53 @@ export type PolicyRuleMetadata = {
   readonly scopeSelectors?: readonly PolicyScopeSelectorKind[];
 };
 
+type RuleOptions = Omit<PolicyRuleMetadata, "policyPath" | "strictness" | "valueType" | "checkIds">;
+type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
+
+function booleanRule(
+  path: string,
+  checkId: PolicyCheckId,
+  required: boolean,
+  options: RuleOptions = {},
+): PolicyRuleMetadata {
+  return {
+    policyPath: path.split("."),
+    strictness: required ? "requires-true" : "requires-false",
+    valueType: "boolean",
+    checkIds: [checkId],
+    ...options,
+  };
+}
+
+function allowlistRule(
+  path: string,
+  checkId: PolicyCheckId,
+  options: RuleOptions = {},
+): PolicyRuleMetadata {
+  return {
+    policyPath: path.split("."),
+    strictness: "allowlist-subset",
+    valueType: "string-list",
+    checkIds: [checkId],
+    emptyList: "disabled",
+    ...options,
+  };
+}
+
+function denylistRule(
+  path: string,
+  checkId: PolicyCheckId,
+  options: RuleOptions = {},
+): PolicyRuleMetadata {
+  return {
+    policyPath: path.split("."),
+    strictness: "denylist-superset",
+    valueType: "string-list",
+    checkIds: [checkId],
+    ...options,
+  };
+}
+
 export const SANDBOX_CONTAINER_POLICY_RULES = [
   {
     key: "denyHostNetwork",
@@ -66,23 +113,13 @@ export const SANDBOX_CONTAINER_POLICY_RULES = [
 ] as const;
 
 const SANDBOX_POLICY_RULE_METADATA = [
-  {
-    policyPath: ["sandbox", "requireMode"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policySandboxModeUnapproved],
-    emptyList: "disabled",
+  allowlistRule("sandbox.requireMode", CHECK_IDS.policySandboxModeUnapproved, {
     allowedValues: ["off", "non-main", "all"],
     scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["sandbox", "allowBackends"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policySandboxBackendUnapproved],
-    emptyList: "disabled",
+  }),
+  allowlistRule("sandbox.allowBackends", CHECK_IDS.policySandboxBackendUnapproved, {
     scopeSelectors: ["agentIds"],
-  },
+  }),
   ...SANDBOX_CONTAINER_POLICY_RULES.map((rule) => ({
     policyPath: ["sandbox", "containers", rule.key] as const,
     strictness: "requires-true" as const,
@@ -90,13 +127,14 @@ const SANDBOX_POLICY_RULE_METADATA = [
     checkIds: rule.checkIds,
     scopeSelectors: ["agentIds"] as const,
   })),
-  {
-    policyPath: ["sandbox", "browser", "requireCdpSourceRange"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing],
-    scopeSelectors: ["agentIds"],
-  },
+  booleanRule(
+    "sandbox.browser.requireCdpSourceRange",
+    CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
+    true,
+    {
+      scopeSelectors: ["agentIds"],
+    },
+  ),
 ] as const satisfies readonly PolicyRuleMetadata[];
 
 export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
@@ -108,54 +146,25 @@ export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
     emptyList: "meaningful",
     caseSensitive: true,
   },
-  {
-    policyPath: ["mcp", "servers", "allow"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyUnapprovedMcpServer],
-    emptyList: "disabled",
+  allowlistRule("mcp.servers.allow", CHECK_IDS.policyUnapprovedMcpServer, {
     caseSensitive: true,
-  },
-  {
-    policyPath: ["mcp", "servers", "deny"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyDeniedMcpServer],
+  }),
+  denylistRule("mcp.servers.deny", CHECK_IDS.policyDeniedMcpServer, {
     caseSensitive: true,
-  },
-  {
-    policyPath: ["models", "providers", "allow"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyUnapprovedModelProvider],
-    emptyList: "disabled",
+  }),
+  allowlistRule("models.providers.allow", CHECK_IDS.policyUnapprovedModelProvider, {
     normalizeValues: "model-provider",
-  },
-  {
-    policyPath: ["models", "providers", "deny"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyDeniedModelProvider],
+  }),
+  denylistRule("models.providers.deny", CHECK_IDS.policyDeniedModelProvider, {
     normalizeValues: "model-provider",
-  },
-  {
-    policyPath: ["network", "privateNetwork", "allow"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyPrivateNetworkAccess],
-  },
-  {
-    policyPath: ["routing", "requireBindings"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyRoutingBindingsRequired],
-  },
-  {
-    policyPath: ["routing", "requireConfiguredChannels"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyRoutingBindingChannelUnconfigured],
-  },
+  }),
+  booleanRule("network.privateNetwork.allow", CHECK_IDS.policyPrivateNetworkAccess, false),
+  booleanRule("routing.requireBindings", CHECK_IDS.policyRoutingBindingsRequired, true),
+  booleanRule(
+    "routing.requireConfiguredChannels",
+    CHECK_IDS.policyRoutingBindingChannelUnconfigured,
+    true,
+  ),
   {
     policyPath: ["routing", "probes"],
     strictness: "routing-probes",
@@ -169,130 +178,66 @@ export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
     orderedValues: ["main", "per-peer", "per-channel-peer", "per-account-channel-peer"],
     checkIds: [CHECK_IDS.policyIngressDmScopeUnapproved],
   },
-  {
-    policyPath: ["gateway", "exposure", "allowNonLoopbackBind"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayNonLoopbackBind],
-  },
-  {
-    policyPath: ["gateway", "exposure", "allowTailscaleFunnel"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayTailscaleFunnel],
-  },
-  {
-    policyPath: ["gateway", "auth", "requireAuth"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayAuthDisabled],
-  },
-  {
-    policyPath: ["gateway", "auth", "requireExplicitRateLimit"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayRateLimitMissing],
-  },
-  {
-    policyPath: ["gateway", "controlUi", "allowInsecure"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayControlUiInsecure],
-  },
-  {
-    policyPath: ["gateway", "remote", "allow"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayRemoteEnabled],
-  },
-  {
-    policyPath: ["gateway", "http", "denyEndpoints"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyGatewayHttpEndpointEnabled],
+  booleanRule(
+    "gateway.exposure.allowNonLoopbackBind",
+    CHECK_IDS.policyGatewayNonLoopbackBind,
+    false,
+  ),
+  booleanRule(
+    "gateway.exposure.allowTailscaleFunnel",
+    CHECK_IDS.policyGatewayTailscaleFunnel,
+    false,
+  ),
+  booleanRule("gateway.auth.requireAuth", CHECK_IDS.policyGatewayAuthDisabled, true),
+  booleanRule(
+    "gateway.auth.requireExplicitRateLimit",
+    CHECK_IDS.policyGatewayRateLimitMissing,
+    true,
+  ),
+  booleanRule("gateway.controlUi.allowInsecure", CHECK_IDS.policyGatewayControlUiInsecure, false),
+  booleanRule("gateway.remote.allow", CHECK_IDS.policyGatewayRemoteEnabled, false),
+  denylistRule("gateway.http.denyEndpoints", CHECK_IDS.policyGatewayHttpEndpointEnabled, {
     allowedValues: ["chatCompletions", "responses"],
     caseSensitive: true,
-  },
-  {
-    policyPath: ["gateway", "http", "requireUrlAllowlists"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted],
-  },
-  {
-    policyPath: ["gateway", "nodes", "denyCommands"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyGatewayNodeCommandDenied],
+  }),
+  booleanRule(
+    "gateway.http.requireUrlAllowlists",
+    CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+    true,
+  ),
+  denylistRule("gateway.nodes.denyCommands", CHECK_IDS.policyGatewayNodeCommandDenied, {
     caseSensitive: true,
-  },
-  {
-    policyPath: ["agents", "workspace", "allowedAccess"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyAgentsWorkspaceAccessDenied],
-    emptyList: "disabled",
+  }),
+  allowlistRule("agents.workspace.allowedAccess", CHECK_IDS.policyAgentsWorkspaceAccessDenied, {
     allowedValues: ["none", "ro", "rw"],
     scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["agents", "workspace", "denyTools"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyAgentsToolNotDenied],
+  }),
+  denylistRule("agents.workspace.denyTools", CHECK_IDS.policyAgentsToolNotDenied, {
     allowedValues: ["exec", "process", "write", "edit", "apply_patch"],
     scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "profiles", "allow"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsProfileUnapproved],
-    emptyList: "disabled",
+  }),
+  allowlistRule("tools.profiles.allow", CHECK_IDS.policyToolsProfileUnapproved, {
     allowedValues: ["minimal", "coding", "messaging", "full"],
     scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "fs", "requireWorkspaceOnly"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyToolsFsWorkspaceOnlyRequired],
+  }),
+  booleanRule("tools.fs.requireWorkspaceOnly", CHECK_IDS.policyToolsFsWorkspaceOnlyRequired, true, {
     scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "exec", "allowSecurity"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsExecSecurityUnapproved],
-    emptyList: "disabled",
+  }),
+  allowlistRule("tools.exec.allowSecurity", CHECK_IDS.policyToolsExecSecurityUnapproved, {
     allowedValues: ["deny", "allowlist", "full"],
     scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "exec", "requireAsk"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsExecAskUnapproved],
-    emptyList: "disabled",
+  }),
+  allowlistRule("tools.exec.requireAsk", CHECK_IDS.policyToolsExecAskUnapproved, {
     allowedValues: ["off", "on-miss", "always"],
     scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "exec", "allowHosts"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsExecHostUnapproved],
-    emptyList: "disabled",
+  }),
+  allowlistRule("tools.exec.allowHosts", CHECK_IDS.policyToolsExecHostUnapproved, {
     allowedValues: ["auto", "sandbox", "gateway", "node"],
     scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "elevated", "allow"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyToolsElevatedEnabled],
+  }),
+  booleanRule("tools.elevated.allow", CHECK_IDS.policyToolsElevatedEnabled, false, {
     scopeSelectors: ["agentIds"],
-  },
+  }),
   {
     policyPath: ["tools", "alsoAllow", "expected"],
     strictness: "exact-list",
@@ -301,13 +246,9 @@ export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
     emptyList: "meaningful",
     scopeSelectors: ["agentIds"],
   },
-  {
-    policyPath: ["tools", "denyTools"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsRequiredDenyMissing],
+  denylistRule("tools.denyTools", CHECK_IDS.policyToolsRequiredDenyMissing, {
     scopeSelectors: ["agentIds"],
-  },
+  }),
   {
     policyPath: ["tools", "requireMetadata"],
     strictness: "denylist-superset",
@@ -321,29 +262,21 @@ export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
     allowedValues: ["risk", "sensitivity", "owner"],
   },
   ...SANDBOX_POLICY_RULE_METADATA,
-  {
-    policyPath: ["ingress", "channels", "allowDmPolicies"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyIngressDmPolicyUnapproved],
-    emptyList: "disabled",
+  allowlistRule("ingress.channels.allowDmPolicies", CHECK_IDS.policyIngressDmPolicyUnapproved, {
     allowedValues: ["pairing", "allowlist", "open", "disabled"],
     scopeSelectors: ["channelIds"],
-  },
-  {
-    policyPath: ["ingress", "channels", "denyOpenGroups"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyIngressOpenGroupsDenied],
+  }),
+  booleanRule("ingress.channels.denyOpenGroups", CHECK_IDS.policyIngressOpenGroupsDenied, true, {
     scopeSelectors: ["channelIds"],
-  },
-  {
-    policyPath: ["ingress", "channels", "requireMentionInGroups"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyIngressGroupMentionRequired],
-    scopeSelectors: ["channelIds"],
-  },
+  }),
+  booleanRule(
+    "ingress.channels.requireMentionInGroups",
+    CHECK_IDS.policyIngressGroupMentionRequired,
+    true,
+    {
+      scopeSelectors: ["channelIds"],
+    },
+  ),
   {
     // Redaction is unconditional in src/logging/redact.ts, so no doctor check can fail for
     // this rule. The key stays a policy contract: `openclaw policy compare` still enforces
@@ -354,74 +287,52 @@ export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
     checkIds: [],
     satisfiedByInvariant: "oc://openclaw.invariant/logging/redaction",
   },
-  {
-    policyPath: ["dataHandling", "telemetry", "denyContentCapture"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyDataHandlingTelemetryContentCapture],
-  },
-  {
-    policyPath: ["dataHandling", "retention", "requireSessionMaintenance"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced],
-  },
-  {
-    policyPath: ["dataHandling", "memory", "denySessionTranscriptIndexing"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyDataHandlingSessionTranscriptMemory],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["secrets", "requireManagedProviders"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policySecretsUnmanagedProvider],
-  },
-  {
-    policyPath: ["secrets", "denySources"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policySecretsDeniedProviderSource],
-  },
-  {
-    policyPath: ["secrets", "allowInsecureProviders"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policySecretsInsecureProvider],
-  },
+  booleanRule(
+    "dataHandling.telemetry.denyContentCapture",
+    CHECK_IDS.policyDataHandlingTelemetryContentCapture,
+    true,
+  ),
+  booleanRule(
+    "dataHandling.retention.requireSessionMaintenance",
+    CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
+    true,
+  ),
+  booleanRule(
+    "dataHandling.memory.denySessionTranscriptIndexing",
+    CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
+    true,
+    {
+      scopeSelectors: ["agentIds"],
+    },
+  ),
+  booleanRule("secrets.requireManagedProviders", CHECK_IDS.policySecretsUnmanagedProvider, true),
+  denylistRule("secrets.denySources", CHECK_IDS.policySecretsDeniedProviderSource),
+  booleanRule("secrets.allowInsecureProviders", CHECK_IDS.policySecretsInsecureProvider, false),
 
-  {
-    policyPath: ["execApprovals", "requireFile"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyExecApprovalsMissing],
-  },
-  {
-    policyPath: ["execApprovals", "defaults", "allowSecurity"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved],
-    emptyList: "disabled",
-    allowedValues: ["deny", "allowlist", "full"],
-  },
-  {
-    policyPath: ["execApprovals", "agents", "allowSecurity"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved],
-    emptyList: "disabled",
-    allowedValues: ["deny", "allowlist", "full"],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["execApprovals", "agents", "allowAutoAllowSkills"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled],
-    scopeSelectors: ["agentIds"],
-  },
+  booleanRule("execApprovals.requireFile", CHECK_IDS.policyExecApprovalsMissing, true),
+  allowlistRule(
+    "execApprovals.defaults.allowSecurity",
+    CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved,
+    {
+      allowedValues: ["deny", "allowlist", "full"],
+    },
+  ),
+  allowlistRule(
+    "execApprovals.agents.allowSecurity",
+    CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved,
+    {
+      allowedValues: ["deny", "allowlist", "full"],
+      scopeSelectors: ["agentIds"],
+    },
+  ),
+  booleanRule(
+    "execApprovals.agents.allowAutoAllowSkills",
+    CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled,
+    false,
+    {
+      scopeSelectors: ["agentIds"],
+    },
+  ),
   {
     policyPath: ["execApprovals", "agents", "allowlist", "expected"],
     strictness: "exact-list",
@@ -434,19 +345,10 @@ export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
     caseSensitive: true,
     scopeSelectors: ["agentIds"],
   },
-  {
-    policyPath: ["auth", "profiles", "requireMetadata"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyAuthProfileInvalidMetadata],
+  denylistRule("auth.profiles.requireMetadata", CHECK_IDS.policyAuthProfileInvalidMetadata, {
     allowedValues: ["provider", "mode"],
-  },
-  {
-    policyPath: ["auth", "profiles", "allowModes"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyAuthProfileUnapprovedMode],
-    emptyList: "disabled",
+  }),
+  allowlistRule("auth.profiles.allowModes", CHECK_IDS.policyAuthProfileUnapprovedMode, {
     allowedValues: ["api_key", "aws-sdk", "oauth", "token"],
-  },
+  }),
 ];

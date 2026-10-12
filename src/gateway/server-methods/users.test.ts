@@ -20,13 +20,14 @@ const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
 const setUserProfileRole = vi.hoisted(() => vi.fn());
 const invalidateOperatorRolePolicy = vi.hoisted(() => vi.fn());
 const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
-const getUserProfileListItem = vi.hoisted(() => vi.fn());
+let disclosedProfile: unknown;
 const prepareUserProfileRoleAuthority = vi.hoisted(() => vi.fn());
 const readResidentUserProfileRevision = vi.hoisted(() =>
   vi.fn<typeof import("../../state/user-profile-list.js").readResidentUserProfileRevision>(),
 );
 
 vi.mock("../../state/user-profile-email.js", () => ({ ensureProfileIdForEmail }));
+// mock-isolation: Exercise RPC admission independently of the shared-state worker.
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRoleAuthority,
 }));
@@ -52,12 +53,12 @@ vi.mock("../../state/user-profile-writes.js", () => ({
   },
 }));
 
+// mock-isolation: Profile disclosure comes from the mocked authority reader above.
 vi.mock("../../state/user-profiles.js", async () => {
   const { UserProfileNotFoundError } = await vi.importActual<
     typeof import("../../state/user-profiles-schema.js")
   >("../../state/user-profiles-schema.js");
   return {
-    getUserProfileListItem,
     listProfiles,
     UserProfileNotFoundError,
   };
@@ -128,10 +129,10 @@ describe("users gateway methods", () => {
 
   beforeEach(() => {
     ensureProfileIdForEmail.mockReset();
-    getUserProfileListItem.mockReset();
     prepareUserProfileRoleAuthority.mockReset();
     prepareUserProfileRoleAuthority.mockImplementation(async (profileId: string) => ({
       profileId,
+      listItem: disclosedProfile,
       isCurrent: () => true,
     }));
     linkEmail.mockReset();
@@ -141,7 +142,7 @@ describe("users gateway methods", () => {
     setCanonicalUserProfileDisplayName.mockReset();
     setUserProfileRole.mockReset();
     invalidateOperatorRolePolicy.mockReset();
-    getUserProfileListItem.mockReturnValue(profile);
+    disclosedProfile = profile;
     readResidentUserProfileRevision.mockReset().mockReturnValue(residentProfile);
   });
 
@@ -230,7 +231,6 @@ describe("users gateway methods", () => {
       for (const effect of [
         ensureProfileIdForEmail,
         prepareUserProfileRoleAuthority,
-        getUserProfileListItem,
         linkEmail,
         mergeProfiles,
         readResidentUserProfileRevision,
@@ -270,12 +270,11 @@ describe("users gateway methods", () => {
         : connectedProfileClient(kind);
       const expected = legacy ? profile : { ...profile, emails: [] };
       ensureProfileIdForEmail.mockResolvedValue(profile.id);
-      getUserProfileListItem.mockReturnValue(expected);
+      disclosedProfile = expected;
       for (let call = 1; call <= 2; call++) {
         const respond = await runUsersHandler("users.self", {}, client);
         expect(respond).toHaveBeenCalledWith(true, { profile: expected });
         expect(validateUsersSelfResult(respond.mock.calls[0]?.[1])).toBe(true);
-        expect(getUserProfileListItem).toHaveBeenNthCalledWith(call, profile.id);
       }
       if (legacy) {
         expect(ensureProfileIdForEmail).toHaveBeenCalledWith(email, {}, expect.any(Function));
@@ -307,13 +306,13 @@ describe("users gateway methods", () => {
         }),
     );
     providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
-    getUserProfileListItem.mockReturnValue(profile);
+    disclosedProfile = profile;
 
     const pending = runUsersHandler("users.self", {}, providerClient);
     await Promise.resolve();
 
     expect(authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
-    expect(getUserProfileListItem).not.toHaveBeenCalled();
+    expect(prepareUserProfileRoleAuthority).not.toHaveBeenCalled();
     finishSync?.();
     const respond = await pending;
     expect(respond).toHaveBeenCalledWith(true, { profile });
@@ -338,7 +337,7 @@ describe("users gateway methods", () => {
         return { profileId: profile.id, updatedAt: profile.updatedAt };
       });
     providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
-    getUserProfileListItem.mockReturnValue(profile);
+    disclosedProfile = profile;
 
     expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(
       false,
@@ -793,6 +792,7 @@ describe("users gateway methods", () => {
     let authorityCurrent = true;
     prepareUserProfileRoleAuthority.mockImplementation(async (profileId: string) => ({
       profileId,
+      listItem: disclosedProfile,
       isCurrent: () => authorityCurrent,
     }));
     const avatar = method === "users.setAvatar";

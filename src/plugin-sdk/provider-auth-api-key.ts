@@ -17,6 +17,7 @@ export {
   applyAuthProfileConfig,
   buildApiKeyCredential,
   upsertApiKeyProfile,
+  upsertApiKeyProfileAsync,
 } from "../plugins/provider-auth-helpers.js";
 export {
   captureProviderApiKey,

@@ -341,9 +341,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
         if flag("OPENCLAW_DEBUG_OPEN_MENU", "--debug-open-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self, let button = self.statusItem?.button else { return }
-                self.statusItem?.menu = self.menu
-                button.performClick(nil)
+                self?.presentMenu()
             }
         }
         if flag("OPENCLAW_DEBUG_PROBE_RIGHTCLICK", "--debug-probe-rightclick") {

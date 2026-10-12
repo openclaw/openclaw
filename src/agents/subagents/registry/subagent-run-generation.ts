@@ -1,5 +1,8 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "./subagent-child-owner-match.js";
 
 type ComparableSubagentRun = {
   runId: string;
@@ -106,10 +109,13 @@ export function isSameSubagentRunOwner(
   if (!current || !expected) {
     return false;
   }
+  if (current === expected) {
+    return true;
+  }
   const key = runtimeKeys.get(current);
-  const shared = current === expected || (key !== undefined && key === runtimeKeys.get(expected));
   return (
-    shared &&
+    key !== undefined &&
+    key === runtimeKeys.get(expected) &&
     (isSameSubagentRun(current, expected) ||
       isQueuedSubagentRunRekey(expected, current) ||
       isQueuedSubagentRunRekey(current, expected))
@@ -179,6 +185,18 @@ export function latestSubagentRun<T extends ComparableSubagentRun>(
   return latest;
 }
 
+export function isSubagentRunGenerationCandidate(
+  entry: Pick<GenerationalSubagentRun, "childSessionKey" | "childAgentId">,
+  childSessionKey: string,
+  childAgentId?: string,
+): boolean {
+  return (
+    entry.childSessionKey === childSessionKey &&
+    (!resolveSubagentChildAgentId(entry) ||
+      matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId))
+  );
+}
+
 /** Allocates a durable monotonic generation within one child session. */
 export function nextSubagentRunGeneration(
   runs: Iterable<GenerationalSubagentRun>,
@@ -187,7 +205,7 @@ export function nextSubagentRunGeneration(
 ): number {
   let generation = 0;
   for (const entry of runs) {
-    if (matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
+    if (isSubagentRunGenerationCandidate(entry, childSessionKey, childAgentId)) {
       generation = Math.max(generation, normalizeGeneration(entry));
     }
   }

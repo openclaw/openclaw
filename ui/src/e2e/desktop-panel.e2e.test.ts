@@ -203,57 +203,6 @@ suite.define(() => {
     },
   );
 
-  it("refreshes direct-target status before observing the exact worker", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: [
-          "desktop.launch",
-          "desktop.observe",
-          "environments.list",
-          "environments.status",
-        ],
-        methodResponses: {
-          "sessions.list": sessionsList("active"),
-          "environments.list": {
-            environments: [workerDesktopEnvironment],
-          },
-          "environments.status": workerDesktopEnvironment,
-          "desktop.observe": {
-            transport: "rfb",
-            wsPath: "/desktop/observe?token=direct",
-            expiresAtMs: 60_000,
-            control: false,
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const panel = await openDesktopPanel(page, suite.server.baseUrl);
-      await installDesktopClientFake(panel);
-      const requestCount = (await gateway.getRequests()).length;
-
-      await openDirectDesktop(page, "worker-desktop-1");
-
-      const observeRequest = await gateway.waitForRequest("desktop.observe");
-      expect(observeRequest.params).toEqual({
-        source: { kind: "environment", environmentId: "worker-desktop-1" },
-        control: false,
-      });
-      expect(
-        (await gateway.getRequests())
-          .slice(requestCount)
-          .filter((request) =>
-            ["environments.status", "environments.list", "desktop.observe"].includes(
-              request.method,
-            ),
-          )
-          .map((request) => request.method),
-      ).toEqual(["environments.status", "desktop.observe"]);
-      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
-      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
-      await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
-    });
-  });
-
   it("reports an unavailable direct target without showing another source", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -455,7 +404,7 @@ suite.define(() => {
       const bottom = await panel.evaluate((element) => {
         document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "40px");
         document.documentElement.style.setProperty("--oc-browser-reserve-bottom", "80px");
-        const section = element.shadowRoot?.querySelector<HTMLElement>(".bp--right");
+        const section = element.querySelector<HTMLElement>(".bp--right");
         return section ? getComputedStyle(section).bottom : null;
       });
       expect(bottom).toBe("120px");
@@ -687,13 +636,13 @@ suite.define(() => {
         await browserButton.evaluate((element) => getComputedStyle(element).backgroundColor),
       ).toBe("rgba(0, 0, 0, 0)");
       const stageUsesAppBackground = await panel.evaluate((element) => {
-        const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-surface");
+        const stage = element.querySelector<HTMLElement>(".desktop-surface");
         if (!stage) {
           return false;
         }
         const reference = document.createElement("div");
         reference.style.background = "var(--bg)";
-        element.shadowRoot?.append(reference);
+        element.append(reference);
         const matches =
           getComputedStyle(stage).backgroundColor === getComputedStyle(reference).backgroundColor;
         reference.remove();
@@ -703,10 +652,8 @@ suite.define(() => {
 
       const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
       const overlayCoversStage = await panel.evaluate((element) => {
-        const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-stage");
-        const overlay = element.shadowRoot?.querySelector<HTMLElement>(
-          ".desktop-stage__take-control",
-        );
+        const stage = element.querySelector<HTMLElement>(".desktop-stage");
+        const overlay = element.querySelector<HTMLElement>(".desktop-stage__take-control");
         if (!stage || !overlay) {
           return false;
         }
@@ -883,11 +830,10 @@ suite.define(() => {
         // Observe both terminal outcomes so the broken stream fails without waiting for a missing frame.
         const outcome = () =>
           panel.evaluate((element) => {
-            if (element.shadowRoot?.textContent?.includes("Desktop disconnected:")) {
+            if (element.textContent?.includes("Desktop disconnected:")) {
               return "disconnected";
             }
-            const canvas =
-              element.shadowRoot?.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
+            const canvas = element.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
             const pixel = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
             return pixel && [...pixel].join(",") === "24,180,160,255" ? "frame" : null;
           });

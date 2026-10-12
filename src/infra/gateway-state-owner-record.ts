@@ -88,15 +88,11 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     assertMaintenance();
     return;
   }
+  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`;
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
-    throw new StateDatabaseAdmissionPendingError(
-      databasePath,
-      `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
-    );
+    throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
-  throw new Error(
-    `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
-  );
+  throw new Error(maintenancePending);
 }
 
 export function defaultPayload(databasePath: string): LockPayload {

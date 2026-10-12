@@ -1,6 +1,6 @@
+export { closeOpenClawAgentDatabases } from "./openclaw-agent-db-lifecycle.js";
 export {
   closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabases,
   closeOpenClawAgentDatabasesAsync,
   deferOpenClawAgentPostCommitPublication,
   listOpenClawRegisteredAgentDatabases,

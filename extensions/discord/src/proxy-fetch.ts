@@ -5,23 +5,17 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 
-function resolveDiscordProxyUrl(
-  account: Pick<ResolvedDiscordAccount, "config">,
-  cfg: OpenClawConfig,
-): string | undefined {
-  const accountProxy = normalizeOptionalString(account.config.proxy);
-  if (accountProxy) {
-    return accountProxy;
-  }
-  return normalizeOptionalString(cfg?.channels?.discord?.proxy);
-}
-
 export function resolveDiscordProxyFetchForAccount(
   account: Pick<ResolvedDiscordAccount, "config">,
   cfg: OpenClawConfig,
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
-  return withValidatedDiscordProxy(resolveDiscordProxyUrl(account, cfg), runtime, makeProxyFetch);
+  return withValidatedDiscordProxy(
+    normalizeOptionalString(account.config.proxy) ??
+      normalizeOptionalString(cfg?.channels?.discord?.proxy),
+    runtime,
+    makeProxyFetch,
+  );
 }
 
 export function withValidatedDiscordProxy<T>(

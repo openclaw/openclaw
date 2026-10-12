@@ -4,6 +4,7 @@ import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
+import { normalizeCappedStringList } from "./store-string-lists.js";
 import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
@@ -16,35 +17,6 @@ import { createWorkboardOrchestrationTools } from "./tools-orchestration.js";
 
 function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
   return ctx?.agentId || ctx?.sessionKey || ctx?.sessionId || "agent";
-}
-
-function readParentIds(value: unknown): string[] {
-  if (value == null) {
-    return [];
-  }
-  const entries =
-    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
-  if (!entries) {
-    throw new Error("parents must be an array or comma-separated string.");
-  }
-  const parents: string[] = [];
-  for (const entry of entries) {
-    if (typeof entry !== "string") {
-      throw new Error("parents must contain only strings.");
-    }
-    const parent = entry.trim();
-    if (!parent || parents.includes(parent)) {
-      continue;
-    }
-    if (parent.length > 120) {
-      throw new Error("parents must be 120 characters or fewer.");
-    }
-    parents.push(parent);
-    if (parents.length >= 20) {
-      break;
-    }
-  }
-  return parents;
 }
 
 function summarizeCard(card: WorkboardCard) {
@@ -169,7 +141,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
-        readParentIds(record.parents);
+        normalizeCappedStringList(record.parents, "parents");
         return jsonResult({
           card: redactClaimToken(
             await store.create(record, { ownerId, token: record.token as string | undefined }),

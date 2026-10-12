@@ -17,6 +17,7 @@ import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway
 import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
 import { skillsWatcherFixtureFiles } from "./non-isolated-runner.skills-watcher-fixtures.ts";
+import { solidFixtureFiles } from "./non-isolated-runner.solid-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -270,8 +271,9 @@ it("retires gateway admission before the next file", async () => {
 import { getAgentRunContext, registerAgentRunContext } from ${sourcePath("infra/agent-run-registry.ts")};
 import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
 import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
+import { createReplyOperation, replyRunRegistry } from ${sourcePath("auto-reply/reply/reply-run-registry.ts")};
 import { expect, it } from "vitest";
-it("seeds process-global run contexts", () => {
+it("seeds process-global run contexts", async () => {
   expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();
   expect(getActiveGatewayRootWorkCount()).toBe(1);
   markGatewayRestartDraining();
@@ -287,14 +289,32 @@ it("seeds process-global run contexts", () => {
   expect(getAgentRunContext("unrelated-run-a")).toBeDefined();
   expect(getAgentRunContext("unrelated-run-b")).toBeDefined();
   expect(sequence).toBe(1);
+  const operation = createReplyOperation({ sessionKey: "agent:main:runner-waiter", sessionId: "runner-waiter", resetTriggered: false });
+  operation.attachBackend({ kind: "embedded", cancel() {}, isAbortable: () => false });
+  operation.setPhase("running");
+  const outcomes: boolean[] = [];
+  void replyRunRegistry.waitForIdle(operation.key, null).then(ended => outcomes.push(ended));
+  Reflect.set(globalThis, Symbol.for("fixture.replyRunWaiter"), { operation, outcomes });
+  await Promise.resolve();
+  expect(outcomes).toEqual([]);
 });
 `,
     "05-b-agent-run.test.ts": `import { getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission } from ${sourcePath("process/gateway-work-admission.ts")};
 import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${sourcePath("infra/agent-run-registry.ts")};
 import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
 import { listActiveSessionsForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
+import { replyRunRegistry } from ${sourcePath("auto-reply/reply/reply-run-registry.ts")};
 import { expect, it } from "vitest";
 it("clears agent run registry state", () => {
+  const key = Symbol.for("fixture.replyRunWaiter");
+  const prior = Reflect.get(globalThis, key);
+  try {
+    expect(prior?.outcomes).toEqual([false]);
+    expect(replyRunRegistry.isActive("agent:main:runner-waiter")).toBe(false);
+  } finally {
+    prior?.operation.complete();
+    Reflect.deleteProperty(globalThis, key);
+  }
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   const admission = tryBeginGatewayRootWorkAdmission();
   expect(admission).not.toBeNull();
@@ -447,6 +467,7 @@ it("reloads the redirected mock after a real import", () => {
     ...documentFocusFixtureFiles(),
     ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
     ...skillsWatcherFixtureFiles(repoRoot, fixtureRoot),
+    ...solidFixtureFiles(repoRoot),
   };
 }
 
@@ -503,8 +524,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 68,
-    numPassedTests: 67,
+    numTotalTests: 70,
+    numPassedTests: 69,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -559,6 +580,7 @@ async function assertCompletion(
     expect(child.output).toContain(`test API lifecycle: ${generation} resource teardown passed`);
   }
   expect(child.output).not.toContain("first-file");
+  expect(child.output).not.toContain("multiple instances of Solid");
 }
 
 async function verifyRunnerCleanup(signal: AbortSignal) {

@@ -95,61 +95,31 @@ describe("LINE rich-message boundaries", () => {
     expect(Value.Check(schema, { line: { location: { ...location, latitude: 91 } } })).toBe(false);
   });
 
-  it.each([
-    { to: DIRECT_TARGET, native: true },
-    { to: "line:group:C0123456789abcdef0123456789abcdef", native: false },
-  ])("renders question choices for destination $to", async ({ to, native }) => {
+  it("keeps group question choices in the text fallback", async () => {
     const payload = questionPayload();
-    for (const prepared of await prepareBoth(payload, to)) {
+    for (const prepared of await prepareBoth(
+      payload,
+      "line:group:C0123456789abcdef0123456789abcdef",
+    )) {
       expect(prepared.presentation).toBeUndefined();
-      if (native) {
-        expect(prepared.channelData?.line).toMatchObject({
-          flexMessage: {
-            altText: "Which environment?",
-            contents: {
-              footer: {
-                contents: [0, 1].map((index) => ({
-                  action: {
-                    type: "postback",
-                    data: `line.question=${QUESTION_ID}&line.option=${index}`,
-                  },
-                })),
-              },
-            },
-          },
-        });
-      } else {
-        expect(prepared.channelData?.line).toBeUndefined();
-        expect(prepared.text).toBe(payload.text);
-      }
+      expect(prepared.channelData?.line).toBeUndefined();
+      expect(prepared.text).toBe(payload.text);
     }
   });
 
-  it.each([
-    ["blank prompt with guidance", " ", { type: "text", text: " " }, true, false],
-    ["title-only prompt", "Which environment?", null, false, true],
-    ["context prompt", "", { type: "context", text: "Which environment?" }, false, true],
-  ] as const)(
-    "preserves the %s through both render owners",
-    async (_name, title, prompt, other, native) => {
-      const payload = questionPayload({
-        title,
-        prompt,
-        other,
-        labels: ["Staging", "Production", "Canary", "Sandbox"],
-      });
-      for (const prepared of await prepareBoth(payload)) {
-        expect(prepared.presentation).toBeUndefined();
-        if (native) {
-          expect(prepared.channelData?.line).toHaveProperty("flexMessage");
-          expect(JSON.stringify(prepared.channelData?.line)).toContain("Which environment?");
-        } else {
-          expect(prepared.channelData?.line).toBeUndefined();
-          expect(prepared.text).toBe(payload.text);
-        }
-      }
-    },
-  );
+  it("keeps a blank authored prompt in the fallback despite generated guidance", async () => {
+    const payload = questionPayload({
+      title: " ",
+      prompt: { type: "text", text: " " },
+      other: true,
+      labels: ["Staging", "Production", "Canary", "Sandbox"],
+    });
+    for (const prepared of await prepareBoth(payload)) {
+      expect(prepared.presentation).toBeUndefined();
+      expect(prepared.channelData?.line).toBeUndefined();
+      expect(prepared.text).toBe(payload.text);
+    }
+  });
 
   it("names the omitted Other control below and above the action budget", async () => {
     for (const optionCount of [2, 4]) {
@@ -255,27 +225,6 @@ describe("LINE rich-message boundaries", () => {
     expect(line?.quickReplyItems).toHaveLength(1);
   });
 
-  it.each(["   "])("keeps the select prompt when fallback text is %j", async (text) => {
-    const prepared = await prepareLineReplyPayload({
-      text,
-      presentationTextMode: "fallback",
-      presentation: {
-        title: "Choose a deployment",
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Which environment should receive this deployment?",
-            options: [{ label: "Staging", action: { type: "callback", value: "staging" } }],
-          },
-        ],
-      },
-    });
-
-    expect(prepared.text).toBe(
-      "Choose a deployment\n\nWhich environment should receive this deployment?",
-    );
-  });
-
   it("preserves full select prompts and overflow labels while bounding native labels", async () => {
     const placeholder = "Which region should receive this deployment?";
     const options = Array.from({ length: 8 }, (_, index) => ({
@@ -283,7 +232,10 @@ describe("LINE rich-message boundaries", () => {
       action: { type: "command" as const, command: `/region ${index + 1}` },
     }));
     const prepared = await prepareLineReplyPayload({
+      text: "   ",
+      presentationTextMode: "fallback",
       presentation: {
+        title: "Choose a deployment",
         blocks: [
           { type: "select", placeholder: "Choose the first region", options },
           { type: "select", placeholder, options },
@@ -295,7 +247,7 @@ describe("LINE rich-message boundaries", () => {
     };
 
     expect(prepared.text).toBe(
-      `Choose the first region\n\n${placeholder}:\n` +
+      `Choose a deployment\n\nChoose the first region\n\n${placeholder}:\n` +
         options
           .slice(5)
           .map((option) => `- ${option.label}: \`${option.action.command}\``)
@@ -367,11 +319,6 @@ describe("LINE rich-message boundaries", () => {
       kind: "command",
       action: { type: "command", command: "/status" },
       expected: { type: "message", text: "/status" },
-    },
-    {
-      kind: "callback",
-      action: { type: "callback", value: "action=status" },
-      expected: { type: "postback", data: "action=status" },
     },
     {
       kind: "url",

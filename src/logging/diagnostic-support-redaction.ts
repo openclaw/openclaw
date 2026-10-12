@@ -494,6 +494,17 @@ export function redactPublicSupportDiagnosticLine(
   if (maintenance) {
     return maintenance[0];
   }
+  const requirement = /^Required: openclaw@(\S+) (.*); detected: Node (\S+) at /u.exec(line);
+  if (requirement) {
+    const [, target = "", required = "", detected = ""] = requirement;
+    const engine = /^(?:Node [0-9.<>=|^~* +]+|a working Node runtime)$/u.test(required)
+      ? required
+      : "[redacted-requirement]";
+    return truncateUtf16Safe(
+      `Target package: openclaw@${redactPublicSupportVersion(target)}; Required runtime: ${engine}; Running Node: ${redactPublicSupportVersion(detected)}`,
+      200,
+    );
+  }
   const runtime =
     /^Target package: openclaw@(\S+); Minimum Node engine: (\S+); Running Node: (\S+)$/u.exec(line);
   if (runtime) {

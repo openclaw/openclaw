@@ -238,6 +238,10 @@ context window. The selected memory provider supplies the prompts and
 persistence target or tools. It inherits host timing unless it deliberately
 overrides an optional timing field.
 
+When a model server omits usage data, OpenClaw estimates context pressure from
+the active conversation so the memory checkpoint can still run. These estimates
+do not replace provider-reported token usage in session status.
+
 The flush uses a private copy of the conversation, so its housekeeping messages
 never appear in later user turns, even if interrupted. Its writes to memory
 are still saved normally.
@@ -245,6 +249,13 @@ are still saved normally.
 Memory Core's file flush requires writable workspace access. Sessions whose sandbox
 requires read-only or no workspace access skip the flush, including sessions
 with a persisted sandbox requirement that overrides the agent's configuration.
+
+During that flush, `write` appends only to the daily note. Its `content` must
+contain only new text. Replayed whole notes and copied paragraphs are rejected
+without changing the file, so the model can retry with just the new entries.
+Reusing Markdown headings with new facts is allowed. This check compares text
+with normalized line endings; it does not deduplicate paraphrases or repair
+existing notes.
 
 A native provider's tools-based flush does not require a writable workspace;
 other flush plans are not resolved for sessions that cannot write it. It exposes

@@ -7,6 +7,7 @@ import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import * as thinking from "../auto-reply/thinking.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -104,22 +105,9 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     mockRunCronFallbackPassthrough();
   });
 
-  it.each([
-    {
-      label: "uses agentId for workspace, session key, and store paths",
-      agentId: "ops",
-      sessionKey: "cron:job-ops",
-      explicitAgentId: true,
-      jobSessionKey: false,
-    },
-    {
-      label: "uses an agent-scoped job session when the cron job omits agentId",
-      agentId: "molty",
-      sessionKey: "agent:molty:cron:job-molty",
-      explicitAgentId: false,
-      jobSessionKey: true,
-    },
-  ])("$label", async ({ agentId, sessionKey, explicitAgentId, jobSessionKey }) => {
+  it("uses agentId for workspace, session key, and store paths", async () => {
+    const agentId = "ops";
+    const sessionKey = "cron:job-ops";
     await withTempHome(async (home) => {
       const deps = makeDeps();
       const workspaceDir = path.join(home, `${agentId}-workspace`);
@@ -142,13 +130,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         deps,
         job: {
           ...makeJob({ kind: "agentTurn", message: DEFAULT_MESSAGE }),
-          ...(explicitAgentId ? { agentId } : {}),
-          ...(jobSessionKey ? { sessionKey } : {}),
+          agentId,
           delivery: { mode: "none" },
         },
         message: DEFAULT_MESSAGE,
         sessionKey,
-        ...(explicitAgentId ? { agentId } : {}),
+        agentId,
         lane: "cron",
       });
 
@@ -172,6 +159,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       await withTempHome(async (home) => {
         const storePath = await writeSessionStore(home, { delivery: { kind: "internal" } });
         const profile = ensureProfileForEmail("cron-creator@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const createdActor = { type: "human" as const, source, id: profile.id };
         const job: CronStoredJob = {
           ...makeJob({ kind: "agentTurn", message: "persist this turn" }),

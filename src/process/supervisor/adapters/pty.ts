@@ -155,9 +155,7 @@ export async function createPtyAdapter(
         stdinEnded = true;
         const eof = process.platform === "win32" ? "\x1a" : "\x04";
         pty.write(eof);
-      } catch {
-        // ignore EOF errors
-      }
+      } catch {}
     },
     destroy: () => {
       stdinDestroyed = true;

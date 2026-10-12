@@ -36,6 +36,7 @@ import { withTimeout } from "../utils/with-timeout.js";
 import { environmentsHandlers } from "./server-methods/environments.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
   installGatewayTestHooks,
   startServer,
@@ -440,23 +441,24 @@ async function proveRealGatewayContracts(): Promise<void> {
     `${timeoutRunId}:start`,
     `${timeoutRunId}:error`,
   ]);
-  const lifecycleWritesStarted = createDeferred();
-  const lifecycleWrites: Promise<void>[] = [];
-  const persistLifecycle = lifecycleState.persistGatewaySessionLifecycleEvent;
+  const lifecycleWritesAccepted = createDeferred();
+  const lifecycleWrites = createPreparedLifecycleWriteTracker();
+  const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
   const lifecyclePersistence = vi
-    .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+    .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
     .mockImplementation((params) => {
-      const write = persistLifecycle(params);
+      const persist = prepareLifecycle(params);
       const phase = params.event.data?.phase;
       if (
-        (params.event.runId === runId || params.event.runId === timeoutRunId) &&
-        (phase === "start" || phase === "end" || phase === "error")
+        (params.event.runId !== runId && params.event.runId !== timeoutRunId) ||
+        (phase !== "start" && phase !== "end" && phase !== "error")
       ) {
-        lifecycleWrites.push(write);
-        pendingLifecycleEvents.delete(`${params.event.runId}:${phase}`);
-        if (pendingLifecycleEvents.size === 0) {
-          lifecycleWritesStarted.resolve();
-        }
+        return persist;
+      }
+      const write = lifecycleWrites.track(persist);
+      pendingLifecycleEvents.delete(`${params.event.runId}:${phase}`);
+      if (pendingLifecycleEvents.size === 0) {
+        lifecycleWritesAccepted.resolve();
       }
       return write;
     });
@@ -581,9 +583,9 @@ async function proveRealGatewayContracts(): Promise<void> {
       error: { message: "provider timed out" },
     });
 
-    // run.wait observes events before persistence finishes registering the report writer's store.
-    await lifecycleWritesStarted.promise;
-    await Promise.all(lifecycleWrites);
+    // run.wait can precede acceptance, and accepted writes may still wait in the owner queue.
+    await lifecycleWritesAccepted.promise;
+    await lifecycleWrites.drain();
     expect(loadSessionEntry({ storePath: testState.sessionStorePath, sessionKey })).toMatchObject({
       sessionId,
       status: "timeout",
@@ -649,10 +651,14 @@ async function proveRealGatewayContracts(): Promise<void> {
       await oc?.close();
       await started?.server.close();
     } finally {
-      lifecyclePersistence.mockRestore();
-      started?.envSnapshot.restore();
-      testState.sessionStorePath = previousSessionStorePath;
-      await fs.rm(tempDir, { recursive: true, force: true });
+      try {
+        await lifecycleWrites.drain();
+      } finally {
+        lifecyclePersistence.mockRestore();
+        started?.envSnapshot.restore();
+        testState.sessionStorePath = previousSessionStorePath;
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
     }
   }
 }

@@ -111,14 +111,13 @@ function detectBrewPrefix(): string {
   return prefix;
 }
 
-function ensureImportLine(corefilePath: string, importGlob: string): boolean {
+function ensureImportLine(corefilePath: string, importGlob: string): void {
   const existing = fs.readFileSync(corefilePath, "utf-8");
   if (existing.includes(importGlob)) {
-    return false;
+    return;
   }
   const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
   writeFileSudoIfNeeded(corefilePath, next);
-  return true;
 }
 
 export function registerDnsCli(program: Command) {
@@ -204,7 +203,7 @@ export function registerDnsCli(program: Command) {
         throw new Error("dns setup is currently supported on macOS only");
       }
       if (!tailnetIPv4 && !tailnetIPv6) {
-        throw new Error("no tailnet IP detected; ensure Tailscale is running on this machine");
+        throw new Error("no tailnet IP detected; check that Tailscale is running on this machine");
       }
 
       const prefix = detectBrewPrefix();

@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import process from "node:process";
@@ -48,8 +47,6 @@ const WAKE_EVENT_ID_FIELDS = [
   "id",
 ] as const;
 
-type RaftBridgeProcess = Pick<ChildProcess, "pid"> & Pick<EventEmitter, "once">;
-
 type RaftWakeReplayEvent = { accountId: string; key: string };
 
 class WakeRequestError extends Error {
@@ -67,7 +64,7 @@ function spawnRaftBridge(params: {
   profile: string;
   endpoint: string;
   token: string;
-}): RaftBridgeProcess {
+}): ChildProcess {
   // Raft owns the fixed bridge command. OpenClaw passes profile/loopback
   // endpoint/token as separate argv/env fields; wake payloads never reach argv.
   return spawn(
@@ -174,7 +171,7 @@ function closeServer(server: Server, sockets: Set<Socket>) {
   }
 }
 
-function stopBridge(child: RaftBridgeProcess) {
+function stopBridge(child: ChildProcess) {
   if (typeof child.pid !== "number") {
     return;
   }
@@ -295,7 +292,7 @@ export async function startRaftGatewayAccount(
           { accountId: ctx.accountId, key: dedupeKey },
           async () => {
             assertWakeActive();
-            await dispatchRaftWake({ ctx });
+            await dispatchRaftWake(ctx);
           },
         );
         if (result.kind === "duplicate") {
@@ -342,7 +339,7 @@ export async function startRaftGatewayAccount(
     socket.once("close", () => sockets.delete(socket));
   });
 
-  let bridge: RaftBridgeProcess | undefined;
+  let bridge: ChildProcess | undefined;
   let bridgeStopRequested = false;
   const requestBridgeStop = () => {
     if (!bridge || bridgeStopRequested) {

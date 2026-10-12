@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { GitHubPublicationSessionLifecycle } from "./github-publication-read.types.js";
+import { githubPublicationReceipts } from "./github-publication-receipts.js";
 import {
   encodeGitHubPublicationRequester,
   type GitHubPublicationRequesterSnapshot,
@@ -28,19 +29,16 @@ export function insertGitHubPublicationSessionLifecycle(
   },
 ): void {
   ensureGitHubPublicationSessionLifecycleSchema(db);
-  executeSqliteQuerySync(
-    db,
-    query(db)
-      .insertInto(table)
-      .values({
-        publication_kind: input.publicationKind,
-        request_id: input.requestId,
-        lifecycle_revision: input.lifecycleRevision,
-        requester_authority_json: input.requester
-          ? encodeGitHubPublicationRequester(input.requester)
-          : null,
-      }),
-  );
+  const row = {
+    publication_kind: input.publicationKind,
+    request_id: input.requestId,
+    lifecycle_revision: input.lifecycleRevision,
+    requester_authority_json: input.requester
+      ? encodeGitHubPublicationRequester(input.requester)
+      : null,
+  };
+  executeSqliteQuerySync(db, query(db).insertInto(table).values(row));
+  githubPublicationReceipts.stageRow(db, `${input.publicationKind}-lifecycle`, row);
 }
 
 /** A missing binding is unproven; a retained NULL records an originally absent revision. */

@@ -240,7 +240,7 @@ applicable policy also requires fresh publication admission.
 
     `await api.runtime.gateway.readSessionFacts({ sessionKeys })` reads at most
     40 sessions and returns typed `{ sessions, warnings? }` data. Each session
-    includes its key, identity, agent, bounded redacted title and message preview,
+    includes its key, identity, agent, bounded title and message preview without secret masking,
     run state (`active`, `idle`, or `failed`), optional observer digest
     (health, headline, assessment, revision), pull-request numbers and states,
     archive state, and last activity time. The message preview is capped at
@@ -257,6 +257,28 @@ applicable policy also requires fresh publication admission.
     can ignore them. Unchanged facts need no age-based retry.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
+
+    `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
+    selects immutable facts through the same session-list filtering owner,
+    without pagination. Selection supports agent, archive, automation, activity,
+    and person filters, including the people facet. Unchanged session facts retain
+    object identity across reads; `revision` changes with the selected content or
+    its activity or retry deadline. Eligible human readers receive a stable opaque
+    `scope` for their query and current viewer, profile, access, and configuration
+    facts. Other callers receive `undefined`. The scope is not authority:
+    the host rechecks the caller after the callback settles, including awaited
+    plugin work. Consume reused results only inside this callback.
+
+    Selected rows include `isMain`. Failed acquisition batches retain authorized
+    roster fields with an `unavailable` reason; plugins can show their previous
+    facts for the same session identity. Missing or no-longer-visible sessions are
+    omitted; `missingSessionKeys` identifies selected roster entries whose current
+    facts were omitted, so consumers can retire their fallback facts. Selected PR
+    facts retry from 60 seconds up to 15 minutes, retain a
+    last-confirmed list with `pullRequestsStale: true`, and reset on lifecycle
+    replacement or a successful read. Session and PR text are not secret-masked.
+    `activityExpiresAt` and `retryAt` describe the next relevant deadlines; no polling timer is created. Remove these
+    selection-only fields when adapting facts to another public response contract.
 
     `await api.runtime.gateway.resolveGitHubAccount({ login, signal? })` resolves a
     public GitHub login to `{ accountId, login }` using the Gateway's configured

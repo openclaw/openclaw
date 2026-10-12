@@ -198,7 +198,6 @@ export class SelectPicker<
     }
   }
 
-  // Fades mark the edges of a list that scrolls past them.
   private readonly syncScrollFade = () => {
     const list = this.querySelector<HTMLElement>(".picker-select__options");
     if (list) {
@@ -346,9 +345,6 @@ export class SelectPicker<
       if (opensMenu) {
         event.preventDefault();
         this.openMenu(event.key === "ArrowUp");
-        return;
-      }
-      if (!printable) {
         return;
       }
       event.preventDefault();

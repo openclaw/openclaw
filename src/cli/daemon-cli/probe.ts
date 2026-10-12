@@ -27,7 +27,7 @@ function resolveProbeFailureMessage(result: {
   if (closeHint && (!result.error || result.error === "timeout")) {
     return closeHint;
   }
-  return result.error ?? closeHint ?? "gateway probe failed";
+  return result.error ?? closeHint ?? "gateway check failed";
 }
 
 function projectGatewayConnectFailure(params: {

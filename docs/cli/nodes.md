@@ -82,7 +82,7 @@ Flags:
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout as a positive integer (default `15000`).
 - `--timeout <ms>`: Gateway transport timeout (default `30000`). For a positive invoke timeout, the effective transport timeout is `max(timeout, invokeTimeout + 10000)`, allowing transport grace beyond the node's invoke deadline.
-- `--idempotency-key <key>`: optional nonempty idempotency key. An explicit empty value fails before node lookup or Gateway requests. Supplied keys retain their exact bytes, including whitespace; omitting the flag generates a key.
+- `--idempotency-key <key>`: optional nonempty request key that prevents duplicate runs. An explicit empty value fails before node lookup or Gateway requests. Supplied keys retain their exact bytes, including whitespace; omitting the flag generates a key.
 
 The invocation timeout covers Gateway checks, node wake-up, readiness retries, and the node response. Clock adjustments do not reset or extend this elapsed-time budget.
 

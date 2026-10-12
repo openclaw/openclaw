@@ -313,7 +313,7 @@ export async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
-  const sessionStableReplyMode = resolveSessionStableReplyMode({
+  const sessionStableReplyMode = await resolveSessionStableReplyMode({
     cfg,
     ctx: { CommandAuthorized: false },
     sessionEntry: sessionEntryRaw,

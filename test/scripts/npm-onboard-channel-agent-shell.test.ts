@@ -22,6 +22,7 @@ type Scenario = {
   sourcePlugin?: boolean;
   helpFailure?: "exit" | "timeout";
   failProbe?: number;
+  doctorExitCode?: number;
   dirtyState?: boolean;
 };
 
@@ -79,6 +80,7 @@ function runScenario(scenario: Scenario = {}) {
   const bin = join(root, "bin");
   const packageRoot = join(root, "package");
   const eventsPath = join(root, "events.jsonl");
+  const redactorPath = join(root, "redactor.mjs");
   const channel = scenario.channel ?? "telegram";
   const bundled = scenario.bundled ?? channel === "telegram";
   mkdirSync(bin);
@@ -89,6 +91,10 @@ function runScenario(scenario: Scenario = {}) {
   }
   mkdirSync(packageRoot);
   writeFileSync(eventsPath, "");
+  writeFileSync(
+    redactorPath,
+    'export const redactSensitiveText = (text) => text.replaceAll("synthetic-private-doctor", "[redacted]");\n',
+  );
   if (bundled) {
     mkdirSync(join(packageRoot, "dist/extensions", channel), { recursive: true });
   }
@@ -131,6 +137,9 @@ if (help) {
   if (!current) installChannelDependency();
 } else if (args[0] === "identity") {
   console.log("execution-fixture");
+} else if (args[0] === "doctor" && env.DOCTOR_EXIT_CODE) {
+  console.error("doctor fixture stopped: synthetic-private-doctor");
+  process.exit(Number(env.DOCTOR_EXIT_CODE));
 }
 function dependencyPath() {
   const dep = { telegram: "grammy", discord: "discord-api-types", slack: "@slack/bolt" }[env.OPENCLAW_NPM_ONBOARD_CHANNEL];
@@ -180,7 +189,14 @@ openclaw_e2e_start_mock_openai() { :; }
 openclaw_e2e_wait_mock_openai() { :; }
 openclaw_e2e_start_gateway() { "$FIXTURE_CLI" gateway-start; printf '%s' fixture-gateway; }
 openclaw_e2e_wait_gateway_ready() { :; }
-openclaw_e2e_stop_process() { if [ -n "$1" ]; then "$FIXTURE_CLI" gateway-stop; fi; }
+openclaw_e2e_stop_process() {
+  if [ "$1" = fixture-gateway ]; then
+    "$FIXTURE_CLI" gateway-stop
+  elif [ -n "$1" ]; then
+    kill "$1" >/dev/null 2>&1 || true
+    wait "$1" >/dev/null 2>&1 || true
+  fi
+}
 `;
   const registryEnv = scenario.registry ? registryFixture(root, scenario) : {};
   if (scenario.corruptRegistry) {
@@ -206,6 +222,8 @@ openclaw_e2e_stop_process() { if [ -n "$1" ]; then "$FIXTURE_CLI" gateway-stop; 
       BUNDLED: bundled ? "1" : "0",
       HELP_FAILURE: scenario.helpFailure ?? "",
       FAIL_PROBE: scenario.helpFailure ? String(scenario.failProbe ?? 1) : "0",
+      DOCTOR_EXIT_CODE: scenario.doctorExitCode ? String(scenario.doctorExitCode) : "",
+      OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
       OPENCLAW_E2E_COMMAND_TIMEOUT: scenario.helpFailure === "timeout" ? "1s" : "5s",
       OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS: "10",
       OPENCLAW_NPM_ONBOARD_CHANNEL: channel,
@@ -230,6 +248,14 @@ openclaw_e2e_stop_process() { if [ -n "$1" ]; then "$FIXTURE_CLI" gateway-stop; 
 }
 
 describe("npm onboarding fixture consent", () => {
+  it.each([124, 137])("publishes redirected Doctor diagnostics with exit status %s", (status) => {
+    const { result, events } = runScenario({ doctorExitCode: status });
+    expect(result.status).toBe(status);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("doctor fixture stopped: [redacted]");
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain("synthetic-private-doctor");
+    expect(events.some((args) => args[0] === "agent")).toBe(false);
+  });
+
   it("does not load the redactor for empty failure logs", () => {
     const root = tempDirs.make("openclaw-onboard-empty-log-");
     const logPath = join(root, "onboard.json");
@@ -322,7 +348,6 @@ describe("npm onboarding fixture consent", () => {
         ["gateway-start"],
         ["audit", "--execution", "execution-fixture"],
         ["gateway-stop"],
-        ...(registry ? [["gateway-stop"]] : []),
       ]);
     },
   );

@@ -188,6 +188,12 @@ Scheduler's **End** action terminates the Gateway and its descendants. After
 updating an older installation, run `openclaw gateway install --force` to
 regenerate the launcher if the update did not refresh it.
 
+For pnpm global installs, new launchers use the verified stable
+`node_modules/openclaw` link so package replacement does not invalidate them.
+If an older launcher already points at a deleted package generation, run
+`openclaw gateway install --force` from the current installation to rewrite
+`gateway.cmd`. Without `--force`, a registered task can be left unchanged.
+
 Reinstalling a managed Scheduled Task stops and settles its previous process
 before publishing and starting the replacement. This also applies when both
 installations use Node or only the service arguments change. Status verifies
@@ -232,22 +238,22 @@ Doctor compares task definitions using Task Scheduler's defaults. An omitted
 export differences do not cause drift warnings or failed refresh verification.
 Explicitly disabled tasks and triggers are still reported.
 
-The task probe allows Windows PowerShell to inherit or create a console because
+The task check allows Windows PowerShell to inherit or create a console because
 some PowerShell 5.1 hosts fail inspection when console creation is disabled.
 Invoking it from an app without a console can briefly display a console window.
-Without an explicit caller deadline, each probe allows up to 60 seconds for
-PowerShell's cold startup. Registration inspection uses the same native probe
+Without an explicit caller deadline, each check allows up to 60 seconds for
+PowerShell's cold startup. Registration inspection uses the same native check
 and shares its budget with any Startup-folder checks. Explicit inspection
 budgets replace the default allowance. Direct lifecycle commands retain their
 existing limits. Access-denied and timeout results remain inspection failures,
 not proof that a task is absent.
-If inspection fails, Doctor and update refusals include the underlying probe
+If inspection fails, Doctor and update refusals include the underlying check
 detail; an empty response identifies the exit code and reports that PowerShell
 produced no output.
 
-During previous-Gateway readiness verification, each Scheduled Task runtime probe allows at most five seconds, or the shorter remaining budget. Other service inspections retain their caller's budget, including the longer allowance for verifying that a runtime rebuild is safe.
+During previous-Gateway readiness verification, each Scheduled Task runtime check allows at most five seconds, or the shorter remaining budget. Other service inspections retain their caller's budget, including the longer allowance for verifying that a runtime rebuild is safe.
 
-During update preflight, Scheduled Task inspection uses the update's `--timeout` budget. A registration or runtime timeout retries the complete strict inspection once. If inspection remains unavailable, the update reports the enforced budget and probe detail, preserves the recorded service definition, and skips automatic service restart. Inspect the service with `openclaw gateway status --deep`, then restart it manually after the update. Losing verified ownership after admission blocks the service mutation.
+During update preflight, Scheduled Task inspection uses the update's `--timeout` budget. A registration or runtime timeout retries the complete strict inspection once. If inspection remains unavailable, the update reports the enforced budget and check detail, preserves the recorded service definition, and skips automatic service restart. Inspect the service with `openclaw gateway status --deep`, then restart it manually after the update. Losing verified ownership after admission blocks the service mutation.
 
 Gateway startup creates private SQLite staging directories through Windows APIs,
 without compiling C# or launching PowerShell for their permissions. The owner,

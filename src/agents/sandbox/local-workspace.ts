@@ -22,7 +22,7 @@ export async function prepareLocalSandboxWorkspace(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }) {
-  const owner = resolveLocalWorkspaceOwner(params);
+  const owner = await resolveLocalWorkspaceOwner(params);
   if (!owner) {
     return undefined;
   }
@@ -47,6 +47,7 @@ export async function prepareLocalSandboxWorkspace(params: {
           env: owner.env ?? process.env,
           signal: params.signal,
           commitGuard: owner.assertCurrent,
+          workerAuthority: owner.workerAuthority,
         },
         (allocation) => {
           allocated();

@@ -65,7 +65,7 @@ const {
 } = imageRuntimeMocks;
 export const preparedAuthStorage = { [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock };
 
-export type ResolveModelWithRegistryTestParams = {
+type ResolveModelWithRegistryTestParams = {
   modelRegistry: { find: (provider: string, modelId: string) => unknown };
   provider: string;
   modelId: string;

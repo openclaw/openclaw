@@ -6,6 +6,7 @@ import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "../../agents/bash-tools.exec-host-node.types.js";
+import * as conversationPolicy from "../../agents/conversation-capability-profile.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { createInstalledSkillTools } from "../../agents/tools/installed-skill-tools.js";
@@ -102,9 +103,48 @@ async function authority(
 
 afterEach(() => {
   gatewayMocks.callGatewayTool.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("resolveWorkerToolAuthority", () => {
+  it("refuses an existing delegated session before exporting worker tool authority", async () => {
+    const sessionKey = "agent:main:dashboard:delegated";
+    const config = {
+      agents: {
+        entries: {
+          intake: { subagents: { allowAgents: ["main"], delegateToolsTo: ["main"] } },
+          main: {},
+        },
+      },
+    };
+    const profile = conversationPolicy.resolveConversationCapabilityProfile({
+      config,
+      agentId: "main",
+      sessionKey,
+      preparedSessionCapabilityStore: {
+        [sessionKey]: {
+          sessionId: "delegated",
+          spawnedBy: "agent:intake:main",
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolDeny: ["exec"],
+          delegatedToolPolicy: {
+            requesterSessionKey: "agent:intake:main",
+            targetAgentId: "main",
+            deny: [],
+            requesterDeny: ["exec"],
+          },
+        },
+      },
+    });
+    expect(profile.policy.delegatedToolPolicy).toBeDefined();
+    // Storage/lineage resolution is covered separately; exercise the actual worker
+    // admission owner with that resolved profile, not a spawn-only adapter.
+    vi.spyOn(conversationPolicy, "resolveConversationCapabilityProfile").mockReturnValue(profile);
+    await expect(resolvedAuthority({ config, sessionKey })).rejects.toThrow(
+      "Worker execution cannot enforce a delegated tool grant",
+    );
+  });
   it("retains installed skill discovery and read authority across placement", async () => {
     const skill = {
       ...createFixtureSkillEntry("deployment-guide").skill,

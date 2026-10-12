@@ -79,18 +79,7 @@ function parseExpiry(value: unknown, nowMs: number): number {
   return parsed;
 }
 
-function parseStatus(value: unknown): StandingIntentStatus | undefined {
-  return value === undefined
-    ? undefined
-    : parseChoice<StandingIntentStatus>(
-        value,
-        "status",
-        ["pending", "armed", "fired", "done", "cancelled", "expired"],
-        "pending",
-      );
-}
-
-function parseChoice<T extends string>(
+function parseChoice<T extends string | undefined>(
   value: unknown,
   field: string,
   allowed: readonly T[],
@@ -121,11 +110,9 @@ export function createStandingIntentExecutor(options: {
       const provider = options.provider?.trim();
       const senderId = options.senderId?.trim();
       if (!provider || !senderId) {
-        const missingIdentity = !provider
-          ? senderId
-            ? "channel"
-            : "channel and sender"
-          : "sender";
+        const missingIdentity = [provider ? null : "channel", senderId ? null : "sender"]
+          .filter(Boolean)
+          .join(" and ");
         throw new Error(
           `authenticated ${missingIdentity} identity is unavailable for this turn; retry from an authenticated channel conversation`,
         );
@@ -188,7 +175,12 @@ export function createStandingIntentExecutor(options: {
         intents: await listStandingIntents({
           agentId: options.agentId,
           assertCurrent: options.assertCurrent,
-          status: parseStatus(params.status),
+          status: parseChoice<StandingIntentStatus | undefined>(
+            params.status,
+            "status",
+            ["pending", "armed", "fired", "done", "cancelled", "expired"],
+            undefined,
+          ),
         }),
       });
     }

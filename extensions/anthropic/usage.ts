@@ -181,12 +181,9 @@ async function fetchAnthropicAdminUsage(params: {
   apiKey: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
-  now?: number;
-  periodDays?: number;
 }): Promise<ProviderUsageSnapshot> {
   const period = resolveProviderUsageDailyPeriod({
-    now: params.now ?? Date.now(),
-    periodDays: params.periodDays,
+    now: Date.now(),
     defaultPeriodDays: ANTHROPIC_USAGE_HISTORY_DAYS,
   });
   const common = {
@@ -252,11 +249,7 @@ export async function resolveAnthropicUsageAuth(
     return oauthToken;
   }
 
-  const apiKey = ctx.resolveApiKeyFromConfigAndStore();
-  const adminKey = normalizeAdminKey(apiKey);
-  if (adminKey) {
-    return { token: encodeAdminToken(adminKey) };
-  }
+  const apiKey = storedCandidates[0];
   if (apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
     if (validateAnthropicSetupToken(apiKey) === undefined) {

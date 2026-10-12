@@ -26,7 +26,8 @@ suite.define(() => {
           ],
         });
         const gateway = await installMockGateway(page, {
-          heldMethods: ["connect", "agents.list"],
+          heldMethods: ["connect"],
+          heldRequests: [{ method: "agents.list" }],
           authMethod: "token",
           authMode: "token",
           workspace: "/workspace-a",

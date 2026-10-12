@@ -1,4 +1,3 @@
-// Windows host paths used by the MXC filesystem policy.
 import { win32 } from "node:path";
 
 type BaselineTempEnv = {

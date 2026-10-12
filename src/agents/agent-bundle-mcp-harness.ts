@@ -1,4 +1,3 @@
-/** Harness-facing materialization of configured MCP tools. */
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -44,12 +43,22 @@ type RequesterScopedHarnessMcpTools = {
 };
 
 type StaticHarnessMcpTools = {
-  /** Final executable static MCP tools for this turn. */
   tools: AnyAgentTool[];
   /** Bounded model/operator warning when configured servers or final policy were incomplete. */
   diagnosticNotice?: string;
   dispose: () => Promise<void>;
 };
+
+function createHarnessDisposer(runtime: Pick<StaticHarnessMcpTools, "dispose"> | undefined) {
+  let disposed = false;
+  return async () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    await runtime?.dispose();
+  };
+}
 
 function formatConfiguredMcpDiagnosticNotice(
   messages: readonly string[],
@@ -251,6 +260,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
   const acquisition = await acquireSessionMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId ?? conversationCapabilityProfile?.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
@@ -329,17 +339,10 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
       ],
       params.requestInteractiveCodexApproval ? "this run" : "this scheduled run",
     );
-    let disposed = false;
     return {
       tools: allowed,
       ...(diagnosticNotice ? { diagnosticNotice } : {}),
-      dispose: async () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await liveRuntime.dispose();
-      },
+      dispose: createHarnessDisposer(liveRuntime),
     };
   } catch (error) {
     await liveRuntime.dispose();
@@ -362,6 +365,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId ?? policyParams.conversationCapabilityProfile?.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
@@ -431,17 +435,10 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
         })
       : filteredTools;
 
-    let disposed = false;
     return {
       tools: executableTools,
       advertisedTools: filteredAdvertised,
-      dispose: async () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await liveRuntime?.dispose();
-      },
+      dispose: createHarnessDisposer(liveRuntime),
     };
   } catch (error) {
     await liveRuntime?.dispose();

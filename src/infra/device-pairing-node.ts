@@ -21,6 +21,7 @@ import {
   type RecordPairedNodeConnectionResult,
   type RequestNodePairingResult,
 } from "./device-pairing-node.records.js";
+import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
@@ -28,7 +29,6 @@ import {
 } from "./device-pairing-worker.js";
 import type { PairedDevice, PairedDevicePendingNodeSurface } from "./device-pairing.types.js";
 
-export { projectNodePairing } from "./device-pairing-node.records.js";
 export type {
   NodePairingCleanupClaim,
   NodePairingPendingRequest,
@@ -215,6 +215,7 @@ export async function approveNodePairing(
     callerScopes?: readonly string[];
     initialOnly?: boolean;
     isApprovalCurrent?: () => boolean;
+    onApproved?: (approval: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
   },
   baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
@@ -231,6 +232,7 @@ export async function approveNodePairing(
     {
       baseDir,
       onAuthorityRefused: () => null,
+      onNodeApproved: options.onApproved,
       // Automatic grants must retain their policy authority through lock and worker waits.
       assertCurrent: () => {
         if (options.isApprovalCurrent?.() === false) {

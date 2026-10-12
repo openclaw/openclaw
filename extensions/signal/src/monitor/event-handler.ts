@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -46,7 +45,6 @@ import {
   resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
-import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -111,18 +109,11 @@ import {
   shouldEmitSignalReactionNotification,
 } from "./reactions.js";
 
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
-const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 type SignalInboundDebounceParams = Parameters<
   typeof createChannelInboundDebouncer<SignalInboundEntry>
 >[0];
 type SignalInboundFlushFactory = Parameters<SignalInboundDebounceParams["onFlush"]>[1];
 type SignalInboundFlush = ReturnType<SignalInboundDebounceParams["onFlush"]>;
-function isSignalReplySessionInitConflictError(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
-    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
-  );
-}
 
 function resolveSignalInboundRoute(params: {
   cfg: SignalEventHandlerDeps["cfg"];
@@ -545,8 +536,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           },
           dispatcherOptions,
           delivery,
-          // Signal retries the whole debounced flush below so the keyed lane and durable claims
-          // remain owned during backoff; a nested dispatch retry breaks shutdown cancellation.
+          // Durable ingress owns redelivery; do not retry a dispatch inside the debounce lane.
           sessionInitRetry: { delaysMs: [] },
           replyOptions: {
             ...(entry.turnAdoptionLifecycle
@@ -619,36 +609,33 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       await settle();
       return;
     }
-    if (entries.length === 1) {
-      await handleSignalInboundMessage({
+    let inbound = last;
+    if (entries.length > 1) {
+      const combinedText = entries
+        .map((entry) => entry.bodyText)
+        .filter(Boolean)
+        .join("\n");
+      const combinedCommandBody = entries
+        .map((entry) => entry.commandBody)
+        .filter(Boolean)
+        .join("\n");
+      if (!combinedText.trim()) {
+        await settle();
+        return;
+      }
+      inbound = {
         ...last,
-        channelIngress,
-        turnAdoptionLifecycle: lifecycle,
-      });
-      await settle();
-      return;
-    }
-    const combinedText = entries
-      .map((entry) => entry.bodyText)
-      .filter(Boolean)
-      .join("\n");
-    const combinedCommandBody = entries
-      .map((entry) => entry.commandBody)
-      .filter(Boolean)
-      .join("\n");
-    if (!combinedText.trim()) {
-      await settle();
-      return;
+        bodyText: combinedText,
+        commandBody: combinedCommandBody,
+        isBatched: true,
+        nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
+        media: entries.flatMap((entry) => entry.media ?? []),
+      };
     }
     await handleSignalInboundMessage({
-      ...last,
-      bodyText: combinedText,
-      commandBody: combinedCommandBody,
-      turnAdoptionLifecycle: lifecycle,
-      isBatched: true,
-      nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
-      media: entries.flatMap((entry) => entry.media ?? []),
+      ...inbound,
       channelIngress,
+      turnAdoptionLifecycle: lifecycle,
     });
     await settle();
   }
@@ -657,9 +644,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     entries: SignalInboundEntry[],
     last: SignalInboundEntry,
   ): Promise<readonly ResolvedChannelMessageIngress[]> {
-    if (last.boundChannelIngress) {
-      return last.boundChannelIngress;
-    }
     const route = resolveSignalInboundRoute({
       cfg: last.cfg,
       accountId: deps.accountId,
@@ -673,56 +657,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...(last.messageId ? { messageId: last.messageId } : {}),
       inboundEventKind: "user_request",
     };
-    const resolved = await Promise.all(
+    return await Promise.all(
       entries.flatMap((entry) =>
         entry.resolveChannelIngress
           ? [entry.resolveChannelIngress(contextBinding)]
           : (entry.channelIngress ?? []).map(async (ingress) => ingress),
       ),
     );
-    // The original last entry survives retry attempts; cache this exact aggregate
-    // so session-conflict retries cannot mint replacement provenance.
-    last.boundChannelIngress = resolved;
-    return resolved;
-  }
-
-  async function retrySignalInboundFlush(
-    entries: SignalInboundEntry[],
-    lifecycle: SignalIngressLifecycle,
-    settle: () => Promise<void>,
-    initialError: unknown,
-  ): Promise<void> {
-    let lastError = initialError;
-    for (const [attemptIndex, delayMs] of RETRYABLE_FLUSH_RETRY_DELAYS_MS.entries()) {
-      const attempt = attemptIndex + 1;
-      logVerbose(
-        `signal: reply session init conflict, retrying ${entries.length} inbound message(s) in ${delayMs}ms (attempt ${attempt}/${RETRYABLE_FLUSH_RETRY_DELAYS_MS.length})`,
-      );
-      try {
-        await sleep(delayMs, undefined, { ref: false, signal: deps.abortSignal });
-      } catch (err) {
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
-        throw err;
-      }
-      if (deps.abortSignal?.aborted) {
-        return;
-      }
-      try {
-        await flushSignalInboundEntries(entries, lifecycle, settle);
-        return;
-      } catch (err) {
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
-        lastError = err;
-        if (!isSignalReplySessionInitConflictError(err)) {
-          throw err;
-        }
-      }
-    }
-    throw lastError;
   }
 
   const flushDebouncedSignalInboundEntries = (
@@ -744,22 +685,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         try {
           await flushSignalInboundEntries(entries, admissionLifecycle, settle);
         } catch (err) {
-          if (!isSignalReplySessionInitConflictError(err)) {
-            throw err;
-          }
-          if (deps.abortSignal?.aborted) {
-            return;
-          }
-          // Retry only pre-admission session conflicts; admitted turns have already
-          // released the debounce lane and own their normal completion lifecycle.
-          await retrySignalInboundFlush(entries, admissionLifecycle, settle, err).catch(
-            async (terminalError: unknown) => {
-              // Exhausted retries: release the drain claims so queue retry policy
-              // owns redelivery instead of the stall watchdog dead-lettering them.
-              await lifecycle?.onAbandoned();
-              throw terminalError;
-            },
-          );
+          await lifecycle?.onFailed?.(err);
+          throw err;
         }
       },
     });

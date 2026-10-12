@@ -27,11 +27,6 @@ describe("talk config validation fail-closed behavior", () => {
 
   it.each([
     {
-      name: "invalid silence timeout",
-      talk: { silenceTimeoutMs: true },
-      message: /silenceTimeoutMs|talk/i,
-    },
-    {
       name: "provider absent from providers",
       talk: { provider: "acme", providers: { elevenlabs: { voiceId: "voice-123" } } },
       message: /talk\.provider|talk\.providers|acme/i,

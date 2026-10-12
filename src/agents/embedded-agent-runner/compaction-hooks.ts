@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { refreshMemoryProviderWithHandoff } from "../../plugins/memory-provider-adapter.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import {
   getActiveMemoryProviderCore,
@@ -9,6 +10,7 @@ import {
 } from "../../plugins/memory-runtime.js";
 import { resolveLoadedMemoryProviderKind } from "../../plugins/memory-state.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchIndexConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -32,6 +34,7 @@ type PostCompactionSession = {
 
 async function runPostCompactionSessionMemorySync(
   params: PostCompactionSession & { config: OpenClawConfig },
+  onStarted: () => void,
 ): Promise<void> {
   try {
     const agentId = resolveSessionAgentId({
@@ -79,7 +82,7 @@ async function runPostCompactionSessionMemorySync(
           );
           return;
         }
-        await provider.refresh();
+        await refreshMemoryProviderWithHandoff(provider, onStarted);
         await params.assertActive?.();
       } catch (error) {
         log.debug(`memory refresh failed (post-compaction): ${formatErrorMessage(error)}`);
@@ -107,7 +110,7 @@ async function runPostCompactionSessionMemorySync(
       return;
     }
     const sessionId = params.sessionId?.trim();
-    await manager.sync({
+    const sync = manager.sync({
       reason: "post-compaction",
       ...(sessionId
         ? {
@@ -121,6 +124,8 @@ async function runPostCompactionSessionMemorySync(
           }
         : { archiveFiles: [params.sessionFile] }),
     });
+    onStarted();
+    await sync;
   } catch (err) {
     await params.assertActive?.();
     log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
@@ -141,9 +146,13 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
   });
   await params.assertActive?.();
   const mode = params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async";
+  const started = createDeferredCore();
   const syncTask =
     mode !== "off" && params.config
-      ? runPostCompactionSessionMemorySync({ ...params, config: params.config, sessionFile })
+      ? runPostCompactionSessionMemorySync(
+          { ...params, config: params.config, sessionFile },
+          started.resolve,
+        )
       : undefined;
   if (mode !== "await") {
     // Async indexing cannot leak an abort rejection after foreground settlement.
@@ -151,7 +160,15 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
       log.debug(`memory sync cancelled (post-compaction): ${formatErrorMessage(error)}`);
     });
   }
-  await (mode === "await" ? syncTask : undefined);
+  // Manager/provider acquisition still needs the caller's authority. Once invoked,
+  // the memory owner retains accepted indexing through foreground and Gateway close.
+  if (syncTask) {
+    void syncTask.then(
+      () => started.resolve(),
+      () => started.resolve(),
+    );
+    await (mode === "await" ? syncTask : started.promise);
+  }
   await params.assertActive?.();
 }
 
@@ -210,14 +227,11 @@ export function estimateTokensAfterCompaction(params: {
     return undefined;
   }
   const sanityCheckBaseline = params.observedTokenCount ?? params.fullSessionTokensBefore;
-  if (
-    sanityCheckBaseline > 0 &&
+  return sanityCheckBaseline > 0 &&
     tokensAfter >
       (params.observedTokenCount !== undefined ? sanityCheckBaseline : sanityCheckBaseline * 1.1)
-  ) {
-    return undefined;
-  }
-  return tokensAfter;
+    ? undefined
+    : tokensAfter;
 }
 
 type CompactionHookParams = {
@@ -247,6 +261,13 @@ type CompactionHookParams = {
 /** Internal hooks settle and forward messages before plugin hooks see the same phase. */
 export async function runCompactionHooks(params: CompactionHookParams): Promise<void> {
   params.assertActive?.();
+  const logHookFailure = (hookName: string, error: unknown) => {
+    params.assertActive?.();
+    log.warn(`${hookName} hook failed`, {
+      errorMessage: formatErrorMessage(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+    });
+  };
   try {
     const hookEvent = createInternalHookEvent(
       "session",
@@ -284,11 +305,7 @@ export async function runCompactionHooks(params: CompactionHookParams): Promise<
       });
     }
   } catch (err) {
-    params.assertActive?.();
-    log.warn(`session:compact:${params.phase} hook failed`, {
-      errorMessage: formatErrorMessage(err),
-      errorStack: err instanceof Error ? err.stack : undefined,
-    });
+    logHookFailure(`session:compact:${params.phase}`, err);
   }
   params.assertActive?.();
   if (params.hookRunner?.hasHooks?.(`${params.phase}_compaction`)) {
@@ -321,11 +338,7 @@ export async function runCompactionHooks(params: CompactionHookParams): Promise<
         );
       }
     } catch (err) {
-      params.assertActive?.();
-      log.warn(`${params.phase}_compaction hook failed`, {
-        errorMessage: formatErrorMessage(err),
-        errorStack: err instanceof Error ? err.stack : undefined,
-      });
+      logHookFailure(`${params.phase}_compaction`, err);
     }
   }
   params.assertActive?.();

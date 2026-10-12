@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
+import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import type { ManagedGatewayUpdateVerdict } from "./update-command-service-context-types.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
 const mocks = vi.hoisted(() => ({
   readState: vi.fn<() => Promise<GatewayServiceState>>(),
@@ -31,6 +33,66 @@ afterEach(() => {
 });
 
 describe("prepareUpdateRestart", () => {
+  it.each(["masked", "masked-runtime-refresh", "ownership", "unknown"] as const)(
+    "keeps verified service holds separate from stopped-service ownership failure (%s)",
+    async (scenario) => {
+      const held = scenario.startsWith("masked");
+      const refusal = new ServiceStartRefusalError({
+        reason: "masked",
+        message: "Run `systemctl --user unmask openclaw-gateway.service`, then retry.",
+      });
+      mocks.readState.mockRejectedValueOnce(
+        held
+          ? new GatewayServiceUpdateOwnershipError(refusal.message, refusal)
+          : scenario === "ownership"
+            ? new GatewayServiceUpdateOwnershipError("Service owner changed", undefined)
+            : new Error("Service inspection unavailable"),
+      );
+      const prepared = prepareUpdateRestart(
+        {
+          root: "/installed",
+          result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+          shouldRestart: true,
+          updateStepTimeoutMs: 1000,
+          assertCurrent: () => {},
+          preManagedServiceStop: {
+            stopped: true,
+            inspected: true,
+            runtimeInspected: true,
+            running: true,
+            serviceEnv: { OPENCLAW_STATE_DIR: "/managed/state" },
+          },
+          serviceRuntimeRefreshRequired: scenario === "masked-runtime-refresh",
+        },
+        createConfigFileSnapshot({
+          path: "/managed/state/openclaw.json",
+          exists: true,
+          raw: "{}",
+          parsed: {},
+          sourceConfig: {},
+          runtimeConfig: {},
+          valid: true,
+          issues: [],
+          warnings: [],
+          legacyIssues: [],
+        }),
+      );
+      if (!held) {
+        await expect(prepared).rejects.toBeInstanceOf(GatewayServiceUpdateOwnershipError);
+        return;
+      }
+      await expect(prepared).resolves.toMatchObject({
+        serviceMutationAllowed: false,
+        refreshGatewayServiceEnv: false,
+        gatewayServiceEnv: expect.objectContaining({ OPENCLAW_STATE_DIR: "/managed/state" }),
+        serviceMutationSkipMessage: expect.stringMatching(
+          /SERVICE-DEFINITION.*unmask.*openclaw gateway start.*readiness.*unverified/,
+        ),
+      });
+      expect(mocks.revalidate).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       mode: "npm",

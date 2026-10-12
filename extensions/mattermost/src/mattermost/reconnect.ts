@@ -11,14 +11,6 @@ type RunWithReconnectOpts = {
   reconnectAfterClose?: boolean;
 };
 
-/**
- * Reconnection loop with exponential backoff.
- *
- * Calls `connectFn` in a while loop. On normal resolve (connection closed),
- * the backoff resets. On thrown error (connection failed), the current delay is
- * used, then doubled for the next retry.
- * The loop exits when `abortSignal` fires.
- */
 export async function runWithReconnect(
   connectFn: () => Promise<void>,
   opts: RunWithReconnectOpts = {},

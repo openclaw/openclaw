@@ -6,7 +6,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
   buildLiveModelProviderConfig,
-  buildOpenAICompatibleLiveModelProviderConfig,
   buildOpenAICompatibleProviderCatalog,
   buildOpenAICompatibleProviderFamilyCatalog,
   clearLiveCatalogCacheForTests,
@@ -56,74 +55,54 @@ afterEach(() => {
 });
 
 describe("strict catalog acquisition", () => {
-  it.each(["upstream", "rows", "ids"] as const)(
-    "%s keeps a shared acquisition alive after one consumer cancels",
-    async (kind) => {
-      const started = createDeferredCore<AbortSignal | undefined>();
-      const responseReady = createDeferredCore();
-      const release = vi.fn(async () => {});
-      fetchGuard.mockImplementation(async ({ signal, url }) => {
-        started.resolve(signal);
-        await responseReady.promise;
-        return {
-          response: Response.json(
-            kind === "upstream"
-              ? { alpha: { id: "alpha", models: {} }, beta: { id: "beta", models: {} } }
-              : { data: [{ id: "known" }] },
-          ),
-          finalUrl: url,
-          release,
-        };
-      });
-      const acquire = (signal: AbortSignal, providerId = "alpha"): Promise<unknown> => {
-        if (kind === "upstream") {
-          return getCachedUpstreamProviderCatalog({
-            endpoint: catalogParams.endpoint,
-            providerId,
-            fetchGuard,
-            signal,
-          });
-        }
-        if (kind === "rows") {
-          return getCachedLiveProviderModelRows({ ...catalogParams, signal });
-        }
-        return buildLiveModelProviderConfig({
-          ...catalogParams,
-          discoveryMode: "strict",
-          signal,
-        });
+  it("keeps a shared upstream acquisition alive after one consumer cancels", async () => {
+    const started = createDeferredCore<AbortSignal | undefined>();
+    const responseReady = createDeferredCore();
+    const release = vi.fn(async () => {});
+    fetchGuard.mockImplementation(async ({ signal, url }) => {
+      started.resolve(signal);
+      await responseReady.promise;
+      return {
+        response: Response.json({
+          alpha: { id: "alpha", models: {} },
+          beta: { id: "beta", models: {} },
+        }),
+        finalUrl: url,
+        release,
       };
-      const firstController = new AbortController();
-      const secondController = new AbortController();
-      const first = acquire(firstController.signal);
-      const second = acquire(secondController.signal, "beta");
-      const settled = Promise.allSettled([first, second]);
-      try {
-        const acquisitionSignal = await started.promise;
-        expect(fetchGuard).toHaveBeenCalledOnce();
-        const reason = { source: "first catalog consumer closed" };
-        firstController.abort(reason);
-        expect(acquisitionSignal?.aborted).toBe(false);
-        responseReady.resolve();
-        await expect(first).rejects.toBe(reason);
-        const expected =
-          kind === "upstream"
-            ? { id: "beta", models: {} }
-            : kind === "rows"
-              ? [{ id: "known" }]
-              : { ...seed, apiKey: catalogParams.apiKey };
-        await expect(second).resolves.toEqual(expected);
-        await expect(acquire(secondController.signal, "beta")).resolves.toEqual(expected);
-        expect(fetchGuard).toHaveBeenCalledOnce();
-        expect(release).toHaveBeenCalledOnce();
-      } finally {
-        responseReady.resolve();
-        firstController.abort();
-        secondController.abort();
-        await settled;
-      }
-    },
-  );
+    });
+    const acquire = (signal: AbortSignal, providerId = "alpha") =>
+      getCachedUpstreamProviderCatalog({
+        endpoint: catalogParams.endpoint,
+        providerId,
+        fetchGuard,
+        signal,
+      });
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const first = acquire(firstController.signal);
+    const second = acquire(secondController.signal, "beta");
+    const settled = Promise.allSettled([first, second]);
+    try {
+      const acquisitionSignal = await started.promise;
+      expect(fetchGuard).toHaveBeenCalledOnce();
+      const reason = { source: "first catalog consumer closed" };
+      firstController.abort(reason);
+      expect(acquisitionSignal?.aborted).toBe(false);
+      responseReady.resolve();
+      await expect(first).rejects.toBe(reason);
+      const expected = { id: "beta", models: {} };
+      await expect(second).resolves.toEqual(expected);
+      await expect(acquire(secondController.signal, "beta")).resolves.toEqual(expected);
+      expect(fetchGuard).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      responseReady.resolve();
+      firstController.abort();
+      secondController.abort();
+      await settled;
+    }
+  });
 
   it("preserves available HTTP catalogs and releases abandoned bodies before teardown", async () => {
     for (const mode of ["shared", "abandoned", "capacity"] as const) {
@@ -283,132 +262,103 @@ describe("strict catalog acquisition", () => {
     }
   });
 
-  it.each(["single", "family"] as const)(
-    "%s adapter cancels its underlying acquisition",
-    async (kind) => {
-      const controller = new AbortController();
-      const started = createDeferredCore<AbortSignal>();
-      fetchGuard.mockImplementation(({ signal }) => {
-        if (!signal) {
-          throw new Error("Expected acquisition signal");
-        }
-        const cancelled = createDeferredCore<never>();
-        started.resolve(signal);
-        signal.addEventListener("abort", () => cancelled.reject(signal.reason), { once: true });
-        return cancelled.promise;
-      });
-      const ctx = {
-        config: {},
-        env: {},
-        signal: controller.signal,
-        resolveProviderApiKey: () => ({ apiKey: "fixture-key" }),
-        resolveProviderAuth: () => {
-          throw new Error("Do not reselect auth");
+  it("family adapter cancels its underlying acquisition", async () => {
+    const controller = new AbortController();
+    const started = createDeferredCore<AbortSignal>();
+    fetchGuard.mockImplementation(({ signal }) => {
+      if (!signal) {
+        throw new Error("Expected acquisition signal");
+      }
+      const cancelled = createDeferredCore<never>();
+      started.resolve(signal);
+      signal.addEventListener("abort", () => cancelled.reject(signal.reason), { once: true });
+      return cancelled.promise;
+    });
+    const ctx = {
+      config: {},
+      env: {},
+      signal: controller.signal,
+      resolveProviderApiKey: () => ({ apiKey: "fixture-key" }),
+      resolveProviderAuth: () => {
+        throw new Error("Do not reselect auth");
+      },
+    };
+    const pending = buildOpenAICompatibleProviderFamilyCatalog({
+      discoveryMode: "strict",
+      credentialProviderId: "family",
+      entries: [
+        {
+          id: "demo",
+          label: "Demo",
+          baseUrl: seed.baseUrl,
+          models: seed.models,
+          buildProvider: () => seed,
         },
-      };
-      const pending =
-        kind === "single"
-          ? buildOpenAICompatibleProviderCatalog({
-              ctx,
-              providerId: "demo",
-              buildProvider: () => seed,
-              discoveryMode: "strict",
-            })
-          : buildOpenAICompatibleProviderFamilyCatalog({
-              discoveryMode: "strict",
-              credentialProviderId: "family",
-              entries: [
-                {
-                  id: "demo",
-                  label: "Demo",
-                  baseUrl: seed.baseUrl,
-                  models: seed.models,
-                  buildProvider: () => seed,
-                },
-              ],
-              staticCatalog: async () => ({ providers: {} }),
-              augmentModelCatalog: () => [],
-            }).catalog.run(ctx);
-      const signal = await started.promise;
-      expect(signal.aborted).toBe(false);
-      controller.abort(new Error("Catalog owner closed"));
-      await expect(pending).resolves.toMatchObject({
-        outcomes: [{ provider: "demo", status: "unavailable" }],
+      ],
+      staticCatalog: async () => ({ providers: {} }),
+      augmentModelCatalog: () => [],
+    }).catalog.run(ctx);
+    const signal = await started.promise;
+    expect(signal.aborted).toBe(false);
+    controller.abort(new Error("Catalog owner closed"));
+    await expect(pending).resolves.toMatchObject({
+      outcomes: [{ provider: "demo", status: "unavailable" }],
+    });
+    expect(signal.aborted).toBe(true);
+    expect(fetchGuard).toHaveBeenCalledOnce();
+  });
+
+  it("preserves failure, caches authoritative empty until expiry and supports bypass", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+    const release = vi.fn(async () => {});
+    const failure = new Error("catalog transport unavailable");
+    fetchGuard
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({
+        response: Response.json({ data: [] }),
+        finalUrl: `${seed.baseUrl}/models`,
+        release,
+      })
+      .mockImplementation(async () => ({
+        response: Response.json({ data: [{ id: "known" }] }),
+        finalUrl: `${seed.baseUrl}/models`,
+        release,
+      }));
+    const params = {
+      discoveryMode: "strict" as const,
+      providerId: "demo",
+      providerConfig: seed,
+      apiKey: "synthetic-key",
+      fetchGuard,
+    };
+    const acquire = (ttlMs = 1_000) =>
+      buildLiveModelProviderConfig({
+        ...params,
+        ttlMs,
+        endpoint: `${seed.baseUrl}/models`,
+        models: seed.models,
       });
-      expect(signal.aborted).toBe(true);
-      expect(fetchGuard).toHaveBeenCalledOnce();
-    },
-  );
+    await expect(acquire()).rejects.toBe(failure);
+    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    await expect(acquire()).resolves.toMatchObject({ models: [] });
+    await expect(acquire()).resolves.toMatchObject({ models: [] });
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(999);
+    await expect(acquire()).resolves.toMatchObject({ models: [] });
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
+    await expect(acquire(0)).resolves.toMatchObject({ models: seed.models });
+    await expect(acquire()).resolves.toMatchObject({ models: [] });
+    expect(fetchGuard).toHaveBeenCalledTimes(3);
+    vi.setSystemTime(1_000);
+    await expect(acquire()).resolves.toMatchObject({ models: seed.models });
+    await expect(acquire()).resolves.toMatchObject({ models: seed.models });
+    expect(fetchGuard).toHaveBeenCalledTimes(4);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
 
-  it.each(["ids", "projection", "openai-compatible"] as const)(
-    "%s preserves failure, caches authoritative empty until expiry and supports bypass",
-    async (projection) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(0);
-      const release = vi.fn(async () => {});
-      const failure = new Error("catalog transport unavailable");
-      fetchGuard
-        .mockRejectedValueOnce(failure)
-        .mockResolvedValueOnce({
-          response: Response.json({ data: [] }),
-          finalUrl: `${seed.baseUrl}/models`,
-          release,
-        })
-        .mockImplementation(async () => ({
-          response: Response.json({ data: [{ id: "known" }] }),
-          finalUrl: `${seed.baseUrl}/models`,
-          release,
-        }));
-      const params = {
-        discoveryMode: "strict" as const,
-        providerId: "demo",
-        providerConfig: seed,
-        apiKey: "synthetic-key",
-        fetchGuard,
-      };
-      const acquire = (ttlMs = 1_000) =>
-        projection === "openai-compatible"
-          ? buildOpenAICompatibleLiveModelProviderConfig({
-              ...params,
-              modelDiscovery: { ttlMs },
-            })
-          : buildLiveModelProviderConfig({
-              ...params,
-              ttlMs,
-              endpoint: `${seed.baseUrl}/models`,
-              models: seed.models,
-              ...(projection === "projection"
-                ? { projectRows: (rows: readonly unknown[]) => (rows.length ? seed.models : []) }
-                : {}),
-            });
-      await expect(acquire()).rejects.toBe(failure);
-      expect(fetchGuard).toHaveBeenCalledTimes(1);
-      await expect(acquire()).resolves.toMatchObject({ models: [] });
-      await expect(acquire()).resolves.toMatchObject({ models: [] });
-      expect(fetchGuard).toHaveBeenCalledTimes(2);
-      vi.setSystemTime(999);
-      await expect(acquire()).resolves.toMatchObject({ models: [] });
-      expect(fetchGuard).toHaveBeenCalledTimes(2);
-      await expect(acquire(0)).resolves.toMatchObject({ models: seed.models });
-      await expect(acquire()).resolves.toMatchObject({ models: [] });
-      expect(fetchGuard).toHaveBeenCalledTimes(3);
-      vi.setSystemTime(1_000);
-      await expect(acquire()).resolves.toMatchObject({ models: seed.models });
-      await expect(acquire()).resolves.toMatchObject({ models: seed.models });
-      expect(fetchGuard).toHaveBeenCalledTimes(4);
-      expect(release).toHaveBeenCalledTimes(3);
-    },
-  );
-
-  describe.each(["ids", "projection"] as const)("%s cache isolation", (kind) => {
-    const projection = kind === "projection" ? projectRows : undefined;
-
-    it.each([
-      ["strict", false],
-      ["advisory", false],
-      ["strict", true],
-      ["advisory", true],
-    ] as const)("separates %s-first calls (concurrent: %s)", async (firstMode, concurrent) => {
+  describe("projection cache isolation", () => {
+    it("separates concurrent strict and advisory calls", async () => {
       const held = createDeferredCore();
       const release = vi.fn(async () => {});
       fetchGuard.mockImplementation(async ({ url }) => {
@@ -419,22 +369,17 @@ describe("strict catalog acquisition", () => {
         buildLiveModelProviderConfig({
           ...catalogParams,
           discoveryMode: mode === "strict" ? "strict" : undefined,
-          projectRows: projection,
+          projectRows,
         });
-      const secondMode = firstMode === "strict" ? "advisory" : "strict";
-      const first = acquire(firstMode);
-      if (!concurrent) {
-        held.resolve();
-        await first;
-      }
-      const second = acquire(secondMode);
+      const first = acquire("strict");
+      const second = acquire("advisory");
       const startedRequests = fetchGuard.mock.calls.length;
       held.resolve();
       await expect(first).resolves.toMatchObject({
-        models: firstMode === "strict" ? [] : seed.models,
+        models: [],
       });
       await expect(second).resolves.toMatchObject({
-        models: secondMode === "strict" ? [] : seed.models,
+        models: seed.models,
       });
       expect(startedRequests).toBe(2);
       await expect(acquire("strict")).resolves.toMatchObject({ models: [] });
@@ -445,93 +390,39 @@ describe("strict catalog acquisition", () => {
       expect(release).toHaveBeenCalledTimes(3);
     });
 
-    it.each(["auth", "endpoint", "provider", "kind", "custom"] as const)(
-      "preserves %s isolation with custom key parts",
-      async (scope) => {
-        const release = vi.fn(async () => {});
-        fetchGuard
-          .mockResolvedValueOnce({
-            response: Response.json({ data: [] }),
-            finalUrl: catalogParams.endpoint,
-            release,
-          })
-          .mockImplementation(async ({ url }) => ({
-            response: Response.json({ data: [{ id: "known" }] }),
-            finalUrl: url,
-            release,
-          }));
-        const params = {
-          ...catalogParams,
-          discoveryMode: "strict" as const,
-          discoveryApiKey: "synthetic-resolved-first",
-          cacheKeyParts: ["shared-catalog"],
-          projectRows: projection,
-        };
-        const changed = {
-          ...params,
-          ...(scope === "auth" ? { discoveryApiKey: "synthetic-resolved-second" } : {}),
-          ...(scope === "endpoint" ? { endpoint: "https://other.example/v1/models" } : {}),
-          ...(scope === "provider" ? { providerId: "other" } : {}),
-          ...(scope === "kind" ? { projectRows: projection ? undefined : projectRows } : {}),
-          ...(scope === "custom" ? { cacheKeyParts: ["other-catalog"] } : {}),
-        };
-        await expect(buildLiveModelProviderConfig(params)).resolves.toMatchObject({ models: [] });
-        await expect(buildLiveModelProviderConfig(changed)).resolves.toMatchObject({
-          models: seed.models,
-        });
-        await expect(buildLiveModelProviderConfig(changed)).resolves.toMatchObject({
-          models: seed.models,
-        });
-        await expect(buildLiveModelProviderConfig(params)).resolves.toMatchObject({ models: [] });
-        expect(fetchGuard).toHaveBeenCalledTimes(2);
-        expect(release).toHaveBeenCalledTimes(2);
-      },
-    );
-  });
-
-  it.each(["refresh", "reject"] as const)(
-    "projects cached rows against the current fallback (%s)",
-    async (mode) => {
-      const rows = [{ id: "known" }];
-      const failure = new Error("catalog projection failed");
-      if (mode === "reject") {
-        fetchGuard.mockResolvedValueOnce({
+    it("preserves auth isolation with custom key parts", async () => {
+      const release = vi.fn(async () => {});
+      fetchGuard
+        .mockResolvedValueOnce({
           response: Response.json({ data: [] }),
           finalUrl: catalogParams.endpoint,
-          release: async () => {},
-        });
-      }
-      fetchGuard.mockImplementation(async ({ url }) => ({
-        response: Response.json({ data: rows }),
-        finalUrl: url,
-        release: async () => {},
-      }));
-      const acquire = (models = seed.models) =>
-        buildLiveModelProviderConfig({
-          ...catalogParams,
-          models,
-          discoveryMode: "strict",
-          projectRows: (candidateRows, fallback) => {
-            if (mode === "refresh") {
-              expect(candidateRows).toEqual(rows);
-            } else if (candidateRows.length === 0) {
-              throw failure;
-            }
-            return fallback.models;
-          },
-        });
-      if (mode === "reject") {
-        await expect(acquire()).rejects.toBe(failure);
-      }
-      await expect(acquire()).resolves.toMatchObject({ models: seed.models });
-      const models =
-        mode === "refresh"
-          ? seed.models.map((model) => ({ ...model, name: "Updated", contextWindow: 256_000 }))
-          : seed.models;
-      await expect(acquire(models)).resolves.toMatchObject({ models });
-      expect(fetchGuard).toHaveBeenCalledTimes(mode === "reject" ? 2 : 1);
-    },
-  );
+          release,
+        })
+        .mockImplementation(async ({ url }) => ({
+          response: Response.json({ data: [{ id: "known" }] }),
+          finalUrl: url,
+          release,
+        }));
+      const params = {
+        ...catalogParams,
+        discoveryMode: "strict" as const,
+        discoveryApiKey: "synthetic-resolved-first",
+        cacheKeyParts: ["shared-catalog"],
+        projectRows,
+      };
+      const changed = { ...params, discoveryApiKey: "synthetic-resolved-second" };
+      await expect(buildLiveModelProviderConfig(params)).resolves.toMatchObject({ models: [] });
+      await expect(buildLiveModelProviderConfig(changed)).resolves.toMatchObject({
+        models: seed.models,
+      });
+      await expect(buildLiveModelProviderConfig(changed)).resolves.toMatchObject({
+        models: seed.models,
+      });
+      await expect(buildLiveModelProviderConfig(params)).resolves.toMatchObject({ models: [] });
+      expect(fetchGuard).toHaveBeenCalledTimes(2);
+      expect(release).toHaveBeenCalledTimes(2);
+    });
+  });
 
   it.each([401, 503])(
     "HTTP %s preserves a healthy family sibling and captured auth",

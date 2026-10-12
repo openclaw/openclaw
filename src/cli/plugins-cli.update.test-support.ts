@@ -23,6 +23,7 @@ export function writtenIndexCustody() {
     lease: {
       ...options.lease,
       // Refresh wraps the guards while retaining the original lease owner and signal.
+      assertCurrent: expect.any(Function),
       assertOwned: expect.any(Function),
       assertOwnedInTransaction: expect.any(Function),
     },

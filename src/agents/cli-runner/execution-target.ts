@@ -1,3 +1,7 @@
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
@@ -37,19 +41,21 @@ export function attachCliReplyBackend(params: RunCliAgentParams, cancel: () => v
 export function createCliRunCurrentAssertion(
   params: PreparedCliRunContext["params"],
   signal = params.abortSignal,
-): () => void {
+): SessionSourceAssertion {
   const assertCallerCurrent = params.assertCurrent;
   const assertAdmitted = resolveAdmittedRunActiveAssertion(params.admittedRunContext, signal);
-  return () => {
-    assertCallerCurrent?.();
-    if (signal?.aborted) {
-      throw createAbortError("CLI run aborted");
-    }
-    if (!assertAdmitted) {
-      throw new Error("CLI run authority is no longer active");
-    }
-    assertAdmitted();
-  };
+  return composeSessionSourceAssertion([
+    assertCallerCurrent,
+    composeSessionSourceAssertion([assertAdmitted], (assertSource) => {
+      if (signal?.aborted) {
+        throw createAbortError("CLI run aborted");
+      }
+      if (!assertAdmitted) {
+        throw new Error("CLI run authority is no longer active");
+      }
+      assertSource();
+    }),
+  ]);
 }
 
 /** Preparation and execution must agree on the owner of private prompt context. */

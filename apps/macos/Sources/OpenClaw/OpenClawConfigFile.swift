@@ -45,22 +45,65 @@ enum OpenClawConfigFile {
     #endif
 
     static func loadDict() -> [String: Any] {
+        self.loadDictIfReadable() ?? [:]
+    }
+
+    /// A missing file is an empty config; an existing unreadable or invalid file is not.
+    static func loadDictIfReadable() -> [String: Any]? {
         self.fileLock.withLock {
             let url = OpenClawPaths.configURL
-            guard FileManager().fileExists(atPath: url.path) else { return [:] }
+            var info = stat()
+            if lstat(url.path, &info) != 0 {
+                return errno == ENOENT ? [:] : nil
+            }
             do {
                 let data = try Data(contentsOf: url)
                 guard let root = self.parseConfigData(data) else {
                     self.observeConfigRead(data: data, root: nil, configURL: url)
                     self.logger.warning("config JSON root invalid")
-                    return [:]
+                    return nil
                 }
                 self.observeConfigRead(data: data, root: root, configURL: url)
                 return root
             } catch {
                 self.logger.warning("config read failed: \(error.localizedDescription)")
-                return [:]
+                return nil
             }
+        }
+    }
+
+    static func ensureAppHostedGatewayAuth(environment: [String: String]) throws {
+        try self.fileLock.withLock {
+            let root = self.loadDictIfReadable()
+            let files = AppHostedGatewayAuth.trustedDotEnvURLs(environment: environment)
+                .map { $0.map(self.readAuthDotEnv) } ?? [.unreadable]
+            let decision = AppHostedGatewayAuth.decision(
+                root: root, environment: environment, trustedDotEnvFiles: files)
+            guard decision == .persist else { return }
+            let token = try AppHostedGatewayAuth.generateToken()
+            let output = AppHostedGatewayAuth.persisting(token: token, in: root ?? [:])
+            guard self.saveDict(output, preserveExistingKeys: true, allowGatewayAuthMutation: true) else {
+                throw GatewayHostingError(message: "Could not save the local Gateway authentication token. " +
+                    "Check that \(OpenClawPaths.configURL.path) is writable, then retry setup.")
+            }
+        }
+    }
+
+    private static func readAuthDotEnv(_ url: URL) -> AppHostedGatewayAuth.DotEnvFile {
+        var info = stat()
+        if lstat(url.path, &info) != 0 { return errno == ENOENT ? .missing : .unreadable }
+        guard stat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return .unreadable }
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            // Match the Gateway's 1 MiB bound; anything we cannot inspect keeps existing auth.
+            let data = try handle.read(upToCount: 1024 * 1024 + 1) ?? Data()
+            guard data.count <= 1024 * 1024,
+                  let contents = String(data: data, encoding: .utf8)
+            else { return .unreadable }
+            return .contents(contents)
+        } catch {
+            return .unreadable
         }
     }
 
@@ -298,9 +341,6 @@ extension OpenClawConfigFile {
 
     static func gatewayPort(root: [String: Any] = OpenClawConfigFile.loadDict()) -> Int? {
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
-        if let port = gateway["port"] as? Int, port > 0 {
-            return port
-        }
         if let number = gateway["port"] as? NSNumber, number.intValue > 0 {
             return number.intValue
         }

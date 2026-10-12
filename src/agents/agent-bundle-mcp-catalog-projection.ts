@@ -1,36 +1,23 @@
 /** Projects MCP catalog metadata without owning transport or catalog lifetime. */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-types.js";
+import type {
+  McpCatalogTool,
+  McpToolCatalog,
+  McpToolCatalogDiagnostic,
+} from "./agent-bundle-mcp-types.js";
 import { readMcpAppToolExtensions } from "./mcp-app-extension-metadata.js";
 import { normalizeMcpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
 import { normalizeToolUiVisibility, sanitizeMcpMetadataText } from "./mcp-metadata.js";
 import type { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
 
-export function projectUnavailableBundleMcpCatalog(
-  catalog: McpToolCatalog | null,
-  serverName: string,
-  message: string,
-): McpToolCatalog | null {
-  const server = catalog?.servers[serverName];
-  const diagnostic =
-    catalog?.diagnostics?.[0] ??
-    (server
-      ? {
-          serverName,
-          safeServerName: server.safeServerName ?? serverName,
-          launchSummary: server.launchSummary,
-          message,
-        }
-      : undefined);
-  if (!diagnostic) {
-    return null;
-  }
+export function projectBundleMcpCatalogFailure(
+  catalog: McpToolCatalog | undefined,
+  diagnostic: McpToolCatalogDiagnostic,
+): McpToolCatalog {
   return {
-    version: 1,
+    ...(catalog ?? { version: 1, servers: {}, tools: [] }),
     generatedAt: Date.now(),
-    servers: {},
-    tools: [],
-    diagnostics: [{ ...diagnostic, message }],
+    diagnostics: [diagnostic],
   };
 }
 

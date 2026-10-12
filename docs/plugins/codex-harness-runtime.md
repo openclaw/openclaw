@@ -37,7 +37,7 @@ This check finishes before OpenClaw injects history, starts a turn, or commits a
 thread binding. If the snapshot request fails, persistent provisional threads
 are deleted and ephemeral threads are unsubscribed. OpenClaw retires the app-server connection when safe
 cleanup cannot be confirmed. Supervised branches also clean up their temporary
-probe and preserve recovery state if cleanup fails.
+check and preserve recovery state if cleanup fails.
 
 Account-wide app access cannot override an explicitly disabled configured
 workspace plugin. OpenClaw uses its installed snapshot and reads only that

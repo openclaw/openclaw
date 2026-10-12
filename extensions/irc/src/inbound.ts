@@ -66,40 +66,6 @@ function hasEntries(entries: Array<string | number> | undefined): boolean {
   return normalizeStringEntries(entries).some((entry) => normalizeIrcAllowEntry(entry));
 }
 
-function routeDescriptorsForIrcGroup(params: {
-  isGroup: boolean;
-  groupPolicy: IrcGroupPolicy;
-  groupAllowed: boolean;
-  hasConfiguredGroups: boolean;
-  groupEnabled: boolean;
-  routeGroupAllowFrom: string[];
-}) {
-  if (!params.isGroup) {
-    return [];
-  }
-  return channelIngressRoutes(
-    params.groupPolicy === "allowlist" && {
-      id: "irc:channel",
-      allowed: params.hasConfiguredGroups && params.groupAllowed,
-      precedence: 0,
-      matchId: "irc-channel",
-      blockReason: "channel_not_allowlisted",
-    },
-    !params.groupEnabled && {
-      id: "irc:channel-enabled",
-      enabled: false,
-      precedence: 10,
-      blockReason: "channel_disabled",
-    },
-    hasEntries(params.routeGroupAllowFrom) && {
-      id: "irc:channel-sender",
-      precedence: 20,
-      senderPolicy: "replace",
-      senderAllowFrom: params.routeGroupAllowFrom,
-    },
-  );
-}
-
 async function deliverIrcReply(params: {
   payload: OutboundReplyPayload;
   cfg: CoreConfig;
@@ -249,15 +215,30 @@ export async function handleIrcInbound(params: {
         ...(message.messageId ? { messageId: message.messageId } : {}),
         inboundEventKind: "user_request",
       },
-      route: routeDescriptorsForIrcGroup({
-        isGroup: message.isGroup,
-        groupPolicy,
-        groupAllowed: groupMatch.allowed,
-        hasConfiguredGroups: groupMatch.hasConfiguredGroups,
-        groupEnabled:
-          groupMatch.groupConfig?.enabled !== false && groupMatch.wildcardConfig?.enabled !== false,
-        routeGroupAllowFrom,
-      }),
+      route: message.isGroup
+        ? channelIngressRoutes(
+            groupPolicy === "allowlist" && {
+              id: "irc:channel",
+              allowed: groupMatch.hasConfiguredGroups && groupMatch.allowed,
+              precedence: 0,
+              matchId: "irc-channel",
+              blockReason: "channel_not_allowlisted",
+            },
+            (groupMatch.groupConfig?.enabled === false ||
+              groupMatch.wildcardConfig?.enabled === false) && {
+              id: "irc:channel-enabled",
+              enabled: false,
+              precedence: 10,
+              blockReason: "channel_disabled",
+            },
+            hasEntries(routeGroupAllowFrom) && {
+              id: "irc:channel-sender",
+              precedence: 20,
+              senderPolicy: "replace",
+              senderAllowFrom: routeGroupAllowFrom,
+            },
+          )
+        : [],
       mentionFacts: message.isGroup
         ? {
             canDetectMention: true,

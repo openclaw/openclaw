@@ -13,7 +13,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
@@ -75,7 +75,7 @@ describe("worker automatic resume", () => {
       );
 
       const placements = createWorkerSessionPlacementStore({ database: stateDb });
-      const previous = createHarness(stateDb, placements, { workspacePath: root });
+      const previous = await createHarness(stateDb, placements, { workspacePath: root });
       const active = await previous.service.dispatch({ ...REQUEST, executionMode });
       if (state === "failed") {
         previous.markEnvironmentFailed();
@@ -89,7 +89,7 @@ describe("worker automatic resume", () => {
       }
       previous.markEnvironmentFailed();
       const previousEnvironment = previous.environments.get(active.environmentId);
-      const replacement = createHarness(stateDb, placements, {
+      const replacement = await createHarness(stateDb, placements, {
         environmentGeneration: placement.generation + 1,
         workspacePath: root,
       });
@@ -102,6 +102,7 @@ describe("worker automatic resume", () => {
             : replacement.environments.get(environmentId),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        initialPlacements: await placements.listAsync(),
         scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         placements,

@@ -429,25 +429,17 @@ function buildFoundryConnectionTest(params: {
       },
     };
   }
-  if (params.api === ANTHROPIC_MESSAGES_API) {
-    return {
-      url: `${baseUrl}/v1/messages`,
-      body: {
-        model: params.modelId,
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 1,
-        ...(requiresFoundryMandatoryAdaptiveClaudeThinking(params.modelNameHint ?? params.modelId)
-          ? { thinking: { type: "adaptive" } }
-          : {}),
-      },
-    };
-  }
+  const anthropic = params.api === ANTHROPIC_MESSAGES_API;
   return {
-    url: `${baseUrl}/chat/completions`,
+    url: `${baseUrl}/${anthropic ? "v1/messages" : "chat/completions"}`,
     body: {
       model: params.modelId,
       messages: [{ role: "user", content: "hi" }],
       max_tokens: 1,
+      ...(anthropic &&
+      requiresFoundryMandatoryAdaptiveClaudeThinking(params.modelNameHint ?? params.modelId)
+        ? { thinking: { type: "adaptive" } }
+        : {}),
     },
   };
 }

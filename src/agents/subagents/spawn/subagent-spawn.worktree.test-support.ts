@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { captureMethodCall } from "../../../../test/helpers/capture-method-call.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -16,7 +17,7 @@ import { registerProjectRegistry } from "../../../projects/project-registry.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
-import { managedWorktrees } from "../../worktrees/service.js";
+import { managedWorktrees, ManagedWorktreeService } from "../../worktrees/service.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import {
@@ -88,13 +89,13 @@ export function registerManagedWorktreeSpawnCases(options: {
         signal.throwIfAborted();
         ownedGateway = await createBoundGateway(ownedBound);
         signal.throwIfAborted();
-        const allocate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+        const allocate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
         const allocation = vi
-          .spyOn(managedWorktrees, "createWithOutcome")
-          .mockImplementationOnce(async (params) => {
+          .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+          .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
             preparationStarted.resolve();
             await releasePreparation.promise;
-            return allocate(params);
+            return allocate(this, params);
           });
         restoreAllocation = () => allocation.mockRestore();
         runEmbeddedAgent.mockImplementationOnce(() => {
@@ -222,7 +223,7 @@ export function registerManagedWorktreeSpawnCases(options: {
         );
         const child = loadSessionEntry(childScope);
         const checkout = expectDefined(
-          managedWorktrees.findLiveByOwner("session", childSessionKey),
+          await managedWorktrees.findLiveByOwner("session", childSessionKey),
           "child managed worktree",
         );
         expect(checkout).toMatchObject({

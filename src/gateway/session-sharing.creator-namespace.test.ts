@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { assignSessionOwner, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { retainUserProfileCatalog } from "../state/user-profile-list.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -22,7 +22,7 @@ describe("creator namespace authorization", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const caller = ensureProfileForEmail("cached-caller@example.test");
       const other = ensureProfileForEmail("cached-other@example.test");
-      using _ = { [Symbol.dispose]: retainUserProfileCatalog() };
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const actor = { type: "human", source: "profile", id: other.id } as const;
       const db = openOpenClawStateDatabase().db;
       const prepare = vi.spyOn(db, "prepare");
@@ -48,6 +48,7 @@ describe("creator namespace authorization", () => {
   it("never turns matching attribution or responsibility into a profile creator grant", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("creator@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = {
         connect: { scopes: ["operator.read", "operator.write"] },
         authenticatedUserProfile: { profileId: profile.id },

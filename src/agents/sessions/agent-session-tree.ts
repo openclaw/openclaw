@@ -17,9 +17,7 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
    * Navigate to a different node in the session tree.
    * Unlike fork() which creates a new session file, this stays in the same file.
    *
-   * @param targetId The entry ID to navigate to
    * @param options.summarize Whether user wants to summarize abandoned branch
-   * @param options.customInstructions Custom instructions for summarizer
    * @param options.replaceInstructions If true, customInstructions replaces the default prompt
    * @param options.label Label to attach to the branch summary entry
    * @returns Result with editorText (if user message) and cancelled status
@@ -81,7 +79,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
 
     try {
       let extensionSummary: { summary: string; details?: unknown } | undefined;
-      let fromExtension = false;
 
       if (this.currentExtensionRunner.hasHandlers("session_before_tree")) {
         const result = await this.currentExtensionRunner.emit({
@@ -96,7 +93,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
 
         if (result?.summary && options.summarize) {
           extensionSummary = result.summary;
-          fromExtension = true;
         }
 
         if (result?.customInstructions !== undefined) {
@@ -110,6 +106,7 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         }
       }
 
+      const fromExtension = extensionSummary !== undefined;
       let summaryText: string | undefined;
       let summaryDetails: unknown;
       if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
@@ -149,15 +146,12 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
       let editorText: string | undefined;
 
       if (targetEntry.type === "message" && targetEntry.message.role === "user") {
-        // User message: leaf = parent (null if root), text goes to editor
         newLeafId = targetEntry.parentId;
         editorText = extractTextContent(targetEntry.message.content);
       } else if (targetEntry.type === "custom_message") {
-        // Custom message: leaf = parent (null if root), text goes to editor
         newLeafId = targetEntry.parentId;
         editorText = extractTextContent(targetEntry.content);
       } else {
-        // Non-user message: leaf = selected node
         newLeafId = targetId;
       }
 
@@ -230,9 +224,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
     }
   }
 
-  /**
-   * Get the extension runner (for setting UI context and error handlers).
-   */
   get extensionRunner(): ExtensionRunner {
     return this.currentExtensionRunner;
   }

@@ -20,10 +20,7 @@ export function clearActiveProgressLine(): void {
 
 /** Unregister the active progress line, optionally only for a matching stream. */
 export function unregisterActiveProgressLine(stream?: NodeJS.WriteStream): void {
-  if (!activeStream) {
-    return;
-  }
-  if (stream && activeStream !== stream) {
+  if (!activeStream || (stream && activeStream !== stream)) {
     return;
   }
   activeStream = null;

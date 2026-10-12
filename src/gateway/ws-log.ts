@@ -1,6 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Gateway WebSocket log formatting.
-// Redacts and compacts request/response/event metadata for console diagnostics.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import chalk from "chalk";
@@ -14,9 +12,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
-/**
- * WebSocket logging helpers for gateway request, response, and event traffic.
- */
 const LOG_VALUE_LIMIT = 240;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WS_LOG_REDACT_OPTIONS = {
@@ -62,7 +57,8 @@ export function summarizeSessionListForWsLog(input: unknown): Record<string, unk
   const params = isRecord(input) ? input : {};
   return {
     source: SESSION_LIST_SOURCES.find((source) => source === params.source) ?? "unspecified",
-    rowMode: params.rowMode === "compact" ? "compact" : "full",
+    rowMode:
+      params.rowMode === "compact" || params.rowMode === "dashboard" ? params.rowMode : "full",
     limit:
       typeof params.limit === "number" && Number.isSafeInteger(params.limit) && params.limit > 0
         ? params.limit

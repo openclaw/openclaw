@@ -52,6 +52,7 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     providerId: "device",
     profileId: "device:runner-1",
     nodeDeviceId: "runner-1",
+    sshEndpoint: null,
   };
   writePlacementEnvironmentFixture(database, environment);
   await seedActivePlacement(placements, environment);

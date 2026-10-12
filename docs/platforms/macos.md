@@ -29,9 +29,8 @@ Only need the CLI and Gateway? Start with [Getting started](/start/getting-start
 
 ## Requirements
 
-**OpenClaw.app requires macOS 15.0 (Sequoia) or later.** This also applies to
-its native `openclaw-mac` helper. [Voice Wake and push-to-talk](/platforms/mac/voicewake#requirements)
-require macOS 26 or later.
+**OpenClaw.app requires macOS 26.2 (Tahoe) or later.** This also applies to
+its native `openclaw-mac` helper and [Voice Wake and push-to-talk](/platforms/mac/voicewake#requirements).
 
 The Node-based CLI and Gateway need a [supported Node version](/install/node)
 on an operating system supported by that runtime. Official Node 24 and Node 26
@@ -138,7 +137,7 @@ app profile is active.
 
 If the primary Gateway connection rejects the app's protocol version, the app
 shows an update alert and keeps the explanation in its connection status.
-Remote setup and connection probes show the same guidance inline. The message names the app
+Remote setup and connection checks show the same guidance inline. The message names the app
 release and both protocol versions, and tells you which side needs updating:
 run `openclaw update` on an older Gateway host, or install a newer Mac app from
 the [download options](#download). A rejected handshake may not report the

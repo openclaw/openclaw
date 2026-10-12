@@ -205,7 +205,7 @@ If the provider rotates tokens or the authorization state gets stuck, run `openc
 | `clientCert` / `clientKey`  | mTLS client certificate and key paths                                                  |
 | `supportsParallelToolCalls` | Hint that concurrent calls are safe for this server                                    |
 
-OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
+OpenClaw config uses `transport: "streamable-http"` as the current spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
 
 Example:
 

@@ -11,7 +11,7 @@ afterEach(() => {
 describe("LM Studio embedding request headers", () => {
   it.each([
     {
-      name: "preserves resolved remote literals while resolving provider-owned headers",
+      name: "preserves resolved provider and remote literals",
       providerQuery: "",
       remoteQuery: "",
       providerOwnsDestination: true,
@@ -86,7 +86,9 @@ describe("LM Studio embedding request headers", () => {
           headers: {
             "x-already-resolved": "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
             "x-shared": "remote-value",
-            ...(providerOwnsDestination ? { "x-provider-only": "resolved-provider-value" } : {}),
+            ...(providerOwnsDestination
+              ? { "x-provider-only": "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}" }
+              : {}),
             authorization: "Bearer synthetic-memory-key",
           },
         },

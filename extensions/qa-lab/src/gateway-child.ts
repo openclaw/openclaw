@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
@@ -12,9 +11,7 @@ import {
   type QaChildFailure,
 } from "./gateway-child-process.js";
 import {
-  isRetryableRpcStartupError,
-  QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS,
-  resolveQaGatewayStartupRetry,
+  needsQaGatewayMigrationRestart,
   waitForGatewayListening,
   waitForGatewayReady,
   waitForQaGatewayRestartBoundary,
@@ -70,7 +67,6 @@ async function startOwnedGatewayChild(
   } = setup;
   let active!: ReturnType<QaGatewayChildLifecycle["register"]>;
   let getChildFailure: (() => QaChildFailure | null) | undefined;
-  let launch!: Awaited<ReturnType<typeof setup.prepareAttempt>>;
   const requireRpcClient = () => {
     if (!lifetime.rpcClient) {
       throw new Error("qa gateway rpc client is not ready");
@@ -113,7 +109,7 @@ async function startOwnedGatewayChild(
     });
     // Register synchronously: acceptance/readiness may reject with descendants
     // still alive, and replacement must immediately supersede its stopped parent.
-    active = lifetime.register(child, prepared);
+    const owned = (active = lifetime.register(child, prepared));
     for (const [stream, label, log] of [
       [child.stdout, "stdout", stdoutLog],
       [child.stderr, "stderr", stderrLog],
@@ -124,7 +120,11 @@ async function startOwnedGatewayChild(
         log.write(buffer);
       });
     }
-    getChildFailure = monitorQaGatewayChildFailure(child, output);
+    getChildFailure = monitorQaGatewayChildFailure(
+      child,
+      output,
+      () => owned.ready && !lifetime.signal.aborted && owned.settlement === undefined,
+    );
     active.checkFailure = () => throwQaGatewayChildFailure(getChildFailure, logs);
     try {
       if (prepared && lifetime.controller) {
@@ -160,19 +160,7 @@ async function startOwnedGatewayChild(
       token: gatewayToken,
       logs,
     });
-    for (let rpcAttempt = 1; ; rpcAttempt += 1) {
-      lifetime.assertOpen();
-      try {
-        await lifetime.rpcClient.request("config.get", {}, { timeoutMs: 30_000 });
-        break;
-      } catch (error) {
-        if (rpcAttempt >= 4 || !isRetryableRpcStartupError(error)) {
-          throw error;
-        }
-        await sleep(500 * rpcAttempt);
-        await waitForGatewayReady({ ...health, timeoutMs: initial ? 60_000 : 15_000 });
-      }
-    }
+    await lifetime.rpcClient.request("config.get", {}, { timeoutMs: 30_000 });
     throwActiveChildFailure();
     if (active.identity && lifetime.controller) {
       await lifetime.controller.markReady(active.identity);
@@ -180,41 +168,24 @@ async function startOwnedGatewayChild(
     lifetime.assertOpen();
     active.ready = true;
   };
-  let migrationConvergenceRestartUsed = false;
-  let reuseStartupLaunchState = false;
-  for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
-    launch = await setup.prepareAttempt(reuseStartupLaunchState);
-    const attemptLogMark = output.mark();
-    try {
-      await launchReady(true, attempt);
-      break;
-    } catch (error) {
-      const attemptLogs = output.readRedactedSince(attemptLogMark);
-      const retry = resolveQaGatewayStartupRetry({
-        attempt,
-        details: attemptLogs.trim() ? attemptLogs : formatErrorMessage(error),
-        migrationConvergenceRestartUsed,
-      });
-      const retryableRpcStartup =
-        attempt < QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS &&
-        !retry &&
-        isRetryableRpcStartupError(error);
-      if (!retry && !retryableRpcStartup) {
-        throw error;
-      }
-      await stopAttempt(error);
-      lifetime.assertOpen();
-      migrationConvergenceRestartUsed =
-        retry?.migrationConvergenceRestartUsed ?? migrationConvergenceRestartUsed;
-      reuseStartupLaunchState = retry?.reuseLaunchState ?? false;
-      const retryMessage =
-        retry?.kind === "migration-convergence-restart"
-          ? `[qa-lab] gateway child startup attempt ${attempt}/${QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS} completed plugin migration convergence; restarting once with the same state, config, and port ${launch.gatewayPort}\n`
-          : `[qa-lab] gateway child startup attempt ${attempt}/${QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS} hit a transient startup race on port ${launch.gatewayPort}; retrying with a new port\n`;
-      const retryBuffer = Buffer.from(retryMessage);
-      output.push("internal", retryBuffer);
-      stdoutLog.write(retryBuffer);
+  const launch = await setup.prepareAttempt();
+  const attemptLogMark = output.mark();
+  try {
+    await launchReady(true);
+  } catch (error) {
+    const attemptLogs = output.readRedactedSince(attemptLogMark);
+    if (
+      !needsQaGatewayMigrationRestart(attemptLogs.trim() ? attemptLogs : formatErrorMessage(error))
+    ) {
+      throw error;
     }
+    await stopAttempt(error);
+    const retryBuffer = Buffer.from(
+      `[qa-lab] gateway child startup attempt 1/2 completed plugin migration convergence; restarting once with the same state, config, and port ${launch.gatewayPort}\n`,
+    );
+    output.push("internal", retryBuffer);
+    stdoutLog.write(retryBuffer);
+    await launchReady(true, 2);
   }
   const { cfg, baseUrl, wsUrl, env: runningEnv } = launch;
   const signalActiveProcess = async (signal: NodeJS.Signals) => {
@@ -293,7 +264,6 @@ async function startOwnedGatewayChild(
       mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
     ) {
       return lifetime.run(async () => {
-        throwActiveChildFailure();
         await stopAttempt();
         await mutateState({ configPath, runtimeEnv: runningEnv, stateDir, tempRoot });
         // Mutation can reopen parent stores; release them before child startup maintenance.
@@ -302,14 +272,11 @@ async function startOwnedGatewayChild(
         try {
           await launchReady(false);
         } catch (error) {
-          const retry = resolveQaGatewayStartupRetry({
-            attempt: 1,
-            details: [output.readRedactedSince(replacementLogMark), formatErrorMessage(error)].join(
-              "\n",
-            ),
-            migrationConvergenceRestartUsed: false,
-          });
-          if (retry?.kind !== "migration-convergence-restart") {
+          if (
+            !needsQaGatewayMigrationRestart(
+              [output.readRedactedSince(replacementLogMark), formatErrorMessage(error)].join("\n"),
+            )
+          ) {
             throw error;
           }
           await stopAttempt(error);

@@ -7,7 +7,11 @@ import type {
   ResponseFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
-import { writeOpenAiResponsesSse } from "../../../test/helpers/openai-responses-sse.ts";
+import {
+  writeOpenAiResponsesSse,
+  writeOpenAiResponsesText,
+} from "../../../test/helpers/openai-responses-sse.ts";
+import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 
@@ -19,7 +23,50 @@ export const backgroundWorkFixture = {
   output: "Background process ready: retained output from the loopback fixture.",
   processName: "Background proof process",
   draft: "Keep this unsent parent instruction through both panels and reload.",
+  nextPrompt: "The stopped request is finished. Reply to this new instruction only.",
+  nextReply: "This reply belongs to the new instruction.",
 };
+
+export function createBackgroundWorkInstance(port: number, notifyOnExit = false) {
+  return createOpenClawTestInstance({
+    name: "background-work",
+    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+    config: {
+      update: { checkOnStart: false },
+      gateway: { controlUi: { enabled: true } },
+      cron: { enabled: false },
+      tools: {
+        profile: "full",
+        codeMode: false,
+        toolSearch: false,
+        exec: { host: "gateway", mode: "full", notifyOnExit },
+      },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: "background-fixture/parent",
+          modelPolicy: { allow: ["background-fixture/*"] },
+        },
+        entries: { main: { identity: { name: "Background work fixture" } } },
+      },
+      models: {
+        catalogRefresh: { enabled: false },
+        providers: {
+          "background-fixture": {
+            api: "openai-responses",
+            apiKey: "synthetic-background-fixture-key",
+            baseUrl: "http://127.0.0.1:" + port + "/v1",
+            models: [
+              { id: "parent", name: "Fixture parent" },
+              { id: "child", name: "Fixture child" },
+            ],
+          },
+        },
+      },
+      plugins: { allow: [] },
+    },
+  });
+}
 
 function toolEvents(name: string, args: Record<string, unknown>) {
   const item = {
@@ -62,10 +109,11 @@ function beginPendingResponse(response: ServerResponse) {
 }
 
 /** Only the model provider is scripted. Gateway, exec, subagent, history and Stop are real. */
-export async function startBackgroundWorkProvider() {
+export async function startBackgroundWorkProvider(options: { ordinaryExec?: boolean } = {}) {
   const childStarted = createDeferred();
   const childClosed = createDeferred();
   const parentPending = createDeferred();
+  const parentClosed = createDeferred();
   const processConnected = createDeferred();
   const processClosed = createDeferred();
   const failure = createDeferred<never>();
@@ -126,11 +174,21 @@ export async function startBackgroundWorkProvider() {
               toolEvents("exec", {
                 command: `node -e '${script}'`,
                 title: backgroundWorkFixture.processName,
-                background: true,
+                ...(options.ordinaryExec ? { yieldMs: 10 } : { background: true }),
                 timeoutSeconds: 0,
                 host: "gateway",
               }),
             );
+            return;
+          }
+          if (options.ordinaryExec && step >= 3) {
+            expect(step, "a stopped request must not create an extra model turn").toBe(3);
+            expect(JSON.stringify(body.input)).toContain(backgroundWorkFixture.nextPrompt);
+            writeOpenAiResponsesText(response, {
+              text: backgroundWorkFixture.nextReply,
+              messageId: "new-instruction",
+              responseId: "new-instruction-response",
+            });
             return;
           }
           expect(body.input?.some((item) => item.type === "function_call_output")).toBe(true);
@@ -154,6 +212,7 @@ export async function startBackgroundWorkProvider() {
           }
           expect(step, "parent must stay pending after spawning its worker").toBe(2);
           parentResponse = response;
+          response.once("close", () => parentClosed.resolve());
           beginPendingResponse(response);
           parentPending.resolve();
         })();
@@ -176,10 +235,15 @@ export async function startBackgroundWorkProvider() {
     childStarted: childStarted.promise,
     childClosed: childClosed.promise,
     parentPending: parentPending.promise,
+    parentClosed: parentClosed.promise,
     processConnected: processConnected.promise,
     processClosed: processClosed.promise,
     processIsOpen: () => processResponse?.destroyed === false,
     parentIsPending: () => parentResponse?.destroyed === false,
+    parentRequests: () => parentRequests,
+    releaseProcess() {
+      processResponse?.end();
+    },
     writeChildProgress() {
       if (!childResponse || childResponse.destroyed) {
         throw new Error("Child provider is not pending");

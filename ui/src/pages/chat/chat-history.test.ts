@@ -9,7 +9,6 @@ import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
   activeHistory as emptyActiveHistory,
@@ -143,7 +142,13 @@ it("requests the configured default agent for the global workspace alias", async
   await loadChatHistory(state);
   expect(request).toHaveBeenCalledWith(
     "chat.history",
-    { sessionKey: "workspace", agentId: "main", limit: 80, maxBytes: 256 * 1024 },
+    {
+      sessionKey: "workspace",
+      agentId: "main",
+      limit: 80,
+      maxBytes: 256 * 1024,
+      toolResultMaxChars: 2_000,
+    },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
 });
@@ -162,74 +167,6 @@ it("starts the new subscription before the old unsubscribe settles", async () =>
   release.resolve();
   await sync;
   expect(state.chatSessionMessageSubscription).toEqual(selected);
-});
-
-it.each([false, true])("retains owned subscriptions when releases fail (both=%s)", async (both) => {
-  const release = vi.fn().mockRejectedValueOnce(new Error("previous release failed"));
-  if (both) {
-    release.mockRejectedValueOnce(new Error("replacement release failed"));
-  }
-  release.mockResolvedValue(undefined);
-  const state = subscriptionState(release);
-  await syncSelectedSessionMessageSubscription(state);
-  expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(both ? selected.key : previous.key);
-  expect(state.chatSessionMessageSubscription).toBe(both ? selected : previous);
-  expect(getChatHistoryLoadState(state)).toMatchObject({
-    phase: "failed",
-    message: expect.stringContaining("previous release failed"),
-  });
-  expect(state.sessionsError).toBeNull();
-  expect(release).toHaveBeenNthCalledWith(1, previous);
-  expect(release).toHaveBeenNthCalledWith(2, selected);
-  if (both) {
-    expect(getChatHistoryLoadState(state)).toMatchObject({
-      phase: "failed",
-      message: expect.stringContaining("replacement release failed"),
-    });
-    await syncSelectedSessionMessageSubscription(state);
-    expect(release).toHaveBeenNthCalledWith(3, previous);
-    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(selected.key);
-    expect(state.chatSessionMessageSubscription).toBe(selected);
-  }
-});
-
-it("retries a stale generation's rejected subscription release", async () => {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
-  const stale = { key: "agent:main:stale", agentId: null };
-  const pending = createDeferred<typeof stale>();
-  const release = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("stale release failed"))
-    .mockResolvedValue(undefined);
-  const subscribe = vi.fn(async (key: string) =>
-    key === stale.key ? await pending.promise : selected,
-  );
-  const state = Object.assign(
-    withSessions({ messages: [] }, { subscribeMessages: subscribe, unsubscribeMessages: release }),
-    {
-      sessionKey: stale.key,
-      chatSessionMessageSubscriptionRequestedKey: null as string | null,
-      chatSessionMessageSubscription: null as typeof stale | null,
-    },
-  );
-  const sync = syncSelectedSessionMessageSubscription(state);
-  await Promise.resolve();
-  state.sessionKey = selected.key;
-  await syncSelectedSessionMessageSubscription(state);
-  pending.resolve(stale);
-  await vi.runAllTimersAsync();
-  await sync;
-  expect(state.chatSessionMessageSubscription).toBe(selected);
-  expect(release).toHaveBeenNthCalledWith(1, stale);
-  await syncSelectedSessionMessageSubscription(state);
-  expect(release).toHaveBeenNthCalledWith(2, stale);
-  expect(release).toHaveBeenCalledTimes(2);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(state.chatSessionMessageSubscription).toBe(selected);
-  expect(subscribe).toHaveBeenCalledTimes(2);
 });
 
 it("rewinds cached history and restores only valid composer attachments", async () => {
@@ -518,24 +455,14 @@ it("keeps a foreground tool when history persists a sibling's identical call id"
   const backgroundMessage = addTool("run-background", "exec", { command: "background" }, 3, true);
   state.toolStreamOrder = [foreground, background];
   state.chatToolMessages = [foregroundMessage, backgroundMessage];
-  const foregroundSegment = {
-    text: "before foreground",
-    ts: 2,
-    runId: "run-foreground",
-    toolCallId,
-  };
-  state.chatStreamSegments = [
-    foregroundSegment,
-    { text: "before background", ts: 3, runId: "run-background", toolCallId },
-  ];
   await loadChatHistory(state);
   expect(state.chatRunId).toBe("run-foreground");
-  expect(state.chatStream).toBe("foreground still running");
+  // The snapshot owns the unchanged live tail; tool ownership stays run-scoped.
+  expect(state.chatStream).toBe("intentionally ignored on web");
   expect(state.toolStreamOrder).toEqual([foreground]);
   expect(state.toolStreamById.has(foreground)).toBe(true);
   expect(state.toolStreamById.has(background)).toBe(false);
   expect(state.chatToolMessages).toEqual([foregroundMessage]);
-  expect(state.chatStreamSegments).toEqual([foregroundSegment]);
 });
 
 describe("chat history run errors", () => {

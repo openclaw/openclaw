@@ -37,9 +37,13 @@ import {
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
   OPENAI_GPT_6_MODEL_IDS,
+  OPENAI_GPT_61_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS } from "./shared.js";
+import {
+  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+} from "./shared.js";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
@@ -147,29 +151,6 @@ function normalizeCodexTransportFields(params: {
   return { api, baseUrl };
 }
 
-function matchesOpenAICodexImageCapableModel(modelId: string, modelName?: string): boolean {
-  return [modelId, modelName]
-    .filter((value): value is string => typeof value === "string")
-    .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS));
-}
-
-// Older persisted rows can omit image input; restore it before chat.send chooses claim-check URIs.
-function applyOpenAICodexImageInputCapability(params: {
-  modelId: string;
-  model: ProviderRuntimeModel;
-}): ProviderRuntimeModel | undefined {
-  if (Array.isArray(params.model.input) && params.model.input.includes("image")) {
-    return undefined;
-  }
-  if (!matchesOpenAICodexImageCapableModel(params.modelId, params.model.name)) {
-    return undefined;
-  }
-  return {
-    ...params.model,
-    input: ["text", "image"],
-  };
-}
-
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
   const lowerModelId = normalizeLowercaseStringOrEmpty(model.id);
   const canonicalModelId =
@@ -214,13 +195,26 @@ function resolveCodexForwardCompatModel(
     if (!catalogModel || catalogModel.contextWindow === undefined) {
       return undefined;
     }
+    const registeredModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
     return {
       ...catalogModel,
       contextWindow: catalogModel.contextWindow,
       input: catalogModel.input.filter(
         (item): item is "text" | "image" => item === "text" || item === "image",
       ),
-      ...ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId),
+      ...registeredModel,
+      // Startup borrows Platform manifest rows; their API budget is not a subscription limit.
+      // Same-route registry rows retain authored and account-reported budgets, including 272k.
+      ...(lower === OPENAI_GPT_61_SOL_MODEL_ID
+        ? {
+            contextTokens:
+              registeredModel &&
+              (registeredModel.api === "openai-chatgpt-responses" ||
+                isOpenAICodexBaseUrl(registeredModel.baseUrl))
+                ? (registeredModel.contextTokens ?? OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS)
+                : OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+          }
+        : {}),
       id: trimmedModelId,
       provider: PROVIDER_ID,
       api: "openai-chatgpt-responses",
@@ -553,13 +547,19 @@ export function buildOpenAICodexProviderHooks(): Required<
       if (!isOpenAIProvider(ctx.provider)) {
         return undefined;
       }
-      const transportNormalized = normalizeCodexTransport(ctx.model);
-      const imageCapable =
-        applyOpenAICodexImageInputCapability({
-          modelId: ctx.modelId,
-          model: transportNormalized,
-        }) ?? transportNormalized;
-      return imageCapable === ctx.model ? undefined : imageCapable;
+      let model = normalizeCodexTransport(ctx.model);
+      // Older persisted rows can omit image input; restore it before chat.send chooses claim-check URIs.
+      if (
+        !(Array.isArray(model.input) && model.input.includes("image")) &&
+        [ctx.modelId, model.name].some(
+          (candidate) =>
+            typeof candidate === "string" &&
+            matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS),
+        )
+      ) {
+        model = { ...model, input: ["text", "image"] };
+      }
+      return model === ctx.model ? undefined : model;
     },
     normalizeTransport: ({ provider, api, baseUrl }) => {
       if (!isOpenAIProvider(provider)) {

@@ -1,8 +1,5 @@
 /** Handles /goal session objective commands and continuation prompt formatting. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearSessionGoal,
   createSessionGoal,
@@ -11,12 +8,12 @@ import {
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
-import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply as goalReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import { matchSlashCommandToken } from "./commands-slash-parse.js";
+import { matchSlashCommandToken, splitCommandAction } from "./commands-slash-parse.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const GOAL_COMMAND_PREFIX = "/goal";
@@ -45,26 +42,21 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
   if (argText === null) {
     return null;
   }
-  if (!argText) {
-    return { action: "status", text: "" };
-  }
-  const actionEnd = argText.search(/\s/);
-  const actionRaw = actionEnd === -1 ? argText : argText.slice(0, actionEnd);
-  const action = normalizeOptionalLowercaseString(actionRaw) ?? "status";
+  const { action, args } = splitCommandAction(argText, "status");
   if (!GOAL_ACTIONS.has(action)) {
     return { action: "start", text: argText };
   }
-  return {
-    action,
-    text: actionEnd === -1 ? "" : argText.slice(actionEnd).trim(),
-  };
+  return { action, text: args };
 }
 
-function syncGoalSessionEntry(params: HandleCommandsParams): void {
+async function refreshGoalSessionEntry(params: HandleCommandsParams): Promise<void> {
   if (!params.sessionStore || !params.sessionKey) {
     return;
   }
-  const entry = getSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
+  const entry = await readSessionEntryReadOnlyInWorker({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
   if (!entry) {
     return;
   }
@@ -142,54 +134,45 @@ export async function executeSessionGoalCommand(params: {
     }
     case "start":
     case "set":
-    case "create": {
-      const objective = normalizeOptionalString(params.parsed.text);
-      if (!objective) {
-        return { text: "Usage: /goal start <objective>", changed: false };
-      }
-      const goal = await createSessionGoal({
-        ...common,
-        objective,
-        fallbackEntry: params.fallbackEntry,
-      });
-      return {
-        text: `Goal started: ${goal.objective}`,
-        continuationPrompt: formatGoalContinuationPrompt(goal.objective),
-        changed: true,
-      };
-    }
+    case "create":
     case "edit": {
+      const editing = params.parsed.action === "edit";
       const objective = normalizeOptionalString(params.parsed.text);
       if (!objective) {
-        return { text: "Usage: /goal edit <objective>", changed: false };
+        return { text: `Usage: /goal ${editing ? "edit" : "start"} <objective>`, changed: false };
       }
-      const goal = await updateSessionGoalObjective({ ...common, objective });
-      return { text: `Goal updated: ${goal.objective}`, changed: true };
-    }
-    case "pause": {
-      const goal = await updateSessionGoalStatus({ ...common, status: "paused", ...note });
-      return { text: `Goal paused: ${goal.objective}`, changed: true };
-    }
-    case "resume": {
-      const goal = await updateSessionGoalStatus({ ...common, status: "active", ...note });
+      const goal = editing
+        ? await updateSessionGoalObjective({ ...common, objective })
+        : await createSessionGoal({ ...common, objective, fallbackEntry: params.fallbackEntry });
       return {
-        text: `Goal resumed: ${goal.objective}`,
-        continuationPrompt: formatGoalResumeContinuationPrompt(params.parsed.text),
+        text: `Goal ${editing ? "updated" : "started"}: ${goal.objective}`,
+        ...(editing ? {} : { continuationPrompt: formatGoalContinuationPrompt(goal.objective) }),
         changed: true,
       };
     }
+    case "pause":
+    case "resume":
     case "complete":
-    case "done": {
-      const goal = await updateSessionGoalStatus({ ...common, status: "complete", ...note });
-      return {
-        text: `Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`,
-        changed: true,
-      };
-    }
+    case "done":
     case "block":
     case "blocked": {
-      const goal = await updateSessionGoalStatus({ ...common, status: "blocked", ...note });
-      return { text: `Goal blocked: ${goal.objective}`, changed: true };
+      const status = {
+        pause: "paused",
+        resume: "active",
+        complete: "complete",
+        done: "complete",
+        block: "blocked",
+        blocked: "blocked",
+      } as const;
+      const nextStatus = status[params.parsed.action];
+      const goal = await updateSessionGoalStatus({ ...common, status: nextStatus, ...note });
+      return {
+        text: `Goal ${nextStatus === "active" ? "resumed" : nextStatus}: ${goal.objective}${nextStatus === "complete" ? `\nTokens used: ${goal.tokensUsed}` : ""}`,
+        ...(nextStatus === "active"
+          ? { continuationPrompt: formatGoalResumeContinuationPrompt(params.parsed.text) }
+          : {}),
+        changed: true,
+      };
     }
     case "clear": {
       const removed = await clearSessionGoal(common);
@@ -220,7 +203,7 @@ export const handleGoalCommand: CommandHandler = defineAuthorizedTextCommand(
         readOnlyStatus: true,
       });
       if (result.changed || parsed.action === "status" || parsed.action === "clear") {
-        syncGoalSessionEntry(params);
+        await refreshGoalSessionEntry(params);
       }
       if (result.changed) {
         markCommandSessionMetadataChanged(params);

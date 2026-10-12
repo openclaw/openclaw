@@ -153,7 +153,7 @@ export async function stopSupervisedPredecessorGateway(
       },
     ).then((result) => {
       if (
-        result.runId !== runId ||
+        result?.runId !== runId ||
         result.status !== "running" ||
         !result.steps.some((stored) => stored.step === step && stored.status === "completed")
       ) {

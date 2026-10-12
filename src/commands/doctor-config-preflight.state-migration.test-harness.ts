@@ -18,6 +18,7 @@ import {
   type StartupSmokeFailure,
   type StateMigrationResult,
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
+import { createDoctorMaintenanceFixture } from "./doctor-maintenance.test-support.js";
 
 const handoffDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -67,16 +68,9 @@ const prepareDoctorDatabasePreflight = vi.hoisted(() =>
 );
 const doctorMaintenanceRelease = vi.hoisted(() => vi.fn(async () => {}));
 const beginDoctorMaintenance = vi.hoisted(() =>
-  vi.fn<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>(async () => ({
-    signal: new AbortController().signal,
-    run: <T>(operation: () => T): T => operation(),
-    releaseState: vi.fn(async () => {}),
-    repairSqliteNoCow: vi.fn(async () => {}),
-    enableSqliteReclamation: vi.fn(async () => {}),
-    cleanupRetainedRuntimes: vi.fn(async () => {}),
-    release: doctorMaintenanceRelease,
-    finish: vi.fn(async () => {}),
-  })),
+  vi.fn<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>(async () =>
+    createDoctorMaintenanceFixture({ release: doctorMaintenanceRelease }),
+  ),
 );
 const noteSessionTranscriptHealth = vi.hoisted(() =>
   vi.fn<typeof import("./doctor-session-transcripts.js").noteSessionTranscriptHealth>(
@@ -184,7 +178,7 @@ const inspectPluginMigrationAvailability = vi.hoisted(() =>
     pending: [],
     requiredPluginIds: [],
     inspectionRequiredPluginIds: [],
-    statelessPluginIds: [],
+    statelessPlugins: [],
     runtimePluginAliases: [],
   })),
 );
@@ -265,6 +259,7 @@ vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
     run: (_scope: unknown, operation: () => unknown) =>
       runWithPluginMetadataSnapshot(params.getBaseSnapshot(), operation),
     invalidate: vi.fn(),
+    [Symbol.asyncDispose]: async () => {},
   }),
 }));
 
@@ -304,7 +299,7 @@ export function resetStateMigrationPreflightMocks(): void {
     pending: [],
     requiredPluginIds: [],
     inspectionRequiredPluginIds: [],
-    statelessPluginIds: [],
+    statelessPlugins: [],
     runtimePluginAliases: [],
   });
   pluginMigrationFingerprint.mockReset();

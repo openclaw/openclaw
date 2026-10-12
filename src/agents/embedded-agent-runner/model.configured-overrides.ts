@@ -66,11 +66,7 @@ export function hasConfiguredModelRouteSupport(params: {
   const endpoint = resolveProviderEndpoint(params.route.baseUrl, params.providerMetadataOwners);
   // Vercel AI Gateway is classified only for app attribution; routing catalog models through it
   // remains an operator-owned proxy route like any custom baseUrl.
-  if (
-    endpoint.endpointClass === "custom" ||
-    endpoint.endpointClass === "local" ||
-    endpoint.endpointClass === "vercel-ai-gateway"
-  ) {
+  if (["custom", "local", "vercel-ai-gateway"].includes(endpoint.endpointClass)) {
     return true;
   }
   if (!params.catalogModel) {
@@ -152,12 +148,10 @@ export function resolveConfiguredProviderDefaultApi(params: {
     return undefined;
   }
   const normalized = resolveProviderTransport({
-    provider: params.provider,
+    ...params,
+    modelId: undefined,
     api: undefined,
     baseUrl: providerConfiguredBaseUrl,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
   });
   return normalized.api ?? "openai-completions";
 }
@@ -239,32 +233,33 @@ export function mergeConfiguredModelCost(params: {
   return normalizeResolvedPricing(mergeModelCost(params.catalogCost, authoredCost) ?? {});
 }
 
-export function mergeStaticCatalogInlineModel(
-  staticCatalogModel: ProviderRuntimeModel | undefined,
+export function mergeCatalogInlineModel(
+  catalogModel: ProviderRuntimeModel | undefined,
   inlineModel: Model,
 ): Model {
-  if (!staticCatalogModel) {
+  if (!catalogModel) {
     return inlineModel;
   }
   const compat = resolveCatalogOwnedModelCompat({
-    catalogRoute: staticCatalogModel,
-    catalogCompat: staticCatalogModel.compat,
+    catalogRoute: catalogModel,
+    catalogCompat: catalogModel.compat,
     configuredRoute: inlineModel,
     configuredCompat: inlineModel.compat,
   });
-  const mediaInput = mergeModelMediaInput(staticCatalogModel.mediaInput, inlineModel.mediaInput);
+  const mediaInput = mergeModelMediaInput(catalogModel.mediaInput, inlineModel.mediaInput);
   const params = mergeModelParams(
-    readModelParams(staticCatalogModel.params),
+    readModelParams(catalogModel.params),
     readModelParams(inlineModel.params),
   );
   return {
-    ...staticCatalogModel,
+    ...catalogModel,
     ...inlineModel,
-    api: inlineModel.api ?? staticCatalogModel.api,
+    api: inlineModel.api ?? catalogModel.api,
     baseUrl:
-      normalizeOptionalString(inlineModel.baseUrl) ??
-      normalizeOptionalString(staticCatalogModel.baseUrl),
-    headers: inlineModel.headers ?? staticCatalogModel.headers,
+      normalizeOptionalString(inlineModel.baseUrl) ?? normalizeOptionalString(catalogModel.baseUrl),
+    headers: inlineModel.headers ?? catalogModel.headers,
+    contextWindow: inlineModel.contextWindow ?? catalogModel.contextWindow,
+    contextTokens: inlineModel.contextTokens ?? catalogModel.contextTokens,
     compat,
     ...(mediaInput ? { mediaInput } : {}),
     ...(params ? { params } : {}),
@@ -336,13 +331,6 @@ export function mergeConfiguredRuntimeModelParams(params: {
   );
 }
 
-function markDiscoveredMaxTokensSource(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  if (model.maxTokens === undefined || model.maxTokensSource !== undefined) {
-    return model;
-  }
-  return { ...model, maxTokensSource: "discovered" };
-}
-
 export function clampModelMaxTokensToContextWindow(
   maxTokens: number | undefined,
   contextWindow: number | undefined,
@@ -371,9 +359,11 @@ export function applyConfiguredProviderOverrides(params: {
   getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
   workspaceDir?: string;
 }): ProviderRuntimeModel | undefined {
-  const { providerConfig, modelId } = params;
-  const discoveredModel = attachModelProviderRequestRouteFacts(
-    markDiscoveredMaxTokensSource(params.discoveredModel),
+  const { providerConfig, modelId, discoveredModel: source } = params;
+  const discoveredModel = attachModelProviderRequestRouteFacts<ProviderRuntimeModel>(
+    source.maxTokens === undefined || source.maxTokensSource !== undefined
+      ? source
+      : { ...source, maxTokensSource: "discovered" },
     params.providerMetadataOwners,
   );
   const manifestAliasTransport = params.manifestAlias.transport;
@@ -398,14 +388,10 @@ export function applyConfiguredProviderOverrides(params: {
     );
     const aliasTransport = manifestAliasTransport
       ? resolveProviderTransport({
-          provider: params.provider,
-          modelId,
+          ...params,
           api: manifestAliasTransport.api ?? discoveredModel.api,
           baseUrl:
             normalizeOptionalString(manifestAliasTransport.baseUrl) ?? discoveredModel.baseUrl,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          runtimeHooks: params.runtimeHooks,
         })
       : undefined;
     const requestConfig = resolveProviderRequestConfig({
@@ -510,47 +496,23 @@ export function applyConfiguredProviderOverrides(params: {
     ...params,
     providerConfig,
   });
-  const metadataOverrideBaseUrl = normalizeOptionalString(metadataOverrideModel?.baseUrl);
-  const providerConfiguredBaseUrl = normalizeOptionalString(providerConfig.baseUrl);
-  const discoveredBaseUrl = normalizeOptionalString(discoveredModel.baseUrl);
-  const configuredStaticCatalogBaseUrl = normalizeOptionalString(
-    configuredStaticCatalogModel?.baseUrl,
-  );
-  const manifestAliasBaseUrl = normalizeOptionalString(manifestAliasTransport?.baseUrl);
   // A retained alias owns transport identity and always takes the second branch
   // below. Discovery-first ordering is therefore alias-free by construction.
   const preferDiscoveredTransport = params.preferDiscoveredTransport && !manifestAliasTransport;
-  const resolvedTransportApi = preferDiscoveredTransport
-    ? (discoveredModel.api ??
-      metadataOverrideModel?.api ??
-      providerConfig.api ??
-      configuredStaticCatalogModel?.api ??
-      providerDefaultApi)
-    : (metadataOverrideModel?.api ??
-      providerConfig.api ??
-      manifestAliasTransport?.api ??
-      discoveredModel.api ??
-      configuredStaticCatalogModel?.api ??
-      providerDefaultApi);
-  const resolvedTransportBaseUrl = preferDiscoveredTransport
-    ? (discoveredBaseUrl ??
-      metadataOverrideBaseUrl ??
-      providerConfiguredBaseUrl ??
-      configuredStaticCatalogBaseUrl)
-    : (metadataOverrideBaseUrl ??
-      providerConfiguredBaseUrl ??
-      manifestAliasBaseUrl ??
-      discoveredBaseUrl ??
-      configuredStaticCatalogBaseUrl);
-
+  const transportSources = preferDiscoveredTransport
+    ? [discoveredModel, metadataOverrideModel, providerConfig, configuredStaticCatalogModel]
+    : [
+        metadataOverrideModel,
+        providerConfig,
+        manifestAliasTransport,
+        discoveredModel,
+        configuredStaticCatalogModel,
+      ];
   const resolvedTransport = resolveProviderTransport({
-    provider: params.provider,
+    ...params,
     modelId: discoveredModel.id,
-    api: resolvedTransportApi,
-    baseUrl: resolvedTransportBaseUrl,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
+    api: transportSources.find((entry) => entry?.api != null)?.api ?? providerDefaultApi,
+    baseUrl: transportSources.map((entry) => normalizeOptionalString(entry?.baseUrl)).find(Boolean),
   });
   if (
     !hasConfiguredModelRouteSupport({
@@ -563,6 +525,13 @@ export function applyConfiguredProviderOverrides(params: {
     return undefined;
   }
   const contextWindow = metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow;
+  // An authored native window replaces its provenance; a prompt cap does not.
+  const { contextWindowSource: _syntheticContextWindowSource, ...discoveredWithoutSizeSource } =
+    discoveredModel;
+  const discoveredSizing =
+    metadataOverrideModel?.contextWindow !== undefined
+      ? discoveredWithoutSizeSource
+      : discoveredModel;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -626,7 +595,7 @@ export function applyConfiguredProviderOverrides(params: {
     attachModelProviderLocalService(
       attachModelProviderRequestTransport(
         {
-          ...discoveredModel,
+          ...discoveredSizing,
           provider: params.provider,
           api: requestConfig.api ?? "openai-responses",
           baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,

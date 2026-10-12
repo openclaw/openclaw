@@ -1,4 +1,6 @@
 import path from "node:path";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
@@ -24,7 +26,13 @@ export async function readIncognitoSessionHistory<Key extends keyof IncognitoHis
   signal?: AbortSignal,
 ): Promise<IncognitoHistoryOperations[Key]["output"]> {
   const prepared = prepareIncognitoSessionHistoryRead(binding, scope, signal);
-  return prepared.actor.sessions.history(prepared.authority, command(prepared.target), signal);
+  const result = await prepared.actor.sessions.history(
+    prepared.authority,
+    command(prepared.target),
+    signal,
+  );
+  prepared.authority.assertCurrent();
+  return result;
 }
 
 /** Inactive until atomic activation supplies the original actor instead of native routing. */
@@ -35,11 +43,17 @@ export function prepareIncognitoSessionHistoryRead(
 ) {
   const { actor, authority } = binding;
   const target = structuredClone(binding.target);
+  const suppliedPath = scope.storePath === undefined ? undefined : path.resolve(scope.storePath);
+  const selectedPath =
+    isIncognitoSessionKey(scope.sessionKey ?? target.sessionKey) &&
+    (scope.env !== undefined || (suppliedPath !== undefined && suppliedPath !== actor.path))
+      ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: actor.agentId, env: scope.env })
+      : suppliedPath;
   if (
     scope.sessionId !== target.sessionId ||
     (scope.sessionKey !== undefined && scope.sessionKey !== target.sessionKey) ||
     (scope.agentId !== undefined && scope.agentId !== actor.agentId) ||
-    (scope.storePath !== undefined && path.resolve(scope.storePath) !== actor.path) ||
+    (selectedPath !== undefined && selectedPath !== actor.path) ||
     (scope.sessionEntry?.sessionId !== undefined &&
       scope.sessionEntry.sessionId !== target.sessionId)
   ) {
@@ -55,9 +69,9 @@ export function prepareIncognitoSessionHistoryRead(
   const claim = actor.sessions.captureCurrent(target.sessionKey);
   const assertCurrent = () => {
     signal?.throwIfAborted();
-    actor.assertCurrent();
     authority.assertCurrent();
     claim.assertCurrent();
+    actor.assertReadable();
   };
   assertCurrent();
   return {

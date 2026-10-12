@@ -1,4 +1,3 @@
-// Gateway log-tail helpers for status diagnostics.
 // Summaries compact repeated auth/runtime failures while preserving enough context for operators.
 
 import {
@@ -55,7 +54,6 @@ function consumeJsonBlock(
   return { json: fragment.json, endIndex: startIndex + consumedLineOffset };
 }
 
-/** Summarizes gateway log tail lines, grouping repeated failures and trimming long output. */
 export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number }): string[] {
   const maxLines = Math.max(6, opts?.maxLines ?? 26);
 

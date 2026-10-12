@@ -7,7 +7,6 @@ import {
   mergeArgumentChurnActivity,
   recordDiagnosticActivityProgress,
 } from "./diagnostic-argument-churn-activity.js";
-import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
 import {
   type DiagnosticRepeatedRequestActivity,
   mergeRepeatedRequestActivity,
@@ -45,7 +44,30 @@ export type DiagnosticOwnerRegistration = {
 
 export const activityByRef = new Map<string, SessionActivity>();
 export const activityByRunId = new Map<string, SessionActivity>();
-export const embeddedRunIndex = createDiagnosticEmbeddedRunIndex(activityByRunId);
+export const embeddedRunIndex = {
+  remove(activity: SessionActivity, workKey: string): void {
+    const embeddedRun = activity.activeEmbeddedRuns.get(workKey);
+    if (!embeddedRun) {
+      return;
+    }
+    activity.activeEmbeddedRuns.delete(workKey);
+    const runIdStillActive = Array.from(activity.activeEmbeddedRuns.values()).some(
+      (candidate) => candidate.runId === embeddedRun.runId,
+    );
+    if (!runIdStillActive && activityByRunId.get(embeddedRun.runId) === activity) {
+      activityByRunId.delete(embeddedRun.runId);
+    }
+  },
+  clear(activity: SessionActivity): void {
+    // Every local owner is leaving; only retain indexes now owned by another activity.
+    for (const { runId } of activity.activeEmbeddedRuns.values()) {
+      if (activityByRunId.get(runId) === activity) {
+        activityByRunId.delete(runId);
+      }
+    }
+    activity.activeEmbeddedRuns.clear();
+  },
+};
 export const activeDiagnosticOwners = new Map<
   CoreModelRequestOwnerGeneration,
   DiagnosticOwnerRegistration
@@ -141,8 +163,9 @@ export function resolveSessionActivity(params: {
   create?: boolean;
 }): SessionActivity | undefined {
   let activity = params.runId ? activityByRunId.get(params.runId) : undefined;
+  const refs = sessionRefs(params);
 
-  for (const ref of sessionRefs(params)) {
+  for (const ref of refs) {
     const byRef = activityByRef.get(ref);
     if (!byRef) {
       continue;
@@ -159,7 +182,8 @@ export function resolveSessionActivity(params: {
     return activity;
   }
 
-  if (!params.create) {
+  // Run-only signals can update existing activity, but cannot own session state.
+  if (!params.create || refs.length === 0) {
     return undefined;
   }
 

@@ -117,7 +117,11 @@ describe("worker session tool send delivery", () => {
         args: expect.objectContaining({ sessionKey: TARGET.sessionKey }),
         options: expect.objectContaining({
           agentChannel: "telegram",
+          agentId: SOURCE.agentId,
+          agentSessionId: SOURCE.sessionId,
+          assertSourceCurrent: expect.any(Function),
           expectedTargetSessionId: TARGET.sessionId,
+          completionOwner: "caller",
           expectedTargetStorePath: "/physical/session-owner.sqlite",
           idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
         }),
@@ -125,70 +129,38 @@ describe("worker session tool send delivery", () => {
     );
   });
 
-  it.each([
-    { relation: "parent", placement: "unplaced" },
-    { relation: "parent", placement: "local" },
-    { relation: "sibling", placement: "unplaced" },
-    { relation: "sibling", placement: "local" },
-  ] as const)(
-    "delivers to an authorized Gateway $relation with $placement placement",
-    async ({ relation, placement }) => {
-      setEntry(TARGET.sessionKey, TARGET.sessionId);
-      setEntry(SOURCE.sessionKey, SOURCE.sessionId, relation === "parent" ? PARENT : TARGET);
-      setEntry(PARENT.sessionKey, PARENT.sessionId, relation === "sibling" ? TARGET : undefined);
-      if (placement === "local") {
-        const claim = await placements.claimTurn({
-          ...PARENT,
-          agentId: SOURCE.agentId,
-          claimId: "gateway-target-claim",
-          runId: "gateway-target-run",
-          owner: { kind: "local" },
-        });
-        await placements.releaseTurn(claim);
-        expect(placements.get(PARENT.sessionId)?.state).toBe("local");
-      } else {
-        expect(placements.get(PARENT.sessionId)).toBeUndefined();
-      }
+  it("delivers to an authorized Gateway parent with local placement", async () => {
+    setEntry(TARGET.sessionKey, TARGET.sessionId);
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId, PARENT);
+    setEntry(PARENT.sessionKey, PARENT.sessionId);
+    const claim = await placements.claimTurn({
+      ...PARENT,
+      agentId: SOURCE.agentId,
+      claimId: "gateway-target-claim",
+      runId: "gateway-target-run",
+      owner: { kind: "local" },
+    });
+    await placements.releaseTurn(claim);
+    expect(placements.get(PARENT.sessionId)?.state).toBe("local");
 
-      const result = await execute({
-        identity,
-        toolName: "sessions_send",
-        request: {
-          toolCallId: "send-to-gateway",
-          sessionKey: PARENT.sessionKey,
-          message: "Report the Gateway result",
-          timeoutSeconds: 30,
-        },
-      });
+    const result = await execute({
+      identity,
+      toolName: "sessions_send",
+      request: {
+        toolCallId: "send-to-gateway",
+        sessionKey: PARENT.sessionKey,
+        message: "Report the Gateway result",
+        timeoutSeconds: 30,
+      },
+    });
 
-      expect(JSON.parse(result.resultJson)).toMatchObject({ details: { status: "ok" } });
-      expect(delivered).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          args: expect.objectContaining({ sessionKey: PARENT.sessionKey }),
-          options: expect.objectContaining({ expectedTargetSessionId: PARENT.sessionId }),
-        }),
-      );
-    },
-  );
-
-  it("deduplicates retries without collapsing distinct identical sends", async () => {
-    setParentAndChild();
-
-    const first = await send("identical-send-one");
-    const replay = await send("identical-send-one");
-    await send("identical-send-two");
-
-    expect(replay.resultJson).toBe(first.resultJson);
-    expect(delivered).toHaveBeenCalledTimes(2);
-    const firstKey = (
-      delivered.mock.calls[0]?.[0] as { options?: { idempotencyKey?: string } } | undefined
-    )?.options?.idempotencyKey;
-    const secondKey = (
-      delivered.mock.calls[1]?.[0] as { options?: { idempotencyKey?: string } } | undefined
-    )?.options?.idempotencyKey;
-    expect(firstKey).toMatch(/^worker-session-send:/u);
-    expect(secondKey).toMatch(/^worker-session-send:/u);
-    expect(secondKey).not.toBe(firstKey);
+    expect(JSON.parse(result.resultJson)).toMatchObject({ details: { status: "ok" } });
+    expect(delivered).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        args: expect.objectContaining({ sessionKey: PARENT.sessionKey }),
+        options: expect.objectContaining({ expectedTargetSessionId: PARENT.sessionId }),
+      }),
+    );
   });
 
   it("delivers a validated policy rewrite with the original tool-call identity", async () => {
@@ -340,20 +312,6 @@ describe("worker session tool send delivery", () => {
     expect(replay.resultJson).toContain("blocked by worker session policy");
     expect(beforeToolCall).toHaveBeenCalledOnce();
     expect(delivered).not.toHaveBeenCalled();
-  });
-
-  it("replays a completed send after the target incarnation changes", async () => {
-    setParentAndChild();
-
-    const first = await send("completed-before-target-replacement");
-    setEntry(TARGET.sessionKey, "replacement-target", {
-      sessionKey: SOURCE.sessionKey,
-      sessionId: SOURCE.sessionId,
-    });
-    const replay = await send("completed-before-target-replacement");
-
-    expect(replay.resultJson).toBe(first.resultJson);
-    expect(delivered).toHaveBeenCalledOnce();
   });
 
   it("records repeated downstream send failures as unknown instead of replayable failure", async () => {

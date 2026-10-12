@@ -166,9 +166,7 @@ function isStaleForeignBundledPin(params: {
 }
 
 function resolveDuplicatePrecedenceRank(params: {
-  pluginId: string;
   candidate: PluginCandidate;
-  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): number {
@@ -187,13 +185,7 @@ function resolveDuplicatePrecedenceRank(params: {
   if (
     params.candidate.origin === "global" &&
     !isStaleForeignBundledPin({ candidate: params.candidate, env: params.env }) &&
-    matchesInstalledPluginRecord({
-      pluginId: params.pluginId,
-      candidate: params.candidate,
-      config: params.config,
-      env: params.env,
-      installRecords: params.installRecords,
-    })
+    matchesInstalledPluginRecord(params)
   ) {
     return 2;
   }
@@ -208,10 +200,8 @@ function resolveDuplicatePrecedenceRank(params: {
 }
 
 function isIntentionalInstalledBundledDuplicate(params: {
-  pluginId: string;
   left: PluginCandidate;
   right: PluginCandidate;
-  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
@@ -223,9 +213,7 @@ function isIntentionalInstalledBundledDuplicate(params: {
   ).some(
     ([installed, bundled]) =>
       matchesInstalledPluginRecord({
-        pluginId: params.pluginId,
         candidate: installed,
-        config: params.config,
         env: params.env,
         installRecords: params.installRecords,
       }) &&
@@ -374,9 +362,7 @@ export function buildPluginManifestRegistry(
       const allowLegacyBareMinHostVersion =
         candidate.origin === "global" &&
         matchesInstalledPluginRecord({
-          pluginId: effectivePluginId,
           candidate,
-          config,
           env,
           installRecords: getInstallRecords(),
         });
@@ -458,7 +444,6 @@ export function buildPluginManifestRegistry(
           configSchema,
           trust: resolvePluginTrust({
             registryPath,
-            pluginId: effectivePluginId,
             candidate,
             env,
             installRecords: getInstallRecords(),
@@ -503,16 +488,12 @@ export function buildPluginManifestRegistry(
       }
 
       const candidateRank = resolveDuplicatePrecedenceRank({
-        pluginId: effectivePluginId,
         candidate,
-        config,
         env,
         installRecords: getInstallRecords(),
       });
       const existingRank = resolveDuplicatePrecedenceRank({
-        pluginId: effectivePluginId,
         candidate: existing.candidate,
-        config,
         env,
         installRecords: getInstallRecords(),
       });
@@ -524,10 +505,8 @@ export function buildPluginManifestRegistry(
       }
       if (
         isIntentionalInstalledBundledDuplicate({
-          pluginId: effectivePluginId,
           left: candidate,
           right: existing.candidate,
-          config,
           env,
           installRecords: getInstallRecords(),
         })
@@ -541,7 +520,6 @@ export function buildPluginManifestRegistry(
         winnerCandidate.origin === "bundled" &&
         isStaleForeignBundledPin({ candidate: overriddenCandidate, env }) &&
         matchesInstalledPluginRecord({
-          pluginId: effectivePluginId,
           candidate: overriddenCandidate,
           env,
           installRecords: getInstallRecords(),

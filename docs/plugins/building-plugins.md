@@ -314,6 +314,17 @@ calls reject invalid schemas before execution and validate the final value after
 tool hooks. Omit it for tools without a stable JSON result. See
 [Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
 
+Declare when a tool needs the session workspace with `workspaceAccess` in its
+registration options. Use `true` when the factory reads working files, or omit
+the option to retain that safe default. OpenClaw finishes workspace preparation
+before calling those factories or starting the model. Use `"execute"` when the
+factory only builds a definition and working files are accessed during tool
+preparation or execution. Use `false` only when both factory and execution are
+independent of the session workspace. These explicit declarations let the model
+start while checkout continues. Plain tool objects default to `"execute"` because
+they have no runtime factory. `defineToolPlugin` accepts the same option on each
+tool definition.
+
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
 

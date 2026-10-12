@@ -7,6 +7,7 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const retained = "published update keeps π \0 雪";
 const event = JSON.stringify({
@@ -80,6 +81,18 @@ export function seedPublishedDriverSessionSources(state) {
   }
 }
 
+function readTranscript(database, id) {
+  const rows = database
+    .prepare(`SELECT rowid,seq,${sqliteTranscriptPayloadColumns(database)}
+      FROM transcript_events WHERE session_id=? ORDER BY seq,rowid`)
+    .all(id);
+  return rows.map((row) => ({
+    rowid: row.rowid,
+    seq: row.seq,
+    event: readSqliteTranscriptPayload(row),
+  }));
+}
+
 function inspectImportedSession(database, agentId) {
   const entry = database
     .prepare("SELECT current_session_id FROM session_nodes WHERE session_key=?")
@@ -89,15 +102,7 @@ function inspectImportedSession(database, agentId) {
     bootstrapSessionId,
     "Published Doctor did not import the session",
   );
-  const rows = database
-    .prepare(`SELECT rowid,seq,${sqliteTranscriptPayloadColumns(database)}
-      FROM transcript_events WHERE session_id=? ORDER BY seq,rowid`)
-    .all(bootstrapSessionId);
-  const transcript = rows.map((row) => ({
-    rowid: row.rowid,
-    seq: row.seq,
-    event: readSqliteTranscriptPayload(row),
-  }));
+  const transcript = readTranscript(database, bootstrapSessionId);
   assert.equal(transcript.length, 1, "Published Doctor did not import the transcript");
   assert.deepEqual(JSON.parse(transcript[0].event), bootstrapHeader);
   return { sessionId: entry.current_session_id, transcript };
@@ -120,6 +125,37 @@ export function seedPublishedDriverLegacySqlite(state) {
         INSERT INTO published_driver_discarded VALUES(42,zeroblob(4194304));
         DELETE FROM published_driver_discarded;`);
       database.prepare("INSERT INTO published_driver_retained VALUES(41,?)").run(retained);
+      if (target.role === "global") {
+        // This launch schema is shared with 2026.10.1; its boot companion did not exist yet.
+        const schema = fs.readFileSync(
+          new URL("./fixtures/node-worker-launch-v2026.10.1.sql", import.meta.url),
+          "utf8",
+        );
+        database.exec(schema);
+        database
+          .prepare(`INSERT INTO node_worker_launches (
+          launch_id,plan_hash,gateway_namespace,environment_id,session_id,owner_epoch,
+          placement_generation,run_id,state,supervisor_pid,supervisor_start_time,
+          created_at_ms,updated_at_ms
+        ) VALUES(?,?,?,?,?,1,0,?,'pending',2147483647,0,?,?)`)
+          .run(
+            "published-driver-node-launch",
+            "a".repeat(64),
+            "survivor",
+            "node-environment",
+            "node-session",
+            "node-run",
+            seededAt,
+            seededAt,
+          );
+        assert.equal(
+          database
+            .prepare("SELECT name FROM sqlite_schema WHERE name='node_worker_launch_boots'")
+            .get(),
+          undefined,
+          "Baseline unexpectedly has boot metadata",
+        );
+      }
       if (target.agentId) {
         const rowMap = rowMapIdentity(database);
         const key = `agent:${target.agentId}:reclamation`;
@@ -161,10 +197,8 @@ export function seedPublishedDriverLegacySqlite(state) {
 
 /** Independent SQLite reads preserve the baseline/candidate storage contract. */
 export function inspectPublishedDriverSqlite(state, expectedMode) {
-  const observations = [];
-  for (const target of publishedDriverSqliteTargets(state)) {
-    const database = new DatabaseSync(target.path, { readOnly: true });
-    try {
+  return publishedDriverSqliteTargets(state).map((target) =>
+    readDatabase(target.path, (database) => {
       const mode = database.prepare("PRAGMA auto_vacuum").get().auto_vacuum;
       assert.equal(mode, expectedMode, `${target.path} reclamation mode`);
       assert.equal(database.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
@@ -190,6 +224,10 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
       let schema;
       let sessions;
       let importedSession;
+      const nodeLaunches =
+        target.role === "global"
+          ? database.prepare("SELECT * FROM node_worker_launches ORDER BY launch_id").all()
+          : undefined;
       if (target.agentId) {
         importedSession = inspectImportedSession(database, target.agentId);
         const identity = rowMapIdentity(database);
@@ -214,15 +252,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
             session_id: sessionId,
           },
         ]);
-        const rows = database
-          .prepare(`SELECT rowid,seq,${sqliteTranscriptPayloadColumns(database)}
-          FROM transcript_events WHERE session_id=? ORDER BY seq,rowid`)
-          .all(sessionId);
-        transcript = rows.map((row) => ({
-          rowid: row.rowid,
-          seq: row.seq,
-          event: readSqliteTranscriptPayload(row),
-        }));
+        transcript = readTranscript(database, sessionId);
         assert.deepEqual(transcript, [
           { rowid: 40, seq: 0, event: reclamationHeader },
           { rowid: 41, seq: 7, event },
@@ -260,7 +290,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
           "Transcript FTS rows and row-map identities differ",
         );
       }
-      observations.push({
+      return {
         observedAt: new Date().toISOString(),
         path: target.path,
         role: target.role,
@@ -280,6 +310,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
         rowMap,
         sessions,
         importedSession,
+        nodeLaunches,
         discarded,
         deletedIdsAbsent: [42],
         logicalSha256: createHash("sha256")
@@ -290,6 +321,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
               matches: searchContent(matches),
               sessions,
               importedSession,
+              nodeLaunches,
               discarded,
             }),
           )
@@ -299,12 +331,9 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
           : undefined,
         integrity: "ok",
         foreignKeyFailures: [],
-      });
-    } finally {
-      database.close();
-    }
-  }
-  return observations;
+      };
+    }),
+  );
 }
 
 export function assertPublishedDriverReclaimed(before, after) {

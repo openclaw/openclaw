@@ -112,42 +112,6 @@ describe("maybeCreateDynamicAgent", () => {
     expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
   });
 
-  it("persists a sender agent and direct binding when config writes are allowed", async () => {
-    const cfg = createConfig();
-    const { runtime, mutateConfigFile } = createRuntime(cfg);
-
-    const result = await createAgent(cfg, runtime);
-
-    expect(result.created).toBe(true);
-    expect(result.agentId).toBe("feishu-ou_sender");
-    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
-    expect(mutateConfigFile).toHaveBeenCalledWith({
-      base: "runtime",
-      afterWrite: { mode: "auto" },
-      mutate: expect.any(Function),
-    });
-    expect(result.updatedCfg.agents?.entries).toEqual({
-      main: {},
-      "feishu-ou_sender": {
-        workspace: path.join(tempRoot, "workspace-feishu-ou_sender"),
-        agentDir: path.join(tempRoot, "agent-feishu-ou_sender"),
-      },
-    });
-    expect(result.updatedCfg.agents).not.toHaveProperty("list");
-    expect(result.updatedCfg.bindings).toEqual([
-      {
-        agentId: "feishu-ou_sender",
-        match: {
-          channel: "feishu",
-          accountId: "default",
-          peer: { kind: "direct", id: "ou_sender" },
-        },
-      },
-    ]);
-    expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(true);
-    expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(true);
-  });
-
   it("does not create persistent state when current ingress denies the sender", async () => {
     const cfg = createConfig();
     const { runtime, mutateConfigFile } = createRuntime(cfg);

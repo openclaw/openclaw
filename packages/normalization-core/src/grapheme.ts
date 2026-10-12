@@ -49,6 +49,19 @@ export function findGraphemeChunkEnd(
     return preferred;
   }
 
+  // Adjacent ASCII code units always break except CRLF. Avoid copying the entire
+  // source into ICU for each chunk of a long reply; non-ASCII boundaries need ICU.
+  const before = text.charCodeAt(preferred - 1);
+  const after = text.charCodeAt(preferred);
+  if (
+    Number.isInteger(preferred) &&
+    before <= 0x7f &&
+    after <= 0x7f &&
+    !(before === 0x0d && after === 0x0a)
+  ) {
+    return preferred;
+  }
+
   const segments = getGraphemeSegmenter().segment(text);
   let end = containingSegment(segments, text, preferred)?.index ?? preferred;
   if (end <= start && preferred < hardEnd) {

@@ -13,9 +13,7 @@ import {
   OutboundDeliveryQueuedErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
-  SkillProposalRevisionChangedErrorDetailsSchema,
   missingScopeErrorShape,
-  readSkillProposalRevisionChangedError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
@@ -130,22 +128,6 @@ describe("gateway error details", () => {
     expect(Value.Check(UnknownAgentIdErrorDetailsSchema, { ...details, agentId: "" })).toBe(false);
   });
 
-  it.each(["WIZARD_NOT_FOUND", "SETUP_ADMISSION_BUSY"])("validates closed %s details", (code) => {
-    const details = { code };
-    expect(Value.Check(ErrorShapeSchema, { code: "UNAVAILABLE", message: "busy", details })).toBe(
-      true,
-    );
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(false);
-    expect(
-      Value.Check(ErrorShapeSchema, {
-        code: "UNAVAILABLE",
-        message: "other failure",
-        details: { code: "future_detail", context: 1 },
-      }),
-    ).toBe(true);
-  });
-
   it("validates typed project clone failures", () => {
     const details = {
       code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
@@ -156,23 +138,6 @@ describe("gateway error details", () => {
     expect(Value.Check(ProjectCloneErrorDetailsSchema, { ...details, cause: "unknown" })).toBe(
       false,
     );
-  });
-
-  it("validates and reads changed skill proposal revisions", () => {
-    const details = {
-      code: GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED,
-      expectedRevisionHash: "A".repeat(64),
-      currentRevisionHash: "b".repeat(64),
-    };
-
-    expect(Value.Check(SkillProposalRevisionChangedErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-    expect(readSkillProposalRevisionChangedError({ details })).toEqual(details);
-    expect(
-      readSkillProposalRevisionChangedError({
-        details: { ...details, currentRevisionHash: "not-a-sha256" },
-      }),
-    ).toBeNull();
   });
 
   it("builds a distinct forbidden missing-scope response", () => {

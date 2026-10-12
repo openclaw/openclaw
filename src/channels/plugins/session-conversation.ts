@@ -62,15 +62,10 @@ function getLoadedSessionChannelPlugin(channel: string) {
 }
 
 function buildGenericConversationResolution(rawId: string): ResolvedSessionConversation | null {
-  const trimmed = rawId.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parsed = parseThreadSessionSuffix(trimmed);
+  const parsed = parseThreadSessionSuffix(rawId);
   // Generic parsing treats `:thread:*` suffixes as child thread metadata while
   // preserving the base conversation id for parent lookups.
-  const id = (parsed.baseSessionKey ?? trimmed).trim();
+  const id = (parsed.baseSessionKey ?? rawId).trim();
   if (!id) {
     return null;
   }
@@ -79,16 +74,15 @@ function buildGenericConversationResolution(rawId: string): ResolvedSessionConve
     id,
     threadId: parsed.threadId,
     baseConversationId: id,
-    parentConversationCandidates: normalizeUniqueSingleOrTrimmedStringList(
-      parsed.threadId ? [parsed.baseSessionKey] : [],
-    ),
+    parentConversationCandidates: parsed.threadId ? [id] : [],
   };
 }
 
 function normalizeSessionConversationResolution(
   resolved: SessionConversationHookResult | null | undefined,
 ): NormalizedSessionConversationResolution | null {
-  if (!resolved?.id?.trim()) {
+  const id = resolved?.id?.trim();
+  if (!resolved || !id) {
     return null;
   }
 
@@ -96,14 +90,14 @@ function normalizeSessionConversationResolution(
     resolved.parentConversationCandidates ?? [],
   );
   return {
-    id: resolved.id.trim(),
+    id,
     threadId: normalizeOptionalString(resolved.threadId),
     // When plugins omit an explicit base id, prefer the last declared parent
     // candidate so nested topic/thread routes still collapse to their parent.
     baseConversationId:
       normalizeOptionalString(resolved.baseConversationId) ??
       parentConversationCandidates.at(-1) ??
-      resolved.id.trim(),
+      id,
     parentConversationCandidates,
     hasExplicitParentConversationCandidates: Object.hasOwn(
       resolved,
@@ -205,7 +199,7 @@ export function resolveSessionConversation(params: {
     }
   }
   resolved.baseConversationId =
-    resolved.parentConversationCandidates.at(-1) ?? resolved.baseConversationId ?? resolved.id;
+    resolved.parentConversationCandidates.at(-1) ?? resolved.baseConversationId;
   return resolved;
 }
 

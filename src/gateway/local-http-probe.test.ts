@@ -50,7 +50,7 @@ test("probes local TLS directly under a managed proxy while enforcing its certif
         waitForGatewayHttpReadiness({
           attempts: 1,
           config,
-          deadlineAt: Date.now() + 1_000,
+          deadlineAt: performance.now() + 1_000,
           delayMs: 0,
           port: address.port,
         }),
@@ -97,7 +97,7 @@ test("cancels pending readiness requests when the repair budget expires", async 
     const received = once(server, "request");
     const pending = waitForGatewayHttpReadiness({
       attempts: 3,
-      deadlineAt: Date.now() + 60_000,
+      deadlineAt: performance.now() + 60_000,
       delayMs: 500,
       port: address.port,
       signal: controller.signal,

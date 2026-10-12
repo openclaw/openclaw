@@ -1,4 +1,3 @@
-/** Resolves daemon log paths and shell snippets for restart handoff diagnostics. */
 import fs from "node:fs";
 import path from "node:path";
 import { quoteCmdScriptArg } from "./cmd-argv.js";

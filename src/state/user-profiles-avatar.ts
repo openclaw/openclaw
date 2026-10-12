@@ -9,6 +9,7 @@ import {
   captureOpenClawStateReadContext,
   captureOpenClawStateWorkerContext,
 } from "./openclaw-state-worker-context.js";
+import { isProfileDisplayRow } from "./user-profile-display-validation.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import { profileCatalogPath } from "./user-profile-identity.read.js";
 import {
@@ -300,51 +301,56 @@ export async function adoptTailscaleProfileAvatar(
       profileId,
     );
   }
-  const [{ withOpenClawStateSettlementRead }, { createSqliteWorkerOperationAdmission }] =
-    await Promise.all([
-      import("./openclaw-state-settlement-read.js"),
-      import("../infra/sqlite-worker-operation-admission.js"),
-    ]);
-  return await withOpenClawStateSettlementRead(context, async (settlementRead) =>
-    runOpenClawStateWorkerOperation(
+  const { createSqliteWorkerOperationAdmission } =
+    await import("../infra/sqlite-worker-operation-admission.js");
+  let publication: ReturnType<typeof retainUserProfileMutationPublication> | undefined;
+  let admission: ReturnType<typeof createSqliteWorkerOperationAdmission> | undefined;
+  try {
+    return await runOpenClawStateWorkerOperation(
       context,
       async (scope) => {
         const receipt = await scope.execute({
           type: "userProfiles.avatar.adopt",
           input: { profileId, bytes: avatar.bytes, mime: avatar.mime, now: Date.now() },
         });
-        settlementRead.acknowledge(receipt.committed);
         return requireAvatarProfile(receipt.profile, profileId);
       },
       {
-        createAdmission(retained) {
-          return {
-            nativeLocations: [context.admission.databasePath],
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              context.admission.assertCurrent();
-              if (request.stage !== "transaction" || !isUserProfileAvatarAdmission(request.facts)) {
-                throw new Error("Unexpected profile avatar transaction admission");
-              }
+        createAdmission() {
+          let canonicalProfileId: string | undefined;
+          admission = createSqliteWorkerOperationAdmission((request, grant) => {
+            context.admission.assertCurrent();
+            if (request.stage === "transaction" && isUserProfileAvatarAdmission(request.facts)) {
               const beforeProfile = request.facts.before;
-              const publication = retainUserProfileMutationPublication(context.admission.identity, [
+              canonicalProfileId = beforeProfile.id;
+              publication = retainUserProfileMutationPublication(context.admission.identity, [
                 [beforeProfile.id, beforeProfile],
               ]);
-              try {
-                settlementRead.bind(
-                  { type: "userProfiles.reconcile", profileId: beforeProfile.id },
-                  retained.settled,
-                  (observed) => publication.reconcile([[beforeProfile.id, observed]]),
-                  publication.release,
-                );
-              } catch (error) {
-                publication.release();
-                throw error;
-              }
               grant();
-            }),
-          };
+              return;
+            }
+            if (
+              request.stage !== "commit" ||
+              !isProfileDisplayRow(request.facts) ||
+              request.facts.id !== canonicalProfileId
+            ) {
+              throw new Error("Unexpected profile avatar commit admission");
+            }
+            grant();
+          });
+          return { nativeLocations: [context.admission.databasePath], admission };
         },
       },
-    ),
-  );
+    );
+  } finally {
+    // Publish confirmed commits even when ordinary result delivery fails; do not replay an unknown write.
+    try {
+      const committed = admission?.committed?.facts;
+      if (publication && isProfileDisplayRow(committed)) {
+        publication.reconcile([[committed.id, committed]]);
+      }
+    } finally {
+      publication?.release();
+    }
+  }
 }

@@ -3,7 +3,6 @@ import { showToast } from "../lib/toast.ts";
 import { renderSidebarPluginNavigationMenu } from "./app-sidebar-nav-menus.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
-/** Binds the plugin navigation context menu to the sidebar menus controller's open state. */
 export function renderSidebarPluginNavigationMenuForController(controller: SidebarMenusController) {
   const position = controller.pluginNavigationMenuPosition;
   if (!position || position.entry.signal.aborted) {
@@ -33,11 +32,6 @@ export function renderSidebarPluginNavigationMenuForController(controller: Sideb
         }
       }
     },
-    onTabAway: () => trigger?.focus(),
-    onClose: (restoreFocus) => {
-      if (controller.pluginNavigationMenuPosition === position) {
-        controller.closePositionedMenu("pluginNavigation", { restoreFocus });
-      }
-    },
+    ...controller.positionedMenuHandlers("pluginNavigation"),
   });
 }

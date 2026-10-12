@@ -2,6 +2,7 @@ import type { SessionEntryReadScope } from "../../../config/sessions/session-acc
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { resolveSessionStoreIdentity } from "../../../gateway/session-store-key.js";
 import type { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
+import type { SessionBindingRecord } from "../../../infra/outbound/session-binding-service.js";
 
 type StoreScope = { agentId?: string; env?: NodeJS.ProcessEnv; storePath?: string };
 type EntryScope = StoreScope & { sessionKey: string };
@@ -20,6 +21,16 @@ export function createAcpSpawnStoreMocks(mocks: {
     Object.entries(mocks.loadSessionStoreMock(resolveStorePath(scope))).map(
       ([sessionKey, entry]) => ({ sessionKey, entry }),
     );
+  const withSessionEntryReadOnlyInWorker = async <T>(
+    scope: SessionEntryReadScope,
+    assertCurrent: () => void,
+    consume: (read: { ok: true; value: SessionEntry | undefined }) => Promise<T>,
+  ): Promise<T> => {
+    assertCurrent();
+    const result = await consume({ ok: true, value: loadEntry(scope) });
+    assertCurrent();
+    return result;
+  };
   return {
     workerLookup: {
       resolveGatewaySessionStoreTargetInWorker: async (
@@ -50,16 +61,32 @@ export function createAcpSpawnStoreMocks(mocks: {
         await mocks.upsertSessionEntryMock(scope, patch),
     },
     readRuntime: {
-      withSessionEntryReadOnlyInWorker: async <T>(
-        scope: SessionEntryReadScope,
-        assertCurrent: () => void,
-        consume: (read: { ok: true; value: SessionEntry | undefined }) => Promise<T>,
-      ): Promise<T> => {
-        assertCurrent();
-        const result = await consume({ ok: true, value: loadEntry(scope) });
-        assertCurrent();
-        return result;
-      },
+      withSessionEntryReadOnlyInWorker,
+      readSessionEntryReadOnlyInWorker: (scope: SessionEntryReadScope, assertCurrent: () => void) =>
+        withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => read.value),
     },
+  };
+}
+
+export function createAcpSpawnSessionBinding(
+  overrides?: Partial<SessionBindingRecord>,
+): SessionBindingRecord {
+  return {
+    bindingId: "default:child-thread",
+    targetSessionKey: "agent:codex:acp:s1",
+    targetKind: "session",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "child-thread",
+      parentConversationId: "parent-channel",
+    },
+    status: "active",
+    boundAt: Date.now(),
+    metadata: {
+      agentId: "codex",
+      boundBy: "system",
+    },
+    ...overrides,
   };
 }

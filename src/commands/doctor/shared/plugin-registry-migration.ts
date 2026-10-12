@@ -89,13 +89,6 @@ type PluginRegistryDoctorMigrationResult =
 
 export class InvalidPluginInstallRecordStateError extends Error {}
 
-function invalidPersistedInstallRecordMessage(filePath: string): string {
-  return [
-    `Persisted plugin install records are invalid at ${filePath}.`,
-    "Stop the Gateway, back up this database, delete only the config_machine_state row with state_key='plugins.installedIndex' using SQLite tooling, then rerun `openclaw doctor --fix` to rebuild it.",
-  ].join(" ");
-}
-
 export type PluginRegistryDoctorMigrationParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
     dryRun?: boolean;
@@ -110,7 +103,9 @@ export function preflightPluginRegistryDoctorMigration(
   const filePath = resolveInstalledPluginIndexStorePath(params);
   const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
   if (persistedState.status === "invalid") {
-    throw new InvalidPluginInstallRecordStateError(invalidPersistedInstallRecordMessage(filePath));
+    throw new InvalidPluginInstallRecordStateError(
+      `Persisted plugin install records are invalid at ${filePath}. Stop the Gateway, back up this database, delete only the config_machine_state row with state_key='plugins.installedIndex' using SQLite tooling, then rerun \`openclaw doctor --fix\` to rebuild it.`,
+    );
   }
   const pathExists = params.existsSync ?? fs.existsSync;
   if (pathExists(filePath)) {
@@ -148,49 +143,37 @@ async function readMigrationConfig(
 export async function migratePluginRegistryForDoctor(
   params: PluginRegistryDoctorMigrationParams = {},
 ): Promise<PluginRegistryDoctorMigrationResult> {
-  const preflight = preflightPluginRegistryDoctorMigration(params);
+  const initialPreflight = preflightPluginRegistryDoctorMigration(params);
   if (params.dryRun) {
     return {
-      status: preflight.action === "skip-existing" ? "skip-existing" : "dry-run",
+      status: initialPreflight.action === "skip-existing" ? "skip-existing" : "dry-run",
       migrated: false,
-      preflight,
+      preflight: initialPreflight,
     };
   }
   return await withPluginLifecycleLease(
     resolveInstalledPluginIndexStateDatabaseOptions(params),
-    async () => migratePluginRegistryForDoctorWithLease(params),
+    async (): Promise<PluginRegistryDoctorMigrationResult> => {
+      const preflight = preflightPluginRegistryDoctorMigration(params);
+      if (preflight.action === "skip-existing") {
+        return { status: "skip-existing", migrated: false, preflight };
+      }
+      const rawConfig = await readMigrationConfig(params);
+      const config = withoutPluginInstallRecords(rawConfig);
+      const installRecords = migrateOfficialPluginInstallProvenance(
+        params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params)),
+      );
+      const current: InstalledPluginIndex = {
+        ...loadInstalledPluginIndex({ ...params, config, installRecords }),
+        refreshReason: "migration",
+      };
+      await writePersistedInstalledPluginIndex(current, params);
+      return {
+        status: "migrated",
+        migrated: true,
+        preflight,
+        current,
+      };
+    },
   );
-}
-
-async function migratePluginRegistryForDoctorWithLease(
-  params: PluginRegistryDoctorMigrationParams,
-): Promise<PluginRegistryDoctorMigrationResult> {
-  const preflight = preflightPluginRegistryDoctorMigration(params);
-  if (preflight.action === "skip-existing") {
-    return { status: "skip-existing", migrated: false, preflight };
-  }
-  const rawConfig = await readMigrationConfig(params);
-  const config = withoutPluginInstallRecords(rawConfig);
-  const installRecords = migrateOfficialPluginInstallProvenance(
-    params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params)),
-  );
-  const migrationParams = {
-    ...params,
-    config,
-    installRecords,
-  };
-  const candidateIndex = loadInstalledPluginIndex({
-    ...migrationParams,
-  });
-  const current: InstalledPluginIndex = {
-    ...candidateIndex,
-    refreshReason: "migration",
-  };
-  await writePersistedInstalledPluginIndex(current, params);
-  return {
-    status: "migrated",
-    migrated: true,
-    preflight,
-    current,
-  };
 }

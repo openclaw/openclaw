@@ -180,7 +180,7 @@ describe("prepareEmbeddedAttemptStream", () => {
               await release.promise;
               return undefined;
             });
-            const queued = vi.spyOn(session.agent, "steer");
+            const queued = vi.spyOn(session.agent, "admitSteeringMessage");
             const prepared = prepareCatalogExecutor({
               activeSession: session,
               attempt: preparedAttempt,
@@ -447,7 +447,7 @@ describe("prepareEmbeddedAttemptStream", () => {
   it("rejects steering after session settlement while its lifecycle owner remains published", async () => {
     const sessionId = "session-output-schema";
     const { session, settled, releaseSettlement } = await createHeldSettlementSession();
-    const steer = vi.spyOn(session.agent, "steer");
+    const steer = vi.spyOn(session.agent, "admitSteeringMessage");
     const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
       "../../embedded-agent-subscribe.js",
     );

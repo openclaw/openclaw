@@ -98,7 +98,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(exec.toolNames).toEqual(["exec", "process", schedulerToolName]);
     expect(exec.description).toBe(
-      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
     expect(process.description).toBe(
       "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
@@ -109,7 +109,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     const exec = findToolDescription("exec", undefined, false);
 
     expect(exec.description).toBe(
-      "Run shell and wait for completion. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell and wait for completion. Omit host to use the session's configured host. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
   });
 

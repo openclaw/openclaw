@@ -4,10 +4,6 @@ type MainSessionRecoveryExecutionIdentity = NonNullable<
   MainRestartRecoveryState["executionIdentity"]
 >;
 
-type MainSessionRecoveryExecutionIdentityAdmission =
-  | { kind: "capture"; token: MainSessionRecoveryExecutionIdentity }
-  | { kind: "retry-reference"; token: MainSessionRecoveryExecutionIdentity };
-
 export type MainSessionRecoveryObservation = {
   sessionId: string;
   cycleId: string;
@@ -20,7 +16,6 @@ export type MainSessionRecoveryReservation = {
   lifecycleGeneration: string;
   runId: string;
   attempt: number;
-  executionIdentityAdmission?: MainSessionRecoveryExecutionIdentityAdmission;
 };
 
 export type MainSessionRecoveryOwnerClaim = {
@@ -76,7 +71,6 @@ export type MainSessionRecoveryCommand =
       cycleId: string;
       now: number;
       runs?: RestartRecoveryRun[];
-      resetRuntime?: boolean;
     }
   | {
       kind: "observe";

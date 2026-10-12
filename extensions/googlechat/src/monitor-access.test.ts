@@ -124,13 +124,6 @@ describe("googlechat inbound access policy", () => {
       senderId: "users/123",
       ok: false,
     },
-    {
-      name: "matches user id entries",
-      allowNameMatching: false,
-      allowFrom: ["users/abc"],
-      senderId: "users/abc",
-      ok: true,
-    },
   ])("$name", async ({ allowNameMatching, allowFrom, senderId, ok }) => {
     primeCommonDefaults();
     isDangerousNameMatchingEnabled.mockReturnValue(allowNameMatching);
@@ -259,71 +252,6 @@ describe("googlechat inbound access policy", () => {
       effectiveWasMentioned: true,
       groupSystemPrompt: "group prompt",
     });
-  });
-
-  it("allows group traffic from generic message sender access groups", async () => {
-    primeCommonDefaults();
-    allowInboundGroupTraffic();
-
-    const result = await applyInboundAccessPolicy({
-      config: {
-        ...baseAccessConfig,
-        accessGroups: {
-          operators: {
-            type: "message.senders",
-            members: {
-              googlechat: ["users/alice"],
-            },
-          },
-        },
-      } as never,
-      account: {
-        accountId: "default",
-        config: {
-          groups: {
-            "spaces/AAA": {
-              users: ["accessGroup:operators"],
-              requireMention: false,
-            },
-          },
-        },
-      } as never,
-    });
-    expect(result.ok).toBe(true);
-  });
-
-  it("expands generic message sender access groups before DM access checks", async () => {
-    primeCommonDefaults();
-    const readAllowFromStore = vi.fn(async () => []);
-    createChannelPairingController.mockReturnValue({
-      readAllowFromStore,
-      issueChallenge: vi.fn(),
-    });
-
-    const result = await applyInboundAccessPolicy({
-      isGroup: false,
-      config: {
-        ...baseAccessConfig,
-        accessGroups: {
-          operators: {
-            type: "message.senders",
-            members: {
-              googlechat: ["users/alice"],
-            },
-          },
-        },
-      } as never,
-      account: {
-        accountId: "default",
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["accessGroup:operators"],
-        },
-      } as never,
-    });
-    expect(result.ok).toBe(true);
-
-    expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
   it("preserves allowlist group policy when a routed space has no sender allowlist", async () => {

@@ -25,7 +25,7 @@ async function seedFallback(state: OpenClawTestState) {
       delivery: normalizeSessionDeliveryState({ context: deliveryContext }),
     },
   );
-  expect(extractDeliveryInfo(sessionKey, { cfg: {} })).toEqual(expected);
+  expect(await extractDeliveryInfo(sessionKey, { cfg: {} })).toEqual(expected);
   const primaryPath = state.statePath("custom", "sessions.sqlite");
   return {
     primaryPath,
@@ -42,8 +42,8 @@ it("recovers a same-agent route past an empty absent primary", async () => {
     const { cfg, primaryPath, readPrimary } = await seedFallback(state);
     expect(readPrimary()).toMatchObject([{ ok: true, value: [] }]);
 
-    const scalar = extractDeliveryInfo(sessionKey, { cfg });
-    const batch = extractDeliveryInfoBatch([sessionKey], { cfg });
+    const scalar = await extractDeliveryInfo(sessionKey, { cfg });
+    const batch = await extractDeliveryInfoBatch([sessionKey], { cfg });
 
     expect(fs.existsSync(primaryPath)).toBe(false);
     expect({ scalar, batch }).toEqual({ scalar: expected, batch: [expected] });
@@ -73,11 +73,11 @@ it.each(["uninitialized", "corrupt"] as const)(
         },
       ]);
 
-      expect(extractDeliveryInfo(sessionKey, { cfg })).toEqual({
+      expect(await extractDeliveryInfo(sessionKey, { cfg })).toEqual({
         deliveryContext: undefined,
         threadId: undefined,
       });
-      expect(extractDeliveryInfoBatch([sessionKey], { cfg })).toEqual([
+      expect(await extractDeliveryInfoBatch([sessionKey], { cfg })).toEqual([
         { deliveryContext: undefined, threadId: undefined },
       ]);
       expect(fs.readFileSync(primaryPath)).toEqual(before);

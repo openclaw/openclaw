@@ -144,6 +144,9 @@ export function registerWebCapabilityCommands(capability: Command): void {
     const { isWebSearchProviderConfigured, listWebSearchProviders } =
       await import("../../web-search/runtime.js");
     const agentDir = resolveAgentDir(cfg, agentId);
+    const { ensureAuthProfileStoreWithoutExternalProfilesAsync } =
+      await import("../../agents/auth-profiles/store-runtime.js");
+    const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
     const selectedSearchProvider = normalizeLowercaseStringOrEmpty(
       cfg.tools?.web?.search?.provider,
     );
@@ -151,7 +154,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     return {
       search: listWebSearchProviders({ config: cfg }).map((provider) => ({
         available: true,
-        configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
+        configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir, authStore }),
         selected: provider.id === selectedSearchProvider,
         id: provider.id,
         envVars: provider.envVars,

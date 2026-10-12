@@ -119,3 +119,85 @@ describe("AppSidebar catalog import", () => {
     expect(request).not.toHaveBeenCalledWith("sessions.catalog.import", expect.anything());
   });
 });
+
+describe("AppSidebar catalog authority", () => {
+  it.each(["reply", "error", "page"] as const)(
+    "retires cached and in-flight %s data on same-client scope loss",
+    async (pendingKind) => {
+      vi.useFakeTimers();
+      const pending = createDeferred<ReturnType<typeof catalogPage>>();
+      const request = vi
+        .fn()
+        .mockResolvedValue(
+          catalogPage([{ threadId: "retained", name: "Retained catalog session" }], "page-2"),
+        );
+      const gateway = createGatewayHarness(createTestGatewayClient(request));
+      const hello = gatewayHelloForMethods(["sessions.catalog.list"]);
+      hello.features!.events = ["sessions.catalog.changed"];
+      gateway.publish({ hello });
+      const { sidebar, provider } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:visitor-notes"]),
+      );
+      try {
+        sidebar.connected = true;
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+        expect(sidebar.textContent).toContain("Retained catalog session");
+        expect(
+          sidebar.querySelector('[data-session-key="agent:main:visitor-notes"]'),
+        ).not.toBeNull();
+        request.mockReturnValueOnce(pending.promise);
+        const loading =
+          pendingKind === "page"
+            ? sidebar.sessionData.loadMoreSessionCatalog("codex")
+            : sidebar.sessionData.refreshSessionCatalogs();
+        const progressId = request.mock.calls.at(-1)?.[1]?.progressId;
+        expect(request).toHaveBeenCalledTimes(2);
+
+        gateway.publish({
+          hello: { ...hello, auth: { role: "operator", scopes: ["operator.sessions.write"] } },
+        });
+        // No Lit render or promise turn separates authority loss from these events.
+        gateway.publishEvent("sessions.catalog.host", {
+          progressId,
+          agentId: "main",
+          catalog: catalogPage([{ threadId: "stale", name: "Late catalog session" }]).catalogs[0],
+        });
+        gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+        if (pendingKind === "error") {
+          pending.reject(new Error("Stale catalog failure"));
+        } else {
+          pending.resolve(catalogPage([{ threadId: "stale", name: "Late catalog session" }]));
+        }
+        await loading;
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(600_000);
+        await sidebar.updateComplete;
+        expect(sidebar.textContent).not.toContain("Retained catalog session");
+        expect(sidebar.textContent).not.toContain("Late catalog session");
+        expect(sidebar.querySelector(".sidebar-session-catalog-error")).toBeNull();
+        expect(sidebar.sessionData.sessionCatalogs).toEqual([]);
+        expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
+        expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
+        expect(sidebar.sessionData.sessionCatalogLive.timer).toBeNull();
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(
+          sidebar.querySelector('[data-session-key="agent:main:visitor-notes"]'),
+        ).not.toBeNull();
+
+        gateway.publish({ hello });
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+        expect(request).toHaveBeenCalledTimes(3);
+        expect(sidebar.textContent).toContain("Retained catalog session");
+      } finally {
+        pending.resolve(catalogPage([]));
+        provider.remove();
+        vi.useRealTimers();
+      }
+    },
+  );
+});

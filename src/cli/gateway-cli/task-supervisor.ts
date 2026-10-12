@@ -42,6 +42,7 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   let stderr = "";
   let managed: ManagedRun | null = null;
   let cancelled = false;
+  let terminalExitCode: number | undefined;
   const cancel = () => {
     cancelled = true;
     managed?.cancel("signal");
@@ -52,11 +53,9 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
     const launcher = process.env[WINDOWS_TASK_LAUNCHER_ENV];
     delete process.env[WINDOWS_TASK_LAUNCHER_ENV];
     if (launcher === WINDOWS_TASK_LAUNCHER_ACTIVE || launcher === "cmd") {
-      const [{ default: koffi }, { bindWindowsTaskLauncher }] = await Promise.all([
-        import("koffi"),
-        import("../../process/supervisor/service-child-windows-task-launcher.js"),
-      ]);
-      bindWindowsTaskLauncher(koffi, launcher);
+      const { bindWindowsTaskLauncher } =
+        await import("../../process/supervisor/service-child-windows-task-launcher.js");
+      bindWindowsTaskLauncher(launcher);
     }
     while (true) {
       stderr = "";
@@ -97,7 +96,7 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
           diagnostic,
         );
       } else {
-        process.exitCode = result.exitCode ?? 1;
+        terminalExitCode = result.exitCode ?? 1;
         log.error("Gateway child failed", diagnostic);
       }
       await managed.waitForExtinction?.();
@@ -111,11 +110,14 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       return;
     }
   } catch (error) {
-    process.exitCode = 1;
+    terminalExitCode = 1;
     log.error(`Gateway task supervisor failed: ${String(error)}`, { stderr });
   } finally {
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
     await flushLogger();
+    if (terminalExitCode !== undefined) {
+      process.exitCode = terminalExitCode;
+    }
   }
 }

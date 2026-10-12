@@ -53,9 +53,12 @@ Session-scoped readers can read shared GitHub publication options and receipts
 for sessions they can view through `sessions.github.options` and
 `sessions.github.status`. For these narrow callers, the shared publication option
 is available only when the session has a current managed worktree or repository
-workspace with a supported GitHub remote. Unavailable targets do not hide existing
-shared receipts. Reopen the chat or reconnect after the managed workspace changes
-to refresh its options. Personal account discovery and personal receipts still
+workspace with a supported GitHub remote. Positive worktree target discovery reuses
+verified Git metadata for up to 15 seconds; worktree ownership, registry changes,
+and session access are checked on every request. Publication always resolves the
+current Git remote again. Unavailable targets do not hide existing shared receipts.
+Reopen the chat or reconnect after the managed workspace changes to refresh its
+options. Personal account discovery and personal receipts still
 require `operator.read` and the authenticated owner. Identity, role, access grant,
 connection, and session visibility are rechecked before returning awaited reads.
 
@@ -363,6 +366,23 @@ Git author. Effective `"shared"` scope refuses this injection and logs a warning
 naming the agent. `openclaw security audit` warns for each opted-in agent. See
 [GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for the
 credential boundary and backend requirements.
+
+A required sandbox contains the session's exec and file tools. It does not
+contain these paths, so configure them before admitting people you do not trust
+with the Gateway host:
+
+- Code Mode under the default `node` executor runs cells in the Gateway process.
+  Use the [QuickJS executor](/tools/code-mode/executors#choose-an-executor).
+- [CLI backends](/gateway/cli-backends) such as Claude CLI own their native
+  tools and sandboxing on the Gateway host. Exclude them with the role's
+  `modelPolicy`.
+- `worker-turn` cloud workers receive the agent's shared GitHub identity
+  regardless of `allowInSandbox`. Keep restricted people off worker profiles.
+- `sessions.others: "view"` exposes complete shared transcripts, including tool
+  output, from every agent. Keep sensitive work in draft sessions.
+- Gateway-brokered GitHub publication uses the shared account. See
+  [Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
+  for what pull request workflows can run.
 
 The role's `scopes` list caps scopes granted through connection auth, identity
 grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP requests.

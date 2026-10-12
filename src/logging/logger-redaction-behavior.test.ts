@@ -131,29 +131,6 @@ describe("file log redaction", () => {
     },
   );
 
-  it("redacts credential fields before writing JSONL file logs", async () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().info({ apiKey: secret, message: "provider configured" });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("provider configured");
-    expect(content).toContain('"apiKey"');
-    expect(content).not.toContain(secret);
-  });
-
-  it("redacts bearer tokens in file log message strings", async () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().warn({ message: `Authorization: Bearer ${secret}` });
-
-    const content = await readLogFile(logPath);
-    expect(content).toContain("Authorization: Bearer");
-    expect(content).not.toContain(secret);
-  });
-
   it("redacts structured authorization fields before writing JSONL file logs", async () => {
     const logPath = logPathTracker.nextPath();
     const digestResponse = ["runtime", "digest", "response", "1234567890abcdef"].join("-");

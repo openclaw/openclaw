@@ -10,6 +10,7 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
+import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildEmptyInteractiveReplyPayload,
@@ -347,5 +348,107 @@ describe("buildExternalRunFailureReply", () => {
       { isHeartbeat: true },
     );
     expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
+  });
+});
+
+describe("buildKnownAgentRunFailureReplyPayload", () => {
+  const promptSizeGuidance =
+    "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
+  const sessionCtx = {
+    Provider: "discord",
+    Surface: "discord",
+    ChatType: "direct",
+  } as unknown as TemplateContext;
+
+  it.each([
+    { rawError: "Connection error. private-canary", code: undefined },
+    { rawError: "private-canary", code: "ECONNREFUSED" },
+    { rawError: "getaddrinfo ENOTFOUND private-canary", code: undefined },
+  ])("preserves transport guidance in a terminal timeout-bucket reply: %j", (facts) => {
+    const error = new FailoverError("Sanitized provider failure", {
+      ...facts,
+      reason: "timeout",
+      status: 408,
+      provider: "external",
+      model: "local-model",
+    });
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: error,
+      sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Couldn't connect to the AI service.");
+    expect(payload?.text).toContain(
+      "Check the conversation for any completed work before trying again.",
+    );
+    expect(payload?.text).not.toMatch(/took too long|private-canary|Sanitized provider failure/);
+  });
+
+  it("keeps HTTP server failures ahead of connection wording in provider details", () => {
+    const error = new FailoverError("503 connection error: private-canary", {
+      reason: "timeout",
+      status: 503,
+    });
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: error,
+        sessionCtx,
+        resolvedVerboseLevel: "off",
+      })?.text,
+    ).toBe(
+      "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.",
+    );
+  });
+
+  it("puts sanitized HTTP 400 prompt-size guidance in the terminal reply payload", () => {
+    const raw = `400 ${JSON.stringify({
+      error: {
+        type: "invalid_request_error",
+        message:
+          "This prompt is longer than the free tier allows for a single request. Shorten it, or add credits to use this model without the free-tier cap.",
+      },
+      request_id: "req_prompt_size_canary",
+    })}`;
+    const error = new FailoverError(raw, {
+      reason: "rate_limit",
+      provider: "openai",
+      model: "test-model",
+      status: 400,
+      rawError: raw,
+    });
+
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: error,
+      sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toBe(promptSizeGuidance);
+    expect(payload?.text).not.toContain("req_prompt_size_canary");
+    expect(payload?.text).not.toContain("add credits");
+  });
+
+  it("keeps HTTP 429 throttle failures on the existing retry guidance", () => {
+    const raw = "429 rate limit: service overloaded, try again in 30 seconds";
+    const error = new FailoverError(raw, {
+      reason: "rate_limit",
+      provider: "anthropic",
+      model: "test-model",
+      status: 429,
+      rawError: raw,
+    });
+
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: error,
+      sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.text).toBe(
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    );
   });
 });

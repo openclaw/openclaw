@@ -10,6 +10,7 @@ import {
   navigateInApp,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const DURABLE_ATTACHMENT_CAP_BYTES = 25 * 1024 * 1024;
@@ -273,6 +274,8 @@ suite.define(() => {
       await page.waitForURL(
         (url) => url.pathname === controlUiSessionPath("agent:main:retired-draft"),
       );
+      // Navigation no longer waits for this route's durable retirement.
+      await waitForCommittedComposerDraft(page, JSON.stringify(["writer", "", ""]), null, 0);
       await page.close();
       const restoredPage = await context.newPage();
       await installMockGateway(restoredPage);

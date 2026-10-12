@@ -416,6 +416,16 @@ describe("file references", () => {
     }
   });
 
+  it("keeps the longest fitting prefix when a longer token stops looking like a file ref", () => {
+    const input = `${"<".repeat(995)}docs/x.mdbar${"<".repeat(1001)}`;
+    const chunks = markdownToTelegramChunks(input, 4000);
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      `${"<".repeat(995)}docs/x.mdbar<<`,
+      "<".repeat(999),
+    ]);
+    expect(chunks.map((chunk) => chunk.html.length)).toEqual([4000, 3996]);
+  });
+
   it("handles malformed HTML with stray closing tags (negative depth)", () => {
     const input = "</code>README.md<code>inside</code> after.md";
     const result = wrapFileReferencesInHtml(input);

@@ -478,7 +478,7 @@ describe("openclaw agent database handle cache", () => {
     }
   });
 
-  it("reopens an evicted database, revalidates schema, and preserves durable rows and discovery", () => {
+  it("reuses an evicted database and repairs a replacement while preserving rows and discovery", () => {
     const options = { agentId: "durability", env };
     const evicted = openOpenClawAgentDatabase(options);
     evicted.db
@@ -499,6 +499,8 @@ describe("openclaw agent database handle cache", () => {
     ).toEqual(registration);
     vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
     expect(cachedReopen.db.isOpen).toBe(false);
+    fs.copyFileSync(evicted.path, `${evicted.path}.replacement`);
+    fs.renameSync(`${evicted.path}.replacement`, evicted.path);
     const divergent = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(evicted.path);
     try {
       divergent.exec("ALTER TABLE session_nodes DROP COLUMN project_id;");

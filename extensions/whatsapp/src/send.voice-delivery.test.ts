@@ -195,22 +195,6 @@ describe("WhatsApp gateway voice delivery", () => {
     recordChannelActivity.mockReset();
   });
 
-  it("normalizes MIME parameters before handing media to the socket transport", async () => {
-    const buf = Buffer.from("image");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: " Image/PNG; charset=binary ",
-    });
-
-    await sendMessageWhatsApp("+1555", "caption", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/image.png",
-    });
-
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "caption", buf, "image/png");
-  });
-
   it("retains the accepted voice receipt when its gateway caption has no provider key", async () => {
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("audio"),

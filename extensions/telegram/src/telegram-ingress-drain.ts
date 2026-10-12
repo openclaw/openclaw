@@ -27,7 +27,6 @@ import {
 import {
   getPreparedTelegramPollAnswer,
   isEligibleTelegramPollAnswerUpdate,
-  prepareTelegramPollAnswerContext,
   prepareTelegramPollAnswerContextAsync,
   recordPreparedTelegramPollAnswer,
   settleTelegramPollAnswerContext,
@@ -73,15 +72,20 @@ function telegramSpooledLaneKey(update: unknown, botInfo?: TelegramBotInfo): str
   });
 }
 
+function requireTelegramSpooledUpdateId(update: unknown): number {
+  const updateId = resolveTelegramUpdateId(update);
+  if (updateId === null) {
+    throw new TelegramIngressPayloadError("Telegram spooled update is missing numeric update_id.");
+  }
+  return updateId;
+}
+
 function inspectTelegramSpooledUpdate(
   update: unknown,
   botInfo?: TelegramBotInfo,
   claimedLaneKey?: string,
 ) {
-  const updateId = resolveTelegramUpdateId(update);
-  if (updateId === null) {
-    throw new TelegramIngressPayloadError("Telegram spooled update is missing numeric update_id.");
-  }
+  const updateId = requireTelegramSpooledUpdateId(update);
   const derivedLaneKey = telegramSpooledLaneKey(update, botInfo);
   const preservePreIdentityControlLane =
     botInfo !== undefined &&
@@ -100,8 +104,8 @@ function isNonemptyTelegramCallbackValue(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isBoundedTelegramCallbackData(value: unknown): value is string {
-  return isNonemptyTelegramCallbackValue(value) && fitsTelegramCallbackData(value);
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function canReconcileTelegramLegacyLane(params: {
@@ -161,12 +165,11 @@ function canReconcileTelegramLegacyLane(params: {
       candidate.channel_post !== undefined ||
       candidate.edited_channel_post !== undefined ||
       !isNonemptyTelegramCallbackValue(callback.id) ||
-      !isBoundedTelegramCallbackData(callback.data) ||
+      !isNonemptyTelegramCallbackValue(callback.data) ||
+      !fitsTelegramCallbackData(callback.data) ||
       !isNonemptyTelegramCallbackValue(callback.chat_instance) ||
       callback.inline_message_id !== undefined ||
-      typeof senderId !== "number" ||
-      !Number.isSafeInteger(senderId) ||
-      senderId <= 0 ||
+      !isPositiveSafeInteger(senderId) ||
       callback.from?.is_bot !== false ||
       !params.botInfo ||
       callbackMessage?.from?.id !== params.botInfo.id ||
@@ -175,12 +178,8 @@ function canReconcileTelegramLegacyLane(params: {
       callbackMessage.guest_query_id !== undefined ||
       callbackMessage.sender_chat !== undefined ||
       callbackMessage.direct_messages_topic !== undefined ||
-      typeof callbackMessage.date !== "number" ||
-      !Number.isSafeInteger(callbackMessage.date) ||
-      callbackMessage.date <= 0 ||
-      typeof callbackMessage.message_id !== "number" ||
-      !Number.isSafeInteger(callbackMessage.message_id) ||
-      callbackMessage.message_id <= 0
+      !isPositiveSafeInteger(callbackMessage.date) ||
+      !isPositiveSafeInteger(callbackMessage.message_id)
     ) {
       return false;
     }
@@ -202,8 +201,7 @@ function canReconcileTelegramLegacyLane(params: {
   const isPrivateChat = chatType === "private" && typeof chatId === "number" && chatId > 0;
   const isGroupChat =
     (chatType === "group" || chatType === "supergroup") && typeof chatId === "number" && chatId < 0;
-  const hasValidThreadId =
-    typeof threadId === "number" && Number.isSafeInteger(threadId) && threadId > 0;
+  const hasValidThreadId = isPositiveSafeInteger(threadId);
   const chatTypeHint =
     chatType === "channel" ||
     chatType === "group" ||
@@ -313,51 +311,29 @@ type CreateTelegramIngressMonitorParams = {
  * committed spool append into the shared pump.
  */
 export function createTelegramIngressMonitor(params: CreateTelegramIngressMonitorParams) {
+  const inspect: Parameters<typeof createChannelIngressMonitor>[0]["inspect"] = (update, context) =>
+    inspectTelegramSpooledUpdate(
+      update,
+      params.botInfo,
+      context.phase === "claim" ? context.claimedLaneKey : undefined,
+    );
   return createChannelIngressMonitor<
     unknown,
     TelegramSpooledUpdatePayload,
     TelegramSpooledUpdatePayload
   >({
     queue: params.queue,
-    inspect: (update, context) => {
-      if (
-        context.phase === "admission" &&
-        typeof update === "object" &&
-        update !== null &&
-        isEligibleTelegramPollAnswerUpdate(update)
-      ) {
-        prepareTelegramPollAnswerContext({ update, accountId: params.accountId });
-      }
-      return inspectTelegramSpooledUpdate(
-        update,
-        params.botInfo,
-        context.phase === "claim" ? context.claimedLaneKey : undefined,
-      );
-    },
+    inspect,
     inspectAsync: async (update, context) => {
-      if (
-        context.phase === "admission" &&
-        typeof update === "object" &&
-        update !== null &&
-        isEligibleTelegramPollAnswerUpdate(update)
-      ) {
+      if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
       }
-      return inspectTelegramSpooledUpdate(
-        update,
-        params.botInfo,
-        context.phase === "claim" ? context.claimedLaneKey : undefined,
-      );
+      return inspect(update, context);
     },
     payload: {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
       serialize: (update, { receivedAt }) => {
-        const updateId = resolveTelegramUpdateId(update);
-        if (updateId === null) {
-          throw new TelegramIngressPayloadError(
-            "Telegram spooled update is missing numeric update_id.",
-          );
-        }
+        const updateId = requireTelegramSpooledUpdateId(update);
         const preparedPollAnswer =
           typeof update === "object" && update !== null
             ? getPreparedTelegramPollAnswer(update)

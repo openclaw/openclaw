@@ -21,62 +21,50 @@ pub struct GatewaySnapshot {
 }
 
 impl GatewaySnapshot {
-    pub(crate) fn remote_opening() -> Self {
+    fn unavailable(phase: &'static str, status: &str, detail: impl Into<String>) -> Self {
         Self {
-            phase: "remoteOpening",
+            phase,
             runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
-            status: "Opening remote dashboard".to_string(),
-            detail: Some(
-                "Gateway authentication and readiness are shown in the dashboard.".to_string(),
-            ),
+            status: status.to_string(),
+            detail: Some(detail.into()),
         }
+    }
+
+    pub(crate) fn remote_opening() -> Self {
+        Self::unavailable(
+            "remoteOpening",
+            "Opening remote dashboard",
+            "Gateway authentication and readiness are shown in the dashboard.",
+        )
     }
 
     pub(crate) fn remote_error(detail: impl Into<String>) -> Self {
-        Self {
-            phase: "remoteError",
-            status: "Remote connection unavailable".to_string(),
-            detail: Some(detail.into()),
-            ..Self::remote_opening()
-        }
+        Self::unavailable("remoteError", "Remote connection unavailable", detail)
     }
 
     pub fn unconfigured() -> Self {
-        Self {
-            phase: "unconfigured",
-            runtime_path: None,
-            installed: false,
-            running: false,
-            reachable: false,
-            status: "Setup required".to_string(),
-            detail: Some("Choose where your OpenClaw Gateway should run.".to_string()),
-        }
+        Self::unavailable(
+            "unconfigured",
+            "Setup required",
+            "Choose where your OpenClaw Gateway should run.",
+        )
     }
 
     pub fn missing_cli() -> Self {
-        Self {
-            phase: "missingCli",
-            runtime_path: None,
-            installed: false,
-            running: false,
-            reachable: false,
-            status: "CLI required".to_string(),
-            detail: Some("Install the OpenClaw CLI to continue.".to_string()),
-        }
+        Self::unavailable(
+            "missingCli",
+            "CLI required",
+            "Install the OpenClaw CLI to continue.",
+        )
     }
 
     pub fn reconnecting(detail: impl Into<String>) -> Self {
         Self {
-            phase: "reconnecting",
-            runtime_path: None,
             installed: true,
-            running: false,
-            reachable: false,
-            status: "Reconnecting".to_string(),
-            detail: Some(detail.into()),
+            ..Self::unavailable("reconnecting", "Reconnecting", detail)
         }
     }
 }
@@ -176,7 +164,7 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             .rpc
             .as_ref()
             .and_then(|rpc| rpc.error.as_deref())
-            .unwrap_or("The Gateway RPC probe did not report a healthy connection.");
+            .unwrap_or("The Gateway RPC check did not report a healthy connection.");
         return Err(format!(
             "{service_detail}\n{rpc_detail}\nRun `openclaw gateway status` in a terminal \
              to inspect service access and Gateway credentials, then retry."

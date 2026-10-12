@@ -4,13 +4,13 @@ import {
   WORKER_PROTOCOL_MAX_FEATURES,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type {
-  WorkerDesktopEndpoint,
-  WorkerSshEndpoint,
-} from "../../plugins/capability-provider.types.js";
+import type { WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import { isValidSecretRef } from "../../secrets/ref-contract.js";
-import type { WorkerEnvironmentBootstrapReceipt } from "./environment-record.js";
-import { workerEnvironmentStateRequiresLease, type WorkerEnvironmentState } from "./state.js";
+import type {
+  WorkerEnvironmentBootstrapReceipt,
+  WorkerEnvironmentRecord,
+} from "./environment-record.js";
+import { workerEnvironmentStateRequiresLease } from "./state.js";
 
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_HOST_KEY_LENGTH = 16_384;
@@ -174,37 +174,40 @@ export function normalizeWorkerSshEndpoint(value: WorkerSshEndpoint): WorkerSshE
   };
 }
 export function assertShape(
-  state: WorkerEnvironmentState,
-  leaseId: string | null,
-  nodeDeviceId: string | null,
-  sshEndpoint: WorkerSshEndpoint | null,
-  desktop: WorkerDesktopEndpoint | null,
-  bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null,
-  attachedSessionIds: readonly string[],
+  record: Pick<
+    WorkerEnvironmentRecord,
+    | "state"
+    | "leaseId"
+    | "nodeDeviceId"
+    | "sshEndpoint"
+    | "desktop"
+    | "bootstrapReceipt"
+    | "attachedSessionIds"
+  >,
 ): void {
-  if (sshEndpoint && nodeDeviceId) {
+  if (record.sshEndpoint && record.nodeDeviceId) {
     throw new Error("Worker environment cannot retain both SSH and node transports");
   }
-  if (workerEnvironmentStateRequiresLease(state)) {
-    if (!leaseId) {
-      throw new Error(`Worker environment state ${state} requires a provider lease`);
+  if (workerEnvironmentStateRequiresLease(record.state)) {
+    if (!record.leaseId) {
+      throw new Error(`Worker environment state ${record.state} requires a provider lease`);
     }
-    if (state === "bootstrapping" && !sshEndpoint) {
+    if (record.state === "bootstrapping" && !record.sshEndpoint) {
       throw new Error("Worker environment bootstrap requires an SSH endpoint reference");
     }
-    if (state === "ready" && !sshEndpoint && !nodeDeviceId) {
+    if (record.state === "ready" && !record.sshEndpoint && !record.nodeDeviceId) {
       throw new Error("Ready worker environment requires a transport binding");
     }
-  } else if (leaseId || sshEndpoint || desktop) {
-    throw new Error(`Worker environment state ${state} cannot retain a provider lease`);
+  } else if (record.leaseId || record.sshEndpoint || record.desktop) {
+    throw new Error(`Worker environment state ${record.state} cannot retain a provider lease`);
   }
-  if (state === "bootstrapping" && bootstrapReceipt) {
+  if (record.state === "bootstrapping" && record.bootstrapReceipt) {
     throw new Error("Bootstrapping worker environment cannot retain a stale bootstrap receipt");
   }
-  if (state === "attached" && attachedSessionIds.length !== 1) {
+  if (record.state === "attached" && record.attachedSessionIds.length !== 1) {
     throw new Error("Attached worker environment requires exactly one session id");
   }
-  if (state !== "attached" && attachedSessionIds.length !== 0) {
+  if (record.state !== "attached" && record.attachedSessionIds.length !== 0) {
     throw new Error("Only an attached worker environment may retain a session id");
   }
 }

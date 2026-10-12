@@ -37,6 +37,7 @@ export async function recordInboundSession(
     ctx,
     groupResolution,
     createIfMissing,
+    assertCommitAllowed: params.assertAuthority,
   });
   const metaTask = write.catch(async (err: unknown) => {
     try {
@@ -47,7 +48,16 @@ export async function recordInboundSession(
   });
   params.trackSessionMetaTask?.(metaTask);
   // Dispatch needs the writer settled, but best-effort reporting stays with its tracker.
-  await write.catch(() => undefined);
+  await write.catch(async (err: unknown) => {
+    const { AgentDatabaseAdmissionError } = await import("../state/agent-database-admission.js");
+    if (
+      err instanceof AgentDatabaseAdmissionError &&
+      err.refusal.code === "agent-database-inspection-pending"
+    ) {
+      // Leave the inbound unhandled so its channel can retry after startup admission.
+      throw err;
+    }
+  });
 
   const update = params.updateLastRoute;
   if (!update) {
@@ -71,5 +81,6 @@ export async function recordInboundSession(
     ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
     groupResolution,
     createIfMissing,
+    assertCommitAllowed: params.assertAuthority,
   });
 }

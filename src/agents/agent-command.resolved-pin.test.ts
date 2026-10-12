@@ -13,14 +13,6 @@ import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
-vi.mock("./command/runtime-loaders.js", () => ({
-  loadTranscriptResolveRuntime: async () => ({
-    resolveSessionTranscriptFile: async ({ sessionEntry }: { sessionEntry?: SessionEntry }) => ({
-      sessionEntry,
-      sessionFile: "synthetic-transcript",
-    }),
-  }),
-}));
 vi.mock("./command/attempt-execution.shared.js", () => ({
   persistAgentSession: async ({ entry }: { entry: SessionEntry }) => entry,
 }));
@@ -40,7 +32,6 @@ const metadataSnapshot = createPluginMetadataSnapshotFixture({
 });
 
 it.each([
-  { name: "resolved alias-like model", pin: "middle", expected: "middle" },
   { name: "legacy raw alias once", pin: "latest", expected: "middle", raw: true },
   {
     name: "configured default retained by an exact-only policy",

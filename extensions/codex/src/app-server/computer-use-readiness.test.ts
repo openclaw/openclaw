@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  runCodexComputerUseLiveTest,
-  type CodexComputerUseRequest,
-} from "./computer-use-readiness.js";
-import {
   ensureCodexComputerUse,
   installCodexComputerUse,
   readCodexComputerUseStatus,
@@ -15,7 +11,7 @@ import {
   expectStatusFields,
   requestCalls,
 } from "./computer-use.test-support.js";
-import { resolveCodexComputerUseConfig, type CodexComputerUseConfig } from "./config.js";
+import type { CodexComputerUseConfig } from "./config.js";
 import { createClientHarness, waitForHarnessRequest } from "./test-support.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -186,7 +182,7 @@ describe("Codex Computer Use readiness", () => {
       });
       expect(fixture).toHaveBeenCalledWith("thread/start", {
         input: [],
-        developerInstructions: "OpenClaw Computer Use readiness probe",
+        developerInstructions: "OpenClaw Computer Use readiness check",
         ephemeral: true,
       });
       expect(fixture).toHaveBeenCalledWith("mcpServer/tool/call", {
@@ -321,47 +317,6 @@ describe("Codex Computer Use readiness", () => {
     expect(status.warnings).toContain(
       "Could not reload Computer Use MCP servers: MCP runtime reload failed",
     );
-  });
-
-  it("propagates a desktop selection change even when cleanup fails, without retrying the stale client", async () => {
-    const selectionChanged = Object.assign(new Error("desktop selection changed"), {
-      code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-    });
-    const harness = createClientHarness();
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return { thread: { id: "probe-thread" } };
-      }
-      if (method === "mcpServer/tool/call") {
-        throw selectionChanged;
-      }
-      if (method === "thread/unsubscribe") {
-        throw new Error("unsubscribe failed");
-      }
-      throw new Error(`unexpected request: ${method}`);
-    }) as CodexComputerUseRequest;
-
-    try {
-      const failure = await runCodexComputerUseLiveTest({
-        request,
-        client: harness.client,
-        config: resolveCodexComputerUseConfig({
-          pluginConfig: { computerUse: { enabled: true, autoRepair: true } },
-        }),
-      }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(harness.stdinDestroyed).toBe(true);
-      expect(failure).toBe(selectionChanged);
-      expect(requestCalls(request).map(([method]) => method)).toEqual([
-        "thread/start",
-        "mcpServer/tool/call",
-        "thread/unsubscribe",
-      ]);
-    } finally {
-      await harness.client.closeAndWait();
-    }
   });
 
   it("fails fast when MCP exposes no tools even without strict readiness", async () => {

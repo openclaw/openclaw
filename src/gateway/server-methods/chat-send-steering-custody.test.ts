@@ -2,7 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Context } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   installRuntimeContextMessageForPrompt,
   normalizeMessagesForLlmBoundary,
@@ -62,7 +62,7 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("steering input custody", () => {
-  it.each([
+  it.for([
     "shared-secret owner",
     "same grant",
     "changed grant",
@@ -76,7 +76,7 @@ describe("steering input custody", () => {
     "different role sandbox across profiles",
   ] as const)(
     "preserves authenticated chat.send steering authority across callers (%s)",
-    async (scenario) => {
+    async (scenario, { signal }) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
       const sharedSecretOwner = scenario === "shared-secret owner";
       const profile = sharedSecretOwner
@@ -453,7 +453,7 @@ describe("steering input custody", () => {
           expect(session.getSteeringMessages()).toEqual([]);
           expect(queueMessage).not.toHaveBeenCalled();
           if (queued) {
-            await fixture.dispatchedRecorder;
+            await withinTest(fixture.dispatchedRecorder, signal);
             expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(profile.id);
             expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
             expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({

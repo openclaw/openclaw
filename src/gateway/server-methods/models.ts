@@ -1,15 +1,16 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
+  type ErrorShape,
   errorShape,
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
@@ -18,6 +19,7 @@ import { prepareOperatorModelPresentation } from "../operator-model-presentation
 import { authorizeCurrentOperatorRoleScopes } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
+import { sessionModelRevision } from "../session-model-revision.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
@@ -30,7 +32,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads return saved rows while expired provider inventory refreshes in the background.
+// Native catalog demand precedes projection; provider inventory keeps its refresh lifecycle.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -63,7 +65,6 @@ export const modelsHandlers: GatewayRequestHandlers = {
             rawAgentId: params.agentId ?? tryResolveAmbientOwnerAgentId(cfg),
             respond: respondToCaller,
             cfg,
-            normalize: normalizeOptionalString,
           });
         if (!resolved) {
           return undefined;
@@ -103,9 +104,21 @@ export const modelsHandlers: GatewayRequestHandlers = {
           preparedScope.draftAccountSelection?.assertCurrent();
           preparedScope.assertCurrent?.();
         };
+        const { ensureGatewayPreparedModelRuntimeReady } =
+          await import("../../agents/prepared-model-runtime.js");
+        assertCurrent();
+        await ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId });
         assertCurrent();
         if (params.refresh !== true) {
-          refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
+          const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
+            agentId: resolved.agentId,
+            config: cfg,
+          });
+          owner?.recheckNativeLogin?.();
+          if (!params.preparedOnly && params.view !== "provider-config") {
+            await owner?.loadNativeModelCatalog?.();
+            assertCurrent();
+          }
         }
         return {
           assertCurrent,
@@ -115,44 +128,71 @@ export const modelsHandlers: GatewayRequestHandlers = {
               client?.connect.caps,
               GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
             );
+            const listParams = () => ({
+              agentId: resolved.agentId,
+              params,
+              includeManualSelection,
+              requesterProfileId: preparedScope.requesterProfileId,
+              readScope: scope,
+            });
             const prepared =
-              !scope && params.refresh !== true
-                ? await context.readPreparedModelsList?.({
-                    agentId: resolved.agentId,
-                    params,
-                    includeManualSelection,
-                    requesterProfileId: preparedScope.requesterProfileId,
-                  })
+              params.refresh !== true
+                ? await context.readPreparedModelsList?.(listParams())
                 : undefined;
             const result =
               prepared ??
               (await buildModelsListResult({
                 source: { kind: "gateway", context },
-                agentId: resolved.agentId,
-                params,
-                includeManualSelection,
-                requesterProfileId: preparedScope.requesterProfileId,
-                readScope: scope,
+                ...listParams(),
                 publicationScope: preparedScope,
               }));
-            const currentConfig = context.getRuntimeConfig();
-            const projected =
+            const runtimeOwnership =
               scope && params.view !== "provider-config"
-                ? {
-                    ...result,
-                    models: projectSessionModelCatalog(scope, result.models, currentConfig),
-                  }
-                : result;
-            const policy = prepareOperatorModelPresentation({
-              cfg: currentConfig,
-              policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
-              client,
-            })?.forAgent(resolved.agentId, projected.models);
-            respond(
-              true,
-              projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
-              undefined,
-            );
+                ? await readSessionRuntimeOwnershipAsync({
+                    ...scope,
+                    config: context.getRuntimeConfig(),
+                    assertCurrent,
+                  })
+                : undefined;
+            const publish = () => {
+              assertCurrent();
+              const currentConfig = context.getRuntimeConfig();
+              const projected =
+                scope && params.view !== "provider-config"
+                  ? {
+                      ...result,
+                      ...(scope.sessionKey
+                        ? {
+                            sessionModelRevision: sessionModelRevision(
+                              scope.sessionEntry,
+                              scope.workerInference,
+                            ),
+                          }
+                        : {}),
+                      models: projectSessionModelCatalog(
+                        scope,
+                        result.models,
+                        currentConfig,
+                        runtimeOwnership,
+                      ),
+                    }
+                  : result;
+              const policy = prepareOperatorModelPresentation({
+                cfg: currentConfig,
+                policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
+                client,
+              })?.forAgent(resolved.agentId, projected.models);
+              respond(
+                true,
+                projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
+                undefined,
+              );
+            };
+            if (preparedScope.withCurrent) {
+              await preparedScope.withCurrent(publish);
+            } else {
+              publish();
+            }
             if (params.refresh === true) {
               void Promise.resolve()
                 .then(() => applyRemoteModelCatalogUpdate(context.getRuntimeConfig))
@@ -170,26 +210,22 @@ export const modelsHandlers: GatewayRequestHandlers = {
       }
     },
     (error, { respond }) => {
+      let failure: ErrorShape;
       if (error instanceof UnknownModelCatalogProviderError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
-      }
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        respond(false, undefined, error.error);
-        return;
-      }
-      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true, retryAfterMs: 0 }),
-        );
-        return;
-      }
-      if (!(error instanceof ModelAccountConnectAuthorityError)) {
+        failure = errorShape(ErrorCodes.INVALID_REQUEST, error.message);
+      } else if (error instanceof SessionMutationAuthorizationChangedError) {
+        failure = error.error;
+      } else if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+        failure = errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+          retryable: true,
+          retryAfterMs: 0,
+        });
+      } else if (error instanceof ModelAccountConnectAuthorityError) {
+        failure = errorShape(ErrorCodes.FORBIDDEN, error.message);
+      } else {
         throw error;
       }
-      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+      respond(false, undefined, failure);
     },
   ),
 };

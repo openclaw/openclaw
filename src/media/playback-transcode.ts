@@ -320,7 +320,6 @@ export async function resolvePlaybackMetadataForSource(
   return { playback: mode === "fallback" ? undefined : mode, durationMs, width, height };
 }
 
-/** Replaces the original container suffix for a transcoded response filename. */
 export function replacePlaybackFileExtension(fileName: string, extension: `.${string}`): string {
   const currentExtension = path.extname(fileName);
   const stem = currentExtension ? fileName.slice(0, -currentExtension.length) : fileName;

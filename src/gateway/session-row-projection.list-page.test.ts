@@ -122,7 +122,7 @@ it("retains prepared child metadata across a parent presentation refresh", async
   });
 });
 
-it("counts only matching live children on cold and refreshed parent list pages", async () => {
+it("counts matching children across cached serialized archive views", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
@@ -135,23 +135,43 @@ it("counts only matching live children on cold and refreshed parent list pages",
     const writeChild = (index: number, archivedAt?: number) =>
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: children[index]! },
-        { sessionId: `archive-child-${index}`, updatedAt: 1, parentSessionKey: parent, archivedAt },
+        {
+          sessionId: `archive-child-${index}`,
+          updatedAt: 1,
+          parentSessionKey: parent,
+          archivedAt,
+        },
       );
     writeChild(0);
     writeChild(1, 1);
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const listParent = async () => {
-      const result = await listProjectedSessions({ projection, opts: { limit: 1 } });
+      const result = await listProjectedSessions({
+        projection,
+        opts: { limit: 1 },
+        acceptsSerializedJson: true,
+      });
       expect(result.sessions[0]?.key).toBe(parent);
       return result.sessions[0]?.childSessions ?? [];
     };
     try {
       expect(await listParent()).toEqual([children[0]]);
-      const archived = await listProjectedSessions({ projection, opts: { archived: true } });
+      const archived = await listProjectedSessions({
+        projection,
+        opts: { archived: true },
+        acceptsSerializedJson: true,
+      });
       expect(archived.sessions.map((row) => row.key)).toEqual([children[1]]);
-      const all = await listProjectedSessions({ projection, opts: { archived: "all", limit: 1 } });
+      const all = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", limit: 1 },
+        acceptsSerializedJson: true,
+      });
       expect(all.sessions[0]?.childSessions).toEqual(children);
+      const visible = await listParent();
+      expect(visible).toEqual([children[0]]);
+      expect(await listParent()).toBe(visible);
       writeChild(0, 2);
       expect(await listParent()).toEqual([]);
       writeChild(0);

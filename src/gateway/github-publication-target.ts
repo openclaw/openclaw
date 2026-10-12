@@ -2,7 +2,7 @@ import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import {
   prepareGitHubPublicationRepositoryIdentity,
-  type resolveGitHubPublicationWorktreeOwner,
+  type readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
@@ -12,7 +12,7 @@ import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 
 /** Resolve the authoritative Git remote and GitHub PR parent with the selected publisher. */
 export async function prepareGitHubPublicationTarget(params: {
-  worktree: ReturnType<typeof resolveGitHubPublicationWorktreeOwner>["worktree"];
+  worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"];
   identity: PreparedGitHubPublicationIdentity;
   assertCurrent: () => void;
 }) {

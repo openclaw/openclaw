@@ -27,7 +27,7 @@ export const buildSessionLookup = (
     parentSessionKey?: string;
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
-  cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  cfg: { session: { mainKey: "main" } } as OpenClawConfig,
   agentId: resolveAgentIdFromSessionKey(sessionKey, "main"),
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
@@ -80,14 +80,13 @@ const runtimeMocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
     "[image attachment omitted: durable managed media claim unavailable]",
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
-  normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeat: vi.fn(),
@@ -168,9 +167,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   upsertSessionEntryCore: runtimeMocks.upsertSessionEntryCore,
 }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateProcessDeviceIdentity: runtimeMocks.loadOrCreateProcessDeviceIdentity,
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateProcessDeviceIdentityAsync: runtimeMocks.loadOrCreateProcessDeviceIdentity,
 }));
 
 vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
@@ -197,11 +196,6 @@ vi.mock("../infra/system-events.js", async (importOriginal) => ({
 vi.mock("../media/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../media/store.js")>()),
   deleteMediaBuffer: runtimeMocks.deleteMediaBuffer,
-}));
-
-vi.mock("../routing/session-key.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../routing/session-key.js")>()),
-  normalizeMainKey: runtimeMocks.normalizeMainKey,
 }));
 
 vi.mock("./chat-attachment-policy.js", async (importOriginal) => ({

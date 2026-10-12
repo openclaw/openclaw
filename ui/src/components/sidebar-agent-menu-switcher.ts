@@ -1,10 +1,12 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
+import { icons } from "./icons.ts";
 
 export const AGENT_VALUE_PREFIX = "agent:";
 
@@ -16,6 +18,7 @@ export type SidebarAgentMenuSwitcherParams = {
   agents: readonly GatewayAgentRow[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
   pinnedAgentIds: readonly string[];
+  onTogglePinnedAgent: (agentId: string) => Promise<void>;
   resolveAvatarUrl: (url: string) => string | null;
   avatarErrorHandler: (url: string) => () => void;
   agentUnreadCount: (agentId: string) => number;
@@ -89,14 +92,20 @@ function renderAgentRow(
   const identity = params.identities.get(agentId) ?? null;
   const label = normalizeAgentLabel(agent, identity);
   const active = agentId === params.activeId && !params.allAgentsScope;
+  const pinned = params.pinnedAgentIds.includes(agentId);
+  const pinLabel = t(pinned ? "agents.unpinFromSwitcher" : "agents.pinToSwitcher");
   const unread = agentId === params.activeId ? 0 : params.agentUnreadCount(agentId);
   const option = { value: agentId, label, agent, description: duplicateName ? agentId : undefined };
+  const rowLabel = [label, option.description, unread > 0 ? t("sessionsView.unread") : null]
+    .filter(Boolean)
+    .join(" ");
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${
         active ? "sidebar-agent-menu__agent-switch--active" : ""
       }"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
+      aria-label=${rowLabel}
       aria-current=${active ? "true" : nothing}
       ?autofocus=${autofocus}
     >
@@ -104,6 +113,33 @@ function renderAgentRow(
         <span class="sidebar-agent-menu__agent-avatar"> ${renderAgentAvatar(agent, params)} </span>
         ${renderAgentSelectCopy(option)}
         <span class="sidebar-agent-menu__agent-status">
+          ${
+            params.agents.length > 3
+              ? html`<button
+                  type="button"
+                  class="sidebar-agent-menu__pin"
+                  aria-label=${`${pinLabel}: ${label}`}
+                  title=${pinLabel}
+                  aria-pressed=${String(pinned)}
+                  tabindex="-1"
+                  @click=${async (event: MouseEvent) => {
+                    event.stopPropagation();
+                    const button = event.currentTarget;
+                    if (!(button instanceof HTMLButtonElement)) {
+                      return;
+                    }
+                    // Moving a keyed row into pinned-first order can drop native focus.
+                    const focused = button === document.activeElement;
+                    await params.onTogglePinnedAgent(agentId);
+                    if (focused && button.isConnected) {
+                      button.focus({ preventScroll: true });
+                    }
+                  }}
+                >
+                  ${icons.pin}
+                </button>`
+              : nothing
+          }
           ${
             unread > 0
               ? html`<span
@@ -168,7 +204,19 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
                     `
                   : nothing
               }
-              ${visibleAgents.map((entry) => renderAgentRow(entry, params, entry === autofocusAgent, (nameCounts.get(normalizeAgentLabel(entry, params.identities.get(normalizeAgentId(entry.id)))) ?? 0) > 1))}
+              ${repeat(
+                visibleAgents,
+                (entry) => entry.id,
+                (entry) =>
+                  renderAgentRow(
+                    entry,
+                    params,
+                    entry === autofocusAgent,
+                    (nameCounts.get(
+                      normalizeAgentLabel(entry, params.identities.get(normalizeAgentId(entry.id))),
+                    ) ?? 0) > 1,
+                  ),
+              )}
               ${visibleAgents.length === 0 ? html`<div class="sidebar-agent-menu__empty" role="status">${t("agentChip.noMatches")}</div>` : nothing}
             </div>
           `

@@ -455,7 +455,7 @@ describe("Windows startup fallback", () => {
       detail: "service runtime inspection failed",
       inspectionFailure: {
         code: "service-runtime-inspection-failed",
-        detail: "Scheduled Task probe failed (exit 1): -2147024891",
+        detail: "Scheduled Task check failed (exit 1): -2147024891",
       },
       missingUnit: false,
     });

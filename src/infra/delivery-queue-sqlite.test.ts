@@ -2,19 +2,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../test/helpers/sqlite-parent-observer.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import { promoteDeliveryQueueEntryPlatformSendInDatabase } from "./delivery-queue-sqlite-claim.kernel.js";
 import { commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase } from "./delivery-queue-sqlite-namespace.kernel.js";
 import {
+  captureDeliveryQueueStateContext,
   countFailedDeliveryQueueEntries,
   countPendingDeliveryQueueEntries,
-  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
-  loadDeliveryQueueEntry,
   pruneExpiredDeliveryQueueTombstones,
 } from "./delivery-queue-sqlite.js";
 import {
@@ -23,7 +27,12 @@ import {
   getDeliveryQueueEntryOwnersInDatabase,
   updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "./delivery-queue-sqlite.test-support.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   claimDeliveryQueueEntryForTest,
   renewDeliveryQueueEntryLeaseForTest,
@@ -59,10 +68,12 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       `INSERT INTO delivery_queue_entries
          (queue_name, id, status, entry_kind, session_key, channel, target, account_id,
           retry_count, last_attempt_at, last_error, platform_send_started_at, recovery_state,
-          entry_json, enqueued_at, updated_at, failed_at)
+          entry_json, enqueued_at, updated_at, failed_at,
+          retention_id_prefix, retention_max_age_ms, retention_max_entries)
        VALUES (?, ?, 'pending', NULL, NULL, NULL, NULL, NULL,
-               0, NULL, NULL, NULL, NULL, ?, ?, ?, NULL)`,
-    ).run(QUEUE, id, json, Date.now(), Date.now());
+               0, NULL, NULL, NULL, NULL, ?, ?, ?, NULL,
+               @retention_id_prefix, @retention_max_age_ms, @retention_max_entries)`,
+    ).run(deriveDeliveryQueueRetentionColumns(id, json), QUEUE, id, json, Date.now(), Date.now());
     db.close();
   }
 
@@ -96,7 +107,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
     });
   });
 
-  it("counts pending rows across only the selected namespaces", () => {
+  it("counts current pending namespaces in its captured worker without caller SQLite", async () => {
     const database = openTestDatabase();
     enqueueValid("pending");
     seedDeliveryQueueEntry({
@@ -111,8 +122,30 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
     });
     completeDeliveryQueueEntryInDatabase(database, QUEUE, "pending");
 
-    expect(countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir)).toBe(1);
-    expect(countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
+    const context = captureDeliveryQueueStateContext(stateDir);
+    const observer = observeParentSqlite();
+    try {
+      expect(
+        await countPendingDeliveryQueueEntries([QUEUE, "other-q"], "ignored-root", context),
+      ).toBe(1);
+      expect(await countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
+      expect(observer.counts).toEqual(emptySqliteCounts());
+
+      const foreign = openNodeSqliteDatabase(database.path);
+      try {
+        foreign
+          .prepare("UPDATE delivery_queue_entries SET status = 'pending' WHERE id = ?")
+          .run("pending");
+      } finally {
+        foreign.close();
+      }
+      expect(observer.counts.run).toBeGreaterThan(0);
+      observer.reset();
+      expect(await countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir, context)).toBe(2);
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
   });
 
   it("reads ownership without materializing unrelated queue payloads", () => {

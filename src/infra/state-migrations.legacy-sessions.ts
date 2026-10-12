@@ -8,19 +8,15 @@ import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-h
 import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
 import { preserveDeferredPluginSessionSource } from "./deferred-plugin-session-sources.js";
 import { isErrno } from "./errors.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
+import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 import {
   LEGACY_AGENT_DIR_RECEIPT,
   recordCompletedLegacyAgentDirMigration,
 } from "./state-migrations.agent-dir-receipt.js";
-import {
-  migrationFileExists,
-  readSessionStoreJson5,
-  type SessionEntryLike,
-} from "./state-migrations.fs.js";
+import { migrationFileExists, readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
   aliasedSessionStoreMigrationWarning,
   canonicalizeSessionStore,
@@ -75,9 +71,9 @@ export function inspectLegacyAgentDir(
     );
   }
 
-  let database: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  let database: ReturnType<typeof openSqliteReadOnlyDatabase> | undefined;
   try {
-    const opened = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    const opened = openSqliteReadOnlyDatabase(databasePath, { readOnly: true });
     database = opened;
     const schemaOwner = readExistingAgentSchemaMeta(opened);
     if (!schemaOwner || schemaOwner.role !== "agent") {
@@ -117,23 +113,6 @@ export function inspectLegacyAgentDir(
   } finally {
     database?.close();
   }
-}
-
-function normalizeTargetSessionStore(target: Record<string, SessionEntryLike>): {
-  store: Record<string, SessionEntry>;
-  rejectedProtectedKeyCount: number;
-} {
-  const store = Object.create(null) as Record<string, SessionEntry>;
-  let rejectedProtectedKeyCount = 0;
-  for (const [key, entry] of Object.entries(target)) {
-    const normalizedEntry = normalizeSessionEntry(entry, key);
-    if (!normalizedEntry) {
-      rejectedProtectedKeyCount++;
-      continue;
-    }
-    store[key] = normalizedEntry;
-  }
-  return { store, rejectedProtectedKeyCount };
 }
 
 export async function migrateLegacySessions(
@@ -228,15 +207,24 @@ export async function migrateLegacySessions(
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
     legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
   });
-  const normalized = normalizeTargetSessionStore(canonicalized.store);
-  if (normalized.rejectedProtectedKeyCount > 0) {
+  const normalized = Object.create(null) as Record<string, SessionEntry>;
+  let rejectedProtectedKeyCount = 0;
+  for (const [key, entry] of Object.entries(canonicalized.store)) {
+    const normalizedEntry = normalizeSessionEntry(entry, key);
+    if (normalizedEntry) {
+      normalized[key] = normalizedEntry;
+    } else {
+      rejectedProtectedKeyCount++;
+    }
+  }
+  if (rejectedProtectedKeyCount > 0) {
     warnings.push(
-      `Refused legacy session migration because normalization rejected ${normalized.rejectedProtectedKeyCount} existing target session ${normalized.rejectedProtectedKeyCount === 1 ? "key" : "keys"}; left ${detected.sessions.targetStorePath} in place. Repair the conflicting rows, then rerun openclaw doctor --fix.`,
+      `Refused legacy session migration because normalization rejected ${rejectedProtectedKeyCount} existing target session ${rejectedProtectedKeyCount === 1 ? "key" : "keys"}; left ${detected.sessions.targetStorePath} in place. Repair the conflicting rows, then rerun openclaw doctor --fix.`,
     );
     return { changes, warnings };
   }
   if (Object.keys(targetStore).length > 0) {
-    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized.store);
+    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized);
     if (canonicalized.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalized.legacyKeys.length} legacy session key(s)`);
     }

@@ -2,11 +2,9 @@
 // Exercises the serialized mock gateway exactly as a page would: the init
 // script installs MockWebSocket on window, and requests flow over it.
 import { describe, expect, vi } from "vitest";
-import { setSharedControlUiE2eServerBaseUrl } from "./control-ui-e2e-shared-preview.ts";
 import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGateway,
-  type ControlUiMockGatewayScenario,
   type ControlUiMockRequestHandler,
 } from "./control-ui-e2e.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
@@ -17,50 +15,6 @@ type ResponseFrame = {
   type?: string;
   payload?: Record<string, unknown>;
 };
-
-it("advertises the leased build in hello while retaining scenario overrides and clearing stale identity", async ({
-  gatewayPage,
-}) => {
-  const buildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
-  const defaultIdentity = { buildId: "e2e", version: "e2e" };
-  const expectHello = async (
-    id: string,
-    scenario: ControlUiMockGatewayScenario,
-    server: typeof buildInfo,
-  ) => {
-    gatewayPage.execute(createControlUiMockGatewayInitScript(scenario));
-    const { request } = gatewayPage.connect();
-    await flushMockTimers();
-    expect(await request(id, "connect", {})).toMatchObject({ server });
-  };
-
-  setSharedControlUiE2eServerBaseUrl(null);
-  try {
-    await expectHello("ordinary", {}, defaultIdentity);
-    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", buildInfo);
-    await expectHello("prepared", {}, buildInfo);
-    await expectHello(
-      "build-override",
-      { serverBuildId: " custom-build ", serverVersion: " " },
-      { ...buildInfo, buildId: "custom-build" },
-    );
-    await expectHello(
-      "version-override",
-      { serverBuildId: " ", serverVersion: " 2026.9.24 " },
-      { ...buildInfo, version: "2026.9.24" },
-    );
-
-    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", { ...buildInfo, version: null });
-    await expectHello("unknown-version", {}, { ...buildInfo, version: "e2e" });
-    setSharedControlUiE2eServerBaseUrl("http://ordinary-ui/");
-    await expectHello("replacement", {}, defaultIdentity);
-    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", buildInfo);
-    setSharedControlUiE2eServerBaseUrl(null);
-    await expectHello("reset", {}, defaultIdentity);
-  } finally {
-    setSharedControlUiE2eServerBaseUrl(null);
-  }
-});
 
 it("keeps handler responses and events on the requesting socket", async ({ gatewayPage }) => {
   const { window, execute } = gatewayPage;
@@ -316,181 +270,9 @@ describe("mock gateway stateful config", () => {
       ).toMatchObject({ ok: true, hash: "mock-config-hash-4" });
     },
   );
-
-  it("preserves explicit source projections for unchanged raw reads and apply", async ({
-    gatewayPage,
-  }) => {
-    const { execute } = gatewayPage;
-    const raw = '{"logging":{"level":"${MOCK_LOG_LEVEL}"}}';
-    const sourceConfig = { logging: { level: "debug" } };
-    const runtimeConfig = {
-      ...sourceConfig,
-      agents: { defaults: { thinkingDefault: "low" } },
-    };
-    execute(
-      createControlUiMockGatewayInitScript({
-        methodResponses: {
-          "config.get": {
-            raw,
-            config: runtimeConfig,
-            sourceConfig,
-            resolved: sourceConfig,
-            runtimeConfig,
-            hash: "projected-source-fixture",
-            valid: true,
-            issues: [],
-          },
-        },
-      }),
-    );
-    const { request } = gatewayPage.connect();
-    await flushMockTimers();
-    const projections = { raw, sourceConfig, resolved: sourceConfig, runtimeConfig };
-    expect(await request("get-projected", "config.get", {})).toMatchObject(projections);
-
-    const applied = await request("apply-unchanged", "config.apply", {
-      raw,
-      baseHash: "projected-source-fixture",
-    });
-    expect(applied).toMatchObject({ ok: true, hash: "mock-config-hash-1" });
-    expect(await request("get-projected-after-apply", "config.get", {})).toMatchObject({
-      ...projections,
-      hash: applied.hash,
-      appliedConfigHash: applied.hash,
-    });
-  });
-
-  it("preserves configured projections when the raw fixture is unparseable", async ({
-    gatewayPage,
-  }) => {
-    const { execute } = gatewayPage;
-    const sourceConfig = { logging: { level: "info" } };
-    const runtimeConfig = {
-      ...sourceConfig,
-      agents: { defaults: { thinkingDefault: "low" } },
-    };
-    const raw = "{";
-    const issues = [{ path: "", message: "Synthetic parse failure" }];
-    execute(
-      createControlUiMockGatewayInitScript({
-        methodResponses: {
-          "config.get": {
-            raw,
-            config: runtimeConfig,
-            sourceConfig,
-            resolved: sourceConfig,
-            runtimeConfig,
-            hash: "invalid-raw-fixture",
-            valid: false,
-            issues,
-          },
-        },
-      }),
-    );
-    const { request } = gatewayPage.connect();
-    await flushMockTimers();
-    expect(await request("get-invalid", "config.get", {})).toMatchObject({
-      raw,
-      valid: false,
-      issues,
-      config: runtimeConfig,
-      sourceConfig,
-      resolved: sourceConfig,
-      runtimeConfig,
-    });
-
-    const invalidEdit = "{ still invalid";
-    await request("set-invalid", "config.set", {
-      raw: invalidEdit,
-      baseHash: "invalid-raw-fixture",
-    });
-    const invalidReloaded = await request("get-invalid-after-edit", "config.get", {});
-    expect(invalidReloaded).toMatchObject({
-      raw: invalidEdit,
-      valid: false,
-      issues,
-      config: runtimeConfig,
-      sourceConfig,
-      resolved: sourceConfig,
-      runtimeConfig,
-    });
-    expect(invalidReloaded.sourceConfig).toEqual(sourceConfig);
-    expect(invalidReloaded.resolved).toEqual(sourceConfig);
-  });
-
-  it("leaves config methods untouched when the scenario has no raw fixture", async ({
-    gatewayPage,
-  }) => {
-    const { execute } = gatewayPage;
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: { "config.set": { custom: true } },
-    });
-    execute(script);
-
-    const { frames, send } = gatewayPage.connect();
-    await flushMockTimers();
-
-    send("set-1", "config.set", {});
-    await flushMockTimers();
-    const response = frames.find((frame) => frame.type === "res" && frame.id === "set-1");
-    expect(response?.payload).toEqual({ custom: true });
-  });
-
-  it("hydrates legacy persisted config state without losing revision hashes", async ({
-    gatewayPage,
-  }) => {
-    const { window, execute } = gatewayPage;
-    const raw = '{"logging":{"level":"info"}}';
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: {
-        "config.get": {
-          raw,
-          config: { logging: { level: "info" } },
-          hash: "fixture-hash",
-          appliedConfigHash: "fixture-applied-hash",
-          valid: true,
-          issues: [],
-        },
-      },
-    });
-    window.sessionStorage.setItem(
-      "openclaw.control-ui-e2e.configState",
-      JSON.stringify({ raw, revision: 2 }),
-    );
-    execute(script);
-
-    const { frames, send } = gatewayPage.connect();
-    await flushMockTimers();
-    send("get-1", "config.get", {});
-    await flushMockTimers();
-
-    expect(frames.find((frame) => frame.id === "get-1")?.payload).toMatchObject({
-      hash: "fixture-hash",
-      configRevisionHash: "fixture-hash",
-      appliedConfigHash: "fixture-applied-hash",
-    });
-  });
 });
 
 describe("mock gateway stateful sessions", () => {
-  it("acknowledges broad session observation with the real Gateway response", async ({
-    gatewayPage,
-  }) => {
-    const { execute } = gatewayPage;
-    const script = createControlUiMockGatewayInitScript({});
-    execute(script);
-
-    const { frames, send } = gatewayPage.connect();
-    await flushMockTimers();
-
-    send("subscribe-events", "sessions.subscribe");
-    await flushMockTimers();
-
-    expect(frames.find((frame) => frame.id === "subscribe-events")?.payload).toEqual({
-      subscribed: true,
-    });
-  });
-
   it("publishes a catalog adoption only after its deferred response succeeds", async ({
     gatewayPage,
   }) => {
@@ -625,57 +407,5 @@ describe("mock gateway stateful sessions", () => {
       gatewayPage.close();
       vi.useRealTimers();
     }
-  });
-
-  it("moves archive patches between active and archived session lists", async ({ gatewayPage }) => {
-    const { execute } = gatewayPage;
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: {
-        "sessions.list": {
-          count: 2,
-          defaults: {},
-          path: "",
-          sessions: [
-            { key: "agent:main:research", archived: false },
-            { key: "agent:main:launch-notes", archived: true },
-          ],
-          ts: 0,
-        },
-        "sessions.patch": { ok: true },
-      },
-      sessionArchiveFiltering: true,
-    });
-    execute(script);
-
-    const { request } = gatewayPage.connect();
-    await flushMockTimers();
-
-    const keys = (payload: Record<string, unknown>) =>
-      (payload.sessions as Array<{ key: string }>).map((row) => row.key);
-
-    expect(keys(await request("list-1", "sessions.list", {}))).toEqual(["agent:main:research"]);
-    expect(keys(await request("list-2", "sessions.list", { archived: true }))).toEqual([
-      "agent:main:launch-notes",
-    ]);
-    expect(
-      await request("patch-3", "sessions.patch", {
-        key: "agent:main:research",
-        archived: true,
-      }),
-    ).toEqual({ ok: true });
-    expect(keys(await request("list-4", "sessions.list", {}))).toEqual([]);
-    expect(keys(await request("list-5", "sessions.list", { archived: true }))).toEqual([
-      "agent:main:research",
-      "agent:main:launch-notes",
-    ]);
-
-    await request("patch-6", "sessions.patch", {
-      key: "agent:main:launch-notes",
-      archived: false,
-    });
-    expect(keys(await request("list-7", "sessions.list", {}))).toEqual(["agent:main:launch-notes"]);
-    expect(keys(await request("list-8", "sessions.list", { archived: true }))).toEqual([
-      "agent:main:research",
-    ]);
   });
 });

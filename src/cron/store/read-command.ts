@@ -12,7 +12,6 @@ import {
   readActiveCronRunReceiptOwnersInDatabase,
   readCronRunReceiptCurrentFactsInDatabase,
 } from "./run-receipt-read.js";
-import { observeCronRunRecoveryInDatabase } from "./run-recovery.read.js";
 
 type CronStateReadCommand = Extract<OpenClawStateReadCommand, { type: `cron.${string}` }>;
 
@@ -20,7 +19,6 @@ export function isCronStateReadCommand(
   command: OpenClawStateReadCommand,
 ): command is CronStateReadCommand {
   switch (command.type) {
-    case "cron.observeRunRecovery":
     case "cron.currentReceipt":
     case "cron.scratch":
     case "cron.jobNames":
@@ -38,11 +36,6 @@ export function readCronStateCommandInDatabase(
   command: CronStateReadCommand,
 ): Extract<OpenClawStateReadResult, { type: `cron.${string}` }> {
   switch (command.type) {
-    case "cron.observeRunRecovery":
-      return {
-        type: command.type,
-        observation: observeCronRunRecoveryInDatabase(db, command),
-      };
     case "cron.currentReceipt":
       return {
         type: command.type,

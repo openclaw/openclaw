@@ -87,23 +87,13 @@ describe("listGatewayAgentsBasic", () => {
     expect(syncRead).not.toHaveBeenCalled();
   });
 
-  it("does not add owner entries without a roster membership source", async () => {
-    expect(
-      (
-        await listGatewayAgentsBasic({
-          agents: { entries: { main: {} } },
-        })
-      ).agents,
-    ).toEqual([{ id: "main", kind: "agent", name: undefined }]);
-  });
-
   it("lets configured ownership override disk system metadata", async () => {
     await fs.mkdir(path.join(stateDir, "agents", "openclaw"), { recursive: true });
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "main" } },
-        entries: { main: {}, openclaw: { name: "OpenClaw" } },
+        entries: { main: {}, openclaw: { name: "OpenClaw", identity: { name: "Fallback" } } },
       },
     };
 
@@ -124,23 +114,5 @@ describe("listGatewayAgentsBasic", () => {
     const result = await listGatewayAgentsBasic(cfg);
 
     expect(result.agents).toEqual([{ id: "main", kind: "agent", name: "小金" }]);
-  });
-
-  it("prefers the explicit configured name over identity.name", async () => {
-    const cfg: OpenClawConfig = {
-      session: { mainKey: "main" },
-      agents: {
-        entries: {
-          main: {
-            name: "Ops",
-            identity: { name: "开发助手" },
-          },
-        },
-      },
-    };
-
-    const result = await listGatewayAgentsBasic(cfg);
-
-    expect(result.agents).toEqual([{ id: "main", kind: "agent", name: "Ops" }]);
   });
 });

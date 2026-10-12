@@ -7,7 +7,6 @@ import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
-/** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
 export function classifyPortListener(listener: PortListener): PortListenerKind {
   const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
   const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
@@ -99,7 +98,6 @@ function parseGatewayListeners(
   return parsePortListeners(listeners, port);
 }
 
-/** Returns true for one Gateway process represented by separate IPv4 and IPv6 loopback rows. */
 export function isDualStackLoopbackGatewayListeners(
   listeners: PortListener[],
   port: number,
@@ -127,7 +125,6 @@ function parsedListenersOwnSpecificIpv4WithLoopback(parsed: ParsedGatewayListene
   );
 }
 
-/** Checks one PID owns an expected IPv4 interface and canonical loopback. */
 export function isSameProcessSpecificIpv4WithLoopbackListeners(
   listeners: PortListener[],
   port: number,
@@ -144,7 +141,6 @@ export function isSameProcessSpecificIpv4WithLoopbackListeners(
   );
 }
 
-/** Returns true when listener rows describe a benign Gateway bind pattern. */
 export function isExpectedGatewayListeners(listeners: PortListener[], port: number): boolean {
   const parsed = parseGatewayListeners(listeners, port);
   if (!parsed) {
@@ -159,7 +155,6 @@ export function isExpectedGatewayListeners(listeners: PortListener[], port: numb
   );
 }
 
-/** Builds user-facing remediation hints for processes occupying a port. */
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];

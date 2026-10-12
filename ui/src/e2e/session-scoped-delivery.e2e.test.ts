@@ -20,12 +20,14 @@ const narrated = "agent:main:narrated";
 const unrelated = "agent:main:unrelated";
 
 async function receivedSessions(page: Page): Promise<unknown[]> {
+  // Safe observer headlines also reach broad session-list subscribers; raw
+  // messages, tool arguments, and side-chat results remain individually scoped.
   return page.evaluate(() => {
     const app = document.querySelector<HTMLElement & { runtime: { context: ApplicationContext } }>(
       "openclaw-app",
     );
     return (app?.runtime.context.gateway.eventLog ?? []).flatMap(({ event, payload }) =>
-      ["agent", "chat", "session.tool", "session.observer", "chat.side_result"].includes(event) &&
+      ["agent", "chat", "session.tool", "chat.side_result"].includes(event) &&
       payload &&
       typeof payload === "object" &&
       "sessionKey" in payload

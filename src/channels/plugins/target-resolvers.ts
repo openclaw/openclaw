@@ -1,8 +1,5 @@
 import type { ChannelResolveResult } from "./types.adapters.js";
 
-/**
- * Builds unresolved target results with one common note.
- */
 export function buildUnresolvedTargetResults(
   inputs: string[],
   note: string,
@@ -14,9 +11,6 @@ export function buildUnresolvedTargetResults(
   }));
 }
 
-/**
- * Resolves targets only when a required token is available.
- */
 export async function resolveTargetsWithOptionalToken<TResult>(params: {
   token?: string | null;
   inputs: string[];

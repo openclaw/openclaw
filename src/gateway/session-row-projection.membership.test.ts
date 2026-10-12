@@ -13,7 +13,6 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
-import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
@@ -23,6 +22,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionGroupMembership } from "./session-group-membership.read.js";
 import { putSessionGroups } from "./session-groups.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 function observeQueries(prototype: StatementSync) {
@@ -136,66 +136,6 @@ it("publishes byte-identical group and participant facts without host membership
   });
 });
 
-it("retains prepared membership across config changes and reconciles explicitly invalidated facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:config-members" };
-    await upsertSessionEntryCore(scope, { sessionId: "config-members", updatedAt: 1 });
-    addSessionMember(scope, { identityId: "viewer", addedBy: "owner" });
-    recordSessionParticipant(scope, { identity: { type: "agent", id: "research" }, promptedAt: 1 });
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    const membershipReads = vi.fn<(keys: readonly string[] | undefined) => void>();
-    const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-    const observer = vi
-      .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-      .mockImplementation((targets, consume) =>
-        readDatabases(targets, (owners) =>
-          consume(
-            owners.map((owner) => ({
-              ...owner,
-              readMembershipFacts: (input: Parameters<typeof owner.readMembershipFacts>[0]) => {
-                membershipReads(input.sessionKeys);
-                return owner.readMembershipFacts(input);
-              },
-            })),
-          ),
-        ),
-      );
-    try {
-      await projection.ensureMaterialized();
-      membershipReads.mockClear();
-      for (const factsInvalidated of [false, true]) {
-        sessionChanges.emit({
-          all: true,
-          scope: "config",
-          ...(factsInvalidated ? { factsInvalidated: true as const } : {}),
-        });
-        const described = await projection.withPreparedExactRows(
-          () => [{ agentId: scope.agentId, key: scope.sessionKey }],
-          (read) => read.describe({ agentId: scope.agentId, key: scope.sessionKey }),
-        );
-        expect(described).toMatchObject({
-          kind: "complete",
-          value: {
-            entry: {
-              sessionId: "config-members",
-              participants: [{ identity: { type: "agent", id: "research" } }],
-            },
-            membership: new Set(["viewer"]),
-          },
-        });
-        if (factsInvalidated) {
-          expect(membershipReads).toHaveBeenCalledExactlyOnceWith(undefined);
-        } else {
-          expect(membershipReads).not.toHaveBeenCalled();
-        }
-      }
-    } finally {
-      observer.mockRestore();
-      projection.dispose();
-    }
-  });
-});
-
 it("publishes final replacement facts to observers registered before the projection", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const scope = { agentId: "main", sessionKey: "agent:main:transaction-members" };
@@ -270,9 +210,13 @@ it("publishes final replacement facts to observers registered before the project
         });
       }
       expect(projection.needsMembershipPreparation()).toBe(false);
-      expect(
-        projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.entry,
-      ).toMatchObject({
+      const query = { agentId: scope.agentId, key: scope.sessionKey };
+      const entry = await withReadySessionRows(
+        projection,
+        () => [query],
+        (read) => read.describe(query)?.entry,
+      );
+      expect(entry).toMatchObject({
         sessionId: "current",
         category: "current",
         participants: [

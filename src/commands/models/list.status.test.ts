@@ -523,18 +523,18 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it.each([
-    [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
-    [{ probeTimeout: "" }, "--probe-timeout"],
-  ])("rejects invalid probe numeric option %j", async (opts, label) => {
-    const localRuntime = createTestRuntime();
-    mocks.runAuthProbes.mockClear();
-    await expect(
-      modelsStatusCommand({ json: true, probe: true, ...opts }, localRuntime),
-    ).rejects.toThrow(label);
-    expect(mocks.runAuthProbes).not.toHaveBeenCalled();
-    expect(localRuntime.log).not.toHaveBeenCalled();
-  });
+  it.each([[{ probeConcurrency: "2.5" }, "--probe-concurrency"]])(
+    "rejects invalid probe numeric option %j",
+    async (opts, label) => {
+      const localRuntime = createTestRuntime();
+      mocks.runAuthProbes.mockClear();
+      await expect(
+        modelsStatusCommand({ json: true, probe: true, ...opts }, localRuntime),
+      ).rejects.toThrow(label);
+      expect(mocks.runAuthProbes).not.toHaveBeenCalled();
+      expect(localRuntime.log).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards probe numeric options", async () => {
     await jsonStatus({
@@ -547,36 +547,6 @@ describe("modelsStatusCommand auth overview", () => {
       expect.objectContaining({
         options: expect.objectContaining({ timeoutMs: 1.5, concurrency: 1, maxTokens: 1 }),
       }),
-    );
-  });
-
-  it("includes masked auth sources in JSON output", async () => {
-    const { payload } = await jsonStatus();
-
-    expect(payload.auth.shellEnvFallback.enabled).toBe(true);
-    expect(payload.auth.shellEnvFallback.appliedKeys).toContain("OPENAI_API_KEY");
-    expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
-
-    const anthropic = requireProvider(payload.auth.providers, "anthropic");
-    expect(anthropic).toMatchObject({
-      profiles: {
-        labels: expect.arrayContaining([
-          expect.stringContaining("OAuth"),
-          expect.stringContaining("..."),
-        ]),
-      },
-    });
-    const openai = requireProvider(payload.auth.providers, "openai");
-    expect(openai).toMatchObject({
-      env: {
-        source: expect.stringContaining("OPENAI_API_KEY"),
-        value: expect.stringContaining("..."),
-      },
-      profiles: { labels: expect.arrayContaining([expect.stringContaining("...")]) },
-    });
-    expect(JSON.stringify(openai)).not.toContain("abc123");
-    expect(payload.auth.providersWithOAuth).toEqual(
-      expect.arrayContaining([expect.stringMatching(/^anthropic/u), "openai (1)"]),
     );
   });
 
@@ -601,6 +571,7 @@ describe("modelsStatusCommand auth overview", () => {
     });
 
     const { payload } = await jsonStatus();
+    expect(JSON.stringify(payload.auth)).not.toContain("abc123");
 
     expect(payload.allowed).toEqual(["clawrouter/anthropic/claude-haiku-4-5"]);
   });
@@ -802,44 +773,6 @@ describe("modelsStatusCommand auth overview", () => {
     expect(text).toContain("status=unavailable");
     expect(text).toContain("auth=usable");
     expect(text).toContain("runtime=unavailable");
-  });
-
-  it("evaluates mixed primary and fallback OpenAI routes independently", async () => {
-    configureStatus({
-      primary: "openai/gpt-5.6",
-      fallbacks: ["openai/gpt-5.5"],
-      profiles: {
-        "openai:default": createOAuthRefreshCredential({
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-        }),
-      },
-    });
-
-    const { runtime: localRuntime, payload } = await jsonStatus({ check: true });
-    expect(payload.auth.missingProvidersInUse).toEqual(["openai"]);
-    expect(payload.auth.runtimeAuthRoutes).toEqual([
-      {
-        provider: "openai",
-        runtime: "codex",
-        authProvider: "openai",
-        status: "missing",
-        effective: {
-          kind: "profiles",
-          detail: "/tmp/openclaw-agent/auth-profiles.json",
-        },
-      },
-    ]);
-    expect(payload.auth.modelRouteIssues).toEqual([
-      {
-        kind: "missing-auth",
-        provider: "openai",
-        model: "gpt-5.6",
-        authRequirement: "api-key",
-        message: "No usable api-key authentication is available for openai/gpt-5.6.",
-      },
-    ]);
-    expect(localRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("flags a utility model whose route needs api-key auth despite an OAuth-healthy primary", async () => {

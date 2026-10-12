@@ -32,7 +32,6 @@ export type ChatSendSubmitOptions = {
   followUpMode?: ControlUiFollowUpMode;
   /** Only the inline queued-row submit may resume and replace an edited row. */
   resumeQueuedMessageEditId?: string;
-  restoreDraft?: boolean;
 };
 
 export type ChatHost = ToolStreamHost &

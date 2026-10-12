@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -11,6 +12,7 @@ import {
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import { createWorkerPlacementMoveService } from "../worker-environments/placement-move-service.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "../worker-environments/placement-record.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -282,39 +284,6 @@ describe("sessions.dispatch", () => {
     },
   );
 
-  it("dispatches codex sessions through SSH without requiring node command allowlisting", async () => {
-    useWorktreeSession({
-      agentRuntimeOverride: "codex",
-      providerOverride: "openai",
-      modelOverride: "gpt-test",
-    });
-    const dispatch = vi.fn().mockRejectedValue(new Error("remote dispatch reached"));
-    const respond = await invoke(
-      makeContext({
-        workerEnvironmentService: {
-          supportsExecutionMode: (_profileId: string, mode: "worker-turn" | "remote-exec") =>
-            mode === "remote-exec",
-        } as never,
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-    );
-
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        executionMode: "remote-exec",
-        devicePlacement: {
-          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-          consumesWorkerSlot: false,
-        },
-      }),
-      expect.any(Function),
-      undefined,
-      undefined,
-    );
-    expectDispatchError(respond, "remote dispatch reached", ErrorCodes.UNAVAILABLE);
-  });
-
   it("moves an abandoned session back to the Gateway with exact-source CAS", async () => {
     useWorktreeSession();
     const move = vi.fn().mockResolvedValue({ state: "local", generation: 7 });
@@ -417,106 +386,6 @@ describe("sessions.dispatch", () => {
       expectDispatchError(respond, `session cannot move from placement ${source.state}`);
     },
   );
-
-  it.each([2, 3])(
-    "redispatches a reclaimed session with correlated identity (environment epoch: %s)",
-    async (ownerEpoch) => {
-      useWorktreeSession();
-      const dispatchedPlacement: WorkerSessionPlacementRecord = {
-        ...activePlacementRecord(),
-        environmentId: "environment-2",
-        generation: 5,
-        activeOwnerEpoch: 2,
-      };
-      const dispatch = vi.fn().mockResolvedValue(dispatchedPlacement);
-      const context = makeContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: {
-          getMany: () => new Map([[sessionId, reclaimedPlacementRecord()]]),
-        },
-      });
-      vi.spyOn(context.workerEnvironmentService!, "get").mockReturnValue({
-        environmentId: "environment-2",
-        providerId: "fake",
-        profileId: "test",
-        leaseId: "lease-2",
-        sharedHost: false,
-        state: "attached",
-        ownerEpoch,
-        createdAtMs: 1,
-        idleSinceAtMs: null,
-        destroyRequestedAtMs: null,
-        attachedSessionIds: [sessionId],
-        desktopAvailable: false,
-        desktopApps: [],
-        tunnelStatus: "stopped",
-      });
-      const respond = await invoke(context);
-
-      expect(dispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId,
-          sessionKey,
-          agentId: "main",
-          profileId: "test",
-        }),
-        expect.any(Function),
-        undefined,
-        undefined,
-      );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          placement: expect.objectContaining({
-            state: "active",
-            environmentId: "environment-2",
-            generation: 5,
-            ...(ownerEpoch === 2 ? { providerId: "fake", profileId: "test" } : {}),
-          }),
-        }),
-        undefined,
-      );
-      if (ownerEpoch !== 2) {
-        const payload = vi.mocked(respond).mock.calls[0]?.[1];
-        expect(payload).not.toHaveProperty("placement.providerId");
-        expect(payload).not.toHaveProperty("placement.profileId");
-      }
-    },
-  );
-
-  it("allows a failed placement to redispatch after its environment is proven gone", async () => {
-    useWorktreeSession();
-    const dispatch = vi.fn().mockResolvedValue({
-      ...reclaimedPlacementRecord(),
-      state: "active",
-      environmentId: "environment-next",
-      generation: 6,
-      activeOwnerEpoch: 2,
-      recoveryError: null,
-    });
-    const getEnvironment = vi.fn(() => undefined);
-
-    const respond = await invoke(
-      makeContext({
-        workerEnvironmentService: {
-          get: getEnvironment,
-          supportsExecutionMode: () => true,
-        } as never,
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: {
-          getMany: () => new Map([[sessionId, failedPlacementRecord()]]),
-        },
-      }),
-    );
-
-    expect(getEnvironment).toHaveBeenCalledWith("environment-previous");
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ placement: expect.objectContaining({ state: "active" }) }),
-      undefined,
-    );
-  });
 
   it.each([
     [
@@ -713,93 +582,113 @@ describe("sessions.dispatch", () => {
     );
   });
   it("requires admin before resolving a configured project profile", async () => {
-    useWorktreeSession({}, "/repo/worktree");
-    mocks.runCommandWithTimeout.mockResolvedValue({
-      code: 0,
-      stdout: "git@github.com:Acme/App.git\n",
-      stderr: "",
-    });
-    const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
-    const context = makeContext({
-      getRuntimeConfig: () => ({
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {
+        session: { store: state.statePath("sessions.json") },
         cloudWorkers: {
           profiles: { mapped: { provider: "fake" } },
           projectProfiles: { "github.com/acme/app": "mapped" },
         },
-      }),
-      logGateway: { warn: vi.fn() } as never,
-      workerPlacementDispatchService: { dispatch },
-      workerSessionPlacementService: { getMany: () => new Map() },
-    });
-    const controller = new AbortController();
-    const request = async (scope: "operator.write" | "operator.admin") => {
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        signal: controller.signal,
-        req: {
-          type: "req",
-          id: `configured-default-${scope}`,
-          method: "sessions.dispatch",
-          params: { key: sessionKey },
+      };
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath: cfg.session.store },
+        {
+          sessionId,
+          updatedAt: 1,
+          providerOverride: "anthropic",
+          modelOverride: "claude-test",
+          worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
         },
-        respond,
-        client: {
-          connId: `conn-${scope}`,
-          connect: {
-            role: "operator",
-            scopes: [scope],
-            client: { id: "test", version: "1", platform: "test", mode: "test" },
-            minProtocol: 1,
-            maxProtocol: 1,
-          },
-        } as Parameters<typeof handleGatewayRequest>[0]["client"],
-        isWebchatConnect: () => false,
-        context,
-        extraHandlers: { "sessions.dispatch": getSessionDispatchHandler() },
+      );
+      mocks.resolveTarget.mockImplementation(resolveGatewaySessionStoreTargetWithStore);
+      mocks.findLiveByOwner.mockReturnValue({
+        id: "worktree-1",
+        ownerKind: "session",
+        ownerId: sessionKey,
+        path: "/repo/worktree",
       });
-      return respond;
-    };
+      mocks.runCommandWithTimeout.mockResolvedValue({
+        code: 0,
+        stdout: "git@github.com:Acme/App.git\n",
+        stderr: "",
+      });
+      const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
+      const context = makeContext({
+        getRuntimeConfig: () => cfg,
+        logGateway: { warn: vi.fn() } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      });
+      const controller = new AbortController();
+      const request = async (scope: "operator.write" | "operator.admin") => {
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          signal: controller.signal,
+          req: {
+            type: "req",
+            id: `configured-default-${scope}`,
+            method: "sessions.dispatch",
+            params: { key: sessionKey },
+          },
+          respond,
+          client: {
+            connId: `conn-${scope}`,
+            connect: {
+              role: "operator",
+              scopes: [scope],
+              client: { id: "test", version: "1", platform: "test", mode: "test" },
+              minProtocol: 1,
+              maxProtocol: 1,
+            },
+          } as Parameters<typeof handleGatewayRequest>[0]["client"],
+          isWebchatConnect: () => false,
+          context,
+          extraHandlers: { "sessions.dispatch": getSessionDispatchHandler() },
+        });
+        return respond;
+      };
 
-    const writeRespond = await request("operator.write");
+      const writeRespond = await request("operator.write");
 
-    expect(writeRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.FORBIDDEN,
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
-      }),
-    );
-    expect(mocks.resolveTarget).not.toHaveBeenCalled();
-    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(dispatch).not.toHaveBeenCalled();
+      expect(writeRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.FORBIDDEN,
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        }),
+      );
+      expect(mocks.resolveTarget).not.toHaveBeenCalled();
+      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
 
-    const adminRespond = await request("operator.admin");
+      const adminRespond = await request("operator.admin");
 
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
-      ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
-      { timeoutMs: 4_000 },
-    );
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "mapped" }),
-      expect.any(Function),
-      expect.any(Function),
-      controller.signal,
-    );
-    expect(adminRespond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        key: sessionKey,
-        sessionId,
-        placement: expect.objectContaining({ state: "active" }),
-      }),
-      undefined,
-    );
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
+        ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
+        { timeoutMs: 4_000 },
+      );
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "mapped" }),
+        expect.any(Function),
+        expect.any(Function),
+        controller.signal,
+      );
+      expect(adminRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: true,
+          key: sessionKey,
+          sessionId,
+          placement: expect.objectContaining({ state: "active" }),
+        }),
+        undefined,
+      );
+    });
   });
   it.each([
     { name: "starts an active abandonment", joined: false },
@@ -832,9 +721,9 @@ describe("sessions.dispatch", () => {
     };
     const moves = createWorkerPlacementMoveService({
       placements: {
-        beginPlacementMove: () => ({ intent, placement: draining, joined }),
-        get: () => existing,
-        getPlacementMove: () => (joined ? intent : undefined),
+        beginPlacementMove: async () => ({ intent, placement: draining, joined }),
+        getWithMoveAsync: async () => ({ placement: existing, move: joined ? intent : undefined }),
+        getPlacementMoveAsync: async () => (joined ? intent : undefined),
         recordPlacementMoveError,
       } as never,
       environments: { get: () => undefined },

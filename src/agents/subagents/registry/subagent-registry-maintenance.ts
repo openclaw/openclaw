@@ -6,10 +6,7 @@
 import { registerSessionMaintenancePreserveKeysProvider } from "../../../config/sessions/store-maintenance-preserve.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  getSubagentMaintenanceRunsSnapshotForRead,
-  prepareSubagentMaintenanceRunsSnapshotForRead,
-} from "./subagent-registry-state.js";
+import { prepareSubagentMaintenanceRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunMaintenanceRecord } from "./subagent-registry.types.js";
 
 function shouldPreserveForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
@@ -43,15 +40,13 @@ function protectedSubagentSessionKeys(runs: Iterable<SubagentRunMaintenanceRecor
   return [...keys];
 }
 
-registerSessionMaintenancePreserveKeysProvider(
-  () =>
-    protectedSubagentSessionKeys(getSubagentMaintenanceRunsSnapshotForRead(subagentRuns).values()),
-  async () => {
-    const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(subagentRuns);
-    return {
-      capture: () => protectedSubagentSessionKeys(prepared.capture().values()),
-      dispose: () => prepared.dispose(),
-      subagentRunBasis: prepared.basis,
-    };
-  },
-);
+registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
+  const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(
+    subagentRuns,
+    native ? { live: true } : undefined,
+  );
+  return {
+    capture: () => protectedSubagentSessionKeys(prepared.capture().values()),
+    dispose() {},
+  };
+});

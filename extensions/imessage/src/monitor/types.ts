@@ -1,4 +1,3 @@
-// Imessage type declarations define plugin contracts.
 import type {
   ChannelAccountSnapshot,
   ChannelRuntimeSurface,

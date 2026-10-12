@@ -506,6 +506,60 @@ describe("agent.wait gateway dedupe observations", () => {
     }
   });
 
+  it("observes later queue admission without completing terminal or another Gateway's waits", async () => {
+    vi.useFakeTimers();
+    const runId = "queued-after-wait";
+    const context = createGatewayRequestContext(makeContextParams());
+    const otherContext = createGatewayRequestContext(makeContextParams());
+    const service = createAgentTurnService({ context, isWebchatConnect: () => false });
+    const otherService = createAgentTurnService({
+      context: otherContext,
+      isWebchatConnect: () => false,
+    });
+    const queuedObserved = vi.fn();
+    const terminalObserved = vi.fn();
+    const otherObserved = vi.fn();
+    const queuedWait = service.waitForTurn({ runId, timeoutMs: 30_000 }).then(queuedObserved);
+    const terminalWait = waitForAgentJob({ runId, timeoutMs: 30_000, source: "chat" }).then(
+      terminalObserved,
+    );
+    const otherWait = otherService.waitForTurn({ runId, timeoutMs: 30_000 }).then(otherObserved);
+    const controller = new AbortController();
+    const session = {
+      sessionKey: "agent:main:queued-after-wait",
+      sessionId: "queued-after-wait-session",
+      agentId: "main",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    };
+    try {
+      expect(
+        registerQueuedChatTurn({
+          chatQueuedTurns: context.chatQueuedTurns,
+          runId,
+          controller,
+          ...session,
+        }),
+      ).toBe(true);
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${runId}`,
+        session,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(queuedObserved).toHaveBeenCalledWith({
+        session,
+        result: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
+      });
+      expect(terminalObserved).not.toHaveBeenCalled();
+      expect(otherObserved).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      completeRun(context.dedupe, runId, "chat");
+      await Promise.all([queuedWait, terminalWait, otherWait]);
+    }
+  });
+
   it.each([undefined, "agent", "chat"] as const)(
     "resolves concurrent %s waiters when the terminal dedupe entry lands",
     async (source) => {

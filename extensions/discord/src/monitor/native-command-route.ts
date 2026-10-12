@@ -8,16 +8,13 @@ import {
 } from "./route-resolution.js";
 import type { ThreadBindingRecord } from "./thread-bindings.js";
 
-type ResolvedConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
 type ConfiguredBindingResolution = NonNullable<
-  NonNullable<ResolvedConfiguredBindingRoute>["bindingResolution"]
+  NonNullable<ReturnType<typeof resolveConfiguredBindingRoute>>["bindingResolution"]
 >;
 
 type DiscordNativeInteractionRouteState = {
-  route: ResolvedAgentRoute;
   effectiveRoute: ResolvedAgentRoute;
   boundSessionKey?: string;
-  configuredRoute: ResolvedConfiguredBindingRoute | null;
   configuredBinding: ConfiguredBindingResolution | null;
 };
 
@@ -57,11 +54,5 @@ export function resolveDiscordNativeInteractionRouteState(params: {
     configuredRoute,
     matchedBy: configuredBinding ? "binding.channel" : undefined,
   });
-  return {
-    route,
-    effectiveRoute,
-    boundSessionKey,
-    configuredRoute,
-    configuredBinding,
-  };
+  return { effectiveRoute, boundSessionKey, configuredBinding };
 }

@@ -14,6 +14,7 @@ import type {
 import { createSessionTranscriptContextReader } from "./session-transcript-context-reader.js";
 import { prepareIncognitoSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 async function readContextResult<Value>(
   result: Promise<IncognitoContextReadResult<Value>>,
@@ -31,22 +32,28 @@ export function bindIncognitoSessionComputeReader(params: {
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
   signal?: AbortSignal;
+  memorySessionId?: string;
+  onMemoryRead?: (assertCurrent: () => void) => void;
 }) {
   const { actor, authority, signal } = params;
   actor.assertCurrent();
   authority.assertCurrent();
   const target = structuredClone(params.target);
+  const memorySessionId = params.memorySessionId ?? target.sessionId;
   const identity = { ...target, agentId: actor.agentId, storePath: actor.path };
   const claim = actor.sessions.captureCurrent(target.sessionKey);
   const disclose = () => {
     signal?.throwIfAborted();
     claim.authorize(authority, "commit");
-    actor.assertCurrent();
+    actor.assertReadable();
   };
-  const assertScope = (scope: Partial<SessionTranscriptReadScope>) => {
+  const assertScope = (
+    scope: Partial<SessionTranscriptReadScope>,
+    sessionId = target.sessionId,
+  ) => {
     disclose();
     if (
-      (scope.sessionId !== undefined && scope.sessionId !== target.sessionId) ||
+      (scope.sessionId !== undefined && scope.sessionId !== sessionId) ||
       (scope.sessionKey !== undefined && scope.sessionKey !== target.sessionKey) ||
       (scope.agentId !== undefined && scope.agentId !== actor.agentId) ||
       (scope.storePath !== undefined && path.resolve(scope.storePath) !== actor.path)
@@ -55,7 +62,10 @@ export function bindIncognitoSessionComputeReader(params: {
     }
   };
   const retain = <T>(operation: () => Promise<T>) =>
-    actor.sessions.withCompute(authority, target, operation, signal);
+    actor.sessions.withCompute(authority, target, operation, signal).then((result) => {
+      disclose();
+      return result;
+    });
   return {
     prepareHydration(
       limits?: Parameters<typeof prepareIncognitoSessionTranscriptHydration>[0]["limits"],
@@ -63,7 +73,10 @@ export function bindIncognitoSessionComputeReader(params: {
       disclose();
       return prepareIncognitoSessionTranscriptHydration({
         actor,
-        authority,
+        authority: {
+          assertCurrent: disclose,
+          authorize: (stage, facts) => authority.authorize?.(stage, facts),
+        },
         target,
         limits,
         signal,
@@ -72,25 +85,30 @@ export function bindIncognitoSessionComputeReader(params: {
     memoryEntry(absPath: string, options: BuildSessionEntryOptions = {}) {
       const { onTranscriptMessage, ...serializable } = options;
       const captured = structuredClone(serializable);
-      assertScope(captured);
+      assertScope(captured, memorySessionId);
       return retain(async () => {
         let source: ReturnType<typeof actor.sessions.captureSnapshot> | undefined;
         const snapshot = await actor.sessions.history(
           authority,
           {
             type: "session.history.memory-entry",
-            input: { ...target, includeMessages: Boolean(onTranscriptMessage) },
+            input: {
+              ...target,
+              readSessionId: memorySessionId,
+              includeMessages: Boolean(onTranscriptMessage),
+            },
           },
           signal,
           () => {
             source = actor.sessions.captureSnapshot(target.sessionKey);
+            params.onMemoryRead?.(source.assertCurrent);
           },
         );
         const { buildSessionEntryFromSnapshot } =
           await import("../../../packages/memory-host-sdk/src/host/session-files.js");
         return buildSessionEntryFromSnapshot(
           absPath,
-          { ...captured, ...identity, onTranscriptMessage },
+          { ...captured, ...identity, sessionId: memorySessionId, onTranscriptMessage },
           snapshot,
           () => {
             disclose();
@@ -103,7 +121,10 @@ export function bindIncognitoSessionComputeReader(params: {
       });
     },
     memoryCorpus(scope: SessionTranscriptCorpusScope, options: SessionTranscriptCorpusOptions) {
-      const captured = structuredClone({ scope, options });
+      const captured = structuredClone({
+        scope: { ...scope, env: captureSessionTranscriptStorageEnvironment(scope.env) },
+        options,
+      });
       disclose();
       return retain(async () => {
         const { readIncognitoMemoryCorpus } = await import("./session-incognito-memory-corpus.js");
@@ -112,19 +133,22 @@ export function bindIncognitoSessionComputeReader(params: {
           captured.scope,
           captured.options,
           signal,
+          params.onMemoryRead,
         );
       });
     },
     memoryResetRecall(scope: Partial<SessionTranscriptReadScope> = {}) {
-      assertScope(scope);
+      assertScope(scope, memorySessionId);
       return retain(async () => {
         const cutoff = await actor.sessions.history(
           authority,
           {
             type: "session.history.memory-reset-recall",
-            input: target,
+            input: { ...target, readSessionId: memorySessionId },
           },
           signal,
+          () =>
+            params.onMemoryRead?.(actor.sessions.captureSnapshot(target.sessionKey).assertCurrent),
         );
         disclose();
         return cutoff;

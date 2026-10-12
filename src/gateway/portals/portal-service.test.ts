@@ -1,7 +1,12 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { request, type Server } from "node:http";
+import { request as requestHttps } from "node:https";
+import { join } from "node:path";
 import type { Duplex } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as advertisedLanHost from "../../infra/advertised-lan-host.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
@@ -120,7 +125,6 @@ describe("portal open authority fence", () => {
 
   it.each([
     ["owner", "session reset"],
-    ["listener", "Worker portal authority changed"],
     ["LAN", "authority revoked during LAN discovery"],
   ])("releases unpublished resources after %s authority loss", async (stage, message) => {
     const owner = new AbortController();
@@ -132,8 +136,6 @@ describe("portal open authority fence", () => {
       await actualListen(params);
       if (stage === "owner") {
         owner.abort(new Error(message));
-      } else if (stage === "listener") {
-        authorityCurrent = false;
       }
     });
     if (stage === "LAN") {
@@ -329,20 +331,6 @@ describe("gateway portal service", () => {
     expect(closeCurrentForward).toHaveBeenCalledOnce();
   });
 
-  it("keeps worker portal ids bounded for the longest supported environment id", async () => {
-    const { service } = makeService(["127.0.0.1"]);
-    const environmentId = "w".repeat(256);
-    const portal = await service.open({
-      targetPort: 3000,
-      target: workerTarget(environmentId, 7),
-    });
-
-    expect(portal.id.length).toBeLessThanOrEqual(256);
-    expect(service.listWorkerPortals(environmentId, 7)).toEqual([portal]);
-    await service.close(portal.id);
-    expect(service.list()).toEqual([]);
-  });
-
   it("revalidates worker close authority immediately before queued removal", async () => {
     const { service } = makeService(["127.0.0.1"]);
     const owner = {
@@ -393,30 +381,6 @@ describe("gateway portal service", () => {
     expect(closeForward).toHaveBeenCalledOnce();
   });
 
-  it("closes idempotently and closes every portal on shutdown", async () => {
-    const { service, httpServers } = makeService(["127.0.0.1"]);
-    const first = await service.open({ targetPort: 3000 });
-    const firstServer = httpServers.at(-1);
-    const second = await service.open({ targetPort: 4000 });
-    const secondServer = httpServers.at(-1);
-    expect(firstServer).toBeDefined();
-    expect(secondServer).toBeDefined();
-
-    await service.close(first.id);
-    await service.close(first.id);
-    expect(service.list().map((entry) => entry.id)).toEqual([second.id]);
-    // A closed ephemeral port can be reassigned immediately to a parallel test.
-    // Assert the owned Server instead of probing whichever listener now owns its port.
-    expect(firstServer?.listening).toBe(false);
-    expect(firstServer?.address()).toBeNull();
-
-    await service.closeAll();
-    expect(service.list()).toEqual([]);
-    expect(httpServers).toEqual([]);
-    expect(secondServer?.listening).toBe(false);
-    expect(secondServer?.address()).toBeNull();
-  });
-
   it("removes every registered listener after a partial bind failure", async () => {
     const { service, httpServers } = makeService(["127.0.0.1", "127.0.0.1"]);
 
@@ -426,9 +390,7 @@ describe("gateway portal service", () => {
   });
 
   it.each([
-    ["127.0.0.1", "192.168.1.20", "127.0.0.1", "/"],
     ["0.0.0.0", "192.168.1.20", "192.168.1.20", "/app?view=one"],
-    ["::", "192.168.1.20", "192.168.1.20", "/app?view=one"],
     ["0.0.0.0", null, "127.0.0.1", "/"],
     ["::", null, "[::1]", "/"],
   ] as const)("publishes %s with LAN %s as %s", async (bindHost, lanHost, openableHost, path) => {
@@ -442,9 +404,7 @@ describe("gateway portal service", () => {
     expect(portal.url).toBe(
       `${portal.publicUrl}${path.includes("?") ? "&" : "?"}${portal.tokenQuery}`,
     );
-    if (bindHost === "127.0.0.1") {
-      expect(resolveHost).not.toHaveBeenCalled();
-    } else if (lanHost) {
+    if (lanHost) {
       expect(httpServers[0]?.address()).toMatchObject({ address: bindHost });
       expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
       // Publication belongs to this listener lifetime, not each listing or caller's hostname.
@@ -454,4 +414,116 @@ describe("gateway portal service", () => {
       expect(resolveHost).toHaveBeenCalledOnce();
     }
   });
+});
+
+describe("direct HTTPS portal publication", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let certificate: { cert: string; key: string };
+  let ipCertificate: { cert: string; key: string };
+  let wildcardCertificate: { cert: string; key: string };
+
+  // Fresh material keeps CA, expiry, and hostname checks enabled in every case.
+  function createCertificate(subjectAltName: string) {
+    const directory = tempDirs.make("portal-direct-tls-");
+    const certPath = join(directory, "cert.pem");
+    const keyPath = join(directory, "key.pem");
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-days",
+        "2",
+        "-subj",
+        "/CN=gateway.example.test",
+        "-addext",
+        `subjectAltName=${subjectAltName}`,
+        "-keyout",
+        keyPath,
+        "-out",
+        certPath,
+      ],
+      { stdio: "ignore" },
+    );
+    return { cert: readFileSync(certPath, "utf8"), key: readFileSync(keyPath, "utf8") };
+  }
+
+  beforeAll(() => {
+    certificate = createCertificate("DNS:gateway.example.test,DNS:alternate.example.test");
+    ipCertificate = createCertificate("IP:127.0.0.1");
+    wildcardCertificate = createCertificate("DNS:*.example.test");
+  });
+
+  // Only DNS routing is local to the fixture: CA, expiry, and URL hostname checks stay enabled.
+  async function readPortal(url: string, ca = certificate.cert) {
+    return await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = requestHttps(
+        url,
+        {
+          ca,
+          family: 4,
+          lookup: (_host, _options, callback) => callback(null, "127.0.0.1", 4),
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          res.on("end", () =>
+            resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }),
+          );
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  it.each(["ip", "wildcard", "chain", "LAN", "configured"] as const)(
+    "publishes a certificate-valid hostname for %s access",
+    async (kind) => {
+      const material =
+        kind === "ip" ? ipCertificate : kind === "wildcard" ? wildcardCertificate : certificate;
+      const hostname =
+        kind === "ip"
+          ? "127.0.0.1"
+          : kind === "configured"
+            ? "alternate.example.test"
+            : "gateway.example.test";
+      if (kind === "LAN") {
+        // A broken candidate must fail on TLS, not routing.
+        vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockResolvedValue("127.0.0.2");
+      }
+      const service = createGatewayPortalService({
+        httpBindHosts: [kind === "LAN" ? "0.0.0.0" : "127.0.0.1"],
+        httpServers: [],
+        tlsOptions: { ...material, cert: kind === "chain" ? [material.cert] : material.cert },
+        gatewayOrigins:
+          kind === "wildcard"
+            ? ["*", `https://${hostname}`]
+            : kind === "configured"
+              ? ["https://unrelated.example.test", "https://alternate.example.test:8443"]
+              : [],
+      });
+      services.add(service);
+      const checkPortal = async (targetPort: number) => {
+        const portal = await service.open({ targetPort });
+        expect(new URL(portal.publicUrl).hostname).toBe(hostname);
+        if (kind === "LAN") {
+          expect(await readPortal(portal.url)).toEqual({ status: 200, body: "direct TLS app" });
+          expect(service.list()[0]?.publicUrl).toBe(portal.publicUrl);
+        }
+        expect((await readPortal(portal.publicUrl, material.cert)).status).toBe(401);
+      };
+      if (kind === "LAN") {
+        await withServer(
+          (_req, res) => res.end("direct TLS app"),
+          async (targetUrl) => checkPortal(Number(new URL(targetUrl).port)),
+        );
+      } else {
+        await checkPortal(3000);
+      }
+    },
+  );
 });

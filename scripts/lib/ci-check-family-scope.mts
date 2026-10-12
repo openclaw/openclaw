@@ -25,6 +25,7 @@ type CiCheckFamilyScope = {
   additionalGroups: string[];
   baselineRatchets: boolean;
   madgeImportCycles: boolean;
+  kyselyGuardrails: boolean;
   lint: boolean;
   types: boolean;
 };
@@ -61,6 +62,7 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
       additionalGroups: [...ADDITIONAL_GROUPS],
       baselineRatchets: true,
       madgeImportCycles: true,
+      kyselyGuardrails: true,
       lint: true,
       types: true,
     };
@@ -123,6 +125,9 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
     ),
     baselineRatchets: code || runtimeSource || inventoryDocs,
     madgeImportCycles: matches(/\.(?:[cm]?ts|tsx)$/u),
+    kyselyGuardrails: paths.some(
+      (path) => SOURCE_PATH_RE.test(path) && /\.(?:[cm]?ts|tsx)$/u.test(path),
+    ),
     // The changed-lint row also owns formatting for YAML, JSON5, and other data.
     lint: true,
     types,

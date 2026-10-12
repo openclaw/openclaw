@@ -104,17 +104,15 @@ export function mergeSsrFPolicies(
     if (!policy) {
       continue;
     }
-    if (policy.allowPrivateNetwork) {
-      merged.allowPrivateNetwork = true;
-    }
-    if (policy.dangerouslyAllowPrivateNetwork) {
-      merged.dangerouslyAllowPrivateNetwork = true;
-    }
-    if (policy.allowRfc2544BenchmarkRange) {
-      merged.allowRfc2544BenchmarkRange = true;
-    }
-    if (policy.allowIpv6UniqueLocalRange) {
-      merged.allowIpv6UniqueLocalRange = true;
+    for (const key of [
+      "allowPrivateNetwork",
+      "dangerouslyAllowPrivateNetwork",
+      "allowRfc2544BenchmarkRange",
+      "allowIpv6UniqueLocalRange",
+    ] as const) {
+      if (policy[key]) {
+        merged[key] = true;
+      }
     }
     for (const key of [
       "allowedHostnames",
@@ -473,7 +471,9 @@ export function createPinnedLookup(params: {
     const candidates =
       requestedFamily === 4 || requestedFamily === 6
         ? records.filter((entry) => entry.family === requestedFamily)
-        : automaticRecords;
+        : opts.all
+          ? records
+          : automaticRecords;
     const usable = candidates.length > 0 ? candidates : automaticRecords;
     // Match dns.lookup's asynchronous callback contract so connection errors
     // cannot fire before the socket owner attaches its error listener.

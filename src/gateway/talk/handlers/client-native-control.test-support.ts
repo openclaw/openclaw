@@ -12,10 +12,6 @@ import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/r
 import { withPreparedEmbeddedRunToolAuthority } from "../../../agents/harness/tool-authority.runtime.js";
 import type { AgentSession } from "../../../agents/sessions/agent-session.js";
 import { AuthStorage } from "../../../agents/sessions/auth-storage.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../../agents/tools/gateway-caller-context.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { TalkRealtimeConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -43,11 +39,13 @@ import type {
 import { sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection } from "../session-registry.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 import { talkClientHandlers } from "./client.js";
 
 const nativeUpstream = await vi.hoisted(async () => {
   const { EventEmitter } = await import("node:events");
   const sockets: NativeSocket[] = [];
+  const events = new EventEmitter<{ socket: [] }>();
   class NativeSocket extends EventEmitter {
     static readonly OPEN = 1;
     static readonly CLOSED = 3;
@@ -57,6 +55,7 @@ const nativeUpstream = await vi.hoisted(async () => {
     constructor(readonly url: string) {
       super();
       sockets.push(this);
+      events.emit("socket");
     }
 
     open(): void {
@@ -90,6 +89,7 @@ const nativeUpstream = await vi.hoisted(async () => {
   return {
     NativeSocket,
     sockets,
+    events,
     fetch: vi.fn<typeof fetch>(),
     runEmbeddedAgent: vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
     authConfigured: vi.fn(
@@ -142,36 +142,6 @@ export function requireString(record: Record<string, unknown>, key: string): str
   return value;
 }
 
-export async function withRegisteredNativeEmbeddedRun<T>(
-  params: Pick<
-    RunEmbeddedAgentParams,
-    "agentId" | "preparedRunAdmission" | "runId" | "sessionId" | "sessionKey"
-  >,
-  run: () => Promise<T> | T,
-): Promise<T> {
-  const { agentId, preparedRunAdmission, sessionKey } = params;
-  if (!agentId || !preparedRunAdmission || !sessionKey) {
-    throw new Error("Expected real Talk admission");
-  }
-  const admittedRunContext = await preparedRunAdmission.admit("embedded", "native-test-backend");
-  return await withGatewayToolCallerIdentity(
-    createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext,
-      agentId,
-      sessionKey,
-    }),
-    async () => {
-      const handle = createEmbeddedRunHandle({ runId: params.runId });
-      embeddedRuns.setActiveEmbeddedRun(params.sessionId, handle, sessionKey);
-      try {
-        return await run();
-      } finally {
-        embeddedRuns.clearActiveEmbeddedRun(params.sessionId, handle, sessionKey);
-      }
-    },
-  );
-}
-
 function requireSuccessfulReply(respond: ReturnType<typeof vi.fn<RespondFn>>) {
   const reply = respond.mock.calls.at(-1);
   if (!reply) {
@@ -205,6 +175,7 @@ type NativePluginFixture = {
 
 export async function withNativePlugin(
   run: (fixture: NativePluginFixture) => Promise<void>,
+  options: { model?: string; nativeEffects?: boolean; onConsult?: () => void } = {},
 ): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "talk-native-control-", env: { OPENAI_API_KEY: undefined } },
@@ -222,6 +193,7 @@ export async function withNativePlugin(
             other: {},
           },
         },
+        ...(options.nativeEffects ? { tools: { exec: { host: "gateway", mode: "full" } } } : {}),
         talk: { agentId: AGENT_ID, realtime: realtimeConfig },
         plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
       };
@@ -240,7 +212,11 @@ export async function withNativePlugin(
       const client = {
         ...sharingPolicyClient({
           user: profile.id,
-          scopes: ["operator.read", "operator.talk"],
+          scopes: [
+            "operator.read",
+            "operator.talk",
+            ...(options.nativeEffects ? ["operator.write"] : []),
+          ],
         }),
         connId: CONNECTION_ID,
       };
@@ -268,6 +244,22 @@ export async function withNativePlugin(
                 entry,
                 () => capabilityCatalogContext,
               );
+              const createBrowserSession = provider.createBrowserSession;
+              if (createBrowserSession && options.onConsult) {
+                provider.createBrowserSession = (request) => {
+                  const original = request.runAgentConsult;
+                  if (original) {
+                    request.runAgentConsult = Object.assign(
+                      (...args: Parameters<typeof original>) => {
+                        options.onConsult?.();
+                        return original(...args);
+                      },
+                      original,
+                    );
+                  }
+                  return createBrowserSession(request);
+                };
+              }
               registry.realtimeVoiceProviders.push({
                 pluginId: "openai",
                 source: "test",
@@ -281,7 +273,7 @@ export async function withNativePlugin(
         if (!registry.realtimeVoiceProviders.some((entry) => entry.provider.id === "openai")) {
           throw new Error("OpenAI did not register its realtime voice provider");
         }
-        realtimeConfig.model = NATIVE_REALTIME_MODEL;
+        realtimeConfig.model = options.model ?? NATIVE_REALTIME_MODEL;
         setActivePluginRegistry(registry);
         const offerRoute = routes.find((route) => route.path === "/plugins/openai/realtime/calls");
         if (!offerRoute) {
@@ -291,6 +283,7 @@ export async function withNativePlugin(
           { agentId: AGENT_ID, sessionKey: SESSION_KEY },
           {
             sessionId: SESSION_ID,
+            ...(options.nativeEffects ? { permissionMode: "full", execHost: "gateway" } : {}),
             updatedAt: Date.now(),
             createdActor: { type: "human", source: "profile", id: profile.id },
           },
@@ -373,18 +366,32 @@ export async function connectNativeSession(
   expect(result.clientControl).toEqual(negotiated ? { owner: "gateway" } : undefined);
   expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount);
   const sdp = negotiated ? AUDIO_SDP : DATA_CHANNEL_SDP;
-  const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
-  await vi.waitFor(() => expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1));
-  await vi.waitFor(() => expect(upstream.sockets).toHaveLength(socketIndex + 1));
-  expect(response.end).not.toHaveBeenCalled();
-  const socket = upstream.sockets[socketIndex];
-  if (!socket) {
-    throw new Error("Missing native sideband");
+  const socketCreated = createDeferredCore();
+  upstream.events.once("socket", socketCreated.resolve);
+  try {
+    const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
+    await Promise.race([
+      socketCreated.promise,
+      handling.then(() => {
+        throw new Error(
+          `Native offer completed before sideband readiness (HTTP ${response.res.statusCode})`,
+        );
+      }),
+    ]);
+    expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1);
+    expect(upstream.sockets).toHaveLength(socketIndex + 1);
+    expect(response.end).not.toHaveBeenCalled();
+    const socket = upstream.sockets[socketIndex];
+    if (!socket) {
+      throw new Error("Missing native sideband");
+    }
+    socket.open();
+    await handling;
+    expect(response.res.statusCode).toBe(200);
+    return { result, socket };
+  } finally {
+    upstream.events.removeListener("socket", socketCreated.resolve);
   }
-  socket.open();
-  await handling;
-  expect(response.res.statusCode).toBe(200);
-  return { result, socket };
 }
 
 export function nativeDelegation(id: string, text: string) {
@@ -392,41 +399,6 @@ export function nativeDelegation(id: string, text: string) {
     type: "delegation.created",
     item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
   };
-}
-
-type NativeCallSession = {
-  instructions: string;
-  initial_items?: unknown;
-  delegation?: Record<string, unknown>;
-};
-
-function isNativeCallSession(value: unknown): value is NativeCallSession {
-  return (
-    isRecord(value) &&
-    typeof value.instructions === "string" &&
-    (value.delegation === undefined || isRecord(value.delegation))
-  );
-}
-
-export async function nativeCallSession(): Promise<NativeCallSession> {
-  const init = upstream.fetch.mock.calls.at(-1)?.[1];
-  if (!init) {
-    throw new Error("Missing native call request");
-  }
-  const form = await new Request("https://example.test", {
-    method: "POST",
-    headers: init.headers,
-    body: init.body,
-  }).formData();
-  const sessionJson = form.get("session");
-  if (typeof sessionJson !== "string") {
-    throw new Error("Missing native call session");
-  }
-  const session: unknown = JSON.parse(sessionJson);
-  if (!isNativeCallSession(session)) {
-    throw new Error("Invalid native call session");
-  }
-  return session;
 }
 
 export function talkEventTypes(broadcast: ReturnType<typeof vi.fn>): string[] {
@@ -438,22 +410,26 @@ export function talkEventTypes(broadcast: ReturnType<typeof vi.fn>): string[] {
   });
 }
 
-type ParkedNativeTask = NativePluginFixture &
-  Awaited<ReturnType<typeof connectNativeSession>> & {
-    activeRun: RunEmbeddedAgentParams & { abortSignal: AbortSignal };
-    abortOwned: ReturnType<typeof vi.fn<() => void>>;
-    queueMessage: ReturnType<
-      typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>
-    >;
-    settleBackend: () => Promise<void>;
-  };
+type ConnectedNativePluginFixture = NativePluginFixture &
+  Awaited<ReturnType<typeof connectNativeSession>>;
+
+type ParkedNativeTask = ConnectedNativePluginFixture & {
+  activeRun: RunEmbeddedAgentParams & { abortSignal: AbortSignal };
+  abortOwned: ReturnType<typeof vi.fn<() => void>>;
+  queueMessage: ReturnType<
+    typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>
+  >;
+  settleBackend: () => Promise<void>;
+};
 
 export async function withParkedNativeTask(
   run: (task: ParkedNativeTask) => Promise<void>,
   prompt = "Keep working until I cancel.",
-  ...embedded: [] | [session: AgentSession, finish: () => void]
+  ...embedded:
+    | []
+    | [session: AgentSession, finish: () => void, prepared?: ConnectedNativePluginFixture]
 ): Promise<void> {
-  const [embeddedSession, finishEmbeddedSession] = embedded;
+  const [embeddedSession, finishEmbeddedSession, preparedFixture] = embedded;
   const releaseBackend = createDeferredCore();
   const registered =
     createDeferredCore<
@@ -624,7 +600,7 @@ export async function withParkedNativeTask(
     // Let the real consult owner release registration and finish its provider result.
     await nextEventLoopTurn();
   };
-  await withNativePlugin(async (fixture) => {
+  const runInFixture = async (fixture: NativePluginFixture) => {
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopObservingCompletion: (() => void) | undefined;
     const timeoutMs = 1000;
@@ -648,7 +624,7 @@ export async function withParkedNativeTask(
         return claim;
       });
     try {
-      const session = await connectNativeSession(fixture);
+      const session = preparedFixture ?? (await connectNativeSession(fixture));
       const readiness = Promise.race([registered.promise, failed.promise]);
       const send = session.socket.send.bind(session.socket);
       const observeCompletion = vi.spyOn(session.socket, "send").mockImplementation((payload) => {
@@ -701,7 +677,12 @@ export async function withParkedNativeTask(
         }
       }
     }
-  });
+  };
+  if (preparedFixture) {
+    await runInFixture(preparedFixture);
+  } else {
+    await withNativePlugin(runInFixture);
+  }
 }
 
 export function installNativePluginTestHooks() {

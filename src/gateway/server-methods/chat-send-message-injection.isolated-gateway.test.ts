@@ -1,15 +1,25 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { installQueueRuntimeErrorSilencer } from "../../auto-reply/reply/queue.test-helpers.js";
-import * as replyRunRegistryModule from "../../auto-reply/reply/reply-run-registry.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import { forceClearReplyOperation } from "../../auto-reply/reply/reply-run-registry.state.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -77,7 +87,7 @@ function visibleMessageText(message: unknown): string {
 }
 
 let ws: WebSocket;
-const sharedTempDirs: string[] = [];
+let sessionStoreDir: string | undefined;
 let liveOperation: ReturnType<typeof createReplyOperation> | undefined;
 
 installConnectedControlUiServerSuite((started) => {
@@ -102,7 +112,6 @@ beforeEach(() => {
   delete resolverCapture.ctxBody;
   delete resolverCapture.runId;
   delete resolverCapture.messageInjectionDisposition;
-  clearLiveOperation("test-cleanup");
   dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
     const p = params as DispatchInboundParams;
     dispatchCapture.calls += 1;
@@ -113,6 +122,21 @@ beforeEach(() => {
   });
 });
 
+afterEach(async () => {
+  const sessionKey = liveOperation?.key;
+  try {
+    if (sessionKey && testState.sessionStorePath) {
+      // Dispatch diagnostics precede cleanup; settle its writes before reseeding this store.
+      await getSessionWorkAdmissionRelease({
+        scope: testState.sessionStorePath,
+        identities: [sessionKey],
+      });
+    }
+  } finally {
+    clearLiveOperation("test-cleanup");
+  }
+});
+
 async function seedActiveTurn(params: {
   sessionKey: string;
   sessionId: string;
@@ -121,9 +145,9 @@ async function seedActiveTurn(params: {
   sourceTurnId?: string;
   deliverySourceRunId?: string;
 }) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-iso-gw-"));
-  sharedTempDirs.push(dir);
-  testState.sessionStorePath = path.join(dir, "sessions.json");
+  // One suite Gateway keeps one physical store; retained populated stores collide in discovery.
+  sessionStoreDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-iso-gw-"));
+  testState.sessionStorePath = path.join(sessionStoreDir, "sessions.json");
   await writeSessionStore({
     entries: {
       [params.sessionKey]: {
@@ -133,7 +157,6 @@ async function seedActiveTurn(params: {
         ...(params.deliverySourceRunId
           ? { restartRecoveryDeliverySourceRunId: params.deliverySourceRunId }
           : {}),
-        status: "running",
       },
     },
   });
@@ -143,33 +166,108 @@ async function seedActiveTurn(params: {
     resetTriggered: false,
   });
   liveOperation = operation;
+  const fingerprint = "isolated-steer-authority";
+  operation.bindToolAuthoritySnapshot({
+    fingerprint: () => fingerprint,
+    project: () => fingerprint,
+  });
+  operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
+  const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+    async (_text, _options, assertCurrent) => {
+      assertCurrent();
+    },
+  );
   operation.setPhase("running");
   operation.attachBackend({
     kind: "embedded",
     runId: params.runId,
+    toolAuthorityFingerprint: fingerprint,
     cancel: () => {},
     isStreaming: () => false,
-    messageInjection: {
+    messageInjectionV2: {
+      version: 2,
       isAvailable: () => true,
-      queueMessage: async () => {},
+      queueMessage,
     },
   });
   if (params.sourceTurnId) {
     replyRunRegistry.bindSourceTurnId(operation, params.sourceTurnId);
   }
+  return queueMessage;
 }
 
 afterAll(async () => {
   clearLiveOperation("test-cleanup-final");
-  for (const dir of sharedTempDirs.splice(0)) {
+  if (sessionStoreDir) {
     // Defer removal until Gateway teardown; Windows may still hold SQLite handles.
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(sessionStoreDir, { recursive: true, force: true }).catch(() => undefined);
+    sessionStoreDir = undefined;
   }
   testState.sessionStorePath = undefined;
 });
 
 describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => {
-  it.each([
+  it.for([9_400, 15_800, 120_001])(
+    "classifies an accepted steer waiting %sms as steering over the real transport",
+    async (durationMs, { signal }) => {
+      const queueMessage = await seedActiveTurn({
+        sessionKey: SESSION_KEY,
+        sessionId: "session-slow-steer",
+        runId: "live-run-slow-steer",
+        terminalRunId: "source-old",
+        sourceTurnId: SOURCE_TURN_ID,
+      });
+      const commit = createDeferred();
+      const reported = createDeferred<DiagnosticEventPayload>();
+      const previousDiagnostics = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      const stop = onTrustedInternalDiagnosticEvent(
+        (event) => {
+          if (event.type === "diagnostic.phase.completed" && event.name === "chat.send.dispatch") {
+            reported.resolve(event);
+          }
+        },
+        { include: ["diagnostic.phase.completed"] },
+      );
+      let clock = 0;
+      const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
+        assertCurrent();
+        options?.onQueueAccepted?.(true);
+        await commit.promise;
+        assertCurrent();
+      });
+      try {
+        const response = (await rpcReq(ws, "chat.send", {
+          sessionKey: SESSION_KEY,
+          message: "Synthetic steer awaiting the active run boundary.",
+          idempotencyKey: `slow-steer-${durationMs}`,
+          queueMode: "steer",
+        })) as WireResponse;
+        expect(response, JSON.stringify(response)).toMatchObject({
+          ok: true,
+          payload: { status: "started" },
+        });
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(dispatchCapture.calls).toBe(0);
+        clock = durationMs;
+        commit.resolve();
+        expect(await withinTest(reported.promise, signal)).toMatchObject({
+          name: "chat.send.dispatch",
+          durationMs,
+          details: { stage: "steer" },
+        });
+        expect(dispatchCapture.calls).toBe(0);
+      } finally {
+        commit.resolve();
+        now.mockRestore();
+        stop();
+        setDiagnosticsEnabledForProcess(previousDiagnostics);
+      }
+    },
+  );
+
+  it.for([
     {
       name: "a tombstone for the active source",
       sessionKey: SESSION_KEY,
@@ -193,9 +291,9 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
   ])(
     "$name rejects steering and delivers exactly one follow-up reply over the real transport",
     { timeout: 30_000 },
-    async (scenario) => {
-      await seedActiveTurn(scenario);
-      const registrySpy = vi.spyOn(replyRunRegistryModule, "beginReplyMessageInjectionTarget");
+    async (scenario, { signal }) => {
+      const queueMessage = await seedActiveTurn(scenario);
+      const resolved = createDeferred();
 
       // Resetting this seam uses the production dispatcher and delivery owner;
       // only the reply source is controlled. Observe its final on the real socket.
@@ -206,11 +304,13 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         const options = (opts ?? {}) as { runId?: string; messageInjectionDisposition?: unknown };
         resolverCapture.runId = options.runId;
         resolverCapture.messageInjectionDisposition = options.messageInjectionDisposition;
+        resolved.resolve();
         return { text: scenario.replyText };
       });
 
       const runId = `idem-iso-gw-${randomUUID()}`;
       const chatFrames: ChatWirePayload[] = [];
+      const finalReceived = createDeferred();
       const onChatFrame = (raw: RawData) => {
         try {
           const frame = JSON.parse(rawDataToString(raw)) as {
@@ -220,6 +320,9 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           };
           if (frame.type === "event" && frame.event === "chat" && frame.payload?.runId === runId) {
             chatFrames.push(frame.payload);
+            if (frame.payload.state === "final") {
+              finalReceived.resolve();
+            }
           }
         } catch {
           // Unrelated frames on the shared test socket.
@@ -239,36 +342,32 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           20_000,
         )) as WireResponse;
 
-        expect(res.ok).toBe(true);
+        expect(res.ok, JSON.stringify(res)).toBe(true);
         expect(res.payload?.status).toBe("started");
         expect(res.payload?.runId).toBe(runId);
-        expect(registrySpy).not.toHaveBeenCalled();
-        await vi.waitFor(() => expect(resolverCapture.calls).toBe(1), {
-          interval: 50,
-          timeout: 15_000,
-        });
+        expect(queueMessage).not.toHaveBeenCalled();
+        await withinTest(resolved.promise, signal);
+        expect(resolverCapture.calls).toBe(1);
         expect(resolverCapture.ctxBody).toBe(scenario.message);
         expect(resolverCapture.runId).toBe(runId);
         expect(resolverCapture.messageInjectionDisposition).toBe("rejected");
         expect(dispatchCapture.calls).toBe(0);
 
-        await vi.waitFor(
-          () => {
-            expect(chatFrames.some((frame) => frame.state === "final")).toBe(true);
-          },
-          { interval: 50, timeout: 15_000 },
-        );
-        // Quiet-period check: no second terminal may follow the first.
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 300);
+        await withinTest(finalReceived.promise, signal);
+        await getSessionWorkAdmissionRelease({
+          scope: testState.sessionStorePath!,
+          identities: [scenario.sessionKey, scenario.sessionId],
         });
+        // The producer is settled; a pong drains earlier frames on this same connection.
+        const pong = once(ws, "pong", { signal });
+        ws.ping();
+        await withinTest(pong, signal);
         const finals = chatFrames.filter((frame) => frame.state === "final");
         expect(finals.length).toBe(1);
         expect(visibleMessageText(finals[0]?.message)).toContain(scenario.replyText);
       } finally {
         ws.off("message", onChatFrame);
       }
-      registrySpy.mockRestore();
     },
   );
 
@@ -276,21 +375,13 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
     "isolated gateway: still steers when the tombstone belongs to an unrelated prior source turn",
     { timeout: 30_000 },
     async () => {
-      await seedActiveTurn({
+      const queueMessage = await seedActiveTurn({
         sessionKey: SESSION_KEY,
         sessionId: "session-unrelated",
         runId: "live-run-unrelated",
         terminalRunId: "source-old",
         sourceTurnId: SOURCE_TURN_ID,
       });
-      const registrySpy = vi
-        .spyOn(replyRunRegistryModule, "beginReplyMessageInjectionTarget")
-        .mockImplementation(() => ({
-          targetRunId: "live-run-unrelated",
-          acceptance: Promise.resolve(true),
-          outcome: Promise.resolve({ status: "accepted" as const }),
-        }));
-
       const runId = `idem-iso-gw-unrelated-${randomUUID()}`;
       const res = (await rpcReq(
         ws,
@@ -304,11 +395,11 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         20_000,
       )) as WireResponse;
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, JSON.stringify(res)).toBe(true);
       expect(res.payload?.status).toBe("started");
-      expect(registrySpy).toHaveBeenCalledTimes(1);
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(queueMessage.mock.calls[0]?.[0]).toContain("unrelated-tombstone inbound");
       expect(dispatchCapture.calls).toBe(0);
-      registrySpy.mockRestore();
     },
   );
 });

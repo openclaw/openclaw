@@ -236,7 +236,7 @@ All commands accept `--browser-profile <name>` to target a specific profile, and
 ```bash
 openclaw browser status
 openclaw browser doctor
-openclaw browser doctor --deep    # add a live snapshot probe
+openclaw browser doctor --deep    # add a live snapshot check
 openclaw browser start
 openclaw browser start --headless # one-shot local managed headless launch
 openclaw browser stop            # also clears emulation on attach-only/remote CDP

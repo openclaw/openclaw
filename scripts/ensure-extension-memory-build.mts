@@ -86,7 +86,6 @@ export function findBuiltExtensionMemoryEntries(rootDir: string = repoRoot) {
     .toSorted((a, b) => a.dir.localeCompare(b.dir));
 }
 
-/** Reports whether all required built memory extension entries exist. */
 export function hasBuiltExtensionMemoryEntries(params: ExtensionMemoryBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const builtIds = new Set(findBuiltExtensionMemoryEntries(rootDir).map((entry) => entry.dir));

@@ -27,6 +27,6 @@ export class Embed {
       thumbnail: typeof this.thumbnail === "string" ? { url: this.thumbnail } : this.thumbnail,
       author: this.author,
       fields: this.fields,
-    }) as APIEmbed;
+    });
   }
 }

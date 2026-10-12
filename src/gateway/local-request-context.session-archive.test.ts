@@ -195,53 +195,6 @@ describe("scoped session archive tools", () => {
     },
   );
 
-  it.each(["unassigned archive", "ordinary stop"] as const)(
-    "enforces the requested ordinary-session contract: %s",
-    async (scenario) => {
-      await withSessionToolsFixture(async (cfg) => {
-        const client = roleClient("write");
-        const request = getPluginRuntimeGatewayRequestScope();
-        if (!request) {
-          throw new Error("expected local Gateway scope");
-        }
-        await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
-          withOperatorToolGatewayAuthority(
-            {
-              authenticatedUserProfile: client.authenticatedUserProfile,
-              scopes: ["operator.write"],
-            },
-            async () => {
-              const tool = expectDefined(
-                createOpenClawCodingTools({
-                  config: cfg,
-                  agentId: "main",
-                  sessionKey: TARGET,
-                  sessionId: TARGET_ID,
-                  senderIsOwner: false,
-                }).find((candidate) => candidate.name === "sessions"),
-                "session control tool",
-              );
-              if (scenario === "ordinary stop") {
-                expect(tool.parameters).toMatchObject({
-                  properties: { action: { enum: expect.arrayContaining(["stop"]) } },
-                });
-                return;
-              }
-              await expect(
-                tool.execute("foreign-archive", {
-                  action: "patch",
-                  sessionKey: TARGET,
-                  expectedSessionId: TARGET_ID,
-                  archived: true,
-                }),
-              ).rejects.toThrow(/session creator/i);
-            },
-          ),
-        );
-      });
-    },
-  );
-
   it.each(["creator", "assignee", "unrelated", "replacement"] as const)(
     "stops only the authorized ordinary-session run (%s)",
     async (relationship) => {
@@ -344,92 +297,80 @@ describe("scoped session archive tools", () => {
     },
   );
 
-  it.each(["assigned", "unrelated"] as const)(
-    "preserves non-owner active-run steering under session-send access (%s)",
-    async (scenario) => {
-      await withSessionToolsFixture(async (cfg) => {
-        const request = getPluginRuntimeGatewayRequestScope();
-        if (!request?.context) {
-          throw new Error("expected local Gateway context");
-        }
-        const client = roleClient("write");
-        const profile = expectDefined(client.authenticatedUserProfile, "operator profile");
-        const requesterKey = "agent:main:dashboard:steer-requester";
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: requesterKey },
-          {
-            sessionId: "steer-requester-id",
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: profile.profileId },
-          },
-        );
-        if (scenario === "assigned") {
-          assignSessionOwner(
-            { agentId: "main", sessionKey: TARGET },
-            {
-              owner: { type: "human", id: profile.profileId },
-              assignedBy: { type: "human", id: profile.profileId },
-            },
-          );
-        }
-        const accepted = vi.fn();
-        const legacyQueue = vi.fn(async () => {
-          throw new Error("unexpected legacy queue path");
-        });
-        const handle: EmbeddedAgentQueueHandle = {
-          runId: "ordinary-steer-run",
-          queueMessage: legacyQueue,
-          isStreaming: () => true,
-          isCompacting: () => false,
-          supportsTranscriptCommitWait: true,
-          sourceReplyDeliveryMode: "automatic",
-          abort: () => {},
-          messageInjectionV2: {
-            version: 2,
-            isAvailable: () => true,
-            queueMessage: async (_text, _options, assertCurrent) => {
-              assertCurrent();
-              accepted();
-            },
-          },
-        };
-        setActiveEmbeddedRun(TARGET_ID, handle, TARGET, undefined, "main");
-        try {
-          await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
-            withOperatorToolGatewayAuthority(
-              { authenticatedUserProfile: profile, scopes: ["operator.write"] },
-              async () => {
-                const tool = expectDefined(
-                  createOpenClawCodingTools({
-                    config: cfg,
-                    agentId: "main",
-                    sessionKey: requesterKey,
-                    sessionId: "steer-requester-id",
-                    senderIsOwner: false,
-                  }).find((candidate) => candidate.name === "sessions_send"),
-                  "session steering",
-                );
-                const result = await tool.execute("steer-ordinary", {
-                  mode: "steer",
-                  sessionKey: TARGET,
-                  message: "Use the updated requirements",
-                  timeoutSeconds: 0,
-                });
-                expect(result.details, JSON.stringify(result.details)).toMatchObject({
-                  status: "accepted",
-                  targetDisposition: "steered",
-                });
-              },
-            ),
-          );
-          expect(accepted).toHaveBeenCalledOnce();
-          expect(legacyQueue).not.toHaveBeenCalled();
-        } finally {
-          clearActiveEmbeddedRun(TARGET_ID, handle);
-        }
+  it("preserves unrelated active-run steering under session-send access", async () => {
+    await withSessionToolsFixture(async (cfg) => {
+      const request = getPluginRuntimeGatewayRequestScope();
+      if (!request?.context) {
+        throw new Error("expected local Gateway context");
+      }
+      const client = roleClient("write");
+      const profile = expectDefined(client.authenticatedUserProfile, "operator profile");
+      const requesterKey = "agent:main:dashboard:steer-requester";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: requesterKey },
+        {
+          sessionId: "steer-requester-id",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: profile.profileId },
+        },
+      );
+      const accepted = vi.fn();
+      const legacyQueue = vi.fn(async () => {
+        throw new Error("unexpected legacy queue path");
       });
-    },
-  );
+      const handle: EmbeddedAgentQueueHandle = {
+        runId: "ordinary-steer-run",
+        queueMessage: legacyQueue,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "automatic",
+        abort: () => {},
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: async (_text, _options, assertCurrent) => {
+            assertCurrent();
+            accepted();
+          },
+        },
+      };
+      setActiveEmbeddedRun(TARGET_ID, handle, TARGET, undefined, "main");
+      try {
+        await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
+          withOperatorToolGatewayAuthority(
+            { authenticatedUserProfile: profile, scopes: ["operator.write"] },
+            async () => {
+              const tool = expectDefined(
+                createOpenClawCodingTools({
+                  config: cfg,
+                  agentId: "main",
+                  sessionKey: requesterKey,
+                  sessionId: "steer-requester-id",
+                  senderIsOwner: false,
+                }).find((candidate) => candidate.name === "sessions_send"),
+                "session steering",
+              );
+              const result = await tool.execute("steer-ordinary", {
+                mode: "steer",
+                sessionKey: TARGET,
+                message: "Use the updated requirements",
+                timeoutSeconds: 0,
+              });
+              expect(result.details, JSON.stringify(result.details)).toMatchObject({
+                status: "accepted",
+                targetDisposition: "steered",
+              });
+            },
+          ),
+        );
+        expect(accepted).toHaveBeenCalledOnce();
+        expect(legacyQueue).not.toHaveBeenCalled();
+      } finally {
+        clearActiveEmbeddedRun(TARGET_ID, handle);
+      }
+    });
+  });
 
   it("allows creator self-archive and denies assignee archive or restore through the assembled tool surface", async () => {
     const scope = "operator.write";

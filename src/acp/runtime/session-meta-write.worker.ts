@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
-import { mergeSessionEntry } from "../../config/sessions/types.js";
+import {
+  mergeSessionEntry,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions/types.js";
 import {
   legacyAcpMigrationBindingMatches,
   recordLegacyAcpMigrationCompletion,
@@ -9,12 +11,11 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
-import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../../state/worker-operation-registry.js";
 import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "./session-meta-entry.kernel.js";
 import {
@@ -31,18 +32,17 @@ import {
 import { applyAcpSessionMutation } from "./session-meta-write.kernel.js";
 import type {
   AcpSessionMutationCommit,
-  AcpSessionMutationDecision,
   AcpSessionMutationPreparation,
   AcpSessionMutationPrepareInput,
   AcpSessionMutationSource,
 } from "./session-meta-write.types.js";
 
 export const acpSessionOperations = {
-  "acp.prepareMutation": (input: AcpSessionMutationPrepareInput, { open }) =>
-    prepareAcpSessionMutationInWorker(open(), input),
-  "acp.commitMutation": (input: AcpSessionMutationCommit & { nonce: string }, { open }) =>
-    commitAcpSessionMutationInWorker(open(), input),
-} satisfies WorkerOperationHandlers;
+  "acp.prepareMutation": (input: AcpSessionMutationPrepareInput, { write }) =>
+    prepareAcpSessionMutationInWorker(write, input),
+  "acp.commitMutation": (input: AcpSessionMutationCommit & { nonce: string }, { write }) =>
+    commitAcpSessionMutationInWorker(write, input),
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 function readControlledAcpSessionMutation(
   database: OpenClawStateDatabase,
@@ -65,11 +65,23 @@ function readControlledAcpSessionMutation(
 }
 
 function readMutationSource(
-  input: Omit<Parameters<typeof readAcpSessionSourceInWorker>[0], "source"> & {
+  input: Omit<Parameters<typeof readAcpSessionSourceInWorker>[0], "source" | "entry"> & {
     source: AcpSessionMutationSource;
+    entry?: SessionEntry;
   },
   phase: "metadata preparation" | "legacy source consumption",
 ) {
+  if ("kind" in input.source && input.source.kind === "memory") {
+    // Memory entries have one in-process owner and no legacy disk provenance.
+    return input.source.snapshot;
+  }
+  if ("kind" in input.source && input.source.kind === "reset") {
+    const current = readAcpSessionSourceInWorker({ ...input, source: input.source }, phase);
+    if (current.entry?.activeWriterRunId !== input.entry?.activeWriterRunId) {
+      throw new Error(`Canonical ACP session changed before ${phase}.`);
+    }
+    return { entry: current.entry, sources: [] };
+  }
   if ("kind" in input.source) {
     // The host grant revalidates this exact actor snapshot; never reopen its sentinel.
     const current = input.source.snapshot;
@@ -85,11 +97,12 @@ function readMutationSource(
 }
 
 function prepareAcpSessionMutationInWorker(
-  database: OpenClawStateDatabase,
+  write: WorkerWriteOperationContext["write"],
   input: AcpSessionMutationPrepareInput,
 ): AcpSessionMutationPreparation {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
+  return write(
+    (database) => {
+      const { db } = database;
       const controlled = input.control
         ? readControlledAcpSessionMutation(database, input.control)
         : undefined;
@@ -113,30 +126,13 @@ function prepareAcpSessionMutationInWorker(
           ...(entry ? {} : { lifecycleRevision: randomUUID() }),
         }),
       };
-      const { port1, port2 } = new MessageChannel();
-      try {
-        requestSqliteWorkerOperationAdmission(
-          {
-            stage: "transaction",
-            facts: { nonce: input.nonce, preparation, preparationPort: port2 },
-          },
-          [port2],
-        );
-        // SAFETY: only the retained host callback can reply on this command's private port.
-        const decision = receiveMessageOnPort(port1)?.message as
-          | AcpSessionMutationDecision
-          | undefined;
-        if (!decision) {
-          throw new Error("ACP metadata callback returned no admitted decision");
-        }
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce: input.nonce } });
-        return preparation;
-      } finally {
-        port1.close();
-        port2.close();
-      }
+      requestSqliteWorkerOperationAdmission({
+        stage: "transaction",
+        facts: { nonce: input.nonce, preparation },
+      });
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce: input.nonce } });
+      return preparation;
     },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "acp.metadata.prepare" },
   );
 }
@@ -151,10 +147,10 @@ function consumeSources(database: OpenClawStateDatabase, input: AcpSessionMutati
 }
 
 function commitAcpSessionMutationInWorker(
-  database: OpenClawStateDatabase,
+  write: WorkerWriteOperationContext["write"],
   input: AcpSessionMutationCommit & { nonce: string },
 ) {
-  return runOpenClawStateWriteTransaction(
+  return write(
     (current) => {
       requestSqliteWorkerOperationAdmission({
         stage: "transaction",
@@ -171,13 +167,12 @@ function commitAcpSessionMutationInWorker(
       }
       consumeSources(current, input);
       const db = current.db;
-      applyAcpSessionMutation(db, input);
-      const receipt = { nonce: input.nonce };
+      const facts = applyAcpSessionMutation(db, input);
+      const receipt = { nonce: input.nonce, facts };
       deferSqliteWorkerCommitReceipt(db, receipt);
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
       return receipt;
     },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "acp.metadata.commit" },
   );
 }

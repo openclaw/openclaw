@@ -1,5 +1,13 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
+export type ResolvedSubagentController = {
+  controllerSessionKey: string;
+  controllerAgentId?: string;
+  callerSessionKey: string;
+  callerIsSubagent: boolean;
+  controlScope: "children" | "none";
+};
+
 export type SubagentCancellationControl = {
   assertCurrent: () => void;
   prepareRead?: () => Promise<void> | undefined;
@@ -35,4 +43,15 @@ export type SubagentAdminKillParams = {
   expectedGeneration?: number;
   expectedOwnerKey?: string;
   onResult?: (result: SubagentAdminKillResult) => undefined;
+};
+
+/** Outcome of one exact-run kill mutation, including cleanup and supersession results. */
+export type SubagentRunKillResult = {
+  killed: boolean;
+  continuationRetired?: true;
+  superseded?: boolean;
+  declined?: true;
+  targetState?: SubagentKillTargetState;
+  error?: string;
+  completedCleanupError?: string;
 };

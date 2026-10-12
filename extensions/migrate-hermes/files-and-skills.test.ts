@@ -6,6 +6,10 @@ import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
@@ -28,6 +32,8 @@ describe("Hermes migration file and skill items", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync(testWorkspace.dir);
+    await closeOpenClawStateDatabaseAsync();
     await testWorkspace.cleanup();
   });
 

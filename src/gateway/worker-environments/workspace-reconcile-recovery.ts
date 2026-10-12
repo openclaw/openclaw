@@ -33,9 +33,7 @@ import {
   reconciliationEntries,
 } from "./workspace-reconcile-derived-paths.js";
 import {
-  directoryContainsOnlyDerivedWorkspaceEntries,
-  directoryContainsOnlyJournalPaths,
-  entryMatches,
+  directoryContainsOnlyWorkspaceEntries,
   localPath,
   removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
@@ -306,14 +304,13 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
       const isJournalDirectory =
         actual.type === "directory" &&
         ((directories.has(entryPath) &&
-          (await directoryContainsOnlyJournalPaths(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
-            paths,
-            directories,
             params.isRetainedInput,
+            { paths, directories },
           ))) ||
-          (await directoryContainsOnlyDerivedWorkspaceEntries(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
             params.isRetainedInput,
@@ -372,12 +369,11 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
       baseDirectories.has(entry.path) &&
-      (await directoryContainsOnlyJournalPaths(
+      (await directoryContainsOnlyWorkspaceEntries(
         params.root,
         entry.path,
-        basePaths,
-        baseDirectories,
         params.isRetainedInput,
+        { paths: basePaths, directories: baseDirectories },
       ))
     ) {
       continue;
@@ -395,7 +391,7 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       node &&
       !(
         node.type === "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
+        (await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
           params.isRetainedInput,
@@ -422,12 +418,11 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
       if (
         baseEntries.has(entryPath) &&
         appliedDirectories.has(entryPath) &&
-        !(await directoryContainsOnlyJournalPaths(
+        !(await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
-          appliedEntryPaths,
-          appliedDirectories,
           params.isRetainedInput,
+          { paths: appliedEntryPaths, directories: appliedDirectories },
         ))
       ) {
         throw workspaceRecoveryConflict(entryPath);
@@ -443,8 +438,8 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
     const baseEntry = baseEntries.get(entryPath);
     const appliedEntry = appliedEntries.get(entryPath);
     if (
-      (baseEntry && (await entryMatches(params.root, baseEntry))) ||
-      (appliedEntry && (await entryMatches(params.root, appliedEntry)))
+      (baseEntry && sameEntry(local, baseEntry)) ||
+      (appliedEntry && sameEntry(local, appliedEntry))
     ) {
       continue;
     }

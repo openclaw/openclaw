@@ -8,7 +8,7 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
@@ -81,6 +81,7 @@ export function createDiscordBeforePayloadDelivery(params: {
 export function createDiscordMessageReplyRuntime(params: {
   ctx: DiscordMessagePreflightContext;
   processContext: DiscordMessageProcessContext;
+  replyReference: DiscordMessageProcessContext["replyPlan"]["replyReference"];
   sourceRepliesAreToolOnly: boolean;
   shouldDisableCoreTypingKeepalive: boolean;
   isRoomEvent: boolean;
@@ -103,9 +104,9 @@ export function createDiscordMessageReplyRuntime(params: {
     isDirectMessage,
     route,
   } = ctx;
-  const { ctxPayload, deliverTarget, replyReference } = processContext;
-  const deliverChannelId = deliverTarget.startsWith("channel:")
-    ? deliverTarget.slice("channel:".length)
+  const { ctxPayload, replyPlan } = processContext;
+  const deliverChannelId = replyPlan.deliverTarget.startsWith("channel:")
+    ? replyPlan.deliverTarget.slice("channel:".length)
     : messageChannelId;
   let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
   const getTypingFeedback = () =>
@@ -169,7 +170,7 @@ export function createDiscordMessageReplyRuntime(params: {
     }
     try {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-      const sessionEntry = getSessionEntry({
+      const sessionEntry = await getSessionEntryAsync({
         agentId: route.agentId,
         sessionKey,
         storePath,
@@ -195,15 +196,17 @@ export function createDiscordMessageReplyRuntime(params: {
 
   const draftPreview = createDiscordDraftPreviewController({
     groupThread: Boolean(ctxPayload.GroupThread),
+    isRoomEvent: params.isRoomEvent,
     cfg,
     discordConfig,
     accountId,
     abortSignal: ctx.abortSignal,
+    isPolicyCurrent: ctx.isPolicyCurrent,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,
     deliveryRest: params.deliveryRest,
     deliverChannelId,
-    replyReference,
+    replyReference: params.replyReference,
     onFinalReplyStart: params.onFinalReplyStart,
     onFinalReplyDelivered: params.onFinalReplyDelivered,
     log: logVerbose,

@@ -2216,6 +2216,7 @@ describe("release validation no-push transport", () => {
             approve_github_release: { result: beforeDocker ? "skipped" : "success" },
             approve_github_release_before_docker: { result: beforeDocker ? "success" : "skipped" },
             finalize_github_release_before_docker: { result: scenario.early ?? "skipped" },
+            verify_clawhub_publication: { result: scenario.npm },
             verify_core_npm_registry: { result: "skipped" },
           },
         });

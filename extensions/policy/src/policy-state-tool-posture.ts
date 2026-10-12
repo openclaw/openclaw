@@ -1,11 +1,15 @@
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import {
   asNonArrayRecord,
-  isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-helpers.js";
+import {
+  collectPolicyAgentContexts,
+  ocPathSegment,
+  resolvePolicyValue,
+  type PolicyAgentContext,
+} from "./policy-state-helpers.js";
 import type { PolicyToolPostureEvidence } from "./policy-state-types.js";
 
 type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
@@ -13,37 +17,10 @@ type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export function scanPolicyToolPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicyToolPostureEvidence[] {
-  const globalTools = asNonArrayRecord(cfg.tools);
-  const agents = asNonArrayRecord(cfg.agents);
-  const defaults = asNonArrayRecord(agents.defaults);
-  const defaultSandbox = asNonArrayRecord(defaults.sandbox);
   const entries: PolicyToolPostureEvidence[] = [];
-  pushToolPostureEvidence(entries, {
-    id: "tools",
-    scope: "global",
-    tools: globalTools,
-    inheritedTools: {},
-    sandbox: defaultSandbox,
-    inheritedSandbox: {},
-    sourceBase: "oc://openclaw.config/tools",
-  });
-
-  collectPolicyConfiguredAgents(agents).forEach((configured) => {
-    const agent = configured.value;
-    if (!isRecord(agent)) {
-      return;
-    }
-    pushToolPostureEvidence(entries, {
-      id: configured.agentId,
-      scope: "agent",
-      agentId: configured.agentId,
-      tools: asNonArrayRecord(agent.tools),
-      inheritedTools: globalTools,
-      sandbox: asNonArrayRecord(agent.sandbox),
-      inheritedSandbox: defaultSandbox,
-      sourceBase: `${configured.sourceBase}/tools`,
-    });
-  });
+  for (const context of collectPolicyAgentContexts(cfg, "global")) {
+    pushToolPostureEvidence(entries, context);
+  }
 
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
@@ -52,19 +29,19 @@ function pushToolPostureEvidence(
   entries: PolicyToolPostureEvidence[],
   params: ToolPostureParams,
 ): void {
-  const localProfile = readString(params.tools.profile);
-  const inheritedProfile = readString(params.inheritedTools.profile);
   pushToolPostureValue(entries, params, {
     suffix: "profile",
     kind: "profile",
-    value: localProfile ?? inheritedProfile ?? "full",
-    explicit: localProfile !== undefined || inheritedProfile !== undefined,
-    inherited: localProfile === undefined && inheritedProfile !== undefined,
+    ...resolvePolicyValue(
+      readString(params.tools.profile),
+      readString(params.inheritedTools.profile),
+      "full",
+    ),
   });
 
-  pushToolPostureList(entries, params, "allow");
-  pushToolAlsoAllowPostureList(entries, params);
-  pushToolPostureList(entries, params, "deny");
+  for (const key of ["allow", "alsoAllow", "deny"] as const) {
+    pushToolPostureList(entries, params, key);
+  }
   pushToolFsPosture(entries, params);
   pushToolExecPosture(entries, params);
   pushToolElevatedPosture(entries, params);
@@ -73,14 +50,14 @@ function pushToolPostureEvidence(
 function pushToolFsPosture(entries: PolicyToolPostureEvidence[], params: ToolPostureParams): void {
   const localFs = asNonArrayRecord(params.tools.fs);
   const inheritedFs = asNonArrayRecord(params.inheritedTools.fs);
-  const localWorkspaceOnly = readBoolean(localFs.workspaceOnly);
-  const inheritedWorkspaceOnly = readBoolean(inheritedFs.workspaceOnly);
   pushToolPostureValue(entries, params, {
     suffix: "fs/workspaceOnly",
     kind: "fsWorkspaceOnly",
-    value: localWorkspaceOnly ?? inheritedWorkspaceOnly ?? false,
-    explicit: localWorkspaceOnly !== undefined || inheritedWorkspaceOnly !== undefined,
-    inherited: localWorkspaceOnly === undefined && inheritedWorkspaceOnly !== undefined,
+    ...resolvePolicyValue(
+      readBoolean(localFs.workspaceOnly),
+      readBoolean(inheritedFs.workspaceOnly),
+      false,
+    ),
   });
 }
 
@@ -90,15 +67,16 @@ function pushToolExecPosture(
 ): void {
   const localExec = asNonArrayRecord(params.tools.exec);
   const inheritedExec = asNonArrayRecord(params.inheritedTools.exec);
-  const localHost = readString(localExec.host);
-  const inheritedHost = readString(inheritedExec.host);
-  const host = localHost ?? inheritedHost ?? "auto";
+  const hostPosture = resolvePolicyValue(
+    readString(localExec.host),
+    readString(inheritedExec.host),
+    "auto",
+  );
+  const host = hostPosture.value;
   pushToolPostureValue(entries, params, {
     suffix: "exec/host",
     kind: "execHost",
-    value: host,
-    explicit: localHost !== undefined || inheritedHost !== undefined,
-    inherited: localHost === undefined && inheritedHost !== undefined,
+    ...hostPosture,
   });
 
   const localSecurity = readString(localExec.security);
@@ -185,7 +163,7 @@ function pushToolElevatedPosture(
     entries.push({
       id: `${params.id}-elevated-allow-from-${ocPathSegment(provider)}`,
       kind: "elevatedAllowFrom",
-      source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
+      source: `${inherited ? "oc://openclaw.config/tools" : params.toolsSourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
       scope: params.scope,
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       entries: localEntries.length > 0 ? localEntries : inheritedEntries,
@@ -194,37 +172,25 @@ function pushToolElevatedPosture(
   }
 }
 
-type ToolPostureParams = {
-  readonly id: string;
-  readonly scope: "global" | "agent";
-  readonly agentId?: string;
-  readonly tools: Record<string, unknown>;
-  readonly inheritedTools: Record<string, unknown>;
-  readonly sandbox: Record<string, unknown>;
-  readonly inheritedSandbox: Record<string, unknown>;
-  readonly sourceBase: string;
-};
+type ToolPostureParams = PolicyAgentContext<"global">;
 
 function pushToolPostureValue(
   entries: PolicyToolPostureEvidence[],
   params: ToolPostureParams,
-  entry: {
+  entry: Omit<PolicyToolPostureEvidence, "id" | "source" | "scope" | "agentId"> & {
     readonly suffix: string;
     readonly sourceSuffix?: string;
-    readonly kind: PolicyToolPostureEvidence["kind"];
-    readonly value: boolean | string | undefined;
-    readonly explicit: boolean;
     readonly inherited: boolean;
   },
 ): void {
+  const { suffix, sourceSuffix = suffix, inherited, value, ...evidence } = entry;
   entries.push({
-    id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
-    kind: entry.kind,
-    source: `${entry.inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
+    id: `${params.id}-${suffix.replaceAll("/", "-")}`,
+    source: `${inherited ? "oc://openclaw.config/tools" : params.toolsSourceBase}/${sourceSuffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
-    ...(entry.value === undefined ? {} : { value: entry.value }),
-    explicit: entry.explicit,
+    ...(value === undefined ? {} : { value }),
+    ...evidence,
   });
 }
 
@@ -245,40 +211,25 @@ function readExecMode(value: unknown): ExecMode | undefined {
 function pushToolPostureList(
   entries: PolicyToolPostureEvidence[],
   params: ToolPostureParams,
-  key: "allow" | "deny",
+  key: "allow" | "alsoAllow" | "deny",
 ): void {
-  const localEntries = readStringArray(params.tools[key]);
-  const inheritedEntries = readStringArray(params.inheritedTools[key]);
-  const inherited = localEntries.length === 0 && inheritedEntries.length > 0;
-  entries.push({
-    id: `${params.id}-${key}`,
-    kind: key,
-    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${key}`,
-    scope: params.scope,
-    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
-    entries: [...inheritedEntries, ...localEntries],
-    explicit: localEntries.length > 0 || inheritedEntries.length > 0,
-  });
-}
-
-function pushToolAlsoAllowPostureList(
-  entries: PolicyToolPostureEvidence[],
-  params: ToolPostureParams,
-): void {
-  const localValue = params.tools.alsoAllow;
-  const inheritedValue = params.inheritedTools.alsoAllow;
-  const localConfigured = Array.isArray(localValue);
-  const inheritedConfigured = Array.isArray(inheritedValue);
+  const localValue = params.tools[key];
+  const inheritedValue = params.inheritedTools[key];
   const localEntries = readStringArray(localValue);
   const inheritedEntries = readStringArray(inheritedValue);
+  const replace = key === "alsoAllow";
+  const localConfigured = replace ? Array.isArray(localValue) : localEntries.length > 0;
+  const inheritedConfigured = replace ? Array.isArray(inheritedValue) : inheritedEntries.length > 0;
   const inherited = !localConfigured && inheritedConfigured;
-  entries.push({
-    id: `${params.id}-alsoAllow`,
-    kind: "alsoAllow",
-    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/alsoAllow`,
-    scope: params.scope,
-    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
-    entries: inherited ? inheritedEntries : localEntries,
+  pushToolPostureValue(entries, params, {
+    suffix: key,
+    kind: key,
+    inherited,
+    entries: replace
+      ? inherited
+        ? inheritedEntries
+        : localEntries
+      : [...inheritedEntries, ...localEntries],
     explicit: localConfigured || inheritedConfigured,
   });
 }

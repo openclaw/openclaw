@@ -1,4 +1,3 @@
-// Collect read-only doctor findings and sanitized diagnostics for an agent handoff.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -130,7 +129,6 @@ async function collectTriageBundle(
   }
 }
 
-/** Collect read-only diagnostics and hand the local repair to an available coding agent. */
 export async function triageCommand(
   runtime: RuntimeEnv,
   options: TriageOptions = {},
@@ -461,7 +459,7 @@ export async function triageCommand(
     const args =
       handoff.agent === "claude"
         ? [claudeSafeMode ? "--safe-mode" : "-p", prompt]
-        : handoff.agent === "qwen"
+        : handoff.agent === "qwen" || handoff.agent === "agy"
           ? ["--prompt-interactive", prompt]
           : handoff.agent === "opencode" || handoff.agent === "kimi"
             ? ["--prompt", prompt]

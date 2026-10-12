@@ -30,10 +30,7 @@ enum RuntimeLocator {
     }
 
     static func isSupportedNodeVersion(_ version: Semver) -> Bool {
-        if version.major == self.minNode24.major {
-            return version >= self.minNode24
-        }
-        return version >= self.minNode26
+        (version.major == self.minNode24.major && version >= self.minNode24) || version >= self.minNode26
     }
 
     static func resolve(
@@ -44,7 +41,12 @@ enum RuntimeLocator {
         guard let binary = CommandResolver.findExecutable(named: "node", searchPaths: searchPaths) else {
             return .failure(.notFound(searchPaths: searchPaths))
         }
-        guard let rawVersion = await readVersion(of: binary, pathEnv: pathEnv) else {
+        guard let rawVersion = await ExecutableVersionProbe.read(
+            binary: binary,
+            pathEnv: pathEnv,
+            logger: self.logger,
+            label: "runtime")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
             return .failure(.versionParse(
                 raw: "(unreadable)",
                 path: binary,
@@ -85,10 +87,10 @@ enum RuntimeLocator {
             ].joined(separator: "\n")
         }
     }
+}
 
-    // MARK: - Internals
-
-    private static func readVersion(of binary: String, pathEnv: String) async -> String? {
+enum ExecutableVersionProbe {
+    static func read(binary: String, pathEnv: String, logger: Logger, label: String) async -> String? {
         let start = Date()
         do {
             let result = try await BoundedProcess.run(
@@ -99,25 +101,24 @@ enum RuntimeLocator {
             guard result.terminationStatus == 0 else { return nil }
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
-                self.logger.warning(
+                logger.warning(
                     """
-                    runtime --version slow (\(elapsedMs, privacy: .public)ms) \
+                    \(label, privacy: .public) --version slow (\(elapsedMs, privacy: .public)ms) \
                     bin=\(binary, privacy: .public)
                     """)
             } else {
-                self.logger.debug(
+                logger.debug(
                     """
-                    runtime --version ok (\(elapsedMs, privacy: .public)ms) \
+                    \(label, privacy: .public) --version ok (\(elapsedMs, privacy: .public)ms) \
                     bin=\(binary, privacy: .public)
                     """)
             }
-            return String(data: result.output, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return String(data: result.output, encoding: .utf8)
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-            self.logger.error(
+            logger.error(
                 """
-                runtime --version failed (\(elapsedMs, privacy: .public)ms) \
+                \(label, privacy: .public) --version failed (\(elapsedMs, privacy: .public)ms) \
                 bin=\(binary, privacy: .public) \
                 err=\(error.localizedDescription, privacy: .public)
                 """)

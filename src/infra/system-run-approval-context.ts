@@ -6,7 +6,7 @@ import type {
   SystemRunApprovalPlan,
 } from "./exec-approvals.js";
 import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
-import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-command.js";
+import { resolveSystemRunCommandRequest } from "./system-run-command.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 // System-run approval context normalizes prepared node-run payloads before exec policy.
@@ -116,22 +116,25 @@ export function resolveSystemRunApprovalRequestContext(params: {
     host === "node" ? normalizeSystemRunApprovalPlan(params.systemRunPlan) : null;
   const fallbackArgv = normalizeStringArray(params.commandArgv);
   const fallbackCommand = typeof params.command === "string" ? params.command : "";
-  const commandText = normalizedPlan
-    ? normalizedPlan.commandText || formatExecCommand(normalizedPlan.argv)
-    : fallbackCommand;
+  const commandText = normalizedPlan?.commandText ?? fallbackCommand;
   const preview = normalizedPlan
-    ? normalizeNonEmptyString(normalizedPlan.commandPreview ?? fallbackCommand)
+    ? (normalizedPlan.commandPreview ?? normalizeNonEmptyString(fallbackCommand))
     : null;
   const commandPreview = preview && preview !== commandText ? preview : null;
-  const plan = normalizedPlan ? { ...normalizedPlan, commandPreview } : null;
+  const cwd = normalizedPlan?.cwd ?? normalizeNonEmptyString(params.cwd);
+  const agentId = normalizedPlan?.agentId ?? normalizeNonEmptyString(params.agentId);
+  const sessionKey = normalizedPlan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey);
+  const plan = normalizedPlan
+    ? { ...normalizedPlan, commandPreview, cwd, agentId, sessionKey }
+    : null;
   return {
     plan,
     commandArgv: plan?.argv ?? (fallbackArgv.length > 0 ? fallbackArgv : undefined),
     commandText,
     commandPreview,
-    cwd: plan?.cwd ?? normalizeNonEmptyString(params.cwd),
-    agentId: plan?.agentId ?? normalizeNonEmptyString(params.agentId),
-    sessionKey: plan?.sessionKey ?? normalizeNonEmptyString(params.sessionKey),
+    cwd,
+    agentId,
+    sessionKey,
   };
 }
 

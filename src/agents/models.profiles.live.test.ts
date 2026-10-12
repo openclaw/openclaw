@@ -38,6 +38,7 @@ import {
   isAudioOnlyModelErrorMessage,
   isUnsupportedThinkingToggleErrorMessage,
 } from "./live-test-provider-drift.test-support.js";
+import { resolveLiveTestReasoning } from "./live-test-reasoning.js";
 import {
   getApiKeyForModelCore,
   requireApiKey,
@@ -1203,31 +1204,6 @@ describe("explicit live model discovery scope", () => {
   });
 });
 
-function resolveTestReasoning(
-  model: Model,
-): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
-  if (!model.reasoning) {
-    return undefined;
-  }
-  const id = model.id.toLowerCase();
-  if (id.includes("deep-research")) {
-    return "medium";
-  }
-  if (model.provider === "openrouter" && id.startsWith("qwq")) {
-    return undefined;
-  }
-  if (model.provider === "xai" && id.startsWith("grok-4")) {
-    return undefined;
-  }
-  if (model.provider === "openai") {
-    if (id.includes("pro")) {
-      return "high";
-    }
-    return "medium";
-  }
-  return "low";
-}
-
 describe("resolveLiveSystemPrompt", () => {
   it("matches OpenAI Codex HTML interruption pages", () => {
     expect(
@@ -1265,11 +1241,14 @@ async function completeSimpleWithTimeout<TApi extends Api>(
       model,
       cfg: activeLiveCompletionConfig,
     });
+    const reasoning =
+      options?.reasoning === undefined ? undefined : resolveLiveTestReasoning(completionModel);
     return await withLiveHeartbeat(
       Promise.race([
         completeSimple(completionModel, context, {
           ...options,
           sessionId: options?.sessionId ?? resolveLiveCompletionSessionId(model),
+          reasoning,
           signal: controller.signal,
         }),
         timeout,
@@ -1333,7 +1312,7 @@ async function completeOkWithRetry(params: {
       },
       {
         apiKey: params.apiKey,
-        reasoning: resolveTestReasoning(params.model),
+        reasoning: resolveLiveTestReasoning(params.model),
         maxTokens,
       },
       params.timeoutMs,
@@ -1383,7 +1362,7 @@ async function runDeepSeekV4ReplayRegression(params: {
     { messages: [firstUser], tools: [noopTool] },
     {
       apiKey: params.apiKey,
-      reasoning: resolveTestReasoning(params.model),
+      reasoning: resolveLiveTestReasoning(params.model),
       maxTokens: 256,
     },
     params.timeoutMs,
@@ -1402,7 +1381,7 @@ async function runDeepSeekV4ReplayRegression(params: {
       { messages: [firstUser], tools: [noopTool] },
       {
         apiKey: params.apiKey,
-        reasoning: resolveTestReasoning(params.model),
+        reasoning: resolveLiveTestReasoning(params.model),
         maxTokens: 256,
       },
       params.timeoutMs,
@@ -1439,7 +1418,7 @@ async function runDeepSeekV4ReplayRegression(params: {
     },
     {
       apiKey: params.apiKey,
-      reasoning: resolveTestReasoning(params.model),
+      reasoning: resolveLiveTestReasoning(params.model),
       maxTokens: 256,
     },
     params.timeoutMs,
@@ -1463,7 +1442,7 @@ async function runExtraTurnProbes(params: {
   }
   const options = {
     apiKey: params.apiKey,
-    reasoning: resolveTestReasoning(params.model),
+    reasoning: resolveLiveTestReasoning(params.model),
     maxTokens: 128,
   };
   if (LIVE_FILE_PROBE_ENABLED && !shouldSkipLiveModelFileProbe(params.model)) {
@@ -1850,7 +1829,7 @@ describeLive("live models (profile keys)", () => {
                 { messages: [firstUser], tools: [noopTool] },
                 {
                   apiKey,
-                  reasoning: resolveTestReasoning(model),
+                  reasoning: resolveLiveTestReasoning(model),
                   maxTokens: 128,
                   onPayload: requireToolChoicePayload,
                 },
@@ -1881,7 +1860,7 @@ describeLive("live models (profile keys)", () => {
                   { messages: [firstUser], tools: [noopTool] },
                   {
                     apiKey,
-                    reasoning: resolveTestReasoning(model),
+                    reasoning: resolveLiveTestReasoning(model),
                     maxTokens: 128,
                     onPayload: requireToolChoicePayload,
                   },
@@ -1931,7 +1910,7 @@ describeLive("live models (profile keys)", () => {
                 },
                 {
                   apiKey,
-                  reasoning: resolveTestReasoning(model),
+                  reasoning: resolveLiveTestReasoning(model),
                   // Headroom: reasoning summary can consume most of the output budget.
                   maxTokens: 256,
                 },

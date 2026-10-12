@@ -46,7 +46,6 @@ type GatewayBroadcastStateVersion = {
   health?: number;
 };
 
-/** Options for gateway websocket broadcasts. */
 export type GatewayBroadcastOpts = {
   /** Agent scope for agent-relative keys such as `global`. */
   agentId?: string;
@@ -85,14 +84,12 @@ export type GatewayBroadcastOpts = {
   };
 };
 
-/** Broadcast function signature for all connected clients. */
 export type GatewayBroadcastFn = (
   event: string,
   payload: unknown,
   opts?: GatewayBroadcastOpts,
 ) => void;
 
-/** Broadcast function signature for targeted connection ids. */
 export type GatewayBroadcastToConnIdsFn = (
   event: string,
   payload: unknown,

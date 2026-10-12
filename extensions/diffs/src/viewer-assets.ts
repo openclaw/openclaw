@@ -19,11 +19,6 @@ const LANGUAGE_PACK_RUNTIME_CANDIDATE_RELATIVE_PATHS = [
   "./extensions/diffs-language-pack/assets/viewer-runtime.js",
 ] as const;
 
-type ServedViewerAsset = {
-  body: string | Buffer;
-  contentType: string;
-};
-
 type RuntimeAssetCache = {
   mtimeMs: number;
   runtimeBody: Buffer;
@@ -48,7 +43,7 @@ function createViewerAssetHandler(
   prefix: string,
   relativePaths: readonly string[],
   optional = false,
-): (pathname: string) => Promise<ServedViewerAsset | null> {
+) {
   const loaderPath = `${prefix}viewer.js`;
   const runtimePath = `${prefix}viewer-runtime.js`;
   let cache: RuntimeAssetCache | null = null;
@@ -71,7 +66,7 @@ function createViewerAssetHandler(
     return cache;
   };
 
-  return async (pathname) => {
+  return async (pathname: string) => {
     if (pathname !== loaderPath && pathname !== runtimePath) {
       return null;
     }

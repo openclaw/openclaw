@@ -179,8 +179,12 @@ function normalizeExplicitSystemAgentId(agentId: string): string {
   return normalized.ok ? normalized.value : agentId;
 }
 
-function parseConfigSetCommand(input: string): SystemAgentOperation | undefined {
-  const prefix = input.match(CONFIG_SET_PREFIX_RE)?.[0];
+function parseConfigWriteCommand(
+  input: string,
+  kind: "config-set" | "config-set-ref",
+  prefixPattern: RegExp,
+): SystemAgentOperation | undefined {
+  const prefix = input.match(prefixPattern)?.[0];
   if (!prefix) {
     return undefined;
   }
@@ -188,7 +192,9 @@ function parseConfigSetCommand(input: string): SystemAgentOperation | undefined 
   for (const separator of body.matchAll(/\s+/gu)) {
     const path = body.slice(0, separator.index);
     const value = body.slice(separator.index).trim();
-    if (!value) {
+    const args =
+      kind === "config-set-ref" ? value.match(CONFIG_SET_REF_ARGS_RE)?.groups : undefined;
+    if (!value || (kind === "config-set-ref" && !args?.id)) {
       continue;
     }
     try {
@@ -198,10 +204,25 @@ function parseConfigSetCommand(input: string): SystemAgentOperation | undefined 
       if (isSystemAgentSensitiveConfigPathEmbedding(path)) {
         return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
       }
-      return { kind: "config-set", path, value };
     } catch {
       continue;
     }
+    if (!args?.id) {
+      return { kind: "config-set", path, value };
+    }
+    const source = (args.source?.toLowerCase() ?? "env") as "env" | "file" | "exec" | "store";
+    const id = args.id;
+    const provider = args.provider ?? DEFAULT_SECRET_PROVIDER_ALIAS;
+    if (!isValidSecretRef({ source, provider, id })) {
+      return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+    }
+    return {
+      kind: "config-set-ref",
+      path,
+      source,
+      id,
+      ...(args.provider ? { provider: args.provider } : {}),
+    };
   }
   // Keep malformed writes on the host side so their values never reach the
   // model. This outcome is deliberately non-executable.
@@ -234,47 +255,6 @@ function parseConfigReadCommand(
   return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
 }
 
-function parseConfigSetRefCommand(input: string): SystemAgentOperation | undefined {
-  const prefix = input.match(CONFIG_SET_REF_PREFIX_RE)?.[0];
-  if (!prefix) {
-    return undefined;
-  }
-  const body = input.slice(prefix.length);
-  for (const separator of body.matchAll(/\s+/gu)) {
-    const path = body.slice(0, separator.index);
-    const args = body.slice(separator.index).trim().match(CONFIG_SET_REF_ARGS_RE);
-    if (!args?.groups?.id) {
-      continue;
-    }
-    try {
-      parseConfigSetPath(path);
-      if (isSystemAgentSensitiveConfigPathEmbedding(path)) {
-        return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
-      }
-    } catch {
-      continue;
-    }
-    const source = (args.groups.source?.toLowerCase() ?? "env") as
-      | "env"
-      | "file"
-      | "exec"
-      | "store";
-    const id = args.groups.id.trim();
-    const provider = args.groups.provider ?? DEFAULT_SECRET_PROVIDER_ALIAS;
-    if (!isValidSecretRef({ source, provider, id })) {
-      return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
-    }
-    return {
-      kind: "config-set-ref",
-      path,
-      source,
-      id,
-      ...(args.groups.provider ? { provider: args.groups.provider } : {}),
-    };
-  }
-  return body.trim() ? { kind: "none", message: INVALID_CONFIG_SET_MESSAGE } : undefined;
-}
-
 /** Stable name prefix; the secret-store writer allocates a fresh entry for every save. */
 export function secretStoreNameForConfigPath(path: string): string {
   const name = parseConfigSetPath(path)
@@ -305,13 +285,14 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       return { ...operation };
     }
   }
-  const configSetRef = parseConfigSetRefCommand(trimmed);
-  if (configSetRef) {
-    return configSetRef;
-  }
-  const configSet = parseConfigSetCommand(trimmed);
-  if (configSet) {
-    return configSet;
+  for (const [kind, prefix] of [
+    ["config-set-ref", CONFIG_SET_REF_PREFIX_RE],
+    ["config-set", CONFIG_SET_PREFIX_RE],
+  ] as const) {
+    const parsed = parseConfigWriteCommand(trimmed, kind, prefix);
+    if (parsed) {
+      return parsed;
+    }
   }
   for (const [kind, prefix] of [
     ["config-unset", CONFIG_UNSET_PREFIX_RE],
@@ -328,11 +309,11 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     return { kind: "plugin-search", query: pluginSearchMatch.groups.query.trim() };
   }
   const pluginInstallMatch = trimmed.match(PLUGIN_INSTALL_RE);
-  if (pluginInstallMatch?.groups?.spec?.trim()) {
-    const spec = normalizePluginInstallSpec(
-      pluginInstallMatch.groups.spec.trim(),
-      pluginInstallMatch.groups.source,
-    );
+  if (pluginInstallMatch?.groups?.spec) {
+    const rawSpec = pluginInstallMatch.groups.spec;
+    const source = pluginInstallMatch.groups.source?.toLowerCase();
+    const spec =
+      source && !rawSpec.toLowerCase().startsWith(`${source}:`) ? `${source}:${rawSpec}` : rawSpec;
     const validationError = validateSystemAgentPluginInstallSpec(spec);
     if (validationError) {
       return { kind: "none", message: validationError };
@@ -340,8 +321,8 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     return { kind: "plugin-install", spec };
   }
   const pluginUninstallMatch = trimmed.match(PLUGIN_UNINSTALL_RE);
-  if (pluginUninstallMatch?.groups?.pluginId?.trim()) {
-    return { kind: "plugin-uninstall", pluginId: pluginUninstallMatch.groups.pluginId.trim() };
+  if (pluginUninstallMatch?.groups?.pluginId) {
+    return { kind: "plugin-uninstall", pluginId: pluginUninstallMatch.groups.pluginId };
   }
   const channelInfoMatch = trimmed.match(CHANNEL_INFO_RE);
   const channelInfo = channelInfoMatch?.groups?.channel ?? channelInfoMatch?.groups?.aboutChannel;
@@ -439,7 +420,7 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   }
   const setModelMatch = trimmed.match(SET_MODEL_RE);
   if (setModelMatch?.groups?.model) {
-    const agent = setModelMatch.groups.agent?.trim();
+    const agent = setModelMatch.groups.agent;
     return {
       kind: "set-default-model",
       model: setModelMatch.groups.model,
@@ -459,18 +440,6 @@ function trimShellishToken(value: string | undefined): string | undefined {
     (trimmed.startsWith("'") && trimmed.endsWith("'"))
   ) {
     return trimmed.slice(1, -1).trim() || undefined;
-  }
-  return trimmed;
-}
-
-function normalizePluginInstallSpec(spec: string, source: string | undefined): string {
-  const trimmed = spec.trim();
-  const normalizedSource = source?.toLowerCase();
-  if (
-    (normalizedSource === "npm" || normalizedSource === "clawhub") &&
-    !trimmed.toLowerCase().startsWith(`${normalizedSource}:`)
-  ) {
-    return `${normalizedSource}:${trimmed}`;
   }
   return trimmed;
 }

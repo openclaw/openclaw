@@ -58,8 +58,8 @@ vi.mock("./server-context.js", () => ({
   },
 }));
 
-const { readSystemProfileCookies } = await import("../system-profile-api.js");
-const { importSystemProfileCookies } = await import("./system-profiles.js");
+const { readSystemProfileCookies, importSystemProfileCookies } =
+  await import("./system-profiles.js");
 
 const KEYCHAIN_FIXTURE = "fixture-value";
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;

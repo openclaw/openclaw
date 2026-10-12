@@ -24,7 +24,6 @@ function entry(index = 0): SessionEntry {
     visibility: "shared",
     modelProvider: "unit-test",
     model: "model",
-    status: "running",
     inputTokens: index * 100,
     outputTokens: index * 10,
     totalTokens: index * 110,

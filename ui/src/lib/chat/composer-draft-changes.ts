@@ -1,3 +1,5 @@
+import { notifyListeners } from "../../../../src/shared/listeners.js";
+
 const durableComposerDraftChangeListeners = new Set<() => void>();
 
 export function subscribeDurableComposerDraftChanges(listener: () => void): () => void {
@@ -6,11 +8,7 @@ export function subscribeDurableComposerDraftChanges(listener: () => void): () =
 }
 
 export function notifyDurableComposerDraftChanges(): void {
-  for (const listener of durableComposerDraftChangeListeners) {
-    try {
-      listener();
-    } catch (error) {
-      console.error("[openclaw] durable composer draft listener failed", error);
-    }
-  }
+  notifyListeners(durableComposerDraftChangeListeners, undefined, (error) =>
+    console.error("[openclaw] durable composer draft listener failed", error),
+  );
 }

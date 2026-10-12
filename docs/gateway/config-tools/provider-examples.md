@@ -252,7 +252,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
 
     - General endpoint: `https://api.z.ai/api/paas/v4`
     - Coding endpoint: `https://api.z.ai/api/coding/paas/v4`
-    - The default `zai-api-key` auth choice probes your key and auto-detects which endpoint it belongs to (falling back to a prompt, defaulting to Global, if detection is inconclusive). Dedicated CN and Coding-Plan auth choices are also available for explicit selection.
+    - The default `zai-api-key` auth choice checks your key and auto-detects which endpoint it belongs to (falling back to a prompt, defaulting to Global, if detection is inconclusive). Dedicated CN and Coding-Plan auth choices are also available for explicit selection.
     - For the general endpoint, define a custom provider with the base URL override.
 
   </Accordion>

@@ -5,10 +5,11 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 
 /** Observe accepted publications so warm-read fixtures do not measure startup enrichment. */
 export function observeSessionRowBackfill(
-  sessionKeys: string[],
+  identities: string[],
   projection?: Pick<SessionRowProjection, "capture">,
+  identify: (row: records.MaterializedRow) => string = (row) => row.key,
 ) {
-  const remaining = new Set(sessionKeys);
+  const remaining = new Set(identities);
   const completed = createDeferredCore();
   const publish = records.publishTranscriptFields;
   const spy = vi.spyOn(records, "publishTranscriptFields").mockImplementation((...args) => {
@@ -25,7 +26,7 @@ export function observeSessionRowBackfill(
       ) {
         return changed;
       }
-      remaining.delete(row.key);
+      remaining.delete(identify(row));
       if (!remaining.size) {
         completed.resolve();
       }

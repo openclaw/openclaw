@@ -58,7 +58,7 @@ export function setTwitchAccount(
   account: Partial<TwitchAccountConfig>,
   accountId: string = resolveSetupAccountId(cfg),
 ): OpenClawConfig {
-  const resolvedAccountId = resolveSetupAccountId(cfg, accountId.trim());
+  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
   const existing = getAccountConfig(cfg, resolvedAccountId);
   const merged: TwitchAccountConfig = {
     username: account.username ?? existing?.username ?? "",
@@ -213,7 +213,7 @@ export async function configureWithEnvToken(
   dmPolicy: ChannelSetupDmPolicy,
   accountId: string = resolveSetupAccountId(cfg),
 ): Promise<{ cfg: OpenClawConfig } | null> {
-  const resolvedAccountId = resolveSetupAccountId(cfg, accountId.trim());
+  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
   if (resolvedAccountId !== DEFAULT_ACCOUNT_ID) {
     return null;
   }
@@ -251,29 +251,6 @@ export async function configureWithEnvToken(
   }
 
   return { cfg: cfgWithAccount };
-}
-
-function setTwitchAccessControl(
-  cfg: OpenClawConfig,
-  allowedRoles: TwitchRole[],
-  requireMention: boolean,
-  accountId?: string,
-): OpenClawConfig {
-  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
-  const account = getAccountConfig(cfg, resolvedAccountId);
-  if (!account) {
-    return cfg;
-  }
-
-  return setTwitchAccount(
-    cfg,
-    {
-      ...account,
-      allowedRoles,
-      requireMention,
-    },
-    resolvedAccountId,
-  );
 }
 
 function resolveTwitchGroupPolicy(
@@ -376,8 +353,17 @@ const twitchDmPolicy = createChannelDmPolicy({
       policy === "open" ? ["all"] : policy === "allowlist" ? [] : ["moderator"];
     return { allowedRoles };
   },
-  applyPatch: ({ cfg, account, patch }) =>
-    setTwitchAccessControl(cfg, patch.allowedRoles as TwitchRole[], true, account.accountId),
+  applyPatch: ({ cfg, account, patch }) => {
+    const accountId = resolveSetupAccountId(cfg, account.accountId);
+    const existing = getAccountConfig(cfg, accountId);
+    return existing
+      ? setTwitchAccount(
+          cfg,
+          { ...existing, allowedRoles: patch.allowedRoles as TwitchRole[], requireMention: true },
+          accountId,
+        )
+      : cfg;
+  },
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
     const account = getAccountConfig(cfg, resolvedAccountId);

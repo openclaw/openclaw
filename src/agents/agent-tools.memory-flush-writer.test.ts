@@ -133,12 +133,30 @@ describe("memory flush writer availability", () => {
     ]);
   });
 
-  it("does not reintroduce harness setup tools outside the provider flush projection", () => {
-    const { assembled } = runWithAgentRingZeroTools([persistenceTool("host", "openclaw")], () =>
-      assembleProviderFlush([persistenceTool("memory-provider")]),
-    );
-    expect(assembled.map((tool) => tool.name).toSorted()).toEqual(["read", "save_memory"]);
-  });
+  it.each(["provider", "file"] as const)(
+    "does not reintroduce harness execution tools outside the %s flush projection",
+    (arm) => {
+      const tools = runWithAgentRingZeroTools(
+        [persistenceTool("host", "openclaw"), persistenceTool("host", "tool_call")],
+        () => {
+          if (arm === "provider") {
+            return assembleProviderFlush([persistenceTool("memory-provider")]).assembled;
+          }
+          return createOpenClawCodingTools({
+            workspaceDir: tempDirs.make("openclaw-file-flush-"),
+            trigger: "memory",
+            memoryFlushWritePath: MEMORY_PATH,
+            senderIsOwner: true,
+            includeToolSearchControls: true,
+          });
+        },
+      );
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual([
+        "read",
+        arm === "provider" ? "save_memory" : "write",
+      ]);
+    },
+  );
 
   it("carries the delegated audience and only the public flush identity into plugin context", async () => {
     const sessionId = "3a17bcec-6331-4b0e-aac7-b7e1b9da2ad9";

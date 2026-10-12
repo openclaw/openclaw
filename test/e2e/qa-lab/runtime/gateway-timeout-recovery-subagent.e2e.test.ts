@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createQaBusState,
@@ -391,12 +392,7 @@ describe("Gateway timeout recovery subagent delivery", () => {
     cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
     const gateway = await owner.start({
       repoRoot: REPO_ROOT,
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
-        cwd: REPO_ROOT,
-        usePackagedPlugins: true,
-      },
+      useRepoCli: false,
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL,
@@ -485,6 +481,12 @@ describe("Gateway timeout recovery subagent delivery", () => {
         phase,
         provider: provider.proof,
         child: readChildHandoff(),
+        gatewayLogTail: redactSensitiveText(
+          gateway.logs().replaceAll(gateway.token, "[redacted]"),
+          {
+            mode: "tools",
+          },
+        ).slice(-8_000),
       });
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`${message} ${evidence}`, { cause: error });

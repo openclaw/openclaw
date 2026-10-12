@@ -27,8 +27,7 @@ function buildKeyCandidates(
     config: cfg,
     agentId: explicitAgentId,
   });
-  const prefixed = `agent:${agentId}:${rawKey}`;
-  return prefixed === rawKey ? [rawKey] : [rawKey, prefixed];
+  return [rawKey, `agent:${agentId}:${rawKey}`];
 }
 
 function resolveEntryForSessionKey(params: {

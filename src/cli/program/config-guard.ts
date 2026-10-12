@@ -32,7 +32,6 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "probe",
   "health",
   "discover",
-  "call",
   "install",
   "uninstall",
   "start",
@@ -108,8 +107,6 @@ export async function ensureConfigReady(params: {
     commandName !== "health" &&
     commandName !== "logs" &&
     commandName !== "sessions" &&
-    // Remote RPC clients validate without preparing state owned by the running Gateway.
-    !(commandName === "gateway" && subcommandName === "call") &&
     // A newer restart client may be controlling an older live Gateway. Validate
     // config without advancing the persistent schema owned by that process.
     !isRestartController &&
@@ -165,10 +162,7 @@ export async function ensureConfigReady(params: {
   const configSnapshotOptions =
     params.validateConfigOnly || commandName === "logs"
       ? ({ observe: false, pluginValidation: "core-only" } as const)
-      : isManagedNodeRuntime ||
-          commandName === "status" ||
-          (commandName === "gateway" && subcommandName === "call") ||
-          isRestartController
+      : isManagedNodeRuntime || commandName === "status" || isRestartController
         ? ({ observe: false } as const)
         : undefined;
   const snapshot =
@@ -199,6 +193,17 @@ export async function ensureConfigReady(params: {
       // Carry verified package facts into the final config reread without publishing Gateway policy.
       adoptProcessPluginCache(
         getPluginMetadataSnapshotCache(preflightResult.pluginMetadataSnapshot),
+      );
+    }
+    if (prepareGatewayState && preflightResult && snapshot.exists) {
+      const [{ getDeferredPluginMigrationConfigFacts }, { acceptGatewayRunPreflightMigrations }] =
+        await Promise.all([
+          import("../../config/deferred-plugin-migration-config.js"),
+          import("../gateway-cli/pre-bootstrap.js"),
+        ]);
+      // Gateway preflight reads resolve migration rows; snapshots record only nonempty sets.
+      acceptGatewayRunPreflightMigrations(
+        getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig) ?? [],
       );
     }
     return;

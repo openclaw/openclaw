@@ -20,6 +20,9 @@ const STDERR_TAIL_BYTES = 20_000;
 const TERMINAL_EVENT_MAX_BYTES = 1024 * 1024;
 
 function isClaudeResultLine(line: string): boolean {
+  if (Buffer.byteLength(line, "utf8") > TERMINAL_EVENT_MAX_BYTES) {
+    return false;
+  }
   try {
     const value = JSON.parse(line) as { type?: unknown };
     return value?.type === "result";
@@ -129,11 +132,7 @@ export async function runClaudeCliNodeCommand(params: {
       for (let newline = terminalLineBuffer.indexOf("\n"); newline >= 0;) {
         const line = terminalLineBuffer.slice(0, newline).replace(/\r$/u, "");
         terminalLineBuffer = terminalLineBuffer.slice(newline + 1);
-        if (
-          terminalLineTouchesTruncation &&
-          Buffer.byteLength(line, "utf8") <= TERMINAL_EVENT_MAX_BYTES &&
-          isClaudeResultLine(line)
-        ) {
+        if (terminalLineTouchesTruncation && isClaudeResultLine(line)) {
           terminalResultLine = line;
         }
         terminalLineTouchesTruncation = touchesTruncation;
@@ -223,11 +222,7 @@ export async function runClaudeCliNodeCommand(params: {
     void writeProgress(decoder.end());
     terminalLineBuffer += terminalDecoder.end();
     stderr = truncateUtf8Suffix(`${stderr}${stderrDecoder.end()}`, STDERR_TAIL_BYTES);
-    if (
-      terminalLineTouchesTruncation &&
-      Buffer.byteLength(terminalLineBuffer, "utf8") <= TERMINAL_EVENT_MAX_BYTES &&
-      isClaudeResultLine(terminalLineBuffer)
-    ) {
+    if (terminalLineTouchesTruncation && isClaudeResultLine(terminalLineBuffer)) {
       terminalResultLine = terminalLineBuffer;
     }
     if (truncated && terminalResultLine) {

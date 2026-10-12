@@ -1,4 +1,41 @@
 import type { HeapSpaceInfo } from "node:v8";
+import type { WorkerRequestKind } from "./worker-request-kind.js";
+
+export type DiagnosticRuntimeMeasurementFields =
+  | {
+      type: "gateway.http.cancelled";
+      source: "client" | "shutdown";
+    }
+  | {
+      type: "gateway.event_loop.sample";
+      intervalMs: number;
+      delayMaxMs: number;
+    }
+  | {
+      type: "diagnostic.gc";
+      durationMs: number;
+    };
+
+export type DiagnosticWorkerRequestFields = {
+  type: "worker.request";
+  kind: WorkerRequestKind;
+  requestClass: string;
+  phase: "queued" | "started" | "completed";
+  queueDepth: number;
+  queueWaitMs?: number;
+  durationMs?: number;
+};
+
+export type DiagnosticAsyncQueueDroppedFields = {
+  type: "diagnostic.async_queue.dropped";
+  droppedEvents: number;
+  droppedTrustedEvents?: number;
+  droppedUntrustedEvents?: number;
+  droppedPriorityEvents?: number;
+  queueLength: number;
+  maxQueueLength: number;
+  drainBatchSize: number;
+};
 
 export type DiagnosticMemoryUsage = {
   rssBytes: number;

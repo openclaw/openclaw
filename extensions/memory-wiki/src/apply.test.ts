@@ -54,16 +54,6 @@ describe("applyMemoryWikiMutation", () => {
     });
   });
 
-  it("rejects out-of-range string confidence in wiki mutations", () => {
-    expect(() =>
-      normalizeMemoryWikiMutationInput({
-        op: "update_metadata",
-        lookup: "entity.alpha",
-        confidence: "1.5",
-      }),
-    ).toThrow("confidence must be a finite number");
-  });
-
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
 

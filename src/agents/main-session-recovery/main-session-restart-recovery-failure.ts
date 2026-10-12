@@ -1,10 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  type SessionTranscriptTurnExpectedState,
-  type SessionTranscriptTurnLifecyclePatch,
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -139,7 +139,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
       if (notice === "failed") {
         return "notice_failed";
       }
-      const current = loadSessionEntry({
+      const current = await readSessionEntryReadOnlyInWorker({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
@@ -151,7 +151,6 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
         current.sessionId !== params.entry.sessionId ||
         state?.cycleId !== params.observation.cycleId ||
         state.tombstone ||
-        current.status !== "running" ||
         current.abortedLastRun !== true
       ) {
         return "skipped";

@@ -770,6 +770,30 @@ describe("requester yield ownership", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
+  it("reports runtime-owned earlier-turn children beside registry children", async () => {
+    const requesterSessionKey = "agent:main:main";
+    await seedRequiredChild(requesterSessionKey, { requesterTurnRunId: undefined });
+    const nativeChild = {
+      runId: "codex-thread:native-child",
+      childSessionKey: "codex-thread:native-child",
+      state: "running" as const,
+      wakeArmed: false,
+    };
+    const onYield = vi.fn();
+    const tool = createYieldToolForTurn({
+      requesterSessionKey,
+      requesterTurnRunId: "run-turn-2",
+      claimYieldCompletion: () => ({ pendingChildren: [nativeChild] }),
+      onYield,
+    });
+    expect((await tool.execute("yield-turn-2", {})).details).toMatchObject({
+      status: "already_pending",
+      message: expect.stringContaining("already spawned 2 child sessions"),
+      pendingChildren: [nativeChild, { runId: "run-child", state: "running" }],
+    });
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
   it("does not persist or yield after a runtime claim failure", async () => {
     await seedRequiredChild("agent:main:main");
     const before = structuredClone(getSubagentRunByRunId("run-child"));

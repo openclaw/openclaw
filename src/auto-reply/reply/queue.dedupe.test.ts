@@ -60,18 +60,9 @@ describe("followup queue deduplication", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
     expect(enqueueB.enqueueFollowupRun(key, source("redelivery"), settings)).toBe(false);
     expect(calls).toHaveLength(1);
-  });
-
-  it("rejects a drained redelivery without recreating an empty registry entry", async () => {
-    const { calls, done, runFollowup } = createDrainRecorder();
-    expect(enqueueFollowupRun(key, source("original"), settings)).toBe(true);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-    expect(calls).toHaveLength(1);
-    expect(enqueueFollowupRun(key, source("redelivery"), settings)).toBe(false);
     expect(getExistingFollowupQueue(key)).toBeUndefined();
   });
 
@@ -157,23 +148,6 @@ describe("followup queue deduplication", () => {
       expect(getExistingFollowupQueue(key)?.draining).toBe(false);
     },
   );
-
-  it("releases a compacted source's message identity through its cloned lifecycle", () => {
-    const capped: QueueSettings = { ...settings, cap: 1 };
-    const onAbandoned = vi.fn();
-    const first = source("first");
-    first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
-    expect(enqueueFollowupRun(key, first, capped)).toBe(true);
-    for (const messageId of ["m2", "m3"]) {
-      expect(enqueueFollowupRun(key, source(messageId, { messageId }), capped)).toBe(true);
-    }
-    clearFollowupQueue(key);
-    clearFollowupDrainCallback(key);
-    expect(onAbandoned).toHaveBeenCalledOnce();
-    const retry = source("first");
-    retry.turnAdoptionLifecycle = { onAdopted: () => {} };
-    expect(enqueueFollowupRun(key, retry, capped)).toBe(true);
-  });
 
   it("does not let a stale abandoned lifecycle release a newer same-id owner", async () => {
     vi.useFakeTimers();

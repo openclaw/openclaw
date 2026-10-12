@@ -588,9 +588,10 @@ describe("buildModelProviderCards", () => {
   it("keeps API key provenance and config-only providers", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
-      configProviderIds: ["mistral", "OpenAI"],
-      configApiKeyProviderIds: ["OpenAI"],
-      configProviderAuthModes: { OpenAI: "api-key" },
+      configProviders: [
+        { key: "mistral", hasApiKey: false },
+        { key: "OpenAI", hasApiKey: true, authMode: "api-key" },
+      ],
       authStatus: authStatus([
         {
           provider: "openai",
@@ -670,9 +671,10 @@ describe("model provider configuration data", () => {
         },
       }),
     ).toEqual({
-      providerIds: ["openai", "anthropic"],
-      apiKeyProviderIds: ["openai"],
-      providerAuthModes: {},
+      providers: [
+        { key: "openai", hasApiKey: true },
+        { key: "anthropic", hasApiKey: false },
+      ],
       defaults: {
         primary: "openai/gpt-5",
         fallbacks: ["anthropic/claude-sonnet-4-5"],
@@ -691,8 +693,8 @@ describe("model provider configuration data", () => {
     expect(
       readModelProviderConfig({
         models: { providers: { OpenAI: { auth: "oauth" } } },
-      }).providerAuthModes,
-    ).toEqual({ OpenAI: "oauth" });
+      }).providers,
+    ).toEqual([{ key: "OpenAI", hasApiKey: false, authMode: "oauth" }]);
   });
 
   it("lists known providers that are not configured", () => {

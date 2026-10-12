@@ -44,7 +44,6 @@ export type ChatPageHost = ChatHost &
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;
     assistantAvatarReason: string | null;
-    assistantAvatarSource: string | null;
     assistantIdentityRequestVersion: number;
     userName: string | null;
     userAvatar: string | null;
@@ -59,7 +58,6 @@ export type ChatPageHost = ChatHost &
     resourceBasePath: string;
     chatAvatarUrl: string | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
-    chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;

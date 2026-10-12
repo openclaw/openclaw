@@ -21,7 +21,7 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
   if (opts.requireRpc && !opts.probe) {
     failDaemonStatus(
       opts,
-      "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+      "Gateway status failed: --require-rpc needs checking enabled. Remove --no-probe or drop --require-rpc.",
     );
     return;
   }

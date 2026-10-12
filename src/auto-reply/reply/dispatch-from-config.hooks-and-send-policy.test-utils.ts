@@ -40,7 +40,7 @@ import {
   createHookCtx,
   describe1BeforeEach0,
   describe2BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";

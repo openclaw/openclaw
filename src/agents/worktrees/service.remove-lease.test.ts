@@ -5,9 +5,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { getRegistryWorktree } from "./registry.js";
-import { acquireWorktreeRunLease, hasLiveWorktreeRunLease } from "./run-lease.js";
-import { testing as runLeaseTesting } from "./run-lease.test-support.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
+import { acquireWorktreeRunLease } from "./run-lease.js";
+import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { classifyWorktreeRemovalError, IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 

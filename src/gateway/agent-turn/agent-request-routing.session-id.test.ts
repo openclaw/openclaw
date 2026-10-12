@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import * as commandSession from "../../agents/command/session.js";
-import { backfillSessionKey } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
+import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -108,7 +108,17 @@ it.each([
           expect(respond).not.toHaveBeenCalled();
           expect(routing).toMatchObject({ agentId: "ops", requestedSessionKey: sessionKey });
         } else {
-          expect(backfillSessionKey({ config: cfg, sessionId: "ops-session" })).toBe(sessionKey);
+          const prepared = await prepareEmbeddedRunSession({
+            config: cfg,
+            sessionId: "ops-session",
+            sessionFile: sessionKey,
+            workspaceDir: state.workspaceDir,
+            prompt: "resume",
+            runId: "lookup",
+            timeoutMs: 1000,
+          });
+          expect(prepared.params.sessionKey).toBe(sessionKey);
+          expect(prepared.params.agentId).toBe("ops");
         }
         // The legacy listing still reads on the host; only the added inspection is removed.
         expect(opens).toContain("listing");

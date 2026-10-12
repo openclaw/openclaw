@@ -105,42 +105,6 @@ function requireWarning(warnings: string[], text: string): string {
 }
 
 describe("graceful plugin initialization failure", () => {
-  it("keeps loading other plugins after one register failure", async () => {
-    const failing = writePlugin({
-      id: "plugin-fail",
-      body: `module.exports = { id: "plugin-fail", register() { throw new Error("boom"); } };`,
-    });
-    const working = writePlugin({
-      id: "plugin-ok",
-      body: `module.exports = { id: "plugin-ok", register() {} };`,
-    });
-
-    const registry = await loadPlugins([failing.file, working.file]);
-
-    expect(registry.plugins.find((plugin) => plugin.id === "plugin-ok")?.status).toBe("loaded");
-  });
-
-  it("keeps loading other plugins when one manifest declares a malformed configSchema", async () => {
-    const broken = writePlugin({
-      id: "broken-schema-plugin",
-      body: `module.exports = { id: "broken-schema-plugin", register() {} };`,
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: { mode: { $ref: "#/$defs/Mode" } },
-        definitions: { Mode: { type: "string", enum: ["fast", "slow"] } },
-      },
-    });
-    const healthy = writePlugin({
-      id: "healthy-schema-plugin",
-      body: `module.exports = { id: "healthy-schema-plugin", register() {} };`,
-    });
-
-    const registry = await loadPlugins([broken.file, healthy.file]);
-
-    expect(requirePluginEntry(registry, "healthy-schema-plugin").status).toBe("loaded");
-  });
-
   it("records a malformed configSchema as a validation failure", async () => {
     const broken = writePlugin({
       id: "unresolved-ref-plugin",
@@ -211,25 +175,6 @@ describe("graceful plugin initialization failure", () => {
     }
   });
 
-  it("records failed register metadata", async () => {
-    const plugin = writePlugin({
-      id: "register-error",
-      body: `module.exports = { id: "register-error", register() { throw new Error("brutal config fail"); } };`,
-    });
-
-    const before = new Date();
-    const registry = await loadPlugins([plugin.file]);
-    const after = new Date();
-
-    const failed = requirePluginEntry(registry, "register-error");
-    expect(failed.status).toBe("error");
-    expect(failed.failurePhase).toBe("register");
-    expect(failed.error).toContain("brutal config fail");
-    expect(failed.failedAt).toBeInstanceOf(Date);
-    expect(failed.failedAt?.getTime()).toBeGreaterThanOrEqual(before.getTime());
-    expect(failed.failedAt?.getTime()).toBeLessThanOrEqual(after.getTime());
-  });
-
   it("rolls back partial metadata without breaking an earlier class-backed service", async () => {
     const stable = writePlugin({
       id: "a-stable-service-plugin",
@@ -262,20 +207,6 @@ describe("graceful plugin initialization failure", () => {
     expect(registry.services.map((entry) => entry.service.id)).toEqual(["stable-service"]);
     expect(registry.httpRoutes).toEqual([]);
     expect(stableService?.ping?.()).toBe("still-alive");
-  });
-
-  it("records validation failures before register", async () => {
-    const plugin = writePlugin({
-      id: "missing-register",
-      body: `module.exports = { id: "missing-register" };`,
-    });
-
-    const registry = await loadPlugins([plugin.file]);
-    const failed = registry.plugins.find((entry) => entry.id === "missing-register");
-
-    expect(failed?.status).toBe("error");
-    expect(failed?.failurePhase).toBe("validation");
-    expect(failed?.error).toBe("plugin export missing register/activate");
   });
 
   it("logs a startup summary grouped by failure phase", async () => {

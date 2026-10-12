@@ -1,5 +1,8 @@
+import { AsyncResource } from "node:async_hooks";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
@@ -18,9 +21,13 @@ import {
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
-import { revokePluginRecord } from "./registry-lifecycle.js";
+import {
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+  revokePluginRecord,
+} from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
-import { createPluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry, createPluginRegistry } from "./registry.js";
 import { disposePluginRegistryInstances, withPluginRegistrationContext } from "./runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -301,6 +308,183 @@ describe("plugin registration runtime admission", () => {
 });
 
 describe("plugin registry runtime config scope", () => {
+  it("keeps STT interception on its runtime source while resolving each call's registry", async () => {
+    const runtime = createPluginRuntime();
+    const source = runtime.mediaUnderstanding;
+    source.transcribeAudioFile = async () => ({
+      text: getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0],
+    });
+    const { builder, record, api } = registered("stable-media", {}, runtime);
+    const instance = expectDefined(getPluginInstance(record), "media instance");
+    builder.registry.coreGatewayMethodNames.push("original");
+    markPluginRegistryActive(builder.registry);
+    const facade = api.runtime.mediaUnderstanding;
+    const transcribe = facade.transcribeAudioFile.bind(facade);
+    const intercept = vi.spyOn(facade, "transcribeAudioFile").mockImplementation(async (params) => {
+      const result = await transcribe(params);
+      return { ...result, text: `intercepted:${result.text}` };
+    });
+    const request = { cfg: {}, filePath: "/synthetic/voice.wav" };
+    const successor = { ...builder.registry, coreGatewayMethodNames: ["successor"] };
+    try {
+      await expect(
+        api.runtime.mediaUnderstanding.transcribeAudioFile(request),
+      ).resolves.toMatchObject({
+        text: "intercepted:original",
+      });
+      markPluginRegistryActive(successor);
+      markPluginRegistryRetired(builder.registry);
+      await expect(
+        api.runtime.mediaUnderstanding.transcribeAudioFile(request),
+      ).resolves.toMatchObject({
+        text: "intercepted:successor",
+      });
+      const selected = createEmptyPluginRegistry();
+      selected.coreGatewayMethodNames.push("prepared");
+      await expect(
+        withPluginRuntimeRegistryScope(selected, () =>
+          api.runtime.mediaUnderstanding.transcribeAudioFile(request),
+        ),
+      ).resolves.toMatchObject({ text: "intercepted:prepared" });
+      expect(intercept).toHaveBeenCalledTimes(3);
+
+      const replacement: PluginRuntime["mediaUnderstanding"] = {
+        ...source,
+        transcribeAudioFile: async () => ({
+          text: `replacement:${getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0]}`,
+        }),
+      };
+      Object.defineProperty(runtime, "mediaUnderstanding", {
+        value: replacement,
+        configurable: true,
+      });
+      await expect(
+        api.runtime.mediaUnderstanding.transcribeAudioFile(request),
+      ).resolves.toMatchObject({
+        text: "replacement:successor",
+      });
+      expect(intercept).toHaveBeenCalledTimes(3);
+      intercept.mockRestore();
+      revokePluginRecord(successor, record);
+      expect(() => facade.transcribeAudioFile(request)).toThrow("runtime is no longer active");
+      expect(() => api.runtime.mediaUnderstanding.transcribeAudioFile(request)).toThrow(
+        "runtime is no longer active",
+      );
+    } finally {
+      intercept.mockRestore();
+      await instance.dispose();
+      markPluginRegistryRetired(successor);
+    }
+  });
+
+  it("keeps adopted hosted-media resolution scoped without changing pure media helpers", async () => {
+    class RetiredRegistry {
+      readonly fixtureLabel = "RetiredRegistry";
+    }
+    const runtime = createPluginRuntime();
+    const { builder, record, api } = registered("hosted-media", {}, runtime);
+    const instance = expectDefined(getPluginInstance(record), "media instance");
+    api.registerHostedMediaResolver((url) =>
+      url === "hosted:fixture" ? "/synthetic/resolved.txt" : undefined,
+    );
+    builder.registry.plugins.push(record);
+    const media = api.runtime.media;
+    expect(media.detectMime).toBe(runtime.media.detectMime);
+    const current = { ...builder.registry };
+    const resource = (() => {
+      const previous = Object.assign(new RetiredRegistry(), builder.registry);
+      markPluginRegistryActive(previous);
+      const captured = instance.run(() => new AsyncResource("hosted-media-retention"));
+      markPluginRegistryActive(current);
+      markPluginRegistryRetired(previous);
+      return captured;
+    })();
+    const readFile = vi.fn(async (_filePath: string) => Buffer.from("synthetic media"));
+    const load = () =>
+      media.loadWebMedia("hosted:fixture", {
+        localRoots: "any",
+        optimizeImages: false,
+        readFile,
+      });
+    try {
+      await setImmediate();
+      expect(queryObjects(RetiredRegistry)).toBe(0);
+      await expect(resource.runInAsyncScope(load)).resolves.toMatchObject({
+        buffer: Buffer.from("synthetic media"),
+        fileName: "resolved.txt",
+      });
+      expect(readFile.mock.calls[0]?.[0]).toBe("/synthetic/resolved.txt");
+      await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), load);
+      expect(readFile.mock.calls[1]?.[0]).toBe("hosted:fixture");
+    } finally {
+      resource.emitDestroy();
+      await instance.dispose();
+      markPluginRegistryRetired(current);
+    }
+  });
+
+  it.each(["plain", "custody"] as const)(
+    "retains a pending %s runtime selection across adoption, then releases it",
+    async (mode) => {
+      class PendingRegistry {
+        readonly fixtureLabel = "PendingRegistry";
+      }
+      const resume = createDeferredCore();
+      const runtime = createPluginRuntime();
+      runtime.llm.complete = async () => {
+        await resume.promise;
+        return {
+          text:
+            getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0] ??
+            "missing",
+          provider: "fixture",
+          model: "fixture",
+          agentId: "main",
+          usage: {},
+          execution: { mode: "direct-provider", owner: { kind: "provider", id: "fixture" } },
+          audit: { caller: { kind: "plugin", id: "pending-runtime" } },
+        };
+      };
+      const { builder, record, api } = registered("pending-runtime", {}, runtime);
+      const instance = expectDefined(getPluginInstance(record), "runtime instance");
+      markPluginRegistryActive(builder.registry);
+      // Channel monitors retain instance custody without pinning a registry generation.
+      const consumer =
+        mode === "custody" ? instance.retainConsumer(undefined, undefined, "custody") : undefined;
+      const successor = createEmptyPluginRegistry();
+      successor.plugins.push(record);
+      const pending = (() => {
+        const selected = Object.assign(new PendingRegistry(), createEmptyPluginRegistry());
+        selected.plugins.push(record);
+        selected.coreGatewayMethodNames.push("intermediate");
+        markPluginRegistryActive(selected);
+        markPluginRegistryRetired(builder.registry);
+        const invoke = () =>
+          api.runtime.llm.complete({ messages: [{ role: "user", content: "fixture" }] });
+        const operation = consumer ? consumer.run(invoke) : invoke();
+        markPluginRegistryActive(successor);
+        markPluginRegistryRetired(selected);
+        return operation;
+      })();
+      try {
+        await setImmediate();
+        expect(queryObjects(PendingRegistry)).toBe(1);
+        resume.resolve();
+        await expect(pending).resolves.toMatchObject({ text: "intermediate" });
+        await setImmediate();
+        expect(queryObjects(PendingRegistry)).toBe(0);
+        // Retaining the completed caller-visible Promise must not retain its old selection.
+        await expect(pending).resolves.toMatchObject({ text: "intermediate" });
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([pending]);
+        consumer?.release();
+        await instance.dispose();
+        markPluginRegistryRetired(successor);
+      }
+    },
+  );
+
   it("rejects a plugin harness that claims the built-in runtime id", () => {
     const fixture = registered("untrusted-plugin");
     const { api } = fixture;

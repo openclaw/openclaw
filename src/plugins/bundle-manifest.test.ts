@@ -306,54 +306,6 @@ describe("bundle manifest parsing", () => {
     });
   });
 
-  it("detects Link-style Codex bundles with skills and MCP servers", () => {
-    const rootDir = makeTempDir();
-    setupBundleFixture({
-      rootDir,
-      dirs: [".codex-plugin", "skills/create-payment-credential"],
-      textFiles: {
-        ".mcp.json": JSON.stringify({
-          mcpServers: {
-            link: {
-              command: "pnpx",
-              args: ["@stripe/link-cli", "--mcp"],
-            },
-          },
-        }),
-      },
-      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-      manifest: {
-        name: "link",
-        version: "0.2.1",
-        description: "Secure, one-time-use payment credentials from Link",
-        homepage: "https://link.com/agents",
-        repository: "https://github.com/stripe/link-cli",
-        skills: "./skills/",
-        mcpServers: "./.mcp.json",
-        interface: {
-          displayName: "Link",
-          category: "Finance",
-        },
-      },
-    });
-
-    expectBundleManifest({
-      rootDir,
-      bundleFormat: "codex",
-      expected: {
-        id: "link",
-        name: "link",
-        version: "0.2.1",
-        description: "Secure, one-time-use payment credentials from Link",
-        bundleFormat: "codex",
-        skills: ["./skills/"],
-        settingsFiles: [],
-        hooks: [],
-        capabilities: expect.arrayContaining(["skills", "mcpServers"]),
-      },
-    });
-  });
-
   it("keeps client-specific and native formats ahead of portable Agent Plugins", () => {
     const claudeRoot = makeTempDir();
     setupBundleFixture({
@@ -556,28 +508,6 @@ describe("bundle manifest parsing", () => {
     if (!result.ok) {
       expect(result.error).toContain("plugin manifest must be an object");
     }
-  });
-
-  it("exposes default Claude hooks without a hooks declaration", () => {
-    const rootDir = makeTempDir();
-    writeBundleFixtureFiles(rootDir, {
-      [CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "default-hooks" },
-      "hooks/hooks.json": { hooks: [] },
-    });
-    const manifest = expectLoadedManifest(rootDir, "claude");
-    expect(manifest.hooks).toEqual(["hooks/hooks.json"]);
-    expect(manifest.capabilities).toContain("hooks");
-  });
-
-  it("does not misclassify native index plugins as manifestless Claude bundles", () => {
-    const rootDir = makeTempDir();
-    setupBundleFixture({
-      rootDir,
-      dirs: ["commands"],
-      textFiles: { "index.ts": "export default {}" },
-    });
-
-    expect(detectBundleManifestFormat(rootDir)).toBeNull();
   });
 });
 

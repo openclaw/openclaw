@@ -48,10 +48,12 @@ type ClaudeCliRunDiagnosticParams = Pick<
   | "sessionId"
   | "sessionKey"
   | "trigger"
+  | "isolatedCompletionPurpose"
 >;
 
 function diagnosticBase(params: ClaudeCliRunDiagnosticParams, trace: DiagnosticTraceContext) {
   const channel = params.messageChannel ?? params.messageProvider;
+  const trigger = params.isolatedCompletionPurpose ?? params.trigger;
   return {
     runId: params.runId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -59,7 +61,7 @@ function diagnosticBase(params: ClaudeCliRunDiagnosticParams, trace: DiagnosticT
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     provider: params.modelProvider ?? "anthropic",
     ...(params.model ? { model: params.model } : {}),
-    ...(params.trigger ? { trigger: params.trigger } : {}),
+    ...(trigger ? { trigger } : {}),
     ...(channel ? { channel } : {}),
     trace,
   };

@@ -94,7 +94,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
 
   </Accordion>
   <Accordion title="Completion delivery">
-    - OpenClaw hands completions back to the requester session through an `agent` turn with a stable idempotency key.
+    - OpenClaw hands completions back to the requester session through an `agent` turn with a stable key that prevents duplicate turns.
     - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
     - If an active requester cannot accept steering, including a busy CLI run, the handoff waits in the same session lane and starts after the current turn releases its claim. A failed wake does not start a competing turn or discard the completion.
     - A successful in-session parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed. External completion delivery requires a confirmed send, not merely an answer saved in the requester transcript.

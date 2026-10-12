@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { openFixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
@@ -14,18 +15,23 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
+import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import * as logging from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
-import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import {
+  activateSecretsRuntimeSnapshotWithSource,
+  getActiveSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -74,6 +80,7 @@ function pauseIntegrityInspections(params: {
   pausePaths?: string[];
   pausePreparation?: boolean;
   pauseSchema?: boolean;
+  preparationReceiptBroadcastName?: string;
 }) {
   const releasePath = path.join(params.root, "release-inspection");
   const enteredPaths = params.paths.map((_, index) =>
@@ -90,7 +97,10 @@ function pauseIntegrityInspections(params: {
     `
 const fs = require('node:fs'), path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
-const { isMainThread, threadId } = require('node:worker_threads');
+const { BroadcastChannel, isMainThread, threadId } = require('node:worker_threads');
+const receiptBroadcastName = ${JSON.stringify(params.preparationReceiptBroadcastName)};
+const receipts = !isMainThread && receiptBroadcastName ? new BroadcastChannel(receiptBroadcastName) : undefined;
+receipts?.unref();
 const paths = ${JSON.stringify(params.paths.map((pathname) => fs.realpathSync.native(pathname)))};
 const paused = ${JSON.stringify(params.paths.map((pathname) => pausedPaths.includes(pathname)))};
 const preparation = ${params.pausePreparation === true} && (!isMainThread || process.argv[1]?.includes('sqlite-integrity.worker'));
@@ -113,6 +123,7 @@ DatabaseSync.prototype.prepare = function(sql) {
     if (!isMainThread) fs.writeFileSync(marker + '.thread', String(threadId));
     fs.writeFileSync(pendingMarker, String(process.pid));
     fs.renameSync(pendingMarker, marker);
+    receipts?.postMessage({ source: marker, line: 'entered' });
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (paused[index] && !fs.existsSync(release) && !fs.existsSync(releases[index])) {
@@ -158,6 +169,7 @@ it.for([
     const restorationEntered = createDeferredCore();
     const restorationRelease = createDeferredCore();
     let startupSettled = false;
+    let recoverySource: OpenClawConfig | undefined;
     let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
     if (holdSubagentRestoration) {
       vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
@@ -252,6 +264,10 @@ it.for([
       await closeStateDatabaseForTest();
     }
     const agentBytes = fs.readFileSync(agentPath);
+    const handoffReceipts = outcome === "handoff" ? await openFixtureReceiptChannel() : undefined;
+    if (handoffReceipts) {
+      onTestFinished(() => handoffReceipts.close());
+    }
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
     const pause = paused
       ? pauseIntegrityInspections({
@@ -259,6 +275,7 @@ it.for([
           paths: [agentPath],
           pausePreparation: outcome === "shutdown-preparation" || outcome === "handoff",
           pauseSchema: outcome !== "handoff",
+          preparationReceiptBroadcastName: handoffReceipts?.broadcastName,
         })
       : undefined;
     const releasePath = pause?.releasePath ?? path.join(root, "release-inspection");
@@ -349,6 +366,7 @@ it.for([
       );
     }
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+    let inspectionSettled: Promise<unknown> | undefined;
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
     let unadoptedPortClaim: TestPortClaim | undefined;
     try {
@@ -381,6 +399,7 @@ it.for([
           );
         }
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
+        inspectionSettled = admission.pendingPreparation;
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
           suppliedBroker = await spawnBroker.startGatewaySpawnBroker({
@@ -428,12 +447,12 @@ it.for([
       }
       expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
       if (outcome === "corrupt") {
-        await vi.waitFor(() =>
-          expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
-            code: "agent-database-inspection-failed",
-            repairHint: expect.stringContaining("doctor --fix"),
-          }),
-        );
+        // Gateway startup can settle before background integrity inspection does.
+        await withinTest(inspectionSettled ?? Promise.resolve(), signal);
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
+          code: "agent-database-inspection-failed",
+          repairHint: expect.stringContaining("doctor --fix"),
+        });
         expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(
           agentId === "main" ? 503 : 200,
@@ -458,9 +477,9 @@ it.for([
         if (outcome === "handoff") {
           // Old startup blocks in full-file preflight before claiming its writable lease.
           expect(fs.existsSync(enteredPath)).toBe(false);
-          await vi.waitFor(() =>
-            expect(fs.existsSync(pause!.preparationEnteredPaths[0]!)).toBe(true),
-          );
+          const preparationMarker = pause!.preparationEnteredPaths[0]!;
+          await withinTest(handoffReceipts!.waitFor(preparationMarker, "entered"), signal);
+          expect(fs.existsSync(preparationMarker)).toBe(true);
         } else {
           await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
         }
@@ -541,6 +560,41 @@ it.for([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-pending",
         });
+        if (outcome === "recover") {
+          const active = getActiveSecretsRuntimeSnapshot()!;
+          const source = structuredClone(active.sourceConfig);
+          source.models = {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [
+                  {
+                    id: "gpt-5.6-sol",
+                    name: "GPT-5.6",
+                    api: "openai-responses",
+                    agentRuntime: { id: "openclaw" },
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          };
+          const runtime = structuredClone(source);
+          recoverySource = source;
+          runtime.models!.providers!.openai!.models[0]!.compat = {
+            supportsTemperature: false,
+            codeMode: "preferred",
+          };
+          // Startup keeps catalog defaults in the secrets input, separate from authored config.
+          activateSecretsRuntimeSnapshotWithSource(
+            { ...active, config: runtime, sourceConfig: runtime },
+            source,
+          );
+        }
         preparationRelease.resolve();
         if (outcome === "superseded") {
           await vi.waitFor(
@@ -568,6 +622,11 @@ it.for([
         );
         expect(input).toBeDefined();
         expect(input && getPreparedModelRuntimeSnapshot(input)).toBeDefined();
+        expect(getRuntimeConfig().models?.providers?.openai?.models[0]?.compat).toEqual({
+          supportsTemperature: false,
+          codeMode: "preferred",
+        });
+        expect(getRuntimeConfigSourceSnapshot()).toEqual(recoverySource);
         const snapshot = getActiveSecretsRuntimeSnapshot();
         expect(
           snapshot?.authStores.find((entry) => entry.databasePath === agentPath)?.store.profiles[

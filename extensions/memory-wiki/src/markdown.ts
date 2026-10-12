@@ -33,7 +33,7 @@ export const WIKI_GENERATED_END_MARKER = "<!-- openclaw:wiki:generated:end -->";
 export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
-type ParsedWikiMarkdown = {
+export type ParsedWikiMarkdown = {
   hasFrontmatter: boolean;
   frontmatter: Record<string, unknown>;
   body: string;
@@ -44,7 +44,7 @@ export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
 type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
 export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];
 
-export type WikiPageFrontmatterError = {
+type WikiPageFrontmatterError = {
   relativePath: string;
   message: string;
 };

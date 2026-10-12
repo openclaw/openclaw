@@ -8,6 +8,7 @@ import {
 } from "../registry/subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
+import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import * as announceOutput from "./subagent-announce-output.js";
 import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
@@ -38,7 +39,6 @@ const { registryRuntimeMock, deliverSpy } = vi.hoisted(() => ({
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 vi.mock("../spawn/subagent-depth.js", () => ({ getSubagentDepthFromSessionStore: () => 0 }));
-vi.mock("./subagent-announce.js", () => ({ hasUsableSessionEntry: () => true }));
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: (params: Record<string, unknown>) => deliverSpy(params),
   loadRequesterSessionEntry: () => ({
@@ -114,6 +114,9 @@ function wakeParams() {
 }
 
 beforeEach(() => {
+  vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockReturnValue(() => ({
+    sessionId: "sess-main",
+  }));
   vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
     readChildCompletionFindings(children, (runId) =>
       registryRuntimeMock.listSubagentRunsForRequester().find((entry) => entry.runId === runId),
@@ -124,6 +127,7 @@ beforeEach(() => {
   deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
 });
 afterEach(() => {
+  vi.mocked(deliveryRuntime.captureRequesterSessionEntryCurrent).mockRestore();
   vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
   publishSystemEventStoreResolver(undefined);
 });

@@ -35,11 +35,10 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
     "/verbose on|off|full",
     "/trace on|off|raw",
   ];
-  if (isCommandFlagEnabled(cfg, "config")) {
-    optionParts.push("/config");
-  }
-  if (isCommandFlagEnabled(cfg, "debug")) {
-    optionParts.push("/debug");
+  for (const key of ["config", "debug"] as const) {
+    if (isCommandFlagEnabled(cfg, key)) {
+      optionParts.push(`/${key}`);
+    }
   }
   return [
     "ℹ️ Help",
@@ -97,61 +96,6 @@ function formatCommandEntry(command: ChatCommandDefinition): string {
   return `${primary}${aliasLabel}${scopeLabel} - ${command.description}`;
 }
 
-type CommandsListItem = {
-  label: string;
-  text: string;
-};
-
-function buildCommandItems(
-  commands: ChatCommandDefinition[],
-  pluginCommands: ReturnType<typeof listPluginCommands>,
-): CommandsListItem[] {
-  const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
-  for (const command of commands) {
-    const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
-    const list = grouped.get(category) ?? [];
-    list.push(command);
-    grouped.set(category, list);
-  }
-  const items: CommandsListItem[] = [];
-
-  for (const [category, label] of COMMAND_CATEGORIES) {
-    for (const command of grouped.get(category) ?? []) {
-      items.push({ label, text: formatCommandEntry(command) });
-    }
-  }
-
-  for (const command of pluginCommands) {
-    const pluginLabel = command.pluginId ? ` (${command.pluginId})` : "";
-    // Preserve the canonical spelling without auto-linking only its prefix or guessing an alias.
-    const commandName = command.name.includes("-") ? `\`/${command.name}\`` : `/${command.name}`;
-    items.push({
-      label: "Plugins",
-      text: `${commandName}${pluginLabel} - ${command.description}`,
-    });
-  }
-
-  return items;
-}
-
-function formatCommandList(items: CommandsListItem[]): string {
-  const lines: string[] = [];
-  let currentLabel: string | null = null;
-
-  for (const item of items) {
-    if (item.label !== currentLabel) {
-      if (lines.length > 0) {
-        lines.push("");
-      }
-      lines.push(item.label);
-      currentLabel = item.label;
-    }
-    lines.push(`  ${item.text}`);
-  }
-
-  return lines.join("\n");
-}
-
 /** Builds `/commands` text, returning only the rendered message body. */
 export function buildCommandsMessage(
   cfg?: OpenClawConfig,
@@ -178,7 +122,30 @@ export function buildCommandsMessagePaginated(
     ? listChatCommandsForConfig(cfg, { skillCommands })
     : listChatCommands({ skillCommands });
   const pluginCommands = listPluginCommands();
-  const items = buildCommandItems(commands, pluginCommands);
+  const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
+  for (const command of commands) {
+    const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
+    const list = grouped.get(category) ?? [];
+    list.push(command);
+    grouped.set(category, list);
+  }
+  const items: Array<{ label: string; text: string }> = [];
+
+  for (const [category, label] of COMMAND_CATEGORIES) {
+    for (const command of grouped.get(category) ?? []) {
+      items.push({ label, text: formatCommandEntry(command) });
+    }
+  }
+
+  for (const command of pluginCommands) {
+    const pluginLabel = command.pluginId ? ` (${command.pluginId})` : "";
+    // Preserve the canonical spelling without auto-linking only its prefix or guessing an alias.
+    const commandName = command.name.includes("-") ? `\`/${command.name}\`` : `/${command.name}`;
+    items.push({
+      label: "Plugins",
+      text: `${commandName}${pluginLabel} - ${command.description}`,
+    });
+  }
 
   const totalPages = prefersPaginatedList
     ? Math.max(1, Math.ceil(items.length / COMMANDS_PER_PAGE))
@@ -188,10 +155,20 @@ export function buildCommandsMessagePaginated(
   const pageItems = prefersPaginatedList
     ? items.slice(startIndex, startIndex + COMMANDS_PER_PAGE)
     : items;
+  const itemLines: string[] = [];
+  for (const [index, item] of pageItems.entries()) {
+    if (item.label !== pageItems[index - 1]?.label) {
+      if (itemLines.length > 0) {
+        itemLines.push("");
+      }
+      itemLines.push(item.label);
+    }
+    itemLines.push(`  ${item.text}`);
+  }
   const lines = [
     prefersPaginatedList ? `ℹ️ Commands (${currentPage}/${totalPages})` : "ℹ️ Slash commands",
     "",
-    formatCommandList(pageItems),
+    itemLines.join("\n"),
   ];
   if (!prefersPaginatedList) {
     lines.push("", "More: /tools for available capabilities");

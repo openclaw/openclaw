@@ -25,27 +25,6 @@ import { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-function sameOwnedSession(params: {
-  leftKey: string | undefined;
-  leftAgentId: string | undefined;
-  rightKey: string;
-  rightAgentId: string | undefined;
-}): boolean {
-  if (!params.leftKey || params.leftKey !== params.rightKey) {
-    return false;
-  }
-  const leftAgentId = params.leftAgentId ?? parseAgentSessionKey(params.leftKey)?.agentId;
-  const rightAgentId = params.rightAgentId ?? parseAgentSessionKey(params.rightKey)?.agentId;
-  return Boolean(
-    leftAgentId && rightAgentId && normalizeAgentId(leftAgentId) === normalizeAgentId(rightAgentId),
-  );
-}
-function isDeliveryFailureWait(wait: AgentWaitResult): boolean {
-  return (
-    (wait.status === "error" && !wait.retryableTransportError) || isTerminalAgentWaitTimeout(wait)
-  );
-}
-
 async function deliverSourceReply(params: {
   deliveryTarget: SessionDeliveryTarget;
   callGateway: AgentToolGatewayRequestCaller;
@@ -110,6 +89,7 @@ export async function runSessionsSendA2AFlow(params: {
   ) => Promise<void>;
 }) {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
+  const child = params.replyMode === "one-way";
   const requesterStepContext = {
     agentId: params.requesterAgentId,
     deliveryContext: params.requesterOrigin,
@@ -117,6 +97,8 @@ export async function runSessionsSendA2AFlow(params: {
     timeoutMs: params.replyTimeoutMs,
     sourceSessionKey: params.targetSessionKey,
     callGateway: gatewayCall,
+    sourceTool: child ? "subagent_announce" : "sessions_send",
+    ...(child ? { sourceRole: "subagent" as const } : {}),
   };
   const deliverRequesterReply = params.deliverRequesterReply ?? runAgentStep;
   try {
@@ -132,7 +114,8 @@ export async function runSessionsSendA2AFlow(params: {
       if (
         params.notifyRequesterOnWaitFailure === true &&
         params.requesterSessionKey &&
-        isDeliveryFailureWait(wait)
+        ((wait.status === "error" && !wait.retryableTransportError) ||
+          isTerminalAgentWaitTimeout(wait))
       ) {
         const error =
           typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
@@ -145,8 +128,6 @@ export async function runSessionsSendA2AFlow(params: {
           extraSystemPrompt: wait.sourceReplyDelivered
             ? "The target run failed after its final source reply was delivered. Preserve the run error diagnosis. Do not resend the message or the reply."
             : "A previous sessions_send delivery failed after it was accepted. Inspect the accepted operation before retrying, or report the failure. Preserve attributed session-tool delivery; do not replace it with an operator CLI request. Do not assume the target received the message.",
-          sourceTool: params.replyMode === "one-way" ? "subagent_announce" : "sessions_send",
-          ...(params.replyMode === "one-way" ? { sourceRole: "subagent" as const } : {}),
         });
       }
       return;
@@ -157,12 +138,15 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     // Self-sends deliver the original output under its captured session generation.
-    const sameSessionSourceReply = sameOwnedSession({
-      leftKey: params.requesterSessionKey,
-      leftAgentId: params.requesterAgentId,
-      rightKey: params.targetSessionKey,
-      rightAgentId: params.targetAgentId,
-    });
+    const requesterAgentId =
+      params.requesterAgentId ?? parseAgentSessionKey(params.requesterSessionKey)?.agentId;
+    const sameSessionSourceReply = Boolean(
+      params.requesterSessionKey &&
+      params.requesterSessionKey === params.targetSessionKey &&
+      requesterAgentId &&
+      params.targetAgentId &&
+      normalizeAgentId(requesterAgentId) === normalizeAgentId(params.targetAgentId),
+    );
     if (sameSessionSourceReply) {
       if (wait.sourceReplyDelivered) {
         return;
@@ -216,15 +200,12 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     if (params.requesterSessionKey) {
-      const child = params.replyMode === "one-way";
       await deliverRequesterReply({
         ...requesterStepContext,
         sessionKey: params.requesterSessionKey,
         message: reply,
         extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.`,
         sourceAgentId: params.targetAgentId,
-        sourceTool: child ? "subagent_announce" : "sessions_send",
-        ...(child ? { sourceRole: "subagent" as const } : {}),
       });
     }
   } catch (err) {

@@ -6,9 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../test-support.js";
 import * as outputFiles from "./output-files.js";
+import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import { closePlaywrightBrowserConnection } from "./pw-session.js";
 import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 
@@ -192,18 +193,7 @@ describe.skipIf(!isLiveTestEnabled())("current-document downloads (real Chromium
     signal,
     onTestFinished,
   }) => {
-    const writeSettled = Promise.withResolvers<void>();
-    const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
-    const write = vi
-      .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
-      .mockImplementation((params) => {
-        const pending = writeOutput(params);
-        void pending.then(
-          () => writeSettled.resolve(),
-          () => writeSettled.resolve(),
-        );
-        return pending;
-      });
+    const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
     onTestFinished(() => write.mockRestore());
     const url = `${baseUrl}/slow.png`;
     await page.goto(url);

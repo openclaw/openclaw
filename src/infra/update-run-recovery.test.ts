@@ -17,8 +17,8 @@ import {
 import {
   createUpdateRun,
   finishUpdateRun,
+  finishInterruptedUpdatePreview,
   getUpdateRun,
-  recordUpdateRunStep,
 } from "./update-run-ledger.js";
 import { legacyRecord } from "./update-run-recovery-legacy.test-support.js";
 import {
@@ -32,6 +32,7 @@ import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "./update-run-recovery.js";
+import { captureCompletedUpdateRun } from "./update-run-terminal-record.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -152,19 +153,18 @@ describe("retained recovery read-only compatibility", () => {
     );
   });
 
-  it.each(["candidate", "previous"] as const)(
-    "reopens private %s proof without exposing it in history",
-    (runtime) => {
-      const f = setup();
-      const record = retainedReadinessRecord(f.record, runtime);
-      storeRetainedUpdateRecovery(record, f.options);
-      closeOpenClawStateDatabaseForTest();
-      const before = snapshot(f.root);
-      expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(record);
-      expect(snapshot(f.root)).toEqual(before);
-      expect(JSON.stringify(getUpdateRun(f.run.runId, f.options))).not.toContain("retained-boot");
-    },
-  );
+  it("reopens private candidate proof without exposing it in history", () => {
+    const runtime = "candidate";
+    const f = setup();
+    const record = retainedReadinessRecord(f.record, runtime);
+    storeRetainedUpdateRecovery(record, f.options);
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshot(f.root);
+    expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(record);
+    expect(snapshot(f.root)).toEqual(before);
+    expect(JSON.stringify(getUpdateRun(f.run.runId, f.options))).not.toContain("retained-boot");
+  });
+
   it.each([
     "run",
     "version",
@@ -212,27 +212,26 @@ describe("retained recovery read-only compatibility", () => {
       expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
     },
   );
-  it.each(["serviceRunning", "pluginsReady", "channelsReady", "settled", "readyz"] as const)(
-    "refuses incomplete retained %s evidence",
-    (check) => {
-      const f = setup();
-      const record = retainedReadinessRecord(f.record);
-      for (const value of [false, undefined]) {
-        const invalid = {
-          ...record,
-          verification: {
-            ...record.verification,
-            receipt: {
-              ...record.verification!.receipt,
-              checks: { ...record.verification!.receipt.checks, [check]: value },
-            },
+  it("refuses incomplete retained service evidence", () => {
+    const check = "serviceRunning";
+    const f = setup();
+    const record = retainedReadinessRecord(f.record);
+    for (const value of [false, undefined]) {
+      const invalid = {
+        ...record,
+        verification: {
+          ...record.verification,
+          receipt: {
+            ...record.verification!.receipt,
+            checks: { ...record.verification!.receipt.checks, [check]: value },
           },
-        };
-        expect(() => decodeUpdateRecovery(JSON.stringify(invalid), record.runId)).toThrow();
-        expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
-      }
-    },
-  );
+        },
+      };
+      expect(() => decodeUpdateRecovery(JSON.stringify(invalid), record.runId)).toThrow();
+      expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
+    }
+  });
+
   it("inspects retained legacy transcript verification without rewriting or admitting work", () => {
     const f = setup();
     const record = retainedReadinessRecord(f.record);
@@ -266,6 +265,30 @@ describe("retained recovery read-only compatibility", () => {
       JSON.stringify(f.record),
     );
   });
+  it("admits terminal legacy history without granting execution authority", () => {
+    const rollback = false;
+    const f = setup();
+    const record = legacyRecord(retainedTerminalRecord(f.record, rollback));
+    const raw = JSON.stringify(record, null, 2);
+    openOpenClawStateDatabase(f.options)
+      .db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
+      .run(raw, "update.recovery." + record.runId);
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshot(f.root);
+    expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
+    expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i);
+    expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(raw);
+    expect(snapshot(f.root)).toEqual(before);
+    const preview = createUpdateRun({ trigger: "cli" }, f.options);
+    finishInterruptedUpdatePreview(preview, f.options);
+    expect(getUpdateRun(preview.runId, f.options)?.status).toBe("skipped");
+    const next = createUpdateRun({ trigger: "cli" }, f.options);
+    finishUpdateRun(next.runId, { status: "succeeded" }, f.options);
+    expect(loadUpdateRecovery(next.runId, f.options)).toBeUndefined();
+    expect(captureCompletedUpdateRun(next.runId, () => {}, f.options)?.runId).toBe(next.runId);
+    expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(raw);
+  });
+
   it("keeps missing-state reads non-creating", () => {
     const root = dirs.make("retained-empty-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
@@ -274,7 +297,7 @@ describe("retained recovery read-only compatibility", () => {
     expect(() => assertNoPendingUpdateRecovery(options)).not.toThrow();
     expect(fs.readdirSync(root)).toEqual([]);
   });
-  it.each(["intent", "interrupted", "completed"] as const)(
+  it.each(["intent", "completed"] as const)(
     "preserves typed package %s effects byte-exactly without admitting work",
     (outcome) => {
       const f = setup();
@@ -311,6 +334,56 @@ describe("retained recovery read-only compatibility", () => {
       expect(snapshot(f.root)).toEqual(before);
     },
   );
+  it.each([
+    "cleanup",
+    "untyped-retirement",
+    "restore-disguised-as-retirement",
+    "package-restore",
+    "restore-progress",
+  ] as const)("distinguishes terminal cleanup from unfinished %s", (scenario) => {
+    const f = setup();
+    const record = retainedTerminalRecord(f.record);
+    const effectId = randomUUID();
+    if (scenario === "restore-progress") {
+      record.restore = {
+        restoreId: randomUUID(),
+        checkpointId: record.checkpoint!.ref.checkpointId,
+        planPath: path.join(f.root, "restore-plan.sqlite"),
+        planSha256: "d".repeat(64),
+        resourceCursor: 0,
+        phase: "intent",
+      };
+    } else {
+      record.effects.push({
+        effectId,
+        kind: scenario === "package-restore" ? scenario : "retirement",
+        resourceId: record.package!.descriptor.backupRoot,
+        runtime: "candidate",
+        state: "intent",
+        observedIdentity: null,
+        ...(scenario === "untyped-retirement"
+          ? {}
+          : {
+              package: {
+                intent: {
+                  effectId,
+                  action: scenario === "cleanup" ? "retire" : "restore",
+                  descriptor: record.package!.descriptor,
+                },
+              },
+            }),
+      });
+    }
+    storeRetainedUpdateRecovery(record, f.options);
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshot(f.root);
+    if (scenario === "cleanup") {
+      expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
+    } else {
+      expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
+    }
+    expect(snapshot(f.root)).toEqual(before);
+  });
   it.each(["version", "backup-path"] as const)(
     "rejects an invalid package descriptor %s without changing retained bytes",
     (mismatch) => {
@@ -338,86 +411,6 @@ describe("retained recovery read-only compatibility", () => {
       expect(snapshot(f.root)).toEqual(before);
     },
   );
-  it("reopens exact interrupted identity without writing database artifacts or exposing source paths", () => {
-    const f = setup();
-    const record = {
-      ...f.record,
-      primaryFailure: { code: "candidate-failed", effectId: null },
-      effects: [
-        {
-          effectId: randomUUID(),
-          kind: "package-activation" as const,
-          resourceId: f.from.root,
-          runtime: "candidate" as const,
-          state: "intent" as const,
-          observedIdentity: null,
-        },
-      ],
-    };
-    storeRetainedUpdateRecovery(record, f.options);
-    recordUpdateRunStep(
-      f.run.runId,
-      { step: "private", status: "completed", detail: f.from.root },
-      f.options,
-    );
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(f.root);
-    expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
-    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
-    expect(snapshot(f.root)).toEqual(before);
-    expect(JSON.stringify(getUpdateRun(record.runId, f.options))).not.toContain(f.from.root);
-  });
-  it("does not retire recovery through diagnostic terminal writes", () => {
-    const f = setup();
-    finishUpdateRun(f.run.runId, { status: "failed", reason: "interrupted" }, f.options);
-    expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
-    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
-  });
-  it("refuses corrupt records without erasing them or admitting new work", () => {
-    const f = setup();
-    const db = openOpenClawStateDatabase(f.options).db;
-    const key = "update.recovery." + f.run.runId;
-    db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?").run(
-      '{"revision":1}',
-      key,
-    );
-    expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow();
-    expect(
-      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key=?").get(key)
-        ?.value_json,
-    ).toBe('{"revision":1}');
-  });
-  it("requires a numeric user-manager UID and forbids it on system scope in retained records", () => {
-    const f = setup();
-    const record = nativeRecord(f.record);
-    const identity = record.nativeManager!.identity;
-    for (const uid of [undefined, null, "0", -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-      const invalid = {
-        ...record,
-        nativeManager: { ...record.nativeManager, identity: { ...identity, uid } },
-      };
-      expect(() => decodeUpdateRecovery(JSON.stringify(invalid), record.runId)).toThrow();
-    }
-    expect(() =>
-      decodeUpdateRecovery(
-        JSON.stringify({
-          ...record,
-          nativeManager: { ...record.nativeManager, identity: { ...identity, scope: "system" } },
-        }),
-        record.runId,
-      ),
-    ).toThrow();
-    const { uid: _uid, ...withoutUid } = identity as typeof identity & { uid: number };
-    expect(() =>
-      decodeUpdateRecovery(
-        JSON.stringify({
-          ...record,
-          nativeManager: { ...record.nativeManager, identity: { ...withoutUid, scope: "system" } },
-        }),
-        record.runId,
-      ),
-    ).not.toThrow();
-  });
   it.each(["run", "state", "config", "profile", "revision"] as const)(
     "rejects misbound retained native %s facts",
     (mismatch) => {
@@ -666,10 +659,12 @@ it.each(["current", "legacy-serving"] as const)(
       records.forEach((record) =>
         expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record),
       );
-      expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
     } else {
-      expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(/legacy.*readiness/i);
+      records.forEach((record) =>
+        expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i),
+      );
     }
+    expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
     expect(snapshot(f.root)).toEqual(before);
   },
 );

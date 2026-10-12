@@ -57,7 +57,7 @@ export function privateSessionRowReadKey(cfg: OpenClawConfig, query: records.Loo
   return isIncognitoSessionKey(key) ? JSON.stringify([query.agentId, key]) : undefined;
 }
 
-export async function withPreparedSessionRows<T>(
+export function readPreparedSessionRows<T>(
   owner: SessionRowReadView & {
     isCurrent(row: records.Row): boolean;
     getPolicyConfig(): OpenClawConfig;
@@ -66,6 +66,8 @@ export async function withPreparedSessionRows<T>(
   queries: (config: OpenClawConfig) => readonly records.Lookup[],
   consume: (read: SessionRowReadView) => T,
   privateRepositories?: ReadonlyMap<string, PreparedPrivateSessionRepository>,
+  capturedPrivateRows?: ReadonlyMap<string, records.Row | undefined>,
+  env?: NodeJS.ProcessEnv,
 ) {
   if (!isActive()) {
     throw new Error("Session row read view is no longer active");
@@ -79,9 +81,11 @@ export async function withPreparedSessionRows<T>(
       const key = privateKey(query);
       if (key && !privateRows.has(key)) {
         const prepared = privateRepositories?.get(key);
-        const row = prepared
-          ? owner.describe(query, prepared.row, prepared.repository.current() ?? null)
-          : owner.describe(query);
+        const row = capturedPrivateRows?.has(key)
+          ? capturedPrivateRows.get(key) && owner.describe(query, capturedPrivateRows.get(key))
+          : prepared
+            ? owner.describe(query, prepared.row, prepared.repository.current() ?? null)
+            : owner.describe(query);
         if (
           prepared &&
           (!records.isCurrentGeneration(prepared.row, row) ||
@@ -96,7 +100,16 @@ export async function withPreparedSessionRows<T>(
       for (const group of row?.materialized.row.swarm?.groups ?? []) {
         for (const child of group.children ?? []) {
           if (!childSelections.has(child.sessionKey)) {
-            childSelections.set(child.sessionKey, owner.selectEntries({ key: child.sessionKey }));
+            const related = row?.preparedPrivate;
+            const prepared = related?.relatedRows[child.sessionKey];
+            childSelections.set(
+              child.sessionKey,
+              prepared
+                ? [{ ...records.create(prepared, prepared.entry), entry: prepared.entry }]
+                : related
+                  ? []
+                  : owner.selectEntries({ key: child.sessionKey }),
+            );
           }
         }
       }
@@ -172,13 +185,24 @@ export async function withPreparedSessionRows<T>(
         void Promise.resolve(result).catch(() => {});
         throw new Error("Session row read consumers must remain synchronous");
       }
+      assertActive();
+      for (const row of privateRows.values()) {
+        row?.privateSource?.assertCurrent();
+      }
       return result;
     } finally {
       active = false;
       privateRows.clear();
       childSelections.clear();
     }
-  });
+  }, env);
+}
+
+/** Awaited facade keeps existing callers on one synchronous presentation owner. */
+export async function withPreparedSessionRows<T>(
+  ...args: Parameters<typeof readPreparedSessionRows<T>>
+) {
+  return readPreparedSessionRows(...args);
 }
 
 /** Reenter the same synchronous consumer after canonical readiness finishes. */

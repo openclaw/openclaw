@@ -87,7 +87,7 @@ describe("memory index", () => {
     trackManager(first);
 
     await expect(first.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
-    expect(providerFixture.embedBatchCalls).toBe(1);
+    expect(providerFixture.embedQueryCalls).toBe(1);
     await first.close();
 
     const second = requireManager(
@@ -114,7 +114,7 @@ describe("memory index", () => {
       checkedAtMs: cachedBeforeProbe?.checkedAtMs,
       cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
     });
-    expect(providerFixture.embedBatchCalls).toBe(1);
+    expect(providerFixture.embedQueryCalls).toBe(1);
 
     const cached = second.getCachedEmbeddingAvailability?.();
     expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(30_000);
@@ -342,7 +342,7 @@ describe("memory index", () => {
           hash: string;
           content: string;
         },
-        options: { source: "memory"; content: string },
+        source: "memory",
       ) => Promise<void>;
       ensureVectorReady: (dimensions?: number) => Promise<boolean>;
       db: {
@@ -422,7 +422,7 @@ describe("memory index", () => {
         hash: hashText(firstContent),
         content: firstContent,
       },
-      { source: "memory", content: firstContent },
+      "memory",
     );
     const secondIndexPromise = fields.indexFile(
       {
@@ -433,7 +433,7 @@ describe("memory index", () => {
         hash: hashText(secondContent),
         content: secondContent,
       },
-      { source: "memory", content: secondContent },
+      "memory",
     );
     let fallbackPromise: Promise<boolean> | null = null;
     try {

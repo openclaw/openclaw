@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -100,11 +100,88 @@ describe("model diagnostic lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    "throw",
+    "promise rejection",
+    "iterator failure",
+    "iterator factory failure",
+    "result rejection",
+    "resolved stream setup failure",
+    "EOF without result",
+  ] as const)(
+    "finishes request activity once after %s without admitting cache usage",
+    async (kind) => {
+      const failure = new Error("Synthetic provider failure");
+      const onFinished = vi.fn();
+      const onTerminal = vi.fn();
+      const onSucceeded = vi.fn();
+      const context = { nextCallId: () => "call-1", onFinished, onTerminal, onSucceeded };
+      const source = () => {
+        if (kind === "throw") {
+          throw failure;
+        }
+        if (kind === "promise rejection") {
+          return Promise.reject(failure);
+        }
+        if (kind === "iterator failure") {
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                async next() {
+                  throw failure;
+                },
+              };
+            },
+          };
+        }
+        if (kind === "iterator factory failure") {
+          return {
+            [Symbol.asyncIterator]() {
+              throw failure;
+            },
+          };
+        }
+        if (kind === "result rejection") {
+          return Object.assign((async function* () {})(), {
+            result: async () => {
+              throw failure;
+            },
+          });
+        }
+        if (kind === "resolved stream setup failure") {
+          return Promise.resolve({
+            async *[Symbol.asyncIterator]() {},
+            get result() {
+              throw failure;
+            },
+          });
+        }
+        return (async function* () {})();
+      };
+      const wrapped = wrap(source as unknown as StreamFn, context);
+      let caught: unknown;
+      try {
+        const response = await wrapped({} as never, { messages: [] });
+        await drain(response);
+        if (kind === "result rejection") {
+          await response.result();
+        }
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(kind === "EOF without result" ? undefined : failure);
+      expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
+      expect(onTerminal).not.toHaveBeenCalled();
+      expect(onSucceeded).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["stop", "error"] as const)(
     "notifies terminal %s once after deferred EOF settlement",
     async (stopReason) => {
       const onTerminal = vi.fn();
       const onSucceeded = vi.fn();
+      const onFinished = vi.fn();
       const source = createAssistantMessageEventStream();
       source.end(
         makeAssistantMessageFixture({
@@ -113,17 +190,24 @@ describe("model diagnostic lifecycle", () => {
           errorMessage: undefined,
         }),
       );
-      const wrapped = wrap(() => source, { agentId: "agent-1", onTerminal, onSucceeded });
+      const wrapped = wrap(() => source, {
+        agentId: "agent-1",
+        onTerminal,
+        onSucceeded,
+        onFinished,
+      });
       const events = await collect(async () => {
         const response = await wrapped({} as never, { messages: [] });
         await drain(response);
         expect(onTerminal).not.toHaveBeenCalled();
         expect(onSucceeded).not.toHaveBeenCalled();
+        expect(onFinished).not.toHaveBeenCalled();
         await response.result();
         await response.result();
         await drain(response);
       });
       expect(onTerminal).toHaveBeenCalledOnce();
+      expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
       expect(onSucceeded).toHaveBeenCalledTimes(stopReason === "stop" ? 1 : 0);
       expect(events.map((event) => event.type)).toEqual([
         "model.call.started",
@@ -221,20 +305,6 @@ describe("model diagnostic lifecycle", () => {
     expect(readFlags.mock.calls.length).toBeLessThan(100);
   });
 
-  it("lets disabled collection override configured timelines", async () => {
-    const timelinePath = join(tempDirs.make("openclaw-disabled-model-timeline-"), "timeline.jsonl");
-    await withEnvAsync(
-      { OPENCLAW_DIAGNOSTICS: "0", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath },
-      async () => {
-        await wrap((() => undefined) as unknown as StreamFn, {
-          config: { diagnostics: { flags: ["timeline"] } },
-        })({} as never, { messages: [] });
-        flushDiagnosticsTimeline();
-        expect(existsSync(timelinePath)).toBe(false);
-      },
-    );
-  });
-
   it("records legacy HTTP metadata without inferring provider acceptance", async () => {
     const onResponse = vi.fn(async () => undefined);
     const response = { status: 200, headers: { "x-request-id": "req-1" } };
@@ -270,41 +340,17 @@ describe("model diagnostic lifecycle", () => {
     expect(events.at(-1)?.status).toBeUndefined();
   });
 
-  it("bounds provider attributes without splitting UTF-16 characters", async () => {
-    const prefix = "m".repeat(255);
-    const boundary = "b".repeat(256);
+  it("uses the terminal error status when no HTTP response was observed", async () => {
+    const wrapped = wrap((() => {
+      throw Object.assign(new Error("rate limited"), { status: 429 });
+    }) as unknown as StreamFn);
     const events = await timeline(async () => {
-      for (const model of [`${prefix}😀tail`, boundary]) {
-        await wrap((() => undefined) as unknown as StreamFn, { model })({} as never, {} as never);
-      }
+      expect(() => wrapped({} as never, {} as never)).toThrow("rate limited");
     });
     expect(events.filter((event) => event.type === "provider.request")).toMatchObject([
-      { attributes: { model: prefix } },
-      { attributes: { model: boundary } },
+      { ok: false, status: 429 },
     ]);
   });
-
-  it.each([undefined, 503])(
-    "prefers observed HTTP status %s over a terminal error",
-    async (status) => {
-      const wrapped = wrap(((
-        model: Parameters<StreamFn>[0],
-        _context: Parameters<StreamFn>[1],
-        options: Parameters<StreamFn>[2],
-      ) => {
-        if (status) {
-          void options?.onResponse?.({ status, headers: {} }, model);
-        }
-        throw Object.assign(new Error("rate limited"), { status: 429 });
-      }) as unknown as StreamFn);
-      const events = await timeline(async () => {
-        expect(() => wrapped({} as never, {} as never)).toThrow("rate limited");
-      });
-      expect(events.filter((event) => event.type === "provider.request")).toMatchObject([
-        { ok: false, status: status ?? 429 },
-      ]);
-    },
-  );
 
   it.each([true, false])(
     "replaces caller traceparent with the trusted exporter span (resolved=%s)",
@@ -335,14 +381,15 @@ describe("model diagnostic lifecycle", () => {
     },
   );
 
-  it.each(["stop", "error"])("fires frozen sanitized hooks for %s", async (stopReason) => {
+  it("fires frozen sanitized hooks for errors", async () => {
     const { started, ended } = hooks();
     const secret = "secret response with Bearer sk-test-secret-value";
     async function* stream() {
       yield { type: "text", text: secret };
-      if (stopReason === "error") {
-        yield { type: "error", error: { role: "assistant", stopReason, errorMessage: secret } };
-      }
+      yield {
+        type: "error",
+        error: { role: "assistant", stopReason: "error", errorMessage: secret },
+      };
     }
     const budget = {
       contextTokenBudget: 150_000,
@@ -359,10 +406,7 @@ describe("model diagnostic lifecycle", () => {
         })({} as never, {} as never),
       );
     });
-    expect(events.map((event) => event.type)).toEqual([
-      "model.call.started",
-      stopReason === "error" ? "model.call.error" : "model.call.completed",
-    ]);
+    expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
     expect(started).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining(budget),
       expect.objectContaining({ ...budget, sessionKey: "session-key", modelProviderId: "openai" }),
@@ -370,7 +414,7 @@ describe("model diagnostic lifecycle", () => {
     expect(ended).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         ...budget,
-        outcome: stopReason === "error" ? "error" : "completed",
+        outcome: "error",
         durationMs: expect.any(Number),
         responseStreamBytes: expect.any(Number),
         timeToFirstByteMs: expect.any(Number),
@@ -381,21 +425,5 @@ describe("model diagnostic lifecycle", () => {
     expect(Object.isFrozen(started.mock.calls[0]?.[1])).toBe(true);
     expect(Object.isFrozen(started.mock.calls[0]?.[1].trace)).toBe(true);
     expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secret);
-  });
-
-  it("keeps core diagnostics when finalization suppresses plugin hooks", async () => {
-    const { started, ended } = hooks();
-    const events = await collect(async () => {
-      await wrap((() => undefined) as unknown as StreamFn, { suppressPluginHooks: true })(
-        {} as never,
-        {} as never,
-      );
-    });
-    expect(events.map((event) => event.type)).toEqual([
-      "model.call.started",
-      "model.call.completed",
-    ]);
-    expect(started).not.toHaveBeenCalled();
-    expect(ended).not.toHaveBeenCalled();
   });
 });

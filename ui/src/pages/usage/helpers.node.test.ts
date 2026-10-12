@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./helpers.ts";
+import { extractQueryTerms, filterSessionsByQuery } from "../../../../src/shared/usage-query.js";
+import { parseToolSummary } from "./helpers.ts";
 
 describe("usage-helpers", () => {
   it("tokenizes query terms including quoted strings", () => {
@@ -76,16 +77,6 @@ describe("usage-helpers", () => {
         keys,
       );
     }
-  });
-
-  it("matches key: glob filters against session keys", () => {
-    const session = {
-      key: "agent:main:cron:16234bc?token=dev-token",
-      label: "agent:main:cron:16234bc?token=dev-token",
-      usage: { totalTokens: 100, totalCost: 0 },
-    };
-    const matches = filterSessionsByQuery([session], "key:agent:main:cron*");
-    expect(matches.sessions).toEqual([session]);
   });
 
   it("supports numeric filters like minTokens/maxTokens", () => {

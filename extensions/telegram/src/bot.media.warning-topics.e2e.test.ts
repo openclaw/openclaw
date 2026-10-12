@@ -834,7 +834,9 @@ describe("Telegram media failure notices", () => {
 
   it("keeps channel-post oversize warnings suppressed (failure=false)", async () => {
     const { replySpy } = await createBotHandlerWithOptions({});
-    const handler = onSpy.mock.calls.find(([event]) => event === "channel_post")?.[1];
+    const handler = onSpy.mock.calls.find(([filter]) =>
+      Array.isArray(filter) ? filter.includes("channel_post") : filter === "channel_post",
+    )?.[1];
     mockTelegramPngDownload();
     await handler({
       channelPost: {

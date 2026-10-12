@@ -47,6 +47,14 @@ function receiptText(receipt: SkillsLibraryReceipt): string {
   return `${receipt.state}: ${receipt.entry.slug} (${receipt.target}, owner ${receipt.entry.ownerLabel})\nSkill ID: ${receipt.entry.skillId}\nRevision: ${receipt.entry.revision}\n${receipt.nextAction}\n`;
 }
 
+async function saveLocalLibrarySkill(input: string, slug: string, rpc: GatewayRpcOpts) {
+  return callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
+    slug,
+    expectedRevision: null,
+    ...(await readLibraryInput(input)),
+  });
+}
+
 export function registerSkillsLibraryCli(skills: Command): void {
   const library = addGatewayClientOptions(
     skills.command("library").description("Manage authenticated personal and team skill libraries"),
@@ -169,16 +177,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .argument("<path>", "Local SKILL.md or skill directory")
     .requiredOption("--slug <slug>", "Library name (lowercase letters, digits, hyphens)")
     .action((input: string, opts: LibraryOptions & { slug: string }, command: Command) =>
-      execute(
-        command,
-        async (rpc) =>
-          callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
-            slug: opts.slug,
-            expectedRevision: null,
-            ...(await readLibraryInput(input)),
-          }),
-        receiptText,
-      ),
+      execute(command, (rpc) => saveLocalLibrarySkill(input, opts.slug, rpc), receiptText),
     );
 
   leaf(
@@ -254,11 +253,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
           if (source.toLowerCase().endsWith(".zip")) {
             return uploadLibraryZip(source, opts.slug, rpc);
           }
-          return callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
-            slug: opts.slug,
-            expectedRevision: null,
-            ...(await readLibraryInput(source)),
-          });
+          return saveLocalLibrarySkill(source, opts.slug, rpc);
         },
         receiptText,
       ),

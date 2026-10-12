@@ -2,7 +2,6 @@ import type {
   ContentBlockParam,
   MessageCreateParamsStreaming,
   MessageParam,
-  Tool as AnthropicTool,
   ImageBlockParam,
   TextBlockParam,
   ToolResultBlockParam,
@@ -12,7 +11,6 @@ import {
   supportsClaudeInHistorySystemMessages,
   type Context,
   type Model,
-  type Tool,
 } from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -32,6 +30,7 @@ import {
   requiresClaudeBetweenToolsThinking,
   resolveAnthropicThinkingEffort,
   resolveClaudeSonnet55ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -71,7 +70,6 @@ import { resolveAnthropicMessagesMaxTokens } from "./anthropic-transport-options
 import { resolveProviderEndpoint } from "./host-policy.js";
 import {
   coerceTransportToolCallArguments,
-  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -104,14 +102,13 @@ async function convertContentBlocks(
     (profile === "provider" || model.input.includes("image")) &&
     content.some(isImageWithMediaPayload);
   if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(
-      extractToolResultText(content),
-      mediaPlaceholder ??
-        (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""),
-    );
+    const text = extractToolResultText(content);
+    return text.trim()
+      ? text
+      : (mediaPlaceholder ??
+          (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""));
   }
   const blocks: Array<TextBlockParam | ImageBlockParam> = [];
-  let hasTextBlock = false;
   for (const block of content) {
     const record = asOptionalObjectRecord(block);
     if (!record) {
@@ -119,8 +116,7 @@ async function convertContentBlocks(
     }
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
-      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
-      hasTextBlock = true;
+      blocks.push({ type: "text", text: blockText });
     }
     if (!isImageWithMediaPayload(record)) {
       continue;
@@ -152,7 +148,7 @@ async function convertContentBlocks(
       },
     });
   }
-  if (!hasTextBlock) {
+  if (!blocks.some((block) => block.type === "text")) {
     blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   return blocks;
@@ -379,14 +375,14 @@ async function convertAnthropicMessages(
 function buildAnthropicGenerationParams({
   model,
   options,
-  tools,
   toolProjection,
+  eagerToolInputStreaming,
   profile,
 }: {
   model: Model<"anthropic-messages">;
   options?: AnthropicOptions;
-  tools?: AnthropicTool[];
   toolProjection?: AnthropicToolProjection;
+  eagerToolInputStreaming: boolean;
   profile: "provider" | "transport";
 }) {
   const params: Pick<
@@ -410,8 +406,13 @@ function buildAnthropicGenerationParams({
     params.stop_sequences = options.stop;
   }
 
-  if (tools && tools.length > 0) {
-    params.tools = tools;
+  if (toolProjection && toolProjection.tools.length > 0) {
+    params.tools = toolProjection.tools.map((tool) => ({
+      name: tool.wireName,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+      ...(eagerToolInputStreaming ? { eager_input_streaming: true } : {}),
+    }));
   }
 
   // Configure thinking mode: always-on adaptive (Fable 5 and Mythos 5),
@@ -455,9 +456,10 @@ function buildAnthropicGenerationParams({
 
   if (options?.toolChoice) {
     const normalizedToolChoice = normalizeAnthropicToolChoice(
-      mandatoryAdaptiveThinking ||
-        options?.thinkingEnabled === true ||
-        resolveClaudeSonnet55ModelIdentity(model) !== undefined,
+      resolveClaudeHaiku55ModelIdentity(model) === undefined &&
+        (mandatoryAdaptiveThinking ||
+          options?.thinkingEnabled === true ||
+          resolveClaudeSonnet55ModelIdentity(model) !== undefined),
       options.toolChoice,
     );
     const projectedToolChoice = toolProjection
@@ -469,33 +471,6 @@ function buildAnthropicGenerationParams({
   }
 
   return params;
-}
-
-function convertAnthropicTools(
-  tools: Tool[],
-  isOAuthTokenLocal: boolean,
-  supportsEagerToolInputStreaming: boolean,
-): {
-  projection: AnthropicToolProjection;
-  tools: AnthropicTool[];
-} {
-  const projection = projectAnthropicTools(tools, (name) =>
-    isOAuthTokenLocal ? toClaudeCodeToolName(name) : name,
-  );
-  return {
-    projection,
-    tools: projection.tools.map((tool) => {
-      const projected: AnthropicTool = {
-        name: tool.wireName,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-      };
-      if (supportsEagerToolInputStreaming) {
-        projected.eager_input_streaming = true;
-      }
-      return projected;
-    }),
-  };
 }
 
 /** Assemble both public Messages routes without changing their replay/default profiles. */
@@ -531,15 +506,16 @@ export async function buildAnthropicRequest(
     cacheControl,
     claudeCodeVersion,
   );
-  const convertedTools = context.tools
-    ? convertAnthropicTools(
-        context.tools,
-        isOAuthToken,
-        !managed &&
-          (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks"),
-      )
-    : undefined;
-  const toolProjection = convertedTools?.projection;
+  let toolProjection: AnthropicToolProjection | undefined;
+  let eagerToolInputStreaming = false;
+  if (context.tools) {
+    const tools = context.tools;
+    eagerToolInputStreaming =
+      !managed && (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks");
+    toolProjection = projectAnthropicTools(tools, (name) =>
+      isOAuthToken ? toClaudeCodeToolName(name) : name,
+    );
+  }
   const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
     enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
     authProfileId: options?.authProfileId,
@@ -586,8 +562,8 @@ export async function buildAnthropicRequest(
     buildAnthropicGenerationParams({
       model,
       options,
-      tools: convertedTools?.tools,
       toolProjection,
+      eagerToolInputStreaming,
       profile,
     }),
   );
@@ -597,7 +573,7 @@ export async function buildAnthropicRequest(
     supportsCacheControlOnTools,
     cacheBreakpointOptOutMessageIndexes,
   );
-  return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
+  return { params, toolProjection, replayedCompaction: replayPlan.compaction };
 }
 
 /** Apply caller payload edits before restoring required request contracts and beta headers. */

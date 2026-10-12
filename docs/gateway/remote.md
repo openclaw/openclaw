@@ -93,7 +93,7 @@ transport is not `direct`, CLI clients own the SSH tunnel, just as the macOS app
 cache paired-device credentials for the selected SSH target and remote Gateway
 port, independently of the allocated local port. Set `gateway.remote.remotePort`
 when the remote Gateway port differs from the port in the URL. TUI/RPC clients
-and diagnostic probes share that credential scope; after pairing, diagnostics
+and diagnostic checks share that credential scope; after pairing, diagnostics
 do not require a shared token or password on every connection. The client closes
 its tunnel on shutdown and cannot reconnect through a released forwarding port.
 Existing configurations with `sshTarget` adopt this client-managed route on
@@ -117,7 +117,7 @@ connecting to a different Gateway.
 
 Local diagnostics prefer their local paired-device credential; an origin-cache
 fallback must match the local Gateway's pairing record. Non-loopback remote
-probes retain their existing exact-origin cache. These changes use the existing
+checks retain their existing exact-origin cache. These changes use the existing
 credential tables without adding a schema migration. Reverting just the route
 binding leaves both credential sets intact. If an older binary rejects an
 independently upgraded database schema, restore compatible pre-update state;
@@ -133,7 +133,7 @@ discovered SSH tunnel clears saved transport settings for the suggested loopback
 URL, which may now reach a different host; start the displayed tunnel manually.
 
 The onboarding and configure readiness checks use the saved TLS fingerprint for
-that same endpoint. Probing a different URL does not inherit its certificate pin.
+that same endpoint. Checking a different URL does not inherit its certificate pin.
 
 Host-key verification is strict by default (`gateway.remote.sshHostKeyPolicy: "strict"`). Set it to `"openssh"` to delegate to your effective OpenSSH config instead; review your user and system SSH settings before enabling it.
 
@@ -248,7 +248,7 @@ only over `wss://`, and never across redirects.
 
 ## Credential precedence
 
-Gateway credential resolution follows one shared contract across call/probe/status paths and Discord exec-approval monitoring. Node-host uses the same contract with one local-mode exception (it ignores `gateway.remote.*`).
+Gateway credential resolution follows one shared contract across call/check/status paths and Discord exec-approval monitoring. Node-host uses the same contract with one local-mode exception (it ignores `gateway.remote.*`).
 
 - Explicit credentials (`--token`, `--password`, or a tool's `gatewayToken`) always win on call paths that accept explicit auth.
 - URL override safety:
@@ -261,10 +261,10 @@ Gateway credential resolution follows one shared contract across call/probe/stat
   - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
   - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
 - Node-host local-mode exception: environment credentials stay first and `gateway.remote.token` / `gateway.remote.password` are ignored because node commands target an explicit host and port.
-- Remote startup/status/wizard probes with SecretRef support treat configured
+- Remote startup/status/wizard checks with SecretRef support treat configured
   `gateway.remote.token` and `gateway.remote.password` as authoritative for the configured
   target. Ambient environment credentials are considered only when neither remote credential
-  is configured. If a configured remote SecretRef cannot be resolved, the probe warns and does
+  is configured. If a configured remote SecretRef cannot be resolved, the check warns and does
   not fall back to environment credentials; a separately configured sibling credential that
   resolves successfully remains usable.
 - Gateway env overrides use `OPENCLAW_GATEWAY_*` only.

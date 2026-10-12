@@ -16,6 +16,7 @@ import {
   resolveDefaultGroupPolicy,
   type OpenClawConfig,
 } from "../../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import type {
   StoredConversationReference,
   MSTeamsConversationStore,
@@ -118,13 +119,17 @@ function formatMSTeamsSenderReason(params: {
 
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   activity: MSTeamsTurnContext["activity"];
   hasControlCommand?: boolean;
   conversationThreadId?: string;
   contextBinding?: ChannelIngressContextBinding;
 }) {
   const activity = params.activity;
-  const msteamsCfg = params.cfg.channels?.msteams;
+  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
+  const msteamsCfg = params.cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(params.cfg, accountId)
+    : undefined;
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
@@ -142,7 +147,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   const pairing = createChannelPairingController({
     core,
     channel: "msteams",
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId,
   });
   const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
   const configuredDmAllowFrom = msteamsCfg?.allowFrom ?? [];
@@ -251,6 +256,7 @@ export async function resolveMSTeamsSenderAccess(params: {
 
 export async function admitMSTeamsMessage(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   activity: MSTeamsTurnContext["activity"];
   text: string;
   conversationId: string;
@@ -269,6 +275,7 @@ export async function admitMSTeamsMessage(params: {
     allowTextCommands && core.channel.commands.isControlCommandMessage(params.text, params.cfg);
   const access = await resolveMSTeamsSenderAccess({
     cfg: params.cfg,
+    accountId: params.accountId,
     activity: params.activity,
     hasControlCommand: isControlCommand,
   });
@@ -288,6 +295,19 @@ export async function admitMSTeamsMessage(params: {
   } = access;
   const effectiveDmAllowFrom = senderAccess.effectiveAllowFrom;
   const effectiveGroupAllowFrom = senderAccess.effectiveGroupAllowFrom;
+  const saveConversationReference = () =>
+    params.conversationStore
+      .upsert(params.conversationId, params.conversationRef)
+      .catch((err: unknown) => {
+        params.log.debug?.("failed to save conversation reference", {
+          error: formatUnknownError(err),
+        });
+      });
+  const dropGroupMessage = (reason: string, details: Record<string, unknown>) => {
+    params.log.info(reason, details);
+    params.log.debug?.(reason, details);
+    return null;
+  };
 
   if (hasConflictingConversationScope) {
     params.log.info("dropping message (conflicting conversation scope)", {
@@ -313,13 +333,7 @@ export async function admitMSTeamsMessage(params: {
       allowNameMatching,
     });
     if (senderAccess.decision === "pairing") {
-      params.conversationStore
-        .upsert(params.conversationId, params.conversationRef)
-        .catch((err: unknown) => {
-          params.log.debug?.("failed to save conversation reference", {
-            error: formatUnknownError(err),
-          });
-        });
+      void saveConversationReference();
       const request = await pairing.upsertPairingRequest({
         id: senderId,
         meta: { name: senderName },
@@ -352,44 +366,28 @@ export async function admitMSTeamsMessage(params: {
 
   if (!isDirectMessage && msteamsCfg) {
     if (channelGate.allowlistConfigured && !channelGate.allowed) {
-      params.log.info("dropping group message (not in team/channel allowlist)", {
+      return dropGroupMessage("dropping group message (not in team/channel allowlist)", {
         conversationId: params.conversationId,
         teamKey: channelGate.teamKey ?? "none",
         channelKey: channelGate.channelKey ?? "none",
         channelMatchKey: channelGate.channelMatchKey ?? "none",
         channelMatchSource: channelGate.channelMatchSource ?? "none",
       });
-      params.log.debug?.("dropping group message (not in team/channel allowlist)", {
-        conversationId: params.conversationId,
-        teamKey: channelGate.teamKey ?? "none",
-        channelKey: channelGate.channelKey ?? "none",
-        channelMatchKey: channelGate.channelMatchKey ?? "none",
-        channelMatchSource: channelGate.channelMatchSource ?? "none",
-      });
-      return null;
     }
 
     if (!senderAccess.allowed && senderAccess.reasonCode === "group_policy_disabled") {
-      params.log.info("dropping group message (groupPolicy: disabled)", {
+      return dropGroupMessage("dropping group message (groupPolicy: disabled)", {
         conversationId: params.conversationId,
       });
-      params.log.debug?.("dropping group message (groupPolicy: disabled)", {
-        conversationId: params.conversationId,
-      });
-      return null;
     }
     if (
       !senderAccess.allowed &&
       (senderAccess.reasonCode === "group_policy_empty_allowlist" ||
         senderAccess.reasonCode === "route_sender_empty")
     ) {
-      params.log.info("dropping group message (groupPolicy: allowlist, no allowlist)", {
+      return dropGroupMessage("dropping group message (groupPolicy: allowlist, no allowlist)", {
         conversationId: params.conversationId,
       });
-      params.log.debug?.("dropping group message (groupPolicy: allowlist, no allowlist)", {
-        conversationId: params.conversationId,
-      });
-      return null;
     }
     if (!senderAccess.allowed) {
       const allowMatch = resolveAllowlistMatchSimple({
@@ -422,13 +420,7 @@ export async function admitMSTeamsMessage(params: {
     return null;
   }
 
-  params.conversationStore
-    .upsert(params.conversationId, params.conversationRef)
-    .catch((err: unknown) => {
-      params.log.debug?.("failed to save conversation reference", {
-        error: formatUnknownError(err),
-      });
-    });
+  void saveConversationReference();
 
   return {
     ...access,

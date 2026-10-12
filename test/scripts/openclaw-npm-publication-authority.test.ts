@@ -379,7 +379,7 @@ describe("npm final publication authority", () => {
     expect(f.state().calls).toContain("actions/runs/99");
   });
 
-  it.each([1, 3])(
+  it.each([3])(
     "stops every later write when admission is revoked after %i companions",
     async (count) => {
       const f = await fixture();

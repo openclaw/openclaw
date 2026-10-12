@@ -120,7 +120,7 @@ export class TerminalOutputController {
     this.bufferedBytes = 0;
   }
 
-  private flush(): void {
+  flush(): void {
     const chunks = this.chunks;
     this.clear();
     if (chunks.length === 0) {
@@ -136,21 +136,24 @@ export class TerminalOutputController {
     this.reconcile(connIds);
   }
 
-  private reconcile(connIds: readonly string[]): void {
+  private reconcile(connIds: readonly string[], reassert = false): void {
     const bufferedAmount = this.maxBufferedAmount(connIds);
+    const previous = this.desiredPaused;
     if (bufferedAmount === undefined) {
-      return;
-    }
-    if (bufferedAmount >= TERMINAL_OUTPUT_HIGH_WATER_BYTES) {
-      this.ensureReassertTimer();
-      if (!this.desiredPaused) {
-        this.desiredPaused = true;
-        this.applyFlowControl();
+      if (!reassert) {
+        return;
       }
-      return;
-    }
-    if (bufferedAmount <= TERMINAL_OUTPUT_LOW_WATER_BYTES && this.desiredPaused) {
       this.desiredPaused = false;
+    } else if (bufferedAmount >= TERMINAL_OUTPUT_HIGH_WATER_BYTES) {
+      if (!reassert) {
+        this.ensureReassertTimer();
+      }
+      this.desiredPaused = true;
+    } else if (bufferedAmount <= TERMINAL_OUTPUT_LOW_WATER_BYTES) {
+      this.desiredPaused = false;
+    }
+    // Periodic probes reassert both states so a missed native resume cannot wedge the shell.
+    if (reassert || previous !== this.desiredPaused) {
       this.applyFlowControl();
     }
   }
@@ -159,20 +162,10 @@ export class TerminalOutputController {
     if (this.reassertTimer) {
       return;
     }
-    this.reassertTimer = setInterval(() => {
-      const bufferedAmount = this.maxBufferedAmount(this.options.getConnIds());
-      if (bufferedAmount !== undefined) {
-        if (bufferedAmount >= TERMINAL_OUTPUT_HIGH_WATER_BYTES) {
-          this.desiredPaused = true;
-        } else if (bufferedAmount <= TERMINAL_OUTPUT_LOW_WATER_BYTES) {
-          this.desiredPaused = false;
-        }
-      } else {
-        this.desiredPaused = false;
-      }
-      // Reassert both states. A missed native resume must not wedge the shell.
-      this.applyFlowControl();
-    }, TERMINAL_OUTPUT_REASSERT_MS);
+    this.reassertTimer = setInterval(
+      () => this.reconcile(this.options.getConnIds(), true),
+      TERMINAL_OUTPUT_REASSERT_MS,
+    );
     this.reassertTimer.unref?.();
   }
 

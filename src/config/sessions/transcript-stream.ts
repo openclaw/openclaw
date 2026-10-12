@@ -1,4 +1,3 @@
-// Transcript streaming reads large JSONL files forward or backward without whole-file buffering.
 import fs from "node:fs";
 import readline from "node:readline";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -18,8 +17,6 @@ type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
 };
 
 /**
- * Stream the non-empty, trimmed JSONL lines of a transcript file in order.
- *
  * Returns an empty async iterator if the file does not exist, is empty, or is
  * not a regular file. Honours `options.signal` between lines so long scans can
  * cooperate with abort signals.
@@ -63,9 +60,6 @@ export async function* streamSessionTranscriptLines(
 }
 
 /**
- * Stream the non-empty, trimmed JSONL lines of a transcript file in reverse
- * (newest-first) order.
- *
  * Returns an empty async iterator if the file does not exist, is empty, or is
  * not a regular file. The implementation splits on newline bytes before UTF-8
  * decoding so multibyte characters survive arbitrary chunk boundaries.

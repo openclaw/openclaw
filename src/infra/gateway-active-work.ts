@@ -1,4 +1,7 @@
-import type { GatewayWriteCustody } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+import type {
+  GatewaySuspendBlocker,
+  GatewayWriteCustody,
+} from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 // Collects process activity shared by restart and host-suspension decisions.
 import { getActiveAcpTurnCount } from "../acp/control-plane/active-turns.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
@@ -7,7 +10,7 @@ import { getActiveMediaGenerationRunCount } from "../agents/media-generation-act
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
+import { getTotalQueueSize, listCommandLaneTotals } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -20,80 +23,24 @@ import { getActiveAgentRunContextCount } from "./agent-run-registry.js";
 import { waitForGatewayDrain } from "./gateway-drain.js";
 import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
-type GatewayActiveWorkCounts = {
-  queueSize: number;
-  pendingReplies: number;
-  embeddedRuns: number;
-  backgroundExecSessions: number;
-  cronRuns: number;
-  agentRuns: number;
-  acpRuns: number;
-  mediaRuns: number;
-  rootRequests: number;
-  sessionAdmissions: number;
-  sessionMutations: number;
-  chatRuns: number;
-  queuedTurns: number;
-  terminalPersistence: number;
-  terminalSessions: number;
-  lifecycleWrites: number;
-  /** Compatibility aggregate. Categories can overlap; use individual counts for diagnostics. */
-  totalActive: number;
-};
-
-export type GatewayActiveWorkBlocker = {
-  kind:
-    | "queue"
-    | "reply"
-    | "embedded-run"
-    | "background-exec"
-    | "cron-run"
-    | "agent-run"
-    | "acp-run"
-    | "media-generation"
-    | "root-request"
-    | "session-admission"
-    | "session-mutation"
-    | "chat-run"
-    | "queued-turn"
-    | "terminal-persistence"
-    | "terminal-session";
-  count: number;
-  message: string;
-};
-
-export type GatewayActiveWorkSnapshot = {
-  idle: boolean;
-  counts: GatewayActiveWorkCounts;
-  blockers: GatewayActiveWorkBlocker[];
-  writeCustody: GatewayWriteCustody;
-};
+export type GatewayActiveWorkBlocker = GatewaySuspendBlocker;
+export type GatewayActiveWorkSnapshot = ReturnType<typeof createGatewayActiveWorkSnapshot>;
 
 type GatewayActiveWorkWaitResult = {
   drained: boolean;
   snapshot: GatewayActiveWorkSnapshot;
 };
 
-export type GatewayActiveWorkInspectors = {
-  getQueueSize: () => number;
-  getPendingReplies: () => number;
-  getEmbeddedRuns: () => number;
-  getBackgroundExecSessions: () => number;
-  getCronRuns: () => number;
-  getAgentRuns: () => number;
-  getAcpRuns: () => number;
-  getMediaRuns: () => number;
-  getRootRequests: () => number;
+export type GatewayActiveWorkInspectors = Omit<
+  typeof defaultInspectors,
+  "getRootRequestHolders"
+> & {
   getRootRequestHolders?: () => string[];
-  getSessionAdmissions: () => number;
-  getSessionMutations: () => number;
-  getChatRuns: () => number;
-  getQueuedTurns: () => number;
-  getTerminalPersistence: () => number;
-  getTerminalSessions: () => number;
+  getChatRunHolders?: () => string[];
+  getTerminalPersistenceHolders?: () => string[];
 };
 
-const defaultInspectors: GatewayActiveWorkInspectors = {
+const defaultInspectors = {
   getQueueSize: getTotalQueueSize,
   getPendingReplies: getTotalPendingReplies,
   getEmbeddedRuns: getActiveEmbeddedRunCount,
@@ -141,10 +88,10 @@ export function readGatewayMaintenanceWork(inspectors: Partial<GatewayActiveWork
 export function createGatewayActiveWorkSnapshot(
   inspectors: Partial<GatewayActiveWorkInspectors> = {},
   options: { ignoreTerminalSessions?: boolean } = {},
-): GatewayActiveWorkSnapshot {
+) {
   const resolved = { ...defaultInspectors, ...inspectors };
   const maintenance = readGatewayMaintenanceWork(inspectors);
-  const counts: GatewayActiveWorkCounts = {
+  const counts = {
     queueSize: normalizeCount(resolved.getQueueSize()),
     pendingReplies: normalizeCount(resolved.getPendingReplies()),
     embeddedRuns: normalizeCount(resolved.getEmbeddedRuns()),
@@ -157,6 +104,7 @@ export function createGatewayActiveWorkSnapshot(
     queuedTurns: normalizeCount(resolved.getQueuedTurns()),
     terminalSessions: normalizeCount(resolved.getTerminalSessions()),
     ...maintenance.counts,
+    /** Compatibility aggregate. Categories can overlap; use individual counts for diagnostics. */
     totalActive: 0,
   };
   counts.totalActive =
@@ -164,12 +112,39 @@ export function createGatewayActiveWorkSnapshot(
     (options.ignoreTerminalSessions ? counts.terminalSessions : 0);
 
   const blockers: GatewayActiveWorkBlocker[] = [];
-  const add = (count: number, kind: GatewayActiveWorkBlocker["kind"], message: string) => {
+  const add = (
+    count: number,
+    kind: GatewayActiveWorkBlocker["kind"],
+    message: string,
+    getHolders?: () => string[],
+  ) => {
     if (count > 0) {
-      blockers.push({ kind, count, message: `${count} ${message}` });
+      const holders = getHolders?.().toSorted() ?? [];
+      const names = holders.slice(0, 8).map((name) => name.replace(/[\r\n\t]/g, " ").slice(0, 256));
+      if (holders.length > names.length) {
+        names.push(`+${holders.length - names.length} more`);
+      }
+      blockers.push({
+        kind,
+        count,
+        message: `${count} ${message}${names.length > 0 ? `: ${names.join(", ")}` : ""}`,
+      });
     }
   };
-  add(counts.queueSize, "queue", "queued or active operation(s)");
+  add(
+    counts.queueSize,
+    "queue",
+    "queued or active operation(s)",
+    inspectors.getQueueSize
+      ? undefined
+      : () =>
+          listCommandLaneTotals()
+            .filter(({ activeCount, queuedCount }) => activeCount + queuedCount > 0)
+            .map(
+              ({ lane, activeCount, queuedCount }) =>
+                `${lane} (active=${activeCount}, queued=${queuedCount})`,
+            ),
+  );
   add(counts.pendingReplies, "reply", "pending reply delivery operation(s)");
   add(counts.embeddedRuns, "embedded-run", "active embedded run(s)");
   add(counts.backgroundExecSessions, "background-exec", "active background exec session(s)");
@@ -177,26 +152,24 @@ export function createGatewayActiveWorkSnapshot(
   add(counts.agentRuns, "agent-run", "admitted agent run(s)");
   add(counts.acpRuns, "acp-run", "active ACP turn(s)");
   add(counts.mediaRuns, "media-generation", "active media generation(s)");
-  const rootRequestHolders =
-    inspectors.getRootRequests && !inspectors.getRootRequestHolders
-      ? []
-      : (resolved.getRootRequestHolders?.() ?? []);
-  const rootRequestHolderNames = rootRequestHolders.toSorted().slice(0, 8);
-  if (rootRequestHolders.length > rootRequestHolderNames.length) {
-    rootRequestHolderNames.push(
-      `+${rootRequestHolders.length - rootRequestHolderNames.length} more`,
-    );
-  }
   add(
     counts.rootRequests,
     "root-request",
-    `active gateway request(s)${rootRequestHolderNames.length > 0 ? `: ${rootRequestHolderNames.join(", ")}` : ""}`,
+    "active gateway request(s)",
+    inspectors.getRootRequests && !inspectors.getRootRequestHolders
+      ? undefined
+      : resolved.getRootRequestHolders,
   );
   add(counts.sessionAdmissions, "session-admission", "admitted session turn(s)");
   add(counts.sessionMutations, "session-mutation", "active session lifecycle mutation(s)");
-  add(counts.chatRuns, "chat-run", "active chat run(s)");
+  add(counts.chatRuns, "chat-run", "active chat run(s)", resolved.getChatRunHolders);
   add(counts.queuedTurns, "queued-turn", "queued chat turn(s)");
-  add(counts.terminalPersistence, "terminal-persistence", "pending terminal session write(s)");
+  add(
+    counts.terminalPersistence,
+    "terminal-persistence",
+    "pending terminal session write(s)",
+    resolved.getTerminalPersistenceHolders,
+  );
   if (!options.ignoreTerminalSessions) {
     add(counts.terminalSessions, "terminal-session", "open terminal session(s)");
   }

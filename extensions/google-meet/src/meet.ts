@@ -16,7 +16,6 @@ import {
   type GoogleMeetConferenceRecord,
   type GoogleMeetParticipant,
   type GoogleMeetParticipantSession,
-  type GoogleMeetPreflightReport,
   type GoogleMeetSmartNotesListResult,
   type GoogleMeetSpace,
 } from "./meet-api.js";
@@ -197,15 +196,12 @@ function mergeAttendanceRows(
   return [...grouped.values()].map((row) => decorateAttendanceRow(row, conferenceRecord, params));
 }
 
-export async function fetchGoogleMeetArtifacts(params: {
-  accessToken: string;
-  meeting?: string;
-  conferenceRecord?: string;
-  pageSize?: number;
-  includeTranscriptEntries?: boolean;
-  allConferenceRecords?: boolean;
-  includeDocumentBodies?: boolean;
-}): Promise<GoogleMeetArtifactsResult> {
+export async function fetchGoogleMeetArtifacts(
+  params: Parameters<typeof resolveConferenceRecordQuery>[0] & {
+    includeTranscriptEntries?: boolean;
+    includeDocumentBodies?: boolean;
+  },
+): Promise<GoogleMeetArtifactsResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const artifacts = await Promise.all(
     resolved.conferenceRecords.map(async (conferenceRecord) => {
@@ -283,16 +279,10 @@ export async function fetchGoogleMeetArtifacts(params: {
   };
 }
 
-export async function fetchGoogleMeetAttendance(params: {
-  accessToken: string;
-  meeting?: string;
-  conferenceRecord?: string;
-  pageSize?: number;
-  allConferenceRecords?: boolean;
-  mergeDuplicateParticipants?: boolean;
-  lateAfterMinutes?: number;
-  earlyBeforeMinutes?: number;
-}): Promise<GoogleMeetAttendanceResult> {
+export async function fetchGoogleMeetAttendance(
+  params: Parameters<typeof resolveConferenceRecordQuery>[0] &
+    Parameters<typeof mergeAttendanceRows>[2],
+): Promise<GoogleMeetAttendanceResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const nestedRows = await Promise.all(
     resolved.conferenceRecords.map(async (conferenceRecord) => {
@@ -332,7 +322,7 @@ export function buildGoogleMeetPreflightReport(params: {
   space: GoogleMeetSpace;
   previewAcknowledged: boolean;
   tokenSource: "cached-access-token" | "refresh-token";
-}): GoogleMeetPreflightReport {
+}) {
   const blockers: string[] = [];
   if (!params.previewAcknowledged) {
     blockers.push(

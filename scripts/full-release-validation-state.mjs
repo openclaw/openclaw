@@ -295,15 +295,14 @@ export async function readChild(child, previous, signal, options = {}) {
       `${child.key} GitHub read failed: ${error instanceof Error ? error.message : String(error)}`,
     );
     ghRetryDeadline ??= degraded ? performance.now() + TRANSPORT_UNCERTAINTY_MS : undefined;
+    const errors = (previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch");
+    if (!degraded) {
+      errors.push(readError);
+    }
     return {
       ...child,
       ...previous,
-      errors: degraded
-        ? (previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch")
-        : [
-            ...(previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch"),
-            readError,
-          ],
+      errors,
       status: degraded ? "transport_uncertain" : stringValue(previous?.status, "unknown"),
       transportFailure: degraded ? { errorClass: "transient" } : undefined,
     };
@@ -456,6 +455,14 @@ async function validateReuse(executionPlan, signal) {
     return { blockers: [], children: plan, errors: [] };
   }
   try {
+    const admission = executionPlan.sourceAdmission?.qualificationAdmission;
+    const verifier = admission
+      ? {
+          ref: admission.workflowHeadBranch,
+          fullRef: admission.workflowFullRef,
+          sha: admission.workflowSha,
+        }
+      : trustedWorkflow;
     const args = [
       RELEASE_SUMMARY_PATH,
       "--validate-run",
@@ -463,13 +470,13 @@ async function validateReuse(executionPlan, signal) {
       "--repo",
       requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
       "--trusted-workflow-ref",
-      requiredString(trustedWorkflow?.ref, "trusted workflow ref"),
+      requiredString(verifier?.ref, "trusted workflow ref"),
       "--trusted-workflow-full-ref",
-      requiredString(trustedWorkflow?.fullRef, "trusted workflow full ref"),
+      requiredString(verifier?.fullRef, "trusted workflow full ref"),
       "--trusted-workflow-sha",
-      requiredString(trustedWorkflow?.sha, "trusted workflow SHA"),
+      requiredString(verifier?.sha, "trusted workflow SHA"),
       "--verifier-source-sha",
-      requiredString(executionPlan.workflowSha, "workflow SHA"),
+      requiredString(admission?.workflowSha ?? executionPlan.workflowSha, "verifier source SHA"),
       "--verifier-source-file",
       RELEASE_SUMMARY_PATH,
       "--expected-target-sha",
@@ -486,6 +493,18 @@ async function validateReuse(executionPlan, signal) {
       JSON.stringify(changedPathsValue(evidenceReuse.changedPaths)),
       "--json",
     ];
+    if (admission) {
+      args.push(
+        "--qualification-reuse-json",
+        JSON.stringify({
+          candidateSha: executionPlan.targetSha,
+          qualificationSha: executionPlan.workflowSha,
+          workflowRef: executionPlan.workflowRef,
+          descriptor: admission,
+          inputs: executionPlan.qualificationInputs,
+        }),
+      );
+    }
     const result = await execFileAsync(process.execPath, args, {
       encoding: "utf8",
       env: process.env,
@@ -530,7 +549,7 @@ async function validateReuse(executionPlan, signal) {
       runId: stringValue(evidenceReuse.selectedRunId),
       url: stringValue(evidenceReuse.runUrl),
     };
-    return API_ERROR_PATTERN.test(message)
+    return entry.kind === "api_error"
       ? { blockers: [], children: plan, errors: [entry] }
       : { blockers: [entry], children: plan, errors: [] };
   }
@@ -1525,42 +1544,32 @@ function selectMode() {
   }
 }
 
-async function main() {
+function main() {
   const mode = process.argv[2];
-  if (mode === "reuse-publication") {
-    await publicationReuseMode();
-    return;
+  switch (mode) {
+    case "reuse-publication":
+      return publicationReuseMode();
+    case "restore-publication":
+    case "finalize-publication":
+      return publicationMode(mode);
+    case "write-manifest":
+      return writeManifestMode();
+    case "plan":
+      return planMode();
+    case "verify":
+      return verifyMode();
+    case "select":
+      return selectMode();
+    case "validate-manifest":
+      return validateManifestMode();
+    case "decision":
+    case "drain":
+      return collectMode(mode);
+    default:
+      throw new Error(
+        "usage: full-release-validation-state.mjs <plan|decision|drain|select|validate-manifest|verify>",
+      );
   }
-  if (["restore-publication", "finalize-publication"].includes(mode)) {
-    await publicationMode(mode);
-    return;
-  }
-  if (mode === "write-manifest") {
-    await writeManifestMode();
-    return;
-  }
-  if (mode === "plan") {
-    await planMode();
-    return;
-  }
-  if (mode === "verify") {
-    verifyMode();
-    return;
-  }
-  if (mode === "select") {
-    selectMode();
-    return;
-  }
-  if (mode === "validate-manifest") {
-    await validateManifestMode();
-    return;
-  }
-  if (!["decision", "drain"].includes(mode)) {
-    throw new Error(
-      "usage: full-release-validation-state.mjs <plan|decision|drain|select|validate-manifest|verify>",
-    );
-  }
-  await collectMode(mode);
 }
 
 if (process.argv[1]?.endsWith("full-release-validation-state.mjs")) {

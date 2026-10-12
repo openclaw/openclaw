@@ -127,18 +127,9 @@ function scheduleSessionWebSocketExpiry(cacheKey: string, entry: CachedWebSocket
   entry.idleTimer.unref?.();
 }
 
-type PreparedWebSocketConnection = {
-  client: OpenAI;
-  headers: Record<string, string>;
-  identity: string;
-  owner: SessionResourceOwner;
-  ownerId: number;
-};
+type PreparedWebSocketConnection = ReturnType<typeof prepareWebSocketConnection>;
 
-function prepareWebSocketConnection(
-  client: OpenAI,
-  headers: Record<string, string> | undefined,
-): PreparedWebSocketConnection {
+function prepareWebSocketConnection(client: OpenAI, headers: Record<string, string> | undefined) {
   if (!isOfficialOpenAIResponsesBaseUrl(client.baseURL)) {
     throw new Error("OpenAI Responses WebSocket requires the official API endpoint");
   }
@@ -244,8 +235,7 @@ function acquireWebSocket(
   },
   connection: PreparedWebSocketConnection,
 ): WebSocketLease {
-  const useCache = params.mode !== "websocket" && Boolean(params.sessionId);
-  if (!useCache || !params.sessionId) {
+  if (params.mode === "websocket" || !params.sessionId) {
     return createTransientWebSocketLease(connection);
   }
 

@@ -10,7 +10,7 @@ import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "../constants.js";
 import { resolveBrowserEngine } from "../engines/registry.js";
-import { resolveDefaultSnapshotFormat } from "../profile-capabilities.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -24,12 +24,13 @@ export function resolveSnapshotPlan(params: {
   const urls = toBoolean(params.query.urls) ?? undefined;
   const explicitFormat =
     params.query.format === "aria" ? "aria" : params.query.format === "ai" ? "ai" : undefined;
-  const format = resolveDefaultSnapshotFormat({
-    profile: params.profile,
-    hasPlaywright: params.hasPlaywright,
-    explicitFormat,
-    mode,
-  });
+  const format =
+    explicitFormat ??
+    (mode === "efficient" ||
+    getBrowserProfileCapabilities(params.profile).usesChromeMcp ||
+    params.hasPlaywright
+      ? "ai"
+      : "aria");
   const limit = parseStrictPositiveInteger(params.query.limit);
   const maxCharsRaw = Object.hasOwn(params.query, "maxChars")
     ? parseStrictNonNegativeInteger(params.query.maxChars)

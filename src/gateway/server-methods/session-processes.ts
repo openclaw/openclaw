@@ -114,8 +114,6 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
       if (
         owner.state !== "active" ||
         owner.executionMode !== "worker-turn" ||
-        !owner.environmentId ||
-        owner.activeOwnerEpoch === null ||
         !context.workerEnvironmentService?.observeProcesses
       ) {
         throw new Error(

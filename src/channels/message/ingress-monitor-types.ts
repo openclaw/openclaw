@@ -14,7 +14,6 @@ export type ChannelIngressMonitorLifecycle = ChannelIngressDispatchLifecycle & {
   admission: "exclusive";
 };
 
-/** Optional explicit outcome from a channel delivery. */
 export type ChannelIngressMonitorDeliveryResult = ChannelIngressDrainDispatchResult;
 
 type ChannelIngressMonitorInspectionContext =

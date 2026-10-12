@@ -6,17 +6,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readPersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import {
-  listSessionTranscriptInstances,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { createNonExitingRuntime } from "../runtime.js";

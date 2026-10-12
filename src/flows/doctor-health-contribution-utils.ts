@@ -27,3 +27,14 @@ export function resolveLegacyParentVersionOverride(ctx: DoctorHealthFlowContext)
   const version = ctx.configResult.sourceLastTouchedVersion?.trim();
   return version ? { lastTouchedVersionOverride: version } : {};
 }
+
+export function noteDoctorRepairResult(
+  result: { changes: readonly string[]; warnings: readonly string[] },
+  note: typeof import("../../packages/terminal-core/src/note.js").note,
+): void {
+  for (const kind of ["changes", "warnings"] as const) {
+    if (result[kind].length > 0) {
+      note(result[kind].join("\n"), `Doctor ${kind}`);
+    }
+  }
+}

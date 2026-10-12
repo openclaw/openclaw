@@ -73,47 +73,38 @@ export function createSentMessageCache() {
     ) {
       return true;
     }
+    const matchesWithin = (cache: Map<string, number>, key: string | undefined, ttlMs: number) => {
+      const timestamp = key ? cache.get(`${scope}:${key}`) : undefined;
+      return Boolean(timestamp && Date.now() - timestamp <= ttlMs);
+    };
+    const hasContentOnlyMatch = (
+      cache: Map<string, number>,
+      backedById: Map<string, number>,
+      key: string | undefined,
+    ) => {
+      const timestamp = key ? cache.get(`${scope}:${key}`) : undefined;
+      const idTimestamp = key ? backedById.get(`${scope}:${key}`) : undefined;
+      return typeof timestamp === "number" && (!idTimestamp || timestamp > idTimestamp);
+    };
     const textKey = normalizeIMessageEchoText(lookup.text);
     const mediaKey = resolveIMessageEchoMediaKey(lookup.media);
     const messageIdKey = normalizeIMessageMessageId(lookup.messageId);
     let canUseMediaFallback = !messageIdKey;
     if (messageIdKey) {
-      const idTimestamp = messageIdCache.get(`${scope}:${messageIdKey}`);
-      if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
+      if (matchesWithin(messageIdCache, messageIdKey, SENT_MESSAGE_ID_TTL_MS)) {
         return true;
       }
-      const textTimestamp = textKey ? textCache.get(`${scope}:${textKey}`) : undefined;
-      const textBackedByIdTimestamp = textKey
-        ? textBackedByIdCache.get(`${scope}:${textKey}`)
-        : undefined;
-      const hasTextOnlyMatch =
-        typeof textTimestamp === "number" &&
-        (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);
-      const mediaTimestamp = mediaKey ? mediaCache.get(`${scope}:${mediaKey}`) : undefined;
-      const mediaBackedByIdTimestamp = mediaKey
-        ? mediaBackedByIdCache.get(`${scope}:${mediaKey}`)
-        : undefined;
-      const hasMediaOnlyMatch =
-        typeof mediaTimestamp === "number" &&
-        (!mediaBackedByIdTimestamp || mediaTimestamp > mediaBackedByIdTimestamp);
+      const hasTextOnlyMatch = hasContentOnlyMatch(textCache, textBackedByIdCache, textKey);
+      const hasMediaOnlyMatch = hasContentOnlyMatch(mediaCache, mediaBackedByIdCache, mediaKey);
       canUseMediaFallback = hasMediaOnlyMatch;
       if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
         return false;
       }
     }
-    if (textKey) {
-      const textTimestamp = textCache.get(`${scope}:${textKey}`);
-      if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
-        return true;
-      }
-    }
-    if (mediaKey && canUseMediaFallback) {
-      const mediaTimestamp = mediaCache.get(`${scope}:${mediaKey}`);
-      if (mediaTimestamp && Date.now() - mediaTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
-        return true;
-      }
-    }
-    return false;
+    return (
+      matchesWithin(textCache, textKey, SENT_MESSAGE_TEXT_TTL_MS) ||
+      (canUseMediaFallback && matchesWithin(mediaCache, mediaKey, SENT_MESSAGE_TEXT_TTL_MS))
+    );
   }
 
   function cleanup(): void {

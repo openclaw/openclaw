@@ -13,13 +13,8 @@ import type { AttachmentItem } from "./chat-message-media.ts";
 
 registerChatMessageMetadataEnglish();
 
-type AttachmentCardKind = Extract<
-  AttachmentItem["attachment"]["kind"],
-  "audio" | "document" | "image" | "video"
->;
-
 export type AttachmentCardHeaderOptions = {
-  kind: AttachmentCardKind;
+  kind: AttachmentItem["attachment"]["kind"];
   label: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -85,29 +80,21 @@ export function openAttachmentCardFromClick(
   onOpen();
 }
 
-function attachmentTypeLabel(
-  kind: AttachmentCardKind,
-  label: string,
-  mimeType: string | undefined,
-): string {
-  if (kind === "audio") {
-    return t("chat.attachments.audio");
-  }
-  if (kind === "video") {
-    return t("chat.attachments.video");
-  }
-  if (kind === "image") {
-    return t("chat.attachments.attachedFile");
-  }
-  return resolveAttachmentFileIcon(label, mimeType).extensionLabel;
-}
+const attachmentTypeLabels = new Map([
+  ["audio", "chat.attachments.audio"],
+  ["video", "chat.attachments.video"],
+  ["image", "chat.attachments.attachedFile"],
+]);
 
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
   const skeleton = options.loading ? "skeleton" : "";
   const compactPreview = options.visualMode === "preview-with-favicon";
   const formattedSize =
     options.sizeBytes === undefined ? undefined : formatBytes(options.sizeBytes);
-  const typeLabel = attachmentTypeLabel(options.kind, options.label, options.mimeType);
+  const typeLabelKey = attachmentTypeLabels.get(options.kind);
+  const typeLabel = typeLabelKey
+    ? t(typeLabelKey)
+    : resolveAttachmentFileIcon(options.label, options.mimeType).extensionLabel;
   const metadata = [typeLabel, formattedSize].filter(Boolean).join(" · ");
   const downloadTitle = t("chat.mediaPlayer.download", { filename: options.label });
   const hasOpenAction = options.onExpand !== undefined;

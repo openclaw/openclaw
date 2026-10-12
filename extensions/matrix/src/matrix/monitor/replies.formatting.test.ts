@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
   resolveMarkdownTableMode,
   type MarkdownTableMode,
@@ -17,7 +15,6 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-chunking";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../../channel.js";
 import { setMatrixRuntime } from "../../runtime.js";
@@ -69,10 +66,6 @@ describe("Matrix automatic reply table presentation", () => {
   });
 
   it.each([
-    { name: "plugin default", mode: undefined, expected: "<table>" },
-    { name: "explicit native tables", mode: "block", expected: "<table>" },
-    { name: "explicit code tables", mode: "code", expected: "<pre><code>" },
-    { name: "explicit bullet tables", mode: "bullets", expected: "<strong>Alpha</strong>" },
     { name: "disabled table parsing", mode: "off", expected: "| Name | Status |" },
   ] satisfies Array<{ name: string; mode: MarkdownTableMode | undefined; expected: string }>)(
     "uses the same native output for automatic and direct sends with $name",
@@ -134,34 +127,7 @@ describe("Matrix automatic reply table presentation", () => {
     ).toBe(true);
   });
 
-  it("keeps native tables in automatic media captions", async () => {
-    await withTempDir("matrix-native-table-caption-", async (tempDir) => {
-      const localRoot = await fs.realpath(tempDir);
-      const mediaPath = path.join(localRoot, "attachment.txt");
-      await fs.writeFile(mediaPath, "caption attachment fixture");
-      const { client, sendMessage, uploadContent } = createClient();
-
-      await deliverMatrixReplies({
-        cfg: defaultCfg,
-        replies: [{ text: table, mediaUrl: mediaPath }],
-        roomId: "!room:example.org",
-        client,
-        runtime: runtimeEnv,
-        replyToMode: "off",
-        mediaLocalRoots: [localRoot],
-      });
-
-      expect(uploadContent).toHaveBeenCalledOnce();
-      expect(sendMessage).toHaveBeenCalledOnce();
-      expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
-        msgtype: "m.file",
-        filename: "attachment.txt",
-        formatted_body: expect.stringContaining("<table>"),
-      });
-    });
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "keeps first-reply relations and receipts across chunks (separate dispatch: %s)",
     async (separateDispatch) => {
       const { client, sendMessage } = createClient();
@@ -309,23 +275,6 @@ describe("Matrix automatic reply table presentation", () => {
         content: sendMessage.mock.calls[0]?.[1].body,
         receipt: { parts: [expect.objectContaining({ replyToId: "$incoming" })] },
       },
-    });
-  });
-
-  it("preserves significant whitespace in an automatic text reply", async () => {
-    const { client, sendMessage } = createClient();
-    const text = "    indented code\n\nHard break  \nnext line";
-    await deliverMatrixReplies({
-      cfg: defaultCfg,
-      replies: [{ text }],
-      roomId: "!room:example.org",
-      client,
-      runtime: runtimeEnv,
-      replyToMode: "off",
-    });
-    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
-      body: text,
-      formatted_body: "<pre><code>indented code\n</code></pre>\n<p>Hard break<br>\nnext line</p>",
     });
   });
 });

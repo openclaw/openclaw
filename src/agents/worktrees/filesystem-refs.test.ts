@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { getRefsFileExtents } from "../../../test/helpers/refs.js";
+import { getRefsFullClusterLcns } from "../../../test/helpers/refs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { extractErrorCode } from "../../infra/errors.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -35,20 +36,34 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
         ["empty", Buffer.alloc(0)],
         ["short", Buffer.from("fresh data")],
         ["日本語-🦀", Buffer.alloc(4097, 0x37)],
+        ["partial-tail", Buffer.alloc(4 * 1024 * 1024 + 1, 0x37)],
         [path.join("nested", ".payload"), Buffer.alloc(1024 * 1024, 0x5a)],
       ]);
+      const atime = new Date("2001-02-03T04:05:06.000Z");
+      const mtime = new Date("2002-03-04T05:06:07.000Z");
+      const sourceBirthtimes = new Map<string, number>();
       for (const [name, bytes] of contents) {
         await fs.writeFile(path.join(source, name), bytes);
+        await fs.utimes(path.join(source, name), atime, mtime);
+        sourceBirthtimes.set(name, (await fs.stat(path.join(source, name))).birthtimeMs);
       }
       await backend.cloneTemplate(source, destination, options);
       for (const [name, bytes] of contents) {
+        const copied = await fs.stat(path.join(destination, name));
+        expect(copied.atimeMs).toBe(atime.getTime());
+        expect(copied.mtimeMs).toBe(mtime.getTime());
+        expect(copied.birthtimeMs).toBe(sourceBirthtimes.get(name));
         expect(await fs.readFile(path.join(destination, name))).toEqual(bytes);
+        expect(copied.size).toBe(bytes.length);
+        expect(getRefsFullClusterLcns(path.join(destination, name))).toEqual(
+          getRefsFullClusterLcns(path.join(source, name)),
+        );
       }
       const original = path.join(source, "nested", ".payload");
       const cloned = path.join(destination, "nested", ".payload");
-      const extents = getRefsFileExtents(original);
-      expect(extents.some((extent) => extent.lcn >= 0n)).toBe(true);
-      expect(getRefsFileExtents(cloned)).toEqual(extents);
+      const extents = getRefsFullClusterLcns(original);
+      expect(extents.some((lcn) => lcn >= 0n)).toBe(true);
+      expect(getRefsFullClusterLcns(cloned)).toEqual(extents);
       expect((await fs.stat(cloned, { bigint: true })).ino).not.toBe(
         (await fs.stat(original, { bigint: true })).ino,
       );
@@ -61,12 +76,12 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
       }
       expect(await fs.readFile(original)).toEqual(contents.get(path.join("nested", ".payload")));
       expect((await fs.readFile(cloned))[0]).toBe(0x11);
-      expect(getRefsFileExtents(cloned)).not.toEqual(getRefsFileExtents(original));
+      expect(getRefsFullClusterLcns(cloned)).not.toEqual(getRefsFullClusterLcns(original));
       await expect(backend.cloneTemplate(source, destination, options)).rejects.toThrow();
       expect((await fs.readFile(cloned))[0]).toBe(0x11);
     });
 
-    it("preserves a literal file symlink when Windows permits creating one", async (context) => {
+    it("preserves literal and dangling file and directory symlinks", async (context) => {
       const root = tempDirs.make("openclaw-refs-symlink-", refsRoot);
       const source = path.join(root, "source");
       const destination = path.join(root, "destination");
@@ -74,8 +89,15 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
       assert(backend);
       await backend.createTemplate(source, options);
       await fs.writeFile(path.join(source, "payload"), "data");
+      const links = [
+        ["link", "payload", "file"],
+        ["dangling-file", "missing-file", "file"],
+        ["dangling-directory", "missing-directory", "dir"],
+      ] as const;
       try {
-        await fs.symlink("payload", path.join(source, "link"), "file");
+        for (const [name, target, type] of links) {
+          await fs.symlink(target, path.join(source, name), type);
+        }
       } catch (error) {
         if (extractErrorCode(error) === "EPERM") {
           context.skip("Windows symlink creation requires Developer Mode or privilege");
@@ -83,10 +105,18 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
         throw error;
       }
       await backend.cloneTemplate(source, destination, options);
-      expect(await fs.readlink(path.join(destination, "link"))).toBe("payload");
+      for (const [name, target] of links) {
+        expect(await fs.readlink(path.join(destination, name))).toBe(target);
+      }
       await fs.writeFile(path.join(destination, "payload"), "cloned edit");
       expect(await fs.readFile(path.join(destination, "link"), "utf8")).toBe("cloned edit");
       expect(await fs.readFile(path.join(source, "payload"), "utf8")).toBe("data");
+      await fs.writeFile(path.join(destination, "missing-file"), "new file");
+      await fs.mkdir(path.join(destination, "missing-directory"));
+      expect(await fs.readFile(path.join(destination, "dangling-file"), "utf8")).toBe("new file");
+      expect((await fs.stat(path.join(destination, "dangling-directory"))).isDirectory()).toBe(
+        true,
+      );
     });
 
     it("stops before the next file when allocation authority is revoked", async () => {
@@ -98,11 +128,12 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
       await backend.createTemplate(source, options);
       await fs.writeFile(path.join(source, "a"), "first");
       await fs.writeFile(path.join(source, "b"), "second");
-      const { refsFilesystem } = await import("./filesystem-refs.native.js");
-      const clone = refsFilesystem.cloneFile;
+      const prototype = Object.getPrototypeOf(await fsRoot(source)) as Root;
+      // oxlint-disable-next-line typescript/unbound-method -- Replayed with the intercepted Root receiver.
+      const copyIn = prototype.copyIn;
       let authorized = true;
-      vi.spyOn(refsFilesystem, "cloneFile").mockImplementation((from, to, clusterSize) => {
-        clone(from, to, clusterSize);
+      vi.spyOn(prototype, "copyIn").mockImplementation(async function (this: Root, ...args) {
+        await copyIn.apply(this, args);
         authorized = false;
       });
       await expect(

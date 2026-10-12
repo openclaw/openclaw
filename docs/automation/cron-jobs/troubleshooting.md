@@ -30,6 +30,7 @@ openclaw doctor
   <Accordion title="Automations not firing">
     - Check the `cron.enabled` config setting and `OPENCLAW_SKIP_CRON` in the Gateway's launch environment. Either can disable automatic runs; clear both disable settings and restart the Gateway to enable scheduling.
     - Confirm the Gateway is running continuously.
+    - Use `openclaw automations list --all` to find disabled jobs and `openclaw doctor` to inspect recorded auto-disable reasons, including terminal one-shot execution failures. Fix the cause before running `openclaw automations enable <jobId>`. Operator cancellations and restart retirements stay quiet and do not record an auto-disable.
     - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
     - `reason: not-due` in run output means the manual run was checked with `openclaw automations run <jobId> --due` and the job was not due yet.
     - If the job's execution agent cannot be resolved, automatic and manual attempts record a failed task and a skipped run-history entry with the reason. Select an agent with `openclaw automations edit <jobId> --agent <id>`.
@@ -45,7 +46,7 @@ openclaw doctor
     - For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can fail because Matrix room IDs are case-sensitive. Edit the job to the exact `!room:server` or `room:!room:server` value from Matrix.
     - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
     - When the dispatcher records intentional suppression, job state, run history, and finished events include `deliverySuppressionReason` (`empty`, `silent`, `heartbeat`, or `channel_transform`). This is separate from `lastDeliveryError` / `deliveryError`; required delivery failures also log an error when they happen.
-    - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`), OpenClaw suppresses direct outbound delivery and the fallback queued-summary path, so nothing is posted back to chat.
+    - For text-only isolated announcements, a reply containing only `NO_REPLY` / `no_reply` or ending with a trailing silent token suppresses the entire text and the fallback queued summary. See [Silent token suppression](/cli/cron#silent-token-suppression) for examples and media behavior.
     - If the agent should message the user itself, check that the job has a usable route (`channel: "last"` with a previous chat, or an explicit channel/target).
 
   </Accordion>

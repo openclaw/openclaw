@@ -49,7 +49,7 @@ import {
 
 type DispatchOptions = Parameters<typeof createWorkerPlacementDispatchService>[0];
 
-export function createHarness(
+export async function createHarness(
   database: OpenClawStateDatabase,
   placementStore: PlacementStore,
   options: {
@@ -124,20 +124,20 @@ export function createHarness(
   const placements: WorkerDispatchPlacementStore = {
     ...placementStore,
     closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
-    beginPlacementMove: (params) => {
-      const begun = placementStore.beginPlacementMove(params);
+    beginPlacementMove: async (params, guard) => {
+      const begun = await placementStore.beginPlacementMove(params, guard);
       if (!begun.joined) {
         log.push("placement:draining");
       }
       return begun;
     },
-    completePlacementMoveSourceToLocal: (params) => {
+    completePlacementMoveSourceToLocal: (params, guard) => {
       log.push("placement:local");
-      return placementStore.completePlacementMoveSourceToLocal(params);
+      return placementStore.completePlacementMoveSourceToLocal(params, guard);
     },
-    completeAbandonedPlacementMoveSourceToLocal: (params) => {
+    completeAbandonedPlacementMoveSourceToLocal: (params, guard) => {
       log.push("placement:local");
-      return placementStore.completeAbandonedPlacementMoveSourceToLocal(params);
+      return placementStore.completeAbandonedPlacementMoveSourceToLocal(params, guard);
     },
     acceptWorkspaceResult: (...args) => placementStore.acceptWorkspaceResult(...args),
     completeWorkspaceResultAndReleaseTurn: (...args) =>
@@ -440,6 +440,7 @@ export function createHarness(
     Object.assign(environments, options.environmentService);
   }
   const service = createWorkerPlacementDispatchService({
+    initialPlacements: await placementStore.listAsync(),
     placements,
     environments,
     isShuttingDown: options.isShuttingDown,
@@ -639,12 +640,13 @@ export function createHarness(
   };
 }
 
-export const createRecoveryService = (
+export const createRecoveryService = async (
   placements: PlacementStore,
   environments: WorkerEnvironmentService,
   isShuttingDown: () => boolean = () => false,
 ) =>
   createWorkerPlacementDispatchService({
+    initialPlacements: await placements.listAsync(),
     placements,
     environments,
     isShuttingDown,

@@ -1,4 +1,5 @@
-export { WorkerTaskPoolCore, WorkerTaskError } from "./worker-task-pool-core.js";
+export { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
+export { WorkerTaskError } from "./worker-task-error.js";
 export {
   createWorkerComputeCapacity,
   DEFAULT_WORKER_PENDING_TASKS,

@@ -231,11 +231,10 @@ export function buildRunEntryTerminal(params: {
     if (typeof meta.aborted === "boolean") {
       metadata.aborted = meta.aborted;
     }
-    if (meta.replayInvalid === true) {
-      metadata.replayInvalid = true;
-    }
-    if (meta.yielded === true) {
-      metadata.yielded = true;
+    for (const key of ["replayInvalid", "yielded"] as const) {
+      if (meta[key] === true) {
+        metadata[key] = true;
+      }
     }
   }
   return { outcome, metadata };
@@ -253,8 +252,7 @@ export function preserveFollowupResultForDelivery(
   if (
     !classification ||
     !("code" in classification) ||
-    !classification.code ||
-    !PRESERVED_FOLLOWUP_RESULT_CODES.has(classification.code)
+    !PRESERVED_FOLLOWUP_RESULT_CODES.has(classification.code ?? "")
   ) {
     return classification;
   }

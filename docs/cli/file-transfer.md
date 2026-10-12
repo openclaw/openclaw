@@ -46,7 +46,7 @@ The command lists one entry per legacy permission, shown as
 
 - **Require exact reapproval** removes the ambiguous permission. The next use
   prompts once and records the exact node, command, requested path, and
-  canonical target.
+  resolved target.
 - **Keep as an intentional wildcard** preserves the entry as an
   operator-authored glob.
 - **Remove this permission** drops the entry outright.

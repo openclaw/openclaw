@@ -314,7 +314,9 @@ it("holds the publication turn through models and the final deletion check", asy
   });
 });
 
-it("waits for readiness outside the four-agent migration pool", async ({ signal }) => {
+it("keeps database opens off readiness and retains the four-agent migration pool", async ({
+  signal,
+}) => {
   const agentIds = ["first", "second", "third", "fourth", "fifth"];
   const fleet = createFleet(agentIds, async ({ agentId, assertCurrent }) => {
     await mocks.migrate({ agentIds: new Set([agentId]), assertCurrent });
@@ -343,16 +345,20 @@ it("waits for readiness outside the four-agent migration pool", async ({ signal 
   });
   await fleet.run(async () => {
     agentIds.forEach((_, index) => fleet.inspect(index));
-    await withinTest(fleet.opened, signal);
     await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.opened).not.toHaveBeenCalled();
     expect(mocks.migrate).not.toHaveBeenCalled();
     for (const agentId of agentIds) {
+      expect(readAgentDatabaseAdmissionRefusal(agentId, fleet)?.code).toBe(
+        "agent-database-inspection-pending",
+      );
       expect(mocks.warn).toHaveBeenCalledWith(
         progressMessage,
         expect.objectContaining({ agentId, phase: "readiness" }),
       );
     }
     ready.resolve();
+    await withinTest(fleet.opened, signal);
     await withinTest(fourMigrating.promise, signal);
     expect(mocks.migrate).toHaveBeenCalledTimes(4);
     const enteredAgent = agentIds.find((id) => mocks.migrate.mock.calls[0]![0].agentIds.has(id))!;
@@ -364,6 +370,28 @@ it("waits for readiness outside the four-agent migration pool", async ({ signal 
     for (const agentId of agentIds) {
       expect(readAgentDatabaseAdmissionRefusal(agentId, fleet)).toBeUndefined();
     }
+  }, ready.promise);
+});
+
+it("cancels unopened agent preparation when the Gateway closes before readiness", async () => {
+  const fleet = createFleet(["worker"]);
+  const ready = fleet.hold();
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      progressMessage,
+      expect.objectContaining({ agentId: "worker", phase: "readiness" }),
+    );
+    await admission.stop();
+    ready.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.opened).not.toHaveBeenCalled();
+    expect(mocks.migrate).not.toHaveBeenCalled();
+    expect(readAgentDatabaseAdmissionRefusal("worker", fleet)?.code).toBe(
+      "agent-database-inspection-pending",
+    );
+    expect(vi.getTimerCount()).toBe(0);
   }, ready.promise);
 });
 

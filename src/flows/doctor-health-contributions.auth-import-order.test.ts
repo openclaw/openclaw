@@ -184,9 +184,12 @@ describe("interactive Doctor auth migration", () => {
           .run("invalid_target", receipt.sourceKey);
       }
       const remainingPath = outcome === "declined" ? await writeLegacyCredentialStore(state) : null;
+      const statePath = outcome === "declined" ? await writeLegacyRotationState(state) : null;
+      const cfg = makeLegacyConfig();
+      const originalConfig = structuredClone(cfg);
       const prompter = makePrompter(false);
       const ctx = createDoctorHealthFlowContext({
-        cfg: {},
+        cfg,
         prompter,
         env: state.env,
         configPath: path.join(state.stateDir, "openclaw.json"),
@@ -218,6 +221,9 @@ describe("interactive Doctor auth migration", () => {
       if (remainingPath) {
         expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
         expect(fs.existsSync(remainingPath)).toBe(true);
+        expect(statePath && fs.existsSync(statePath)).toBe(true);
+        expect(ctx.cfg).toEqual(originalConfig);
+        expect(loadMigratedStore(state)).toBeNull();
       } else {
         expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
       }
@@ -251,26 +257,5 @@ describe("interactive Doctor auth migration", () => {
     expect(ctx.cfg.auth?.profiles).toHaveProperty("openai:chatgpt-bravo");
     expect(ctx.cfg.auth?.profiles).not.toHaveProperty("openai-codex:bravo");
     expect(ctx.cfg.auth?.order?.openai).toEqual(["openai:chatgpt-bravo"]);
-  });
-
-  it("leaves config and standalone state unchanged when migration is declined", async () => {
-    const state = await makeState();
-    const cfg = makeLegacyConfig();
-    const authPath = await writeLegacyCredentialStore(state);
-    const statePath = await writeLegacyRotationState(state);
-    const ctx = createDoctorHealthFlowContext({
-      cfg,
-      cfgForPersistence: structuredClone(cfg),
-      prompter: makePrompter(false),
-      env: state.env,
-      configPath: path.join(state.stateDir, "openclaw.json"),
-    });
-
-    await authProfileMigrationContribution().run(ctx);
-
-    expect(ctx.cfg).toEqual(cfg);
-    expect(fs.existsSync(authPath)).toBe(true);
-    expect(fs.existsSync(statePath)).toBe(true);
-    expect(loadMigratedStore(state)).toBeNull();
   });
 });

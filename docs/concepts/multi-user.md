@@ -25,11 +25,13 @@ Changing a session between **Shared**, **Read-only**, **Suggest**, and **Draft**
 controls signed-in people. None of those settings creates a public link.
 
 The session creator or a Gateway admin can explicitly enable **Public access**.
-Anyone with the resulting bearer URL can then read existing and future conversation
+Anyone with the normal thread URL can then read existing and future conversation
 text without signing in, while tools, reasoning, files, images, widgets, hidden
-messages, and internal metadata remain excluded. Assigning a different owner does
-not transfer this authority. Disable public access to revoke every URL for that
-publication, remembering that downloaded copies cannot be recalled. See
+messages, and internal metadata remain excluded. **Log in** returns to that same
+thread with the person's existing permissions. Assigning a different owner does
+not transfer publication authority. Disabling public access stops anonymous
+reads; enabling it again makes the same normal URL readable. Previously revoked
+token links remain invalid, and downloaded copies cannot be recalled. See
 [Share a session publicly](/web/control-ui/sessions-and-sidebar#share-a-session-publicly)
 for the user flow and [Public session transcripts](/web/urls#public-session-transcripts)
 for the security and deployment contract.
@@ -145,13 +147,15 @@ The Control UI keeps ownership and presence visually distinct:
 - Ringed or translucent presence avatars show people who are currently connected or watching. They come from live presence, not ownership, and disappear when those viewers leave. A person already shown by an owner or participant avatar is not repeated in that surface's live viewers. Participants summarized by a **+N** count can still appear individually as live viewers.
 - Under **Group by Person**, the owner avatar in a section header shows a small green dot while that person is connected. It fades once they have been idle for a couple of minutes and disappears when they leave. Your own section never shows one.
 
-When several people watch the same session, the transcript also shows a live typing indicator above the composer. Someone typing in the Control UI streams their draft text into a softer version of their sent-message bubble, with the same sender identity, a caret, and a **Typing · not sent** label. Other typists show a three-dot bubble with the same unsent label. Drafts are ephemeral presence. They are never persisted. They never enter the session transcript or the model's context. They fade a moment after the typist pauses or sends.
+When several people watch the same session, the transcript also shows a live typing indicator above the composer. Someone typing in the Control UI streams their draft text into a softer version of their sent-message bubble, with the same sender identity, a caret that follows the writer’s editing position, and a **Typing · not sent** label. The bounded preview keeps spaces and line breaks and follows the caret when the writer edits a longer draft. Other typists show a three-dot bubble with the same unsent label. Drafts are ephemeral presence. They are never persisted. They never enter the session transcript or the model's context. They fade a moment after the typist pauses or sends.
 
 When the loaded session list contains fewer than two distinct owner identities and no session has recorded outside participants, OpenClaw hides all ownership and owner-filter chrome. A single-user gateway therefore looks unchanged.
 
 ## People cards
 
 Click or tap a person in the sidebar's **Online** section to open their Activity page. Hover or focus the row to open their information card. **View activity** in the card opens the same page. Unqualified viewers have no profile Activity page, so clicking or tapping their row opens only the card, with connection details and visible watched sessions.
+
+The Activity page shows each distinct app/platform description once, so several matching browser tabs do not repeat the same device metadata. Expand **Connection details** below **Viewing now** for grouped connection counts, reported host/platform, IP address, time zone, and available location or input-recency details. Counts describe connections, not physical devices. Separate tabs keep their own watched-session presence; consolidating the display does not merge those connections.
 
 Under **Group by Person**, the avatar and name in another person's section header open the same card. The chevron still collapses the section. An owner who is not connected gets a card marked **Offline** with only their recent sessions and the Activity link.
 

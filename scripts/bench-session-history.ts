@@ -372,7 +372,7 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = configPath;
   const { replaceTranscriptEvents } =
-    await import("../src/config/sessions/session-accessor.sqlite-transcript-write.js");
+    await import("../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js");
   const { waitForSessionTranscriptIndexReconcilesInStateDir } =
     await import("../src/config/sessions/session-transcript-reconcile.js");
   const { openOpenClawAgentDatabase } = await import("../src/state/openclaw-agent-db.js");

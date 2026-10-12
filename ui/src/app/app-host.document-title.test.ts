@@ -2,6 +2,7 @@
 
 import type { LitElement } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow, GatewaySessionRow } from "../api/types.ts";
@@ -16,6 +17,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 
 type ShellDocumentTitleState = {
   activeSessionKey: string;
@@ -95,11 +97,16 @@ describe("OpenClaw shell document title", () => {
     connected?: boolean;
     phase?: ApplicationContext["gateway"]["snapshot"]["phase"];
     approvalCount?: number;
+    brandName?: string;
     agentsList?: AgentsListResult | null;
     assistantAgentId?: string;
     environment?: { label: string; color: "amber" };
     sessions?: GatewaySessionRow[] | null;
   }): ApplicationContext {
+    const previousBranding = currentThemeBranding();
+    const branding = resolveThemeBranding({ brandName: options.brandName });
+    setCurrentThemeBranding(branding);
+    onTestFinished(() => setCurrentThemeBranding(previousBranding));
     return {
       gateway: {
         snapshot: {
@@ -110,6 +117,7 @@ describe("OpenClaw shell document title", () => {
         connection: { gatewayUrl: "ws://gateway.test" },
       },
       config: { current: { environment: options.environment ?? null } },
+      theme: { branding },
       agents: { state: { agentsList: options.agentsList ?? null } },
       overlays: {
         snapshot: { approvalQueue: Array.from({ length: options.approvalCount ?? 0 }) },
@@ -132,16 +140,21 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("Chat — OpenClaw");
   });
 
-  it("appends the configured environment to route and custodian titles", () => {
-    const shell = createShell(createContext({ environment: { label: "edge", color: "amber" } }));
-    shell.routeState = { routeId: "usage" };
-    shell.syncDocumentTitle();
-    expect(document.title).toBe("Usage — OpenClaw · edge");
+  it.each(["OpenClaw", "Northstar"])(
+    "uses %s and the environment in route and custodian titles",
+    (brandName) => {
+      const shell = createShell(
+        createContext({ brandName, environment: { label: "edge", color: "amber" } }),
+      );
+      shell.routeState = { routeId: "usage" };
+      shell.syncDocumentTitle();
+      expect(document.title).toBe(`Usage — ${brandName} · edge`);
 
-    shell.routeState = { routeId: "custodian" };
-    shell.syncDocumentTitle();
-    expect(document.title).toBe("Ask OpenClaw · edge");
-  });
+      shell.routeState = { routeId: "custodian" };
+      shell.syncDocumentTitle();
+      expect(document.title).toBe(`Ask ${brandName} · edge`);
+    },
+  );
 
   it("uses the active session's derived title for a non-main chat", () => {
     const session: GatewaySessionRow = {

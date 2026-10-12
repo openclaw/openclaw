@@ -5,10 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import {
-  sessionRosterGeneration,
-  sessionRosterScope,
-} from "../lib/sessions/session-roster-cache.ts";
+import { subscribeBootRecordChanges } from "./boot-record.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   createGatewayStoreTestStore,
@@ -85,25 +82,28 @@ describe("OpenClaw shell Control UI refresh", () => {
       protocol: 1,
       auth: { role: "operator", scopes: [], recoveryScope: "admitted-account" },
     });
-    const scope = sessionRosterScope(
-      gatewayCredentialScope(store.gateway.connection.gatewayUrl),
-      "admitted-account",
-    );
-    const generation = sessionRosterGeneration(scope);
-    const observed: number[] = [];
+    const scope = gatewayCredentialScope(store.gateway.connection.gatewayUrl);
+    const retiredOwners: string[] = [];
+    const unsubscribeRetirement = subscribeBootRecordChanges((change) => {
+      if (change.scope === scope && change.retiredOwner?.recoveryScope) {
+        retiredOwners.push(change.retiredOwner.recoveryScope);
+      }
+    });
+    const observed: string[][] = [];
     const unsubscribe = store.gateway.subscribe((snapshot) => {
       if (snapshot.phase === "reconnecting") {
-        observed.push(sessionRosterGeneration(scope));
+        observed.push([...retiredOwners]);
       }
     });
     try {
       store.gateway.connect({ bootstrapToken: "synthetic-replacement-bootstrap" });
       expect(observed.length).toBeGreaterThan(0);
       for (const current of observed) {
-        expect(current).toBeGreaterThan(generation);
+        expect(current).toContain("admitted-account");
       }
     } finally {
       unsubscribe();
+      unsubscribeRetirement();
     }
   });
 

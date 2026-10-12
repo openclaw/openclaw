@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-s
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
 import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import { resolveOpenClawClawHubPackageFamily } from "./clawhub-package-family.mjs";
 import {
   classifyClawHubPublication,
   type ClawHubPublicationState,
@@ -43,6 +44,7 @@ type PluginReleasePlanItem = PublishablePluginPackage & {
   publication: ClawHubPublicationState;
   alreadyPublished: boolean;
   artifactName: string;
+  family: "" | "bundle-plugin";
 };
 
 type PluginReleasePlan = {
@@ -100,6 +102,7 @@ const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/plugin-clawhub-recovery.mjs",
   "scripts/openclaw-npm-release-check.ts",
@@ -244,6 +247,8 @@ function formatClawHubPackageArtifactName(
     .replace(/^-+|-+$/gu, "");
   return `clawhub-package-${safeName}-${plugin.version}`;
 }
+
+export { resolveOpenClawClawHubPackageFamily };
 
 export function collectClawHubPublishablePluginPackages(
   rootDir = resolve("."),
@@ -624,6 +629,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
       alreadyPublished: publication.state === "published",
       publication,
       artifactName: formatClawHubPackageArtifactName(plugin),
+      family: resolveOpenClawClawHubPackageFamily(plugin.packageName),
     } satisfies PluginReleasePlanItemWithPackageState;
   });
   const planResult = await runTasksWithConcurrency({

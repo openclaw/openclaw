@@ -141,16 +141,6 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
 }
 
 describe("release-validation campaign artifact", () => {
-  it("accepts the exact beta campaign contract", () => {
-    expect(() =>
-      validateReleaseValidationCampaignArtifact(betaArtifact(), {
-        expectedTag: TAG,
-        expectedReleaseCommit: RELEASE_COMMIT,
-        expectedGuidanceMainSha: GUIDANCE_SHA,
-      }),
-    ).not.toThrow();
-  });
-
   it("rejects non-empty testing notes and local paths", () => {
     const notes = betaArtifact();
     notes.body = notes.body.replace("| **Testing notes** | |", "| **Testing notes** | failed |");

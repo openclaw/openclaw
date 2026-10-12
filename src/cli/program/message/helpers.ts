@@ -50,20 +50,14 @@ const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
 ]);
 
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
-  for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
-    if (opts[key] === undefined) {
-      continue;
-    }
-    if (parseStrictPositiveInteger(opts[key]) === undefined) {
-      throw new Error(`${flag} must be a positive integer.`);
-    }
-  }
-  for (const [key, flag] of STRICT_NON_NEGATIVE_INTEGER_OPTIONS) {
-    if (opts[key] === undefined) {
-      continue;
-    }
-    if (parseStrictNonNegativeInteger(opts[key]) === undefined) {
-      throw new Error(`${flag} must be a non-negative integer.`);
+  for (const [options, parse, kind] of [
+    [STRICT_POSITIVE_INTEGER_OPTIONS, parseStrictPositiveInteger, "positive"],
+    [STRICT_NON_NEGATIVE_INTEGER_OPTIONS, parseStrictNonNegativeInteger, "non-negative"],
+  ] as const) {
+    for (const [key, flag] of options) {
+      if (opts[key] !== undefined && parse(opts[key]) === undefined) {
+        throw new Error(`${flag} must be a ${kind} integer.`);
+      }
     }
   }
 }

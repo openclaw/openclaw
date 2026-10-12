@@ -455,6 +455,24 @@ describe("createComputerTool v1 execution", () => {
     expect(computerActBodies()).toHaveLength(0);
   });
 
+  it.each(["windowRef", "elementRef"] as const)(
+    "rejects a stale screenshot frame when %s is whitespace-only",
+    async (reference) => {
+      const { tool, frameId } = await createToolWithFrame();
+      const input = { [reference]: " \t " };
+
+      await expect(executeClick(tool, `${frameId}-stale`, input)).rejects.toThrow(
+        "computer: frameId does not match the most recent screenshot result; take a new screenshot",
+      );
+      expect(computerActBodies()).toHaveLength(0);
+
+      await expect(executeClick(tool, frameId, input)).resolves.toMatchObject({
+        details: { action: "left_click" },
+      });
+      expect(readLastComputerActParams()).not.toHaveProperty(reference);
+    },
+  );
+
   it.each([
     [
       "fails closed when a coordinate action has no observed screenshot frame",

@@ -83,6 +83,53 @@ afterEach(async () => {
 });
 
 describe("processEvent (functional)", () => {
+  it("drains final assistant transcript before a carrier terminal event finalizes", async () => {
+    const ctx = createContext();
+    const call = createCall({ callId: "carrier-drain", providerCallId: "CA-drain" });
+    ctx.activeCalls.set(call.callId, call);
+    ctx.beforeCallEnd = async () => {
+      await processEvent(ctx, {
+        id: "last-transcript",
+        callId: call.callId,
+        timestamp: Date.now(),
+        type: "call.assistant-speech",
+        transcript: "The plumber will call back.",
+      });
+    };
+    await processEvent(ctx, {
+      id: "carrier-ended",
+      callId: call.callId,
+      timestamp: Date.now(),
+      type: "call.ended",
+      reason: "completed",
+    });
+    expect(call.transcript).toMatchObject([
+      { speaker: "bot", text: "The plumber will call back." },
+    ]);
+    expect(call.endReason).toBe("completed");
+  });
+
+  it("finalizes confirmed carrier termination even when final transcript drain fails", async () => {
+    const ctx = createContext({
+      beforeCallEnd: async () => {
+        throw new Error("bridge close failed");
+      },
+    });
+    const call = createCall({ callId: "drain-failed", providerCallId: "CA-drain-failed" });
+    ctx.activeCalls.set(call.callId, call);
+    await expect(
+      processEvent(ctx, {
+        id: "carrier-drain-failed",
+        callId: call.callId,
+        timestamp: Date.now(),
+        type: "call.ended",
+        reason: "completed",
+      }),
+    ).resolves.toEqual({ kind: "processed" });
+    expect(call.endReason).toBe("completed");
+    expect(ctx.activeCalls.size).toBe(0);
+  });
+
   it.each(["speech", "answered", "terminal", "fatal-error"] as const)(
     "publishes %s side effects only after SQLite persistence succeeds",
     async (kind) => {

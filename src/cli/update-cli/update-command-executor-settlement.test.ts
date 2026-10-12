@@ -36,8 +36,9 @@ vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-paths.js")>()),
   resolveNodeRuntimeInfo: boundaries.runtime,
 }));
-vi.mock("../../infra/update-managed-service-handoff-lease.js", () => ({
-  createManagedHandoffLeaseStore: boundaries.store,
+vi.mock("../../infra/update-managed-service-handoff-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-managed-service-handoff-lease.js")>()),
+  prepareManagedHandoffLeaseStore: boundaries.store,
   resolveManagedUpdateLeaseDatabasePath: () => boundaries.databasePath,
 }));
 vi.mock("../../infra/update-managed-service-handoff-database.js", () => ({
@@ -143,7 +144,7 @@ beforeEach(() => {
     isProcessIdentityCurrent: () => true,
     acceptParentBoundExecutor: current,
   };
-  boundaries.store.mockReturnValue(store);
+  boundaries.store.mockResolvedValue(store);
 });
 
 function runWithExecutorFence<T>(

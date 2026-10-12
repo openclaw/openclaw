@@ -300,7 +300,7 @@ diagnostics, not provider names:
 If a run shows an unexpected runtime, inspect the selected provider/model
 runtime policy first. Next-turn runtime metadata includes declared fallback
 when the registered harness can determine it from the configured route. It does
-not probe credentials or start a runtime; final route/auth preparation can still
+not check credentials or start a runtime; final route/auth preparation can still
 reject the turn. The completed result records the runtime that actually ran.
 
 ## Related

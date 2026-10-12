@@ -54,12 +54,11 @@ async function sendProfilePost(
   baseUrl: BrowserClientTarget,
   path: string,
   opts: BrowserClientProfileOptions | undefined,
-  fallbackTimeoutMs: number,
 ): Promise<void> {
   await requestBrowserJson(baseUrl, path, {
     profile: opts?.profile,
     method: "POST",
-    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, fallbackTimeoutMs),
+    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 15000),
     signal: opts?.signal,
   });
 }
@@ -180,14 +179,14 @@ export async function browserStart(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
 ): Promise<void> {
-  await sendProfilePost(baseUrl, "/start", opts, 15000);
+  await sendProfilePost(baseUrl, "/start", opts);
 }
 
 export async function browserStop(
   baseUrl?: BrowserClientTarget,
   opts?: BrowserClientProfileOptions,
 ): Promise<void> {
-  await sendProfilePost(baseUrl, "/stop", opts, 15000);
+  await sendProfilePost(baseUrl, "/stop", opts);
 }
 
 export type BrowserCreateProfileResult = {

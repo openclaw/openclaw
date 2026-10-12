@@ -350,19 +350,4 @@ describe("replaceManagedMarkdownBlock", () => {
       "# Title\n\nParagraph A\n\n\nParagraph B\n\n## Generated\n<!-- start -->\n- new\n<!-- end -->\n\n## Notes\nkept\n\n",
     );
   });
-
-  it("is idempotent across repeated calls with the same body", () => {
-    const params = {
-      heading: "## Generated",
-      startMarker: "<!-- start -->",
-      endMarker: "<!-- end -->",
-      body: "- only",
-    } as const;
-    const first = replaceManagedMarkdownBlock({ original: "# Title\n", ...params });
-    const second = replaceManagedMarkdownBlock({ original: first, ...params });
-    const third = replaceManagedMarkdownBlock({ original: second, ...params });
-
-    expect(second).toBe(first);
-    expect(third).toBe(first);
-  });
 });

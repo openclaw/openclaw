@@ -5,8 +5,8 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as nestedActivity from "../../sessions/nested-tool-activity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as historySanitize from "../chat-display-projection.sanitize.js";
@@ -538,7 +538,13 @@ describe("historical page recovery context", () => {
               rawPageMessages: 2,
             });
           } else {
-            expect(Object.keys(page)).toEqual(["messages"]);
+            expect(page.pagination).toBeUndefined();
+            expect(page.anchor).toMatchObject({
+              oldestMessageId: "failed",
+              newestMessageId: "failed",
+              hasOlder: true,
+              hasNewer: true,
+            });
           }
           expect(await raw()).toEqual(original);
           expect(renderedMessages).toBeLessThanOrEqual(original.length * 5);

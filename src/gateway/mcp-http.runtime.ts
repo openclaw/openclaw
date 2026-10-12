@@ -17,11 +17,11 @@ import {
 } from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
-import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -62,12 +62,12 @@ type CachedScopedTools = {
 
 type McpLoopbackScopeParams = {
   admittedRunContext?: AdmittedRunContext;
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
-  rootedExecution?: PreparedRootedExecutionCapability;
   /** Host-selected coding owners for pre-grant projection only. */
   defaultMediatedToolNames?: readonly string[];
   messageActionTurnCapability?: string;
@@ -91,8 +91,7 @@ type LoopbackToolsAllowMode = "exact" | "policy";
 function captureMcpLoopbackScope(params: McpLoopbackScopeParams) {
   const canPreparePortal =
     params.context.senderIsOwner === false &&
-    Boolean(params.context.sessionKey.trim() && params.context.sessionId) &&
-    !params.rootedExecution?.sandbox;
+    Boolean(params.context.sessionKey.trim() && params.context.sessionId);
   const gateway = canPreparePortal ? getInProcessGatewayToolContext() : undefined;
   const projection = gateway ? getSessionRowProjection(gateway) : undefined;
   const assertCurrent = () => {
@@ -172,7 +171,6 @@ async function resolveNodeExecScope(
   mode: LoopbackToolsAllowMode,
 ): Promise<CapturedMcpLoopbackScope> {
   const shouldResolveExec =
-    !params.rootedExecution &&
     !params.context.trustedInternalHandoff &&
     !toolPolicyRestrictsTools(pickSandboxToolPolicy(params.context.conversationToolPolicy)) &&
     params.context.nodeExecAllowed === true &&
@@ -211,9 +209,7 @@ async function resolvePairedComputerNodeScope(
 ): Promise<ResolvedNodeScope> {
   params.assertCurrent();
   const canReachOrdinaryComputerSurface =
-    isComputerAllowedByMcpScope(params, mode) &&
-    params.context.modelHasVision !== false &&
-    !params.rootedExecution;
+    isComputerAllowedByMcpScope(params, mode) && params.context.modelHasVision !== false;
   if (!canReachOrdinaryComputerSurface) {
     return { params };
   }
@@ -228,7 +224,6 @@ async function resolvePairedComputerNodeScope(
   const pairedComputerUseAvailability = await loadPairedComputerUseAvailabilityForSurface({
     computerAllowed,
     modelHasVision: params.context.modelHasVision,
-    computerTransport: params.rootedExecution ? null : undefined,
     signal: params.signal,
   });
   params.assertCurrent();
@@ -313,7 +308,6 @@ async function constructMcpLoopbackTools(
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
   const mediatedNativeTools =
-    params.rootedExecution ||
     context.trustedInternalHandoff ||
     toolPolicyRestrictsTools(pickSandboxToolPolicy(context.conversationToolPolicy))
       ? new Set(NATIVE_TOOL_EXCLUDE)
@@ -332,13 +326,11 @@ async function constructMcpLoopbackTools(
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const skillWorkshop =
-    context.skillWorkshop || params.skillLibraryAuthoring
-      ? { ...context.skillWorkshop, libraryAuthoring: params.skillLibraryAuthoring }
-      : undefined;
+  const skillWorkshop = params.skillLibraryAuthoring
+    ? { libraryAuthoring: params.skillLibraryAuthoring }
+    : undefined;
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
-    rootedExecution: params.rootedExecution,
     messageActionTurnCapability: params.messageActionTurnCapability,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,
@@ -349,6 +341,7 @@ async function constructMcpLoopbackTools(
     conversationReadOrigin: "delegated",
     surface: "loopback",
     admittedRunContext: params.admittedRunContext,
+    sessionEventSourcePolicy: params.sessionEventSourcePolicy,
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,

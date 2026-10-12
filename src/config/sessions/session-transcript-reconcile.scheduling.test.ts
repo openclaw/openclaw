@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -11,6 +13,7 @@ import {
   getSessionTranscriptReconcileWorkerPoolSnapshot,
 } from "./session-transcript-reconcile-pool.js";
 import {
+  reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
@@ -74,3 +77,21 @@ it("drains deferred reconciliation after the caller retires its timer queue", as
     pendingTasks: 0,
   });
 }, 30_000);
+
+it("keeps a missing projection store absent", async ({ onTestFinished }) => {
+  const stateDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-reconcile-missing-");
+  const options = {
+    agentId: "main",
+    path: path.join(stateDir, "missing.sqlite"),
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  };
+  onTestFinished(async () => {
+    await closeSessionTranscriptReconcileWorkerPool();
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    closeOpenClawStateDatabaseForTest();
+  });
+  await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
+    reconciledSessions: 0,
+  });
+  expect(fs.existsSync(options.path)).toBe(false);
+});

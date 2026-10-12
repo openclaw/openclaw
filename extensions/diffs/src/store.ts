@@ -35,31 +35,18 @@ const EMPTY_BLOB = new Uint8Array();
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
-type CreateArtifactParams = {
+type CreateArtifactParams = Pick<
+  DiffArtifactMeta,
+  "title" | "inputKind" | "fileCount" | "context"
+> & {
   html: string;
-  title: string;
-  inputKind: DiffArtifactMeta["inputKind"];
-  fileCount: number;
   ttlMs?: number;
-  context?: DiffArtifactContext;
 };
 
 type CreateStandaloneFileArtifactParams = {
   format?: DiffOutputFormat;
   ttlMs?: number;
   context?: DiffArtifactContext;
-};
-
-type DiffStandaloneFileArtifact = {
-  id: string;
-  filePath: string;
-  expiresAt: string;
-  context?: DiffArtifactContext;
-};
-
-type DiffAuthorizedViewer = {
-  artifact: DiffArtifactMeta;
-  html: Uint8Array;
 };
 
 function isBlobLimitError(error: unknown): boolean {
@@ -114,7 +101,7 @@ export class DiffArtifactStore {
     return viewerEntryToMeta(entry, token);
   }
 
-  async readAuthorizedViewer(id: string, token: string): Promise<DiffAuthorizedViewer | null> {
+  async readAuthorizedViewer(id: string, token: string) {
     if (!DIFF_ARTIFACT_ID_PATTERN.test(id) || !DIFF_ARTIFACT_TOKEN_PATTERN.test(token)) {
       return null;
     }
@@ -143,9 +130,7 @@ export class DiffArtifactStore {
     };
   }
 
-  async createStandaloneFileArtifact(
-    params: CreateStandaloneFileArtifactParams = {},
-  ): Promise<DiffStandaloneFileArtifact> {
+  async createStandaloneFileArtifact(params: CreateStandaloneFileArtifactParams = {}) {
     const format = params.format ?? "png";
     const ttlMs = normalizeTtlMs(params.ttlMs);
     const metadata: DiffRenderedFileArtifactMetadata = {

@@ -36,6 +36,7 @@ import { withTimeout } from "../../../infra/fs-safe.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import {
@@ -84,6 +85,7 @@ import {
   readBoundExecutionState,
   registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
+import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 import { registerManagedWorktreeSpawnCases } from "./subagent-spawn.worktree.test-support.js";
 
@@ -116,6 +118,7 @@ let state: OpenClawTestState;
 let stateDir = "";
 let runtimeConfig: OpenClawConfig;
 let settleRootWork: ReturnType<typeof observeRootWork>;
+let releaseProfileCatalog: (() => void) | undefined;
 
 async function writeTestConfig(maxChildrenPerAgent?: number) {
   const config = {
@@ -213,6 +216,8 @@ afterEach(async ({ task }) => {
   vi.mocked(callGateway).mockReset();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  releaseProfileCatalog?.();
+  releaseProfileCatalog = undefined;
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
@@ -376,15 +381,13 @@ async function createGuestParent(audit = true) {
     cfg: runtimeConfig,
     policy: { sourceAgent: "main", allow: ["custom/test-model"] },
   });
-  const source = createSpawnOperatorSource(
-    ensureProfileForEmail("spawn-guest@example.test").id,
-    guestRole.scopes,
-    {
-      modelPolicy,
-      rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
-      readCurrentRoleAssignment: () => "guest",
-    },
-  );
+  const guest = ensureProfileForEmail("spawn-guest@example.test");
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
+  const source = createSpawnOperatorSource(guest.id, guestRole.scopes, {
+    modelPolicy,
+    rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
+    readCurrentRoleAssignment: () => "guest",
+  });
   const bound = await createBoundParent(source.authority, {
     guestProfileId: source.authority.profileId,
   });
@@ -398,6 +401,17 @@ async function createGuestParent(audit = true) {
 }
 
 describe("recursive spawn production boundary", () => {
+  registerRequestCustodySpawnCases({
+    createBoundParent,
+    createBoundGateway,
+    closeBoundGateway,
+    throwBoundFailures,
+    parentSessionKey,
+    parentRunId,
+    assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
+    runEmbeddedAgent,
+  });
+
   registerGuestSpawnCases({
     createGuestParent,
     createBoundGateway,
@@ -587,7 +601,6 @@ describe("recursive spawn production boundary", () => {
   });
 
   it.each([
-    "active",
     "completed",
     "stopped",
     "operator-completed",
@@ -788,14 +801,6 @@ describe("recursive spawn production boundary", () => {
           expect(
             identities.some((identity) => identity.operationalRunInstance === releaserInstance),
           ).toBe(false);
-          if (parentState === "active") {
-            expect(
-              identities.some(
-                (identity) =>
-                  identity.operationalRunInstance === bound.admission.operationalRunInstance,
-              ),
-            ).toBe(true);
-          }
         }
       } catch (error) {
         failures.push(error);

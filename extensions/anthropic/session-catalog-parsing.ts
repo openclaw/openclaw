@@ -83,11 +83,7 @@ function readParams(
   return value;
 }
 
-export function readListParams(value: unknown): {
-  cursor?: string;
-  limit: number;
-  searchTerm?: string;
-} {
+export function readListParams(value: unknown) {
   if (value === undefined || value === null) {
     return { limit: DEFAULT_PAGE_LIMIT };
   }
@@ -101,11 +97,7 @@ export function readListParams(value: unknown): {
   };
 }
 
-export function readTranscriptParams(value: unknown): {
-  threadId: string;
-  cursor?: string;
-  limit: number;
-} {
+export function readTranscriptParams(value: unknown) {
   const params = readParams(value, "read", ["threadId", "cursor", "limit"]);
   const threadId = readBoundedString(params.threadId, 256);
   if (!threadId || !/^[A-Za-z0-9._:-]+$/.test(threadId)) {
@@ -213,12 +205,7 @@ export function unwrapNodePayload(value: unknown): unknown {
   return value;
 }
 
-export function parseGatewayQuery(value: unknown): {
-  search?: string;
-  limitPerHost: number;
-  hostIds?: string[];
-  cursors?: Record<string, string>;
-} {
+export function parseGatewayQuery(value: unknown) {
   if (value === undefined || value === null) {
     return { limitPerHost: DEFAULT_PAGE_LIMIT };
   }

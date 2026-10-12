@@ -86,6 +86,23 @@ struct UpdateOrchestrationTests {
             defaults: defaults) == nil)
     }
 
+    @Test func `persisted notification attempts saturate without overflowing`() throws {
+        let suite = "UpdateOrchestrationTests.notification-overflow.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let receipt = PostAppUpdateReceipt(
+            fromVersion: "2026.7.3",
+            toVersion: "2026.7.4",
+            recordedAt: Date(timeIntervalSince1970: 1_720_000_000),
+            notificationAttempts: .max)
+        try defaults.set(JSONEncoder().encode(receipt), forKey: postAppUpdateReceiptKey)
+
+        let updated = PostAppUpdateReceiptStore.recordNotificationFailure(receipt: receipt, defaults: defaults)
+
+        #expect(updated.notificationAttempts == PostAppUpdateReceiptStore.notificationRetryLimit)
+        #expect(PostAppUpdateReceiptStore.pending(currentVersion: "2026.7.4", defaults: defaults) == updated)
+    }
+
     @Test func `launch transition bootstraps upgrades but not fresh onboarding`() throws {
         let suite = "UpdateOrchestrationTests.launch-transition.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

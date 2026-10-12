@@ -131,7 +131,6 @@ function configureTestClient(shipUrl: string, dangerouslyAllowPrivateNetwork?: b
   testClientConfig = {
     shipUrl,
     shipName: "~zod",
-    verbose: false,
     getCode: async () => "123456",
     dangerouslyAllowPrivateNetwork,
   };

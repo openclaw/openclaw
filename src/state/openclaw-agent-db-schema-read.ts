@@ -77,3 +77,21 @@ export function assertExistingAgentSchemaOwner(
     );
   }
 }
+
+export function assertCurrentAgentSchemaMetadata(
+  metadata: ExistingAgentSchemaMeta | null,
+  agentId: string,
+  pathname: string,
+): void {
+  if (!metadata) {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw agent database ${pathname} has no schema ownership metadata. Run openclaw doctor --fix to inspect and repair its ownership.`,
+    );
+  }
+  assertExistingAgentSchemaOwner(metadata, agentId, pathname);
+  if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw agent database ${pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
+    );
+  }
+}

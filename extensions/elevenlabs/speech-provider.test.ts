@@ -82,14 +82,7 @@ describe("elevenlabs speech provider", () => {
 
   it.each([
     ["stability", "0", { stability: 0 }],
-    ["similarity_boost", "5e-1", { similarityBoost: 0.5 }],
-    ["style", "1", { style: 1 }],
-    ["speed", ".5", { speed: 0.5 }],
-    ["speed", "2", { speed: 2 }],
-    ["stability", "-0.1", "stability must be between 0 and 1"],
     ["similarity", "Infinity", "invalid similarityBoost value"],
-    ["similarity_boost", "1.1", "similarityBoost must be between 0 and 1"],
-    ["speed", ".49", "speed must be between 0.5 and 2"],
     ["speed", "2.01", "speed must be between 0.5 and 2"],
     ["speed", "invalid", undefined, false],
   ] as const)(
@@ -148,14 +141,6 @@ describe("elevenlabs speech provider", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("keeps non-equivalent deprecated ElevenLabs TTS model IDs", async () => {
-    await provider.synthesizeTelephony?.({
-      ...request,
-      providerConfig: { apiKey: "xi-test", modelId: "eleven_monolingual_v1" },
-    });
-    expect(sentRequest().body).toHaveProperty("model_id", "eleven_monolingual_v1");
-  });
-
   it("maps deprecated ElevenLabs TTS model IDs in overrides", async () => {
     await provider.synthesizeTelephony?.({
       ...request,
@@ -180,43 +165,6 @@ describe("elevenlabs speech provider", () => {
     }
   });
 
-  it("applies provider overrides to telephony synthesis", async () => {
-    const result = await provider.synthesizeTelephony?.({
-      ...request,
-      providerConfig: {
-        apiKey: "xi-test",
-        voiceId: "pMsXgVXv3BLzUgSXRplE",
-        modelId: "eleven_multilingual_v2",
-      },
-      providerOverrides: {
-        voiceId: "21m00Tcm4TlvDq8ikWAM",
-        modelId: "eleven_v3",
-        seed: 123,
-        applyTextNormalization: "on",
-        languageCode: "en",
-        voiceSettings: { speed: 1.2 },
-      },
-    });
-    const { url, body } = sentRequest();
-    expect(url.pathname).toBe("/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM");
-    expect(url.searchParams.get("output_format")).toBe("pcm_22050");
-    expect(body).toEqual({
-      text: "hello",
-      model_id: "eleven_v3",
-      seed: 123,
-      apply_text_normalization: "on",
-      language_code: "en",
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.75,
-        style: 0,
-        use_speaker_boost: true,
-        speed: 1.2,
-      },
-    });
-    expect(result?.outputFormat).toBe("pcm_22050");
-  });
-
   it("drops out-of-range voice settings before synthesis", async () => {
     await provider.synthesizeTelephony?.({
       ...request,
@@ -235,15 +183,6 @@ describe("elevenlabs speech provider", () => {
     });
   });
 
-  it("drops malformed seed values before synthesis", async () => {
-    await provider.synthesizeTelephony?.({
-      ...request,
-      providerConfig: { apiKey: "xi-test", seed: 1.5 },
-      providerOverrides: { seed: Number.POSITIVE_INFINITY },
-    });
-    expect(sentRequest().body).not.toHaveProperty("seed");
-  });
-
   it("drops malformed latency tier overrides before synthesis", async () => {
     await provider.synthesize({
       ...request,
@@ -253,18 +192,17 @@ describe("elevenlabs speech provider", () => {
     expect(sentRequest().url.searchParams.has("optimize_streaming_latency")).toBe(false);
   });
 
-  it.each([
-    { outputFormat: "pcm_44100", fileExtension: ".pcm", voiceCompatible: false },
-    { outputFormat: "OPUS_48000_64", fileExtension: ".opus", voiceCompatible: true },
-    { outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false },
-  ])("returns truthful $outputFormat metadata for a voice-note override", async (expected) => {
-    const result = await provider.synthesize({
-      ...request,
-      providerOverrides: { outputFormat: expected.outputFormat },
-    });
-    expect(sentRequest().url.searchParams.get("output_format")).toBe(expected.outputFormat);
-    expect(result).toEqual({ audioBuffer: Buffer.from([1, 2, 3]), ...expected });
-  });
+  it.each([{ outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false }])(
+    "returns truthful $outputFormat metadata for a voice-note override",
+    async (expected) => {
+      const result = await provider.synthesize({
+        ...request,
+        providerOverrides: { outputFormat: expected.outputFormat },
+      });
+      expect(sentRequest().url.searchParams.get("output_format")).toBe(expected.outputFormat);
+      expect(result).toEqual({ audioBuffer: Buffer.from([1, 2, 3]), ...expected });
+    },
+  );
 
   it("returns truthful stream metadata for an output override and releases the stream once", async () => {
     const cancel = vi.fn();

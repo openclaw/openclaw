@@ -245,21 +245,15 @@ export function scopedHeartbeatWakeOptionsForPolicy<T extends object>(
   policy?: EventSessionRoutingPolicy,
 ): T | (T & { sessionKey: string }) | (T & { agentId: string }) {
   const cronScoped = resolveEventSessionKey(sessionKey, policy?.mainKey, policy?.sessionScope);
-  if (cronScoped !== sessionKey) {
-    return scopedHeartbeatWakeOptions(
-      sessionKey,
-      wakeOptions,
-      policy?.mainKey,
-      policy?.sessionScope,
-    );
-  }
-  const mainScoped = resolveMainScopedEventSessionKey({ sessionKey, policy });
-  if (mainScoped) {
-    if (mainScoped === "global") {
-      const agentId = parseAgentSessionKey(sessionKey)?.agentId;
-      return agentId ? { ...wakeOptions, agentId } : wakeOptions;
+  if (cronScoped === sessionKey) {
+    const mainScoped = resolveMainScopedEventSessionKey({ sessionKey, policy });
+    if (mainScoped) {
+      if (mainScoped === "global") {
+        const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+        return agentId ? { ...wakeOptions, agentId } : wakeOptions;
+      }
+      return { ...wakeOptions, sessionKey: mainScoped };
     }
-    return { ...wakeOptions, sessionKey: mainScoped };
   }
   return scopedHeartbeatWakeOptions(sessionKey, wakeOptions, policy?.mainKey, policy?.sessionScope);
 }

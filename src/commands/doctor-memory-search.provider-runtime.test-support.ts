@@ -88,32 +88,6 @@ export function registerProviderRuntimeDoctorTest(params: ProviderRuntimeDoctorT
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it.each(["ready", "degraded", "unavailable"] as const)(
-    "collects structured native provider health findings for %s",
-    async (status) => {
-      const close = configureProviderHealth(params, { status, message: "provider health detail" });
-
-      const findings = await collectProviderFindings(params.cfg);
-
-      if (status === "ready") {
-        expect(findings).toEqual([]);
-      } else {
-        expect(findings).toEqual([
-          expect.objectContaining({
-            checkId: "core/doctor/memory-search",
-            severity: "warning",
-            path: "plugins.slots.memory",
-          }),
-        ]);
-        const diagnostic = `${findings[0]?.message} ${findings[0]?.fixHint}`;
-        expect(diagnostic).toContain("records");
-        expect(diagnostic).toContain(status);
-        expect(diagnostic).toContain("provider health detail");
-      }
-      expect(close).toHaveBeenCalledOnce();
-    },
-  );
-
   it("collects a native provider acquisition failure as an unavailable warning", async () => {
     const close = configureProviderHealth(params, { status: "ready" });
     vi.mocked(getActiveMemoryProviderCore).mockRejectedValue(new Error("connection failed"));

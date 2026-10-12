@@ -16,7 +16,7 @@ The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/fl
 `gateway.bind` controls where the Gateway listens:
 
 - `"loopback"` (default): only local clients can connect.
-- `"lan"`, `"tailnet"`, `"custom"`: expand the attack surface. Only use with gateway auth (shared token/password, or a correctly configured trusted proxy) and a real firewall.
+- `"lan"`, `"tailnet"`, `"custom"`: make the Gateway reachable by more clients. Only use with gateway auth (shared token/password, or a correctly configured trusted proxy) and a real firewall.
 
 Rules of thumb: prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback and Tailscale handles access); if you must bind to LAN, firewall the port to a tight source-IP allowlist rather than port-forwarding broadly; never expose the Gateway unauthenticated on `0.0.0.0`.
 
@@ -81,7 +81,7 @@ In minimal mode the Gateway broadcasts `role`, `gatewayPort`, `transport` but om
 
 ### Gateway WebSocket auth
 
-Gateway auth is required by default - with no valid auth path configured, the Gateway refuses WebSocket connections (fail-closed). Onboarding generates a token by default (even for loopback) so local clients must authenticate.
+Gateway auth is required by default - with no valid auth path configured, the Gateway refuses WebSocket connections. Onboarding generates a token by default (even for loopback) so local clients must authenticate.
 
 ```json5
 { gateway: { auth: { mode: "token", token: "your-token" } } }
@@ -90,7 +90,7 @@ Gateway auth is required by default - with no valid auth path configured, the Ga
 `openclaw doctor --generate-gateway-token` can generate one for you.
 
 <Note>
-`gateway.remote.token` and `gateway.remote.password` are client credential sources - they do not protect local WS access by themselves. Local call paths use `gateway.remote.*` only as fallback when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote-fallback masking).
+`gateway.remote.token` and `gateway.remote.password` are client credential sources - they do not protect local WS access by themselves. Local call paths use `gateway.remote.*` only as fallback when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution stops with an error instead of falling back to remote credentials.
 </Note>
 
 Pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`. Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs; for other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass (process environment only, not an `openclaw.json` key). Mobile pairing and Android manual/scanned gateway routes are stricter: cleartext only for loopback, while private-LAN, link-local, `.local`, and dotless hostnames must use TLS unless you explicitly opt into the trusted private-network cleartext path.
@@ -117,7 +117,7 @@ Gateway HTTP bearer auth is effectively all-or-nothing operator access. Credenti
 
 Tokenless Serve auth assumes the gateway host itself is trusted - it is not protection against hostile same-host processes. If untrusted local code may run on the gateway host, disable `allowTailscale` and require explicit shared-secret auth (`token` or `password`).
 
-An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: the configured gateway auth applies, `allowTailscale` grants nothing, and no WhoIs lookup runs. Gateway-protected routes reject external Funnel ingress when auth mode is `none`; aggregate health, readiness, and startup probes keep their bounded unauthenticated responses. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel), [Health and readiness](/gateway/health), and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: the configured gateway auth applies, `allowTailscale` grants nothing, and no WhoIs lookup runs. Gateway-protected routes reject external Funnel ingress when auth mode is `none`; aggregate health, readiness, and startup checks keep their bounded unauthenticated responses. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel), [Health and readiness](/gateway/health), and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
@@ -135,7 +135,7 @@ Configure `trustedProxies` narrowly and make the proxy overwrite or safely
 rebuild forwarded headers; see [Rate
 limiting](/gateway/security/rate-limiting#unconfigured-same-host-reverse-proxies).
 
-`trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, which is stricter: it fails closed on loopback-source proxies by default. Same-host loopback reverse proxies can use `trustedProxies` for local-client detection and forwarded-IP handling, but can only satisfy `trusted-proxy` auth mode when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth.
+`trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, which is stricter: it rejects loopback-source proxies by default. Same-host loopback reverse proxies can use `trustedProxies` for local-client detection and forwarded-IP handling, but can only satisfy `trusted-proxy` auth mode when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth.
 
 ```yaml
 gateway:
@@ -147,7 +147,7 @@ gateway:
     password: ${OPENCLAW_GATEWAY_PASSWORD}
 ```
 
-When `trustedProxies` is set, the Gateway uses `X-Forwarded-For` to determine client IP; `X-Real-IP` is ignored unless `gateway.allowRealIpFallback: true` is explicitly set. Ensure your proxy **overwrites** `X-Forwarded-For`/`X-Real-IP` rather than appending to them:
+When `trustedProxies` is set, the Gateway uses `X-Forwarded-For` to determine client IP; `X-Real-IP` is ignored unless `gateway.allowRealIpFallback: true` is explicitly set. Check that your proxy **overwrites** `X-Forwarded-For`/`X-Real-IP` rather than appending to them:
 
 ```nginx
 # good

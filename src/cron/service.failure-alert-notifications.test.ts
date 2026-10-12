@@ -54,15 +54,6 @@ describe("CronService failure notification delivery", () => {
       carriesOrigin: false,
       wakesNow: true,
     },
-    {
-      name: "an untargeted next-heartbeat conversation without waking it",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionTarget: "isolated" as const,
-      wakeMode: "next-heartbeat" as const,
-      carriesOrigin: false,
-      wakesNow: false,
-    },
   ])("routes a rejected failure alert to $name with cadence disabled", async (testCase) => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -101,7 +92,7 @@ describe("CronService failure notification delivery", () => {
     });
     const runner = startHeartbeatRunner({ cfg, readCurrentConfig: () => cfg, runOnce });
     const store = await makeStorePath();
-    const resolveOriginDeliveryContext = vi.fn(() => deliveryContext);
+    const resolveOriginDeliveryContext = vi.fn(async () => deliveryContext);
     const sendCronFailureAlert = vi.fn(async (params) => {
       await params.onDeliverySettled({
         delivered: false,

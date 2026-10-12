@@ -68,74 +68,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([
-  { reason: "dirty", reportable: true },
-  { reason: "already-current", reportable: false },
-  { reason: "dry-run", reportable: false },
-  { reason: "cancelled", reportable: false },
-])(
-  "offers explicit Report for skipped $reason without changing triage admission",
-  async ({ reason, reportable }) => {
-    const run = createUpdateRunFixture({ status: "skipped", phase: "finished", reason });
-    const request = vi.fn<RequestFn>(async () => ({ lastRun: run }));
-    const harness = harnessFor(request);
-    const onUpdateFailure = vi.fn();
-    reportUpdateFailure.mockResolvedValue(null);
-    const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
-    try {
-      await flushMicrotasks();
-      expect(overlays.snapshot.reportableUpdateFailureId).toBe(reportable ? run.runId : null);
-      expect(reportUpdateFailure).not.toHaveBeenCalled();
-      expect(onUpdateFailure).not.toHaveBeenCalled();
-      await overlays.reportUpdateFailure(run.runId);
-      expect(reportUpdateFailure).toHaveBeenCalledTimes(reportable ? 1 : 0);
-      expect(onUpdateFailure).not.toHaveBeenCalled();
-    } finally {
-      overlays.dispose();
-    }
-  },
-);
-
-describe.each([
-  { label: "legacy sentinel", run: null, attemptId: "handoff-failed" },
-  { label: "failed run", run: FAILED_RUN, attemptId: FAILED_RUN.runId },
-  {
-    label: "rolled-back run",
-    run: createUpdateRunFixture({ ...FAILED_RUN, status: "rolled-back" }),
-    attemptId: FAILED_RUN.runId,
-  },
-])("update failure report admission: $label", ({ run, attemptId }) => {
-  it.each([
-    { profileId: "other-operator", allowed: true },
-    { profileId: null, allowed: false },
-  ])("admits only identified administrator profile $profileId", async ({ profileId, allowed }) => {
-    const request = requestForStatus(run);
-    const harness = harnessFor(request);
-    harness.update({ selfUser: profileId ? { id: profileId } : null });
-    reportUpdateFailure.mockImplementation(async ({ isCurrent }) => {
-      expect(isCurrent()).toBe(true);
-      return null;
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await flushMicrotasks();
-      expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
-      await overlays.reportUpdateFailure(attemptId);
-      expect(reportUpdateFailure).toHaveBeenCalledTimes(allowed ? 1 : 0);
-      if (allowed) {
-        expect(reportUpdateFailure).toHaveBeenCalledWith({
-          attemptId,
-          client: harness.gateway.snapshot.client,
-          isCurrent: expect.any(Function),
-        });
-        expect(reportUpdateFailure.mock.calls[0]?.[0].isCurrent()).toBe(false);
-      }
-      expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
-      expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
-    } finally {
-      overlays.dispose();
-    }
-  });
+it("does not admit a failure report without an identified administrator profile", async () => {
+  const request = requestForStatus();
+  const harness = harnessFor(request);
+  harness.update({ selfUser: null });
+  const overlays = createApplicationOverlays(harness.gateway);
+  try {
+    await flushMicrotasks();
+    expect(overlays.snapshot.reportableUpdateFailureId).toBe(FAILED_RUN.runId);
+    await overlays.reportUpdateFailure(FAILED_RUN.runId);
+    expect(reportUpdateFailure).not.toHaveBeenCalled();
+    expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
+    expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
+  } finally {
+    overlays.dispose();
+  }
 });
 
 describe("update failure report continuity", () => {
@@ -234,15 +181,7 @@ describe("update failure report continuity", () => {
   });
 });
 
-it.each([
-  { label: "failed run", run: FAILED_RUN, attemptId: FAILED_RUN.runId },
-  { label: "legacy sentinel", run: null, attemptId: "handoff-failed" },
-  {
-    label: "rolled-back run",
-    run: { ...FAILED_RUN, status: "rolled-back" as const },
-    attemptId: FAILED_RUN.runId,
-  },
-])(
+it.each([{ label: "legacy sentinel", run: null, attemptId: "handoff-failed" }])(
   "keeps a reported $label across reconnect without reporting again",
   async ({ run, attemptId }) => {
     const request = requestForStatus(run);

@@ -88,8 +88,9 @@ it.each(
         expect(writeFile).toHaveBeenCalledOnce();
         expect(content).toBe("after\n");
       } else {
+        const abortedMessage = kind === "write" ? "Operation aborted" : "Planning cancelled";
         await expect(pending).rejects.toThrow(
-          authority === "aborted" ? "Planning cancelled" : "execution scope is no longer active",
+          authority === "aborted" ? abortedMessage : "execution scope is no longer active",
         );
         expect(mkdir).not.toHaveBeenCalled();
         expect(writeFile).not.toHaveBeenCalled();

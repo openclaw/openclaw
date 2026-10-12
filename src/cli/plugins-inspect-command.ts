@@ -89,7 +89,6 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   return lines;
 }
 
-/** Inspect one plugin or all plugins using either snapshot-only or runtime-loaded registry data. */
 export async function runPluginsInspectCommand(
   id: string | undefined,
   opts: PluginInspectOptions,

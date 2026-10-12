@@ -112,32 +112,39 @@ function migrateCodexCliRuntimePolicy(raw: unknown): boolean {
   return true;
 }
 
+function createRuntimeModelRefRewriter(
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+) {
+  const selected: SelectedRuntimeRef[] = [];
+  return {
+    selected,
+    rewrite: (ref: unknown) => {
+      const migrated =
+        typeof ref === "string"
+          ? migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities)
+          : null;
+      if (migrated) {
+        selected.push({ ref: migrated.ref, runtime: migrated.runtime });
+      }
+      return migrated?.ref ?? ref;
+    },
+  };
+}
+
 function migrateRuntimeSelection(
   owner: Record<string, unknown>,
-  key: string,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): SelectedRuntimeRef[] {
-  const selected: SelectedRuntimeRef[] = [];
-  const migrate = (ref: unknown) => {
-    const migrated =
-      typeof ref === "string"
-        ? migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities)
-        : null;
-    if (!migrated) {
-      return ref;
+  const { rewrite, selected } = createRuntimeModelRefRewriter(blockedModelIdentities);
+  const model = owner.model;
+  if (typeof model === "string") {
+    owner.model = rewrite(model);
+  } else if (isRecord(model)) {
+    if (typeof model.primary === "string") {
+      model.primary = rewrite(model.primary);
     }
-    selected.push({ ref: migrated.ref, runtime: migrated.runtime });
-    return migrated.ref;
-  };
-  const raw = owner[key];
-  if (typeof raw === "string") {
-    owner[key] = migrate(raw);
-  } else if (isRecord(raw)) {
-    if (typeof raw.primary === "string") {
-      raw.primary = migrate(raw.primary);
-    }
-    if (Array.isArray(raw.fallbacks)) {
-      raw.fallbacks = raw.fallbacks.map(migrate);
+    if (Array.isArray(model.fallbacks)) {
+      model.fallbacks = model.fallbacks.map(rewrite);
     }
   }
   return selected;
@@ -171,27 +178,15 @@ function migrateRuntimeAgent(
   changes: string[],
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): void {
-  const selected = migrateRuntimeSelection(agent, "model", blockedModelIdentities);
+  const selected = migrateRuntimeSelection(agent, blockedModelIdentities);
   if (selected.length) {
     changes.push(
-      `Moved ${path}.model legacy runtime primary refs to canonical provider refs and selected ${selected[0]!.runtime} runtime.`,
+      `Moved ${path}.model legacy runtime primary refs to provider references and selected ${selected[0]!.runtime} runtime.`,
     );
   }
   const policy = isRecord(agent.modelPolicy) ? agent.modelPolicy : undefined;
-  const policyRefs: SelectedRuntimeRef[] = [];
-  const allow = Array.isArray(policy?.allow)
-    ? policy.allow.map((ref) => {
-        const migrated =
-          typeof ref === "string"
-            ? migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities)
-            : null;
-        if (!migrated) {
-          return ref;
-        }
-        policyRefs.push({ ref: migrated.ref, runtime: migrated.runtime });
-        return migrated.ref;
-      })
-    : undefined;
+  const { rewrite, selected: policyRefs } = createRuntimeModelRefRewriter(blockedModelIdentities);
+  const allow = Array.isArray(policy?.allow) ? policy.allow.map(rewrite) : undefined;
   if (isRecord(agent.models)) {
     const models: Record<string, unknown> = {};
     const legacy: Array<SelectedRuntimeRef & { entry: unknown }> = [];
@@ -209,7 +204,7 @@ function migrateRuntimeAgent(
     }
     if (legacy.length) {
       agent.models = models;
-      changes.push(`Moved ${path}.models legacy runtime keys to canonical provider keys.`);
+      changes.push(`Moved ${path}.models legacy runtime keys to provider keys.`);
     }
   }
   if (ensureSelectedModelRuntimePolicies(agent, policyRefs)) {
@@ -223,15 +218,15 @@ function migrateRuntimeAgent(
     if (!isRecord(execution)) {
       continue;
     }
-    const refs = migrateRuntimeSelection(execution, "model", blockedModelIdentities);
+    const refs = migrateRuntimeSelection(execution, blockedModelIdentities);
     if (refs.length) {
       ensureSelectedModelRuntimePolicies(agent, refs);
-      changes.push(`Moved ${path}.${key}.model to canonical refs with model runtime policy.`);
+      changes.push(`Moved ${path}.${key}.model to provider references with model runtime policy.`);
     }
   }
   if (policy && policyRefs.length) {
     policy.allow = allow;
-    changes.push(`Moved ${path}.modelPolicy.allow legacy runtime refs to canonical provider refs.`);
+    changes.push(`Moved ${path}.modelPolicy.allow legacy runtime refs to provider references.`);
   }
   for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
     if (isRecord(entry) && migrateCodexCliRuntimePolicy(entry.agentRuntime)) {
@@ -356,20 +351,17 @@ export function normalizeLegacyOpenAIModelProviderApi(
   cfg: OpenClawConfig,
   changes: string[],
 ): void {
-  for (const [providerId, provider] of modelProviders(cfg)) {
-    if (provider.api === "openai") {
-      provider.api = "openai-completions";
-      changes.push(
-        `Moved models.providers.${sanitizeForLog(providerId)}.api "openai" → "openai-completions".`,
-      );
+  const migrateApi = (owner: Record<string, unknown>, path: string) => {
+    if (owner.api === "openai") {
+      owner.api = "openai-completions";
+      changes.push(`Moved ${path}.api "openai" → "openai-completions".`);
     }
+  };
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    const path = `models.providers.${sanitizeForLog(providerId)}`;
+    migrateApi(provider, path);
     for (const [index, model] of providerModels(provider)) {
-      if (model.api === "openai") {
-        model.api = "openai-completions";
-        changes.push(
-          `Moved models.providers.${sanitizeForLog(providerId)}.models[${index}].api "openai" → "openai-completions".`,
-        );
-      }
+      migrateApi(model, `${path}.models[${index}]`);
     }
   }
 }

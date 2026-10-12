@@ -1,27 +1,16 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { streamSimple } from "../../../llm/stream.js";
+import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   textToolResult,
   textAssistant,
 } from "../../test-helpers/sparse-transcript.test-support.js";
-
-vi.mock("../context-engine-capabilities.js", () => ({
-  resolveContextEngineCapabilities: async () => ({ llm: undefined }),
-}));
-import type { OpenClawConfig } from "../../../config/config.js";
-import { addSession } from "../../bash-process-registry.js";
-import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
-import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import type { NormalizedUsage } from "../../usage.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "../stream-resolution.js";
-import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import {
-  buildAfterTurnRuntimeContext,
-  buildAfterTurnRuntimeContextFromUsage,
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
@@ -462,29 +451,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
-  it("normalizes toolUse and functionCall names before dispatch", async () => {
-    const partialToolCall = { type: "toolUse", name: " functions.read " };
-    const messageToolCall = { type: "functionCall", name: " functions.exec " };
-    const finalToolCall = { type: "toolUse", name: " tools/write " };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-      message: { role: "assistant", content: [messageToolCall] },
-    };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = fakeBaseStream(finalMessage, [event]);
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-
-    await drainStream(stream);
-    const result = await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(messageToolCall.name).toBe("exec");
-    expect(finalToolCall.name).toBe("write");
-    expect(result).toBe(finalMessage);
-  });
-
   it("does not count partial tool-call deltas as separate unavailable-tool retries", async () => {
     const partialToolCall = { type: "toolCall", name: " exec " };
     const messageToolCall = { type: "toolCall", name: " exec " };
@@ -685,20 +651,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(ids[0]).toMatch(/^call_[0-9a-f]{24}$/);
     expect(ids[1]).toMatch(/^call_[0-9a-f]{24}$/);
     expect(ids[1]).not.toBe(ids[0]);
-  });
-
-  it("fails closed when malformed ids could map to multiple allowlisted tools", async () => {
-    const finalToolCall = { type: "toolCall", id: "functions.exec2", name: "" };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = fakeBaseStream(finalMessage);
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
-    const result = (await stream.result()) as {
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    expectSingleTextContent(result.content, '"blank tool name"');
-    expect(finalToolCall.name).toBe("");
   });
   it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
@@ -1059,15 +1011,6 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
-  it("drops embedded Anthropic user tool_result blocks when signed-thinking replay must stay provider-owned", async () => {
-    const messages = [
-      thinkingTurn({ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }),
-      embeddedResultUser("embedded result"),
-    ];
-    const seenContext = await replaySigned(messages);
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-
   it("preserves embedded Anthropic user tool_result blocks for non-thinking turns even when immutable replay is enabled", async () => {
     const messages = [
       replayAssistant([{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }]),
@@ -1104,12 +1047,11 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   async function replayArgumentDeltas(
     deltas: string[],
     options: {
-      name?: string;
       initialArgs?: Record<string, unknown>;
       fullResult?: boolean;
     } = {},
   ) {
-    const name = options.name ?? "read";
+    const name = "read";
     const partialToolCall = { type: "toolCall", name, arguments: options.initialArgs ?? {} };
     const streamedToolCall = { type: "toolCall", name, arguments: {} };
     const endMessageToolCall = { type: "toolCall", name, arguments: {} };
@@ -1159,19 +1101,12 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     {
       name: "repairs anthropic-compatible tool arguments when trailing junk follows valid JSON",
       deltas: ['{"path":"/tmp/report.txt"}', "xx"],
-      toolName: "read",
-    },
-    {
-      name: "repairs tool arguments when malformed tool-call preamble appears before JSON",
-      deltas: ['.functions.write:8  \n{"path":"/tmp/report.txt"}'],
-      toolName: "write",
     },
     {
       name: "preserves anthropic-compatible tool arguments when the streamed JSON is already valid",
       deltas: ['{"path":"/tmp/report.txt"', "}"],
-      toolName: "read",
     },
-  ])("$name", async ({ deltas, toolName }) => {
+  ])("$name", async ({ deltas }) => {
     const {
       stream,
       partialToolCall,
@@ -1179,7 +1114,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       endMessageToolCall,
       finalToolCall,
       finalMessage,
-    } = await replayArgumentDeltas(deltas, { name: toolName, fullResult: true });
+    } = await replayArgumentDeltas(deltas, { fullResult: true });
     const result = await stream.result();
 
     expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
@@ -1215,141 +1150,4 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   });
 });
 
-describe("buildAfterTurnRuntimeContext", () => {
-  type RuntimeAttempt = Parameters<typeof buildAfterTurnRuntimeContext>[0]["attempt"];
-  const runtimeDirectories = { workspaceDir: "/tmp/workspace", agentDir: "/tmp/agent" };
-  function runtimeAttempt(overrides: Partial<RuntimeAttempt>): RuntimeAttempt {
-    return {
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.4",
-      thinkLevel: "off",
-      reasoningLevel: "on",
-      extraSystemPrompt: "extra",
-      ownerNumbers: ["+15555550123"],
-      ...overrides,
-    };
-  }
-
-  it.each([undefined, "agent:main:execution"])(
-    "preserves execution-scoped processes with sessionKey=%s and borrowed policy",
-    (sessionKey) => {
-      resetProcessRegistryForTests();
-      try {
-        const active = createProcessSessionFixture({
-          id: "sess-session-id",
-          command: "sleep 600",
-          backgrounded: true,
-          pid: 1234,
-        });
-        active.scopeKey = sessionKey ?? "session-123";
-        addSession(active);
-        const other = createProcessSessionFixture({
-          id: "sess-other",
-          command: "sleep 600",
-          backgrounded: true,
-        });
-        other.scopeKey = "agent:main";
-        addSession(other);
-
-        const legacy = buildAfterTurnRuntimeContext({
-          attempt: runtimeAttempt({
-            sessionId: "session-123",
-            sessionKey,
-            sandboxSessionKey: "agent:main",
-          }),
-          ...runtimeDirectories,
-          activeAgentId: "main",
-        });
-
-        const activeProcessSessions = legacy.activeProcessSessions as
-          | Array<{ sessionId?: string; command?: string; pid?: number }>
-          | undefined;
-        expect(activeProcessSessions).toHaveLength(1);
-        const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
-        expect(activeSession.sessionId).toBe("sess-session-id");
-        expect(activeSession.command).toBe("sleep 600");
-        expect(activeSession.pid).toBe(1234);
-        expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
-          false,
-        );
-        expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-      } finally {
-        resetProcessRegistryForTests();
-      }
-    },
-  );
-
-  it("keeps the primary model for a locked after-turn runtime context", () => {
-    const runtimeContext = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:locked",
-        sandboxSessionKey: "global",
-        sandboxAgentId: "main",
-        config: {
-          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
-        } as OpenClawConfig,
-        modelId: "gpt-5.5",
-        agentHarnessId: "openclaw",
-        modelSelectionLocked: true,
-      }),
-      ...runtimeDirectories,
-    });
-
-    expect(runtimeContext.modelSelectionLocked).toBe(true);
-    expect(runtimeContext.sandboxSessionKey).toBe("global");
-    expect(runtimeContext.sandboxAgentId).toBe("main");
-    expect(runtimeContext.provider).toBe("openai");
-    expect(runtimeContext.model).toBe("gpt-5.5");
-  });
-
-  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
-              },
-              compaction: { model: "summary" },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
-    });
-
-    expect(legacy.provider).toBe("openrouter");
-    expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
-    expect(legacy.authProfileId).toBeUndefined();
-  });
-  it("derives afterTurn token count from the current assistant usage snapshot", () => {
-    const lastCallUsage = {
-      input: 10,
-      output: 5,
-      cacheRead: 40,
-      cacheWrite: 2,
-      contextUsage: { state: "available", promptTokens: 23, totalTokens: 28 },
-      total: 57,
-    } satisfies NormalizedUsage;
-    const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
-    const legacy = buildAfterTurnRuntimeContextFromUsage({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
-      tokenBudget: 1050000,
-      lastCallUsage,
-      promptCache,
-    });
-
-    expect(legacy.currentTokenCount).toBe(23);
-    expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

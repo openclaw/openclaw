@@ -215,52 +215,40 @@ async function loadDreamingStoreStats(
 }
 
 function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStats {
-  let shortTermCount = 0;
-  let recallSignalCount = 0;
-  let dailySignalCount = 0;
-  let groundedSignalCount = 0;
-  let totalSignalCount = 0;
-  let phaseSignalCount = 0;
-  let lightPhaseHitCount = 0;
-  let remPhaseHitCount = 0;
-  let promotedTotal = 0;
-  let promotedToday = 0;
+  const totals = {
+    shortTermCount: 0,
+    recallSignalCount: 0,
+    dailySignalCount: 0,
+    groundedSignalCount: 0,
+    totalSignalCount: 0,
+    phaseSignalCount: 0,
+    lightPhaseHitCount: 0,
+    remPhaseHitCount: 0,
+    promotedTotal: 0,
+    promotedToday: 0,
+  };
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
   let lastPromotedAt: string | undefined;
-  const storePaths = new Set<string>();
-  const phaseSignalPaths = new Set<string>();
-  const storeErrors: string[] = [];
-  const phaseSignalErrors: string[] = [];
-  const shortTermEntries: ShortTermDreamingStatsEntry[] = [];
-  const signalEntries: ShortTermDreamingStatsEntry[] = [];
-  const promotedEntries: ShortTermDreamingStatsEntry[] = [];
+  const storePaths = new Set(stats.flatMap((stat) => (stat.storePath ? [stat.storePath] : [])));
+  const phaseSignalPaths = new Set(
+    stats.flatMap((stat) => (stat.phaseSignalPath ? [stat.phaseSignalPath] : [])),
+  );
+  const storeErrors = stats.flatMap((stat) => (stat.storeError ? [stat.storeError] : []));
+  const phaseSignalErrors = stats.flatMap((stat) =>
+    stat.phaseSignalError ? [stat.phaseSignalError] : [],
+  );
 
   for (const stat of stats) {
-    shortTermCount += stat.shortTermCount;
-    recallSignalCount += stat.recallSignalCount;
-    dailySignalCount += stat.dailySignalCount;
-    groundedSignalCount += stat.groundedSignalCount;
-    totalSignalCount += stat.totalSignalCount;
-    phaseSignalCount += stat.phaseSignalCount;
-    lightPhaseHitCount += stat.lightPhaseHitCount;
-    remPhaseHitCount += stat.remPhaseHitCount;
-    promotedTotal += stat.promotedTotal;
-    promotedToday += stat.promotedToday;
-    if (stat.storePath) {
-      storePaths.add(stat.storePath);
-    }
-    if (stat.phaseSignalPath) {
-      phaseSignalPaths.add(stat.phaseSignalPath);
-    }
-    if (stat.storeError) {
-      storeErrors.push(stat.storeError);
-    }
-    if (stat.phaseSignalError) {
-      phaseSignalErrors.push(stat.phaseSignalError);
-    }
-    shortTermEntries.push(...stat.shortTermEntries);
-    signalEntries.push(...stat.signalEntries);
-    promotedEntries.push(...stat.promotedEntries);
+    totals.shortTermCount += stat.shortTermCount;
+    totals.recallSignalCount += stat.recallSignalCount;
+    totals.dailySignalCount += stat.dailySignalCount;
+    totals.groundedSignalCount += stat.groundedSignalCount;
+    totals.totalSignalCount += stat.totalSignalCount;
+    totals.phaseSignalCount += stat.phaseSignalCount;
+    totals.lightPhaseHitCount += stat.lightPhaseHitCount;
+    totals.remPhaseHitCount += stat.remPhaseHitCount;
+    totals.promotedTotal += stat.promotedTotal;
+    totals.promotedToday += stat.promotedToday;
     const promotedAtMs = stat.lastPromotedAt ? Date.parse(stat.lastPromotedAt) : Number.NaN;
     if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
       latestPromotedAtMs = promotedAtMs;
@@ -269,28 +257,19 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   }
 
   return {
-    shortTermCount,
-    recallSignalCount,
-    dailySignalCount,
-    groundedSignalCount,
-    totalSignalCount,
-    phaseSignalCount,
-    lightPhaseHitCount,
-    remPhaseHitCount,
-    promotedTotal,
-    promotedToday,
+    ...totals,
     shortTermEntries: sortAndLimitBy(
-      shortTermEntries,
+      stats.flatMap((stat) => stat.shortTermEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryByRecency,
     ),
     signalEntries: sortAndLimitBy(
-      signalEntries,
+      stats.flatMap((stat) => stat.signalEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryBySignals,
     ),
     promotedEntries: sortAndLimitBy(
-      promotedEntries,
+      stats.flatMap((stat) => stat.promotedEntries),
       DREAMING_ENTRY_LIST_LIMIT,
       compareDreamingEntryByPromotion,
     ),
@@ -445,6 +424,9 @@ export const createDoctorHandlers = (
             ),
       );
       const cronStatus = await resolveManagedDreamingCronStatus(context);
+      for (const phase of Object.values(dreamingConfig.phases)) {
+        Object.assign(phase, cronStatus);
+      }
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         provider: status.provider,
@@ -458,20 +440,6 @@ export const createDoctorHandlers = (
         dreaming: {
           ...dreamingConfig,
           ...storeStats,
-          phases: {
-            light: {
-              ...dreamingConfig.phases.light,
-              ...cronStatus,
-            },
-            deep: {
-              ...dreamingConfig.phases.deep,
-              ...cronStatus,
-            },
-            rem: {
-              ...dreamingConfig.phases.rem,
-              ...cronStatus,
-            },
-          },
         },
       };
       respond(true, payload, undefined);
@@ -480,7 +448,7 @@ export const createDoctorHandlers = (
         agentId,
         embedding: {
           ok: false,
-          error: `gateway memory probe failed: ${formatError(err)}`,
+          error: `gateway memory check failed: ${formatError(err)}`,
         },
       };
       respond(true, payload, undefined);

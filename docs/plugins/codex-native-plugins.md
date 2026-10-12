@@ -24,8 +24,9 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.160.0`; newer custom, remote, and macOS desktop-owned
-  binaries continue with a compatibility warning and normal runtime validation.
+  `@openai/codex` `0.160.0` and may select a newer installed Codex; newer
+  custom, remote, and macOS desktop-owned binaries continue with a
+  compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
 - Migration supports only `openai-curated` plugins that it observed as
@@ -38,6 +39,9 @@ working.
   `workspace-directory`, and marketplace manifests in the current repository.
   Plugins remain unavailable until an owner or `operator.admin` explicitly
   installs or enables their marketplace-qualified identity.
+- OpenClaw excludes the `visualize@openai-bundled` skill from Codex threads.
+  That skill emits Codex-specific inline visualization directives, while
+  OpenClaw visualizations use the `show_widget` tool on supported surfaces.
 
 `codexPlugins` has no effect on OpenClaw-provider runs, ACP conversation
 bindings, or other harnesses, because those paths never create Codex
@@ -379,7 +383,7 @@ its `plugin/installed` snapshot and `plugin/read` details to establish the
 exact marketplace-qualified identity and app ownership. The installed-only
 check during ordinary thread setup is read-only; apps from disabled or
 unapproved plugins stay denied. Owner-issued installation is the explicit
-mutation path. Missing or ambiguous ownership fails closed instead of granting
+mutation path. Missing or ambiguous ownership blocks
 account-wide access.
 
 Runtime app inventory is the target-session accessibility check for both
@@ -437,7 +441,7 @@ Use `/new` or `/reset` if an older custom Codex runtime does not make a newly
 installed plugin available in an existing conversation.
 
 OpenClaw reads installed app runtime state through `app/installed` and fetches
-canonical app metadata with `app/read` in batches of at most 100 app IDs. The
+current app metadata with `app/read` in batches of at most 100 app IDs. The
 first read force-refreshes a cold installed runtime snapshot. When multiple
 configured curated plugins are installed, OpenClaw combines their cache
 invalidations into a single app-inventory refresh. Ordinary cached reads do
@@ -512,12 +516,12 @@ names, OpenClaw uses its `plugin/installed` snapshot and reads only that exact
 configured plugin's details to reserve its owned app IDs. This narrow,
 read-only check does not discover unrelated marketplaces, activate the plugin,
 or grant its apps. If the disabled plugin's ownership cannot be established,
-the account-wide app selection fails closed.
+the account-wide app selection is blocked.
 
 Account apps inherit the global `codexPlugins.allow_destructive_actions` value,
 which accepts `true`, `false`, `"auto"`, or `"ask"`. Explicit per-plugin policy
-overrides the global policy for overlapping app ids. Inventory failures fail
-closed instead of falling back to an unrestricted default.
+overrides the global policy for overlapping app ids. Inventory failures block account-wide app selection
+instead of falling back to an unrestricted default.
 
 ## Thread app config
 
@@ -681,7 +685,7 @@ per-app/tool settings above.
 ## Destructive action policy
 
 Destructive plugin elicitations are allowed by default for configured Codex
-plugins, while unsafe schemas and ambiguous ownership fail closed:
+plugins, while unsafe schemas and ambiguous ownership are rejected:
 
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for
@@ -691,7 +695,7 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
   requests for eligible hosted app tools still go through OpenClaw consent,
   including permitted reads and `/btw` side questions. The bridge does not
   classify tools again or blanket-decline their requests. Plugin-provided MCP
-  server approval requests still receive a deterministic decline.
+  server approval requests still receive an automatic decline.
 - `true`: OpenClaw auto-accepts only safe schemas it can map to an approval
   response, such as a boolean approve field.
 - `"auto"`: OpenClaw exposes destructive plugin actions to Codex, then
@@ -749,7 +753,7 @@ explaining why a tool ran or why no prompt appeared.
 | `app_inventory_unavailable`                       | Strict source app verification was requested but the source Codex app inventory refresh failed.                                      | Fix source Codex app-server access, or retry without `--verify-plugin-apps` to accept the faster account-gated plan.   |
 | `codex_subscription_required`                     | The source app-server positively identified an API-key or other non-ChatGPT account.                                                 | Log in to the Codex app with subscription auth, then rerun migration.                                                  |
 | `codex_account_unavailable`                       | The source account was missing or `account/read` failed without strict app verification.                                             | Restore source account access, or use `--verify-plugin-apps` when authenticated source app inventory can prove access. |
-| `marketplace_missing`, `plugin_missing`           | The exact marketplace or configured plugin is unavailable in the installed snapshot; plugin apps fail closed.                        | Verify the target app-server's `plugin/installed` response and exact configured plugin identity.                       |
+| `marketplace_missing`, `plugin_missing`           | The exact marketplace or configured plugin is unavailable in the installed snapshot; plugin apps are blocked.                        | Verify the target app-server's `plugin/installed` response and exact configured plugin identity.                       |
 | `plugin_detail_unavailable`                       | OpenClaw could not read the exact configured plugin's ownership details.                                                             | Inspect the target app-server's `plugin/installed` and `plugin/read` responses.                                        |
 | `plugin_disabled`                                 | Codex reports the plugin installed but disabled.                                                                                     | Enable the plugin in Codex, or have the owner explicitly install and authorize it again.                               |
 | `plugin_activation_failed`                        | Plugin activation did not complete.                                                                                                  | Use the attached diagnostic to distinguish marketplace, auth, refresh, or workspace-readiness failures.                |
@@ -782,7 +786,7 @@ establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
 `allow_destructive_actions` values. Even with `true`, `"auto"`, or `"ask"`,
-unsafe elicitation schemas and ambiguous plugin identity still fail closed.
+unsafe elicitation schemas and ambiguous plugin identity are still rejected.
 
 ## Related
 

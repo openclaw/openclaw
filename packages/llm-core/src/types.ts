@@ -66,16 +66,13 @@ export type CacheRetention = "none" | "short" | "long";
 /** Streaming transport preference for providers that support multiple transports. */
 export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
 
-/** Helper for hooks that may be synchronous or asynchronous. */
 export type MaybePromise<T> = T | Promise<T>;
 
-/** Minimal HTTP response metadata surfaced through provider hooks. */
 export interface ProviderResponse {
   status: number;
   headers: Record<string, string>;
 }
 
-/** Request options shared by text streaming providers. */
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
@@ -176,7 +173,6 @@ export interface StreamOptions {
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
 
-/** Request options shared by image-generation providers. */
 export interface ImagesOptions {
   signal?: AbortSignal;
   apiKey?: string;
@@ -185,9 +181,6 @@ export interface ImagesOptions {
    * Return undefined to keep the payload unchanged.
    */
   onPayload?: (payload: unknown, model: ImagesModel) => MaybePromise<unknown>;
-  /**
-   * Optional callback invoked after an HTTP response is received.
-   */
   onResponse?: (response: ProviderResponse, model: ImagesModel) => void | Promise<void>;
   /**
    * Optional custom HTTP headers to include in API requests.
@@ -228,8 +221,6 @@ export interface SimpleStreamOptions extends StreamOptions {
   thinkingBudgets?: ThinkingBudgets;
 }
 
-// Generic StreamFunction with typed options.
-//
 // Contract:
 // - Must return an AssistantMessageEventStream.
 // - Once invoked, request/model/runtime failures should be encoded in the
@@ -260,14 +251,12 @@ export interface TextSignatureV1 {
   phase?: "commentary" | "final_answer";
 }
 
-/** Plain assistant/user text content block. */
 export interface TextContent {
   type: "text";
   text: string;
   textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
 }
 
-/** Provider reasoning/thinking content block, including opaque replay signatures. */
 export interface ThinkingContent {
   type: "thinking";
   thinking: string;
@@ -308,11 +297,15 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Producer-only cumulative argument JSON while the call streams. Producers remove it before
+   * `toolcall_end` or terminal cleanup; it never appears in final messages or transcripts.
+   */
+  partialJson?: string;
   thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
   executionMode?: "sequential" | "parallel";
 }
 
-/** Normalized token and cost accounting for a provider response. */
 export interface Usage {
   input: number;
   output: number;
@@ -353,7 +346,6 @@ export type RawPricingTier = ModelDataRawPricingTier;
 export type ModelCostConfig = ModelCostRates & { tieredPricing?: PricingTier[] };
 export type RawModelCostConfig = ModelCostRates & { tieredPricing?: RawPricingTier[] };
 
-/** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 /** Stable error codes for provider outcomes that cannot be replayed safely. */
@@ -365,9 +357,10 @@ export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arg
 export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
   "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.";
 
-/** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
+  /** Host-generated context projected as a user message, not a human-authored turn. */
+  synthetic?: true;
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
   /** Trusted runtime-context metadata; ordinary user messages omit it. */
@@ -503,7 +496,6 @@ export function setRuntimeContextRetention(
   message.runtimeContextCarrierRetained = retained;
 }
 
-/** Assistant turn, including provider identity and final stop state. */
 export type AssistantDeliveryTtsFacts = {
   tagged: true;
   text?: string;
@@ -522,7 +514,7 @@ export interface AssistantMessage {
     mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
-    /** Provider text phase is unresolved until the assistant turn reaches terminal state. */
+    /** @deprecated Ignored; omit this field. Retained until the next Plugin SDK major. */
     textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
     tts?: AssistantDeliveryTtsFacts;
@@ -546,34 +538,27 @@ export interface AssistantMessage {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-/** Tool result turn that answers a prior assistant tool call. */
 export interface ToolResultMessage<TDetails = unknown> {
   role: "toolResult";
   toolCallId: string;
   toolName: string;
-  content: (TextContent | ImageContent)[]; // Supports text and images
+  content: (TextContent | ImageContent)[];
   details?: TDetails;
   isError: boolean;
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-/** Any text-model conversation message supported by LLM core. */
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
-/** Image request input content accepted by image providers. */
 export type ImagesInputContent = TextContent | ImageContent;
-/** Image response output content returned by image providers. */
 export type ImagesOutputContent = TextContent | ImageContent;
 
-/** Image-generation request context. */
 export interface ImagesContext {
   input: ImagesInputContent[];
 }
 
-/** Normalized image-generation stop reasons. */
 export type ImagesStopReason = "stop" | "error" | "aborted";
 
-/** Final image-generation response shape. */
 export interface AssistantImages {
   api: ImagesApi;
   provider: ImagesProvider;
@@ -586,14 +571,17 @@ export interface AssistantImages {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-/** Provider tool declaration with a TypeBox/JSON-schema parameter object. */
 export interface Tool<TParameters extends TSchema = TSchema> {
   name: string;
   description: string;
   parameters: TParameters;
+  /**
+   * `false` keeps calls synchronous where the provider can keep generating after a call
+   * (OpenAI async tools): the response pauses until earlier results are delivered.
+   */
+  async?: false;
 }
 
-/** Text-model request context shared by provider adapters. */
 export interface Context {
   systemPrompt?: string;
   messages: Message[];
@@ -632,7 +620,6 @@ export type AssistantMessageEvent =
   | { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
 
 export interface AssistantMessageEventStreamContract extends AsyncIterable<AssistantMessageEvent> {
-  /** Queue one stream event for consumers. */
   push(event: AssistantMessageEvent): void;
   /** Complete the stream and optionally resolve the final message. */
   end(result?: AssistantMessage): void;

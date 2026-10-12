@@ -21,7 +21,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import * as stateOperation from "../../state/openclaw-state-worker-operation.js";
 
 const fixture = useSubagentControlFixture();
@@ -37,10 +37,13 @@ it.for(["before commit", "after commit"] as const)(
       agentId: "main",
       sessionKey: childKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: "completion-publication-original",
     });
     await registerSubagentRun({
       runId,
       childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",

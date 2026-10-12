@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolvePreparedExecEnvironment } from "../agents/bash-tools.exec-request-preparation.js";
 import { createExecTool } from "../agents/bash-tools.js";
 import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -134,6 +135,41 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
     });
   });
 });
+
+it.each([
+  { configured: undefined, expectedWarnings: [] },
+  {
+    configured: ["/opt/operator/bin"],
+    expectedWarnings: [
+      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+    ],
+  },
+])(
+  "warns about node-host pathPrepend only for operator entries (configured=$configured)",
+  async ({ configured, expectedWarnings }) => {
+    await withTempDir("openclaw-agent-cli-shim-node-", async (stateDir) => {
+      await prepareGatewayAgentCliShim({
+        env: {},
+        invocation: { command: process.execPath, args: ["openclaw.mjs"], cwd: stateDir },
+        stateDir,
+      });
+      const config = {
+        tools: { exec: configured ? { pathPrepend: configured } : {} },
+      } satisfies OpenClawConfig;
+      const execConfig = resolveExecToolConfig({ cfg: config });
+      expect(execConfig.pathPrepend?.[0]).toBe(path.join(stateDir, "tmp", "agent-cli"));
+
+      const warnings: string[] = [];
+      resolvePreparedExecEnvironment({
+        execParams: { command: "openclaw --version" },
+        host: "node",
+        defaultPathPrepend: execConfig.pathPrepend ?? [],
+        warnings,
+      });
+      expect(warnings).toEqual(expectedWarnings);
+    });
+  },
+);
 
 it("renders a Windows PATH launcher for the running CLI", async () => {
   await withTempDir("openclaw-agent-cli-shim-win-", async (root) => {

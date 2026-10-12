@@ -5,9 +5,11 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { saveLegacySessionStore } from "../../infra/state-migrations.legacy-session-store.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
+import { removeFileIfExists } from "./disk-budget-files.js";
 import {
   enforceSessionDiskBudget,
   measureSessionPhysicalDiskUsage,
@@ -29,6 +31,37 @@ function rejectRemoval(targetPath: string, code: "EPERM" | "EACCES") {
 }
 
 describe("session artifact deletion failures", () => {
+  it("retains an artifact when offline maintenance custody is revoked during inspection", async () => {
+    await withOpenClawTestState({ label: "cleanup-revoked-owner" }, async (state) => {
+      const file = await state.writeText("orphan.jsonl", "retained");
+      let current = true;
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        assertOwnerCurrent: () => {
+          if (!current) {
+            throw new Error("maintenance owner revoked");
+          }
+        },
+      });
+      const stat = nodeFs.promises.stat.bind(nodeFs.promises);
+      const inspection = vi.spyOn(nodeFs.promises, "stat").mockImplementation(async (...args) => {
+        const result = await stat(...args);
+        if (args[0] === file) {
+          current = false;
+        }
+        return result;
+      });
+      try {
+        await expect(scope.run(() => removeFileIfExists(file))).rejects.toThrow(
+          "maintenance owner revoked",
+        );
+        expect(await fs.readFile(file, "utf8")).toBe("retained");
+      } finally {
+        inspection.mockRestore();
+        await scope.close();
+      }
+    });
+  });
+
   it.each([
     { boundary: "archives", promptBlob: false, code: "EPERM" },
     { boundary: "unreferenced", promptBlob: false, code: "EACCES" },

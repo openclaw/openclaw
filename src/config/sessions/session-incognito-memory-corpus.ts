@@ -3,6 +3,7 @@ import type {
   SessionTranscriptCorpusScope,
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
 import type { IncognitoSessionHistoryBinding } from "./session-incognito-history-read.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 /** Explicit actor acquisition; ordinary Memory discovery continues to use its host owner. */
 export function readIncognitoMemoryCorpus(
@@ -10,10 +11,14 @@ export function readIncognitoMemoryCorpus(
   scope: SessionTranscriptCorpusScope,
   options: SessionTranscriptCorpusOptions,
   signal?: AbortSignal,
+  onRead?: (assertCurrent: () => void) => void,
 ) {
   const { actor, authority } = binding;
   const target = structuredClone(binding.target);
-  const captured = structuredClone({ scope, options });
+  const captured = structuredClone({
+    scope: { ...scope, env: captureSessionTranscriptStorageEnvironment(scope.env) },
+    options,
+  });
   if (scope.normalizedAgentId !== actor.agentId) {
     throw new Error("Incognito Memory corpus belongs to another agent");
   }
@@ -28,7 +33,6 @@ export function readIncognitoMemoryCorpus(
   const snapshots = new Map<string, ReturnType<typeof actor.sessions.captureSnapshot>>();
   const assertCurrent = () => {
     signal?.throwIfAborted();
-    actor.assertCurrent();
     authority.assertCurrent();
     const currentKeys = actor.sessions.deadlines().map(({ sessionKey }) => sessionKey);
     if (currentKeys.length !== claims.size || currentKeys.some((key) => !claims.has(key))) {
@@ -38,9 +42,10 @@ export function readIncognitoMemoryCorpus(
       claim.authorize(authority, "commit");
       snapshots.get(key)?.assertCurrent();
     }
+    actor.assertReadable();
   };
   assertCurrent();
-  return actor.sessions.withSharedState(async () => {
+  const result = actor.sessions.withSharedState(async () => {
     const entries = await actor.sessions.history(
       { assertCurrent, authorize: (stage, facts) => authority.authorize?.(stage, facts) },
       {
@@ -58,8 +63,13 @@ export function readIncognitoMemoryCorpus(
         for (const key of claims.keys()) {
           snapshots.set(key, actor.sessions.captureSnapshot(key));
         }
+        onRead?.(assertCurrent);
       },
     );
+    assertCurrent();
+    return entries;
+  });
+  return result.then((entries) => {
     assertCurrent();
     return entries;
   });

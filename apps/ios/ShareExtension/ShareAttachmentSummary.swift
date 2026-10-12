@@ -25,37 +25,24 @@ struct ShareAttachmentSummary: Equatable {
                 self.selectedImageCount))
         }
 
-        var unsupported: [String] = []
-        if self.videoCount > 0 {
-            let format = if self.videoCount == 1 {
-                NSLocalizedString("%d video", comment: "Share extension unsupported video count")
-            } else {
-                NSLocalizedString("%d videos", comment: "Share extension unsupported video count")
-            }
-            unsupported.append(String(
-                format: format,
-                self.videoCount))
-        }
-        if self.fileCount > 0 {
-            let format = if self.fileCount == 1 {
-                NSLocalizedString("%d file", comment: "Share extension unsupported file count")
-            } else {
-                NSLocalizedString("%d files", comment: "Share extension unsupported file count")
-            }
-            unsupported.append(String(
-                format: format,
-                self.fileCount))
-        }
-        if self.unknownCount > 0 {
-            let format = if self.unknownCount == 1 {
-                NSLocalizedString("%d unsupported item", comment: "Share extension unsupported attachment count")
-            } else {
-                NSLocalizedString("%d unsupported items", comment: "Share extension unsupported attachment count")
-            }
-            unsupported.append(String(
-                format: format,
-                self.unknownCount))
-        }
+        let unsupported = [
+            Self.unsupportedCount(
+                self.videoCount,
+                singular: NSLocalizedString("%d video", comment: "Share extension unsupported video count"),
+                plural: NSLocalizedString("%d videos", comment: "Share extension unsupported video count")),
+            Self.unsupportedCount(
+                self.fileCount,
+                singular: NSLocalizedString("%d file", comment: "Share extension unsupported file count"),
+                plural: NSLocalizedString("%d files", comment: "Share extension unsupported file count")),
+            Self.unsupportedCount(
+                self.unknownCount,
+                singular: NSLocalizedString(
+                    "%d unsupported item",
+                    comment: "Share extension unsupported attachment count"),
+                plural: NSLocalizedString(
+                    "%d unsupported items",
+                    comment: "Share extension unsupported attachment count")),
+        ].compactMap(\.self)
 
         if !unsupported.isEmpty {
             details.append(String(
@@ -70,6 +57,15 @@ struct ShareAttachmentSummary: Equatable {
             "Remove omitted items and share again.",
             comment: "Share extension omitted attachment recovery"))
         return details.joined(separator: " ")
+    }
+
+    private static func unsupportedCount(
+        _ count: Int,
+        singular: @autoclosure () -> String,
+        plural: @autoclosure () -> String) -> String?
+    {
+        guard count > 0 else { return nil }
+        return String(format: count == 1 ? singular() : plural(), count)
     }
 }
 

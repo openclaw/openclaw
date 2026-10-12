@@ -26,7 +26,7 @@ const CodexPluginsParamsSchema = Type.Object(
 );
 
 type CodexPluginsToolOptions = {
-  bindingStore: Pick<CodexAppServerBindingStore, "read">;
+  bindingStore: Pick<CodexAppServerBindingStore, "read" | "readAsync">;
   context: OpenClawPluginToolContext;
   getPluginConfig: () => unknown;
   request?: typeof codexControlRequest;
@@ -68,7 +68,7 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
           })
         : undefined;
       const readBinding = () => (identity ? options.bindingStore.read(identity) : undefined);
-      const binding = readBinding();
+      const binding = identity ? await options.bindingStore.readAsync(identity) : undefined;
       const selection = codexBindingConnectionSelection(binding);
       const assertCurrent = () => {
         options.context.assertInvocationCurrent?.();

@@ -48,7 +48,6 @@ export function signalVerifiedGatewayPidSync(
   }
 }
 
-/** Find listener PIDs on `port` and keep only verified gateway processes. */
 export function findVerifiedGatewayListenerPidsOnPortSync(
   port: number,
   context: { env?: NodeJS.ProcessEnv } = {},

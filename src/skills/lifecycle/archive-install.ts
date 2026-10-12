@@ -31,7 +31,6 @@ import type {
 export type { SkillArchiveInstallFailureKind } from "./workspace-types.js";
 
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
-/** Accepted root marker names for ClawHub skill archive uploads. */
 export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
   "SKILL.md",
   "skill.md",
@@ -188,15 +187,16 @@ export async function applyExtractedSkillRoot(
         "invalid-request",
       );
     }
+    const snapshot = (changes: NonNullable<typeof params.changes>, includeSourceVersion = false) =>
+      snapshotCommittedSkillArtifactBestEffort({
+        skillDir: targetDir,
+        skillKey: params.slug,
+        source: changes.source,
+        ...(includeSourceVersion ? { sourceVersion: changes.sourceVersion } : {}),
+        logger: params.logger,
+      });
     const before =
-      params.changes && effectiveMode === "update"
-        ? await snapshotCommittedSkillArtifactBestEffort({
-            skillDir: targetDir,
-            skillKey: params.slug,
-            source: params.changes.source,
-            logger: params.logger,
-          })
-        : undefined;
+      params.changes && effectiveMode === "update" ? await snapshot(params.changes) : undefined;
     const policyFailure = await params.beforeInstall?.(effectiveMode);
     if (policyFailure) {
       return installFailure(policyFailure.error, policyFailure.failureKind);
@@ -240,15 +240,7 @@ export async function applyExtractedSkillRoot(
         ...(replacementBlocked ? { replacementBlocked } : {}),
       };
     }
-    const after = params.changes
-      ? await snapshotCommittedSkillArtifactBestEffort({
-          skillDir: targetDir,
-          skillKey: params.slug,
-          source: params.changes.source,
-          sourceVersion: params.changes.sourceVersion,
-          logger: params.logger,
-        })
-      : undefined;
+    const after = params.changes ? await snapshot(params.changes, true) : undefined;
     return { ok: true, targetDir, mode: effectiveMode, before, after };
   } catch (err) {
     return installFailure(formatErrorMessage(err), "unavailable");

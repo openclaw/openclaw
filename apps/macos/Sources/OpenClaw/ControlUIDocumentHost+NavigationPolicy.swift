@@ -33,13 +33,8 @@ extension ControlUIDocumentHost {
     }
 
     nonisolated static func isHTTPURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host?.isEmpty == false
-        else {
-            return false
-        }
-        return true
+        let scheme = url.scheme?.lowercased()
+        return (scheme == "http" || scheme == "https") && url.host?.isEmpty == false
     }
 
     static func isExternalURL(_ url: URL) -> Bool {
@@ -75,13 +70,7 @@ extension ControlUIDocumentHost {
         if self.sameOrigin(url, dashboardURL) {
             return true
         }
-        guard !isMainFrame,
-              isTrustedDashboardSource,
-              host?.isEmpty == false
-        else {
-            return false
-        }
-        return true
+        return !isMainFrame && isTrustedDashboardSource && host?.isEmpty == false
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {

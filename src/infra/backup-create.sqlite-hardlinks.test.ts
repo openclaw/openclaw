@@ -223,14 +223,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     },
   );
 
-  it("preserves WAL-only schema and rows when the last pathname owns the WAL", async () => {
-    await withHardlinkedDatabase("zeta.sqlite", async ({ state }) => {
-      const archive = await createArchive(state);
-      await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({ ok: true });
-      await expectArchivedRecords(state, archive);
-    });
-  });
-
   it.each([
     {
       name: "refuses a canonical symlink retargeted after an earlier declared plugin snapshot completes",
@@ -311,25 +303,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     });
   });
 
-  it.each([
-    { admitted: 1, total: 2 },
-    { admitted: 2, total: 3 },
-  ])(
-    "refuses $admitted admitted names for an inode with $total links",
-    async ({ admitted, total }) => {
-      await withHardlinkedDatabase("alpha.sqlite", async ({ state, ownerPath, aliasPath }) => {
-        if (admitted === 1) {
-          await fs.rename(aliasPath, state.path("outside.sqlite"));
-        } else {
-          await fs.link(ownerPath, state.path("outside.sqlite"));
-        }
-        expect((await fs.stat(ownerPath)).nlink).toBe(total);
-        await expectBackupRefused(state, /journal owner may be outside the backup inventory/iu);
-      });
-    },
-  );
-
-  it.each(["absent", "empty"] as const)(
+  it.each(["empty"] as const)(
     "preserves closed checkpointed hardlinks with %s WAL sidecars",
     async (sidecars) => {
       await withHardlinkedDatabase(

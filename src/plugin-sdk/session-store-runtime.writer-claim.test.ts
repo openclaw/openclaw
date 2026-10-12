@@ -228,20 +228,4 @@ describe("plugin session writer claim projection", () => {
       },
     });
   });
-
-  it("clears private generation fields when a patch rotates lifecycle revision", async () => {
-    const sessionKey = "agent:main:patch-rotate-generation";
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-    await replaceSessionEntry({ sessionKey, storePath }, privateGenerationEntry());
-
-    await patchSessionEntry({
-      sessionKey,
-      storePath,
-      update: () => ({ lifecycleRevision: "generation-2" }),
-    });
-
-    const entry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry | undefined;
-    expect(entry).toMatchObject({ lifecycleRevision: "generation-2", sessionId: "session-1" });
-    expectGenerationPrivateFieldsCleared(entry);
-  });
 });

@@ -38,7 +38,7 @@ func prettyLanguageLabel(lang string) string {
 	if trimmed == "" {
 		return lang
 	}
-	if label, ok := languageLabels[languageKey(trimmed)]; ok {
+	if label, ok := languageLabels[strings.ToLower(trimmed)]; ok {
 		return label
 	}
 	return trimmed

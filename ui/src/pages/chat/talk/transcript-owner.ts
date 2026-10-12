@@ -261,21 +261,16 @@ export function reserveClientVoiceSessionOwner(
   const transcriptController = new AbortController();
   const closeController = new AbortController();
   let released = false;
-  let drainTimer: ReturnType<typeof setTimeout> | undefined;
-  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  let timers: Array<ReturnType<typeof setTimeout>> | undefined;
   const release = () => {
     if (released) {
       return;
     }
     released = true;
-    if (drainTimer !== undefined) {
-      clearTimeout(drainTimer);
-      drainTimer = undefined;
+    for (const timer of timers ?? []) {
+      clearTimeout(timer);
     }
-    if (closeTimer !== undefined) {
-      clearTimeout(closeTimer);
-      closeTimer = undefined;
-    }
+    timers = undefined;
     const nextSessionCount = (ownerCounts.get(sessionKey) ?? 1) - 1;
     if (nextSessionCount > 0) {
       ownerCounts.set(sessionKey, nextSessionCount);
@@ -287,17 +282,19 @@ export function reserveClientVoiceSessionOwner(
     signal: transcriptController.signal,
     closeSignal: closeController.signal,
     beginDrain: () => {
-      if (released || drainTimer !== undefined || closeTimer !== undefined) {
+      if (released || timers) {
         return;
       }
-      drainTimer = setTimeout(() => {
-        transcriptController.abort();
-      }, CLIENT_VOICE_TRANSCRIPT_DRAIN_TIMEOUT_MS);
-      closeTimer = setTimeout(() => {
-        transcriptController.abort();
-        closeController.abort();
-        release();
-      }, CLIENT_VOICE_SESSION_CLOSE_TIMEOUT_MS);
+      timers = [
+        setTimeout(() => {
+          transcriptController.abort();
+        }, CLIENT_VOICE_TRANSCRIPT_DRAIN_TIMEOUT_MS),
+        setTimeout(() => {
+          transcriptController.abort();
+          closeController.abort();
+          release();
+        }, CLIENT_VOICE_SESSION_CLOSE_TIMEOUT_MS),
+      ];
     },
     release,
   };

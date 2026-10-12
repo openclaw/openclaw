@@ -6,7 +6,28 @@ import {
   outboundDeliveryQueueName,
 } from "./delivery-queue-namespaces.js";
 import type { OutboundDeliverySnapshot } from "./delivery-queue-storage.types.js";
-import type { QueuedDelivery } from "./delivery-queue-types.js";
+import type { QueuedDelivery, QueuedDeliveryPayload } from "./delivery-queue-types.js";
+
+/** Copies shared send options without transferring queue custody or process-local callbacks. */
+export function projectQueuedDeliveryOptions(params: QueuedDeliveryPayload) {
+  return {
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    renderedBatchPlan: params.renderedBatchPlan,
+    threadId: params.threadId,
+    formatting: params.formatting,
+    identity: params.identity,
+    bestEffort: params.bestEffort,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    silent: params.silent,
+    mirror: params.mirror,
+    session: params.session,
+    gatewayClientScopes: params.gatewayClientScopes,
+    preparedMessageId: params.preparedMessageId,
+  };
+}
 
 export function projectOutboundDelivery(
   queueName: string,

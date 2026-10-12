@@ -7,11 +7,9 @@ import { readSlackMessages } from "../../actions.js";
 import { SlackSystemEventAuthRetryError } from "../auth.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import type { SlackMemberChannelEvent } from "../types.js";
-import {
-  authorizeAndResolveSlackSystemEventContext,
-  resolveSlackListenerEventScope,
-} from "./system-event-context.js";
+import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
 export function registerSlackMemberEvents(params: {
   ctx: SlackMonitorContext;
@@ -30,7 +28,7 @@ export function registerSlackMemberEvents(params: {
         const eventId = body.event_id;
         try {
           const runtimeContext = await params.ctx.readRuntimeContext();
-          const eventScope = resolveSlackListenerEventScope({
+          const eventScope = resolveSlackMonitorEventScope({
             ctx: runtimeContext,
             body,
             context,
@@ -71,7 +69,7 @@ export function registerSlackMemberEvents(params: {
                 accountId: runtimeContext.accountId,
                 conversationId: channelId,
                 deliverTo: `channel:${channelId}`,
-                route: runtimeContext.resolveSlackSystemEventRoute({
+                route: await runtimeContext.resolveSlackSystemEventRoute({
                   channelId,
                   channelType: roomType,
                   eventScope,

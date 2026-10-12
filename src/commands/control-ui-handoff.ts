@@ -141,10 +141,7 @@ export async function hasVerifiedControlUiLoopbackAlias(target: {
 export async function issueControlUiBrowserHandoff({
   httpUrl,
   wsUrl,
-}: ControlUiHandoffTarget["links"]): Promise<{
-  browserUrl: string;
-  expiresAtMs: number;
-}> {
+}: ControlUiHandoffTarget["links"]) {
   const issued = await issueDeviceBootstrapToken({
     profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
   });

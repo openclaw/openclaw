@@ -25,10 +25,7 @@ type GoogleAuthTransportOptions = NonNullable<
 >;
 type GoogleAuthTransportInit = GoogleAuthTransportOptions & { dispatcher?: unknown };
 type ProxyRule = NonNullable<GoogleAuthTransportOptions["noProxy"]>[number];
-type TlsOptions = {
-  cert?: ConnectionOptions["cert"];
-  key?: ConnectionOptions["key"];
-};
+type TlsOptions = Pick<ConnectionOptions, "cert" | "key">;
 type ProxyAgentLike = {
   connectOpts?: TlsOptions;
   proxy: URL;
@@ -323,25 +320,16 @@ function resolveGoogleAuthDispatcherPolicy(
       : normalizeOptionalString(googleAuthInit.proxy)) ??
     (hasProxyAgentShape(agent) ? agent.proxy.toString() : undefined);
 
-  if (!proxyBypassed && explicitProxy) {
-    return {
-      dispatcherPolicy: {
-        allowPrivateProxy: true,
-        mode: "explicit-proxy",
-        ...(hasTlsOptions(tlsOptions) ? { proxyTls: { ...tlsOptions } } : {}),
-        proxyUrl: explicitProxy,
-      },
-      init: nextInit,
-    };
-  }
-
-  const envProxyUrl = proxyBypassed
+  const proxyUrl = proxyBypassed
     ? undefined
-    : resolveGoogleAuthEnvProxyUrl(requestUrl.protocol === "http:" ? "http" : "https");
-  if (envProxyUrl) {
+    : (explicitProxy ??
+      resolveGoogleAuthEnvProxyUrl(requestUrl.protocol === "http:" ? "http" : "https"));
+  if (proxyUrl) {
     return {
       dispatcherPolicy: {
-        mode: "env-proxy",
+        ...(explicitProxy
+          ? { allowPrivateProxy: true, mode: "explicit-proxy", proxyUrl }
+          : { mode: "env-proxy" }),
         ...(hasTlsOptions(tlsOptions) ? { proxyTls: { ...tlsOptions } } : {}),
       },
       init: nextInit,

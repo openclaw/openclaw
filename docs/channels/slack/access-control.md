@@ -20,7 +20,7 @@ never establish identity, and sender IDs derived from app-controlled message
 metadata remain asserted.
 
 For ordinary messages and app mentions from a verified Slack sender linked to an
-active user profile, OpenClaw includes that profile's canonical ID and current
+active user profile, OpenClaw includes that profile's primary ID and current
 display name in host-generated, per-turn conversation info. A linked profile with `operator.admin` authority can ask
 "Assign this session to me"; the agent uses that profile ID with the `sessions`
 tool's `assign_owner` action for sessions visible to that administrator, including
@@ -97,7 +97,7 @@ restart the Slack monitor. The Gateway remains running.
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the canonical DM allowlist.
+    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the DM allowlist.
 
     - `pairing` (default)
     - `allowlist`

@@ -1176,7 +1176,7 @@ describe("gateway sessions patch", () => {
     },
   );
 
-  test("pins a concrete model selection that equals the configured default", async () => {
+  test("follows the default when a concrete model selection equals the configured default", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: { agents: { defaults: { model: { primary: OPENAI_GPT_MODEL } } } },
@@ -1185,9 +1185,9 @@ describe("gateway sessions patch", () => {
       }),
     );
 
-    expectModelSelection(entry, "openai", OPENAI_GPT_ID);
-    expect(entry.modelOverrideSource).toBe("user");
-    expect(entry.modelOverrideRouteResolution).toBe("resolved");
+    expectModelSelection(entry, undefined, undefined);
+    expect(entry.modelOverrideSource).toBe("default");
+    expect(entry.modelOverrideRouteResolution).toBeUndefined();
   });
 
   test("clears pending live model switches for model reset patches", async () => {
@@ -2080,8 +2080,13 @@ describe("gateway sessions patch", () => {
       return;
     }
     const entry = expectPatchOk(result);
-    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
-    expect(entry.modelOverrideSource).toBe("user");
+    if (config.agentPrimaryModel === SUBAGENT_MODEL) {
+      expectModelSelection(entry, undefined, undefined);
+      expect(entry.modelOverrideSource).toBe("default");
+    } else {
+      expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
+      expect(entry.modelOverrideSource).toBe("user");
+    }
   });
 
   test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {

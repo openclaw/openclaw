@@ -41,14 +41,25 @@ export function readSessionGroupCatalogEntry(db: DatabaseSync, name: string) {
 export function readSessionGroupCatalogSnapshot(db: DatabaseSync): SessionGroupCatalogSnapshot {
   const query = kyselyFor(db).selectFrom("session_groups").orderBy("position").orderBy("name");
   const defaultsSchema = hasDefaults(db);
-  const groups = executeSqliteQuerySync(db, query.select(["name", "position"])).rows;
+  const rows: Array<{
+    name: string;
+    position: number;
+    cwd?: string | null;
+    worktree?: number | null;
+  }> = executeSqliteQuerySync(
+    db,
+    defaultsSchema
+      ? query.select(["name", "position", "cwd", "worktree"])
+      : query.select(["name", "position"]),
+  ).rows;
+  const groups = rows.map(({ name, position }) => ({ name, position }));
   const defaults = defaultsSchema
-    ? executeSqliteQuerySync(db, query.select(["name", "cwd", "worktree"])).rows.map((row) => {
+    ? rows.map((row) => {
         const record: SessionGroupDefaultsRecord = { name: row.name };
         if (row.cwd) {
           record.cwd = row.cwd;
         }
-        if (row.worktree !== null) {
+        if (row.worktree != null) {
           record.worktree = row.worktree === 1;
         }
         return record;
@@ -114,18 +125,10 @@ export function mutateSessionGroupCatalogInDatabase(
         ]);
       };
       const groups = readGroups();
-      const assertGroupsCurrent = () => {
-        if (groups && !isDeepStrictEqual(groups, readGroups())) {
-          throw new Error(
-            "Session group members changed before catalog mutation; retry the request",
-          );
-        }
-      };
       requestSqliteWorkerOperationAdmission({
         stage: "transaction",
         facts: { names, groups },
       });
-      assertGroupsCurrent();
       let changed = false;
       let source: SessionGroupCatalogMutationResult["source"];
       let missingName: string | undefined;
@@ -135,7 +138,6 @@ export function mutateSessionGroupCatalogInDatabase(
           .filter((group) => group.memberSessions > 0);
         if (nonEmpty?.length) {
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          assertGroupsCurrent();
           return { changed: false, nonEmpty, snapshot: readSessionGroupCatalogSnapshot(db) };
         }
         const now = Date.now();
@@ -212,7 +214,6 @@ export function mutateSessionGroupCatalogInDatabase(
         }
       }
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      assertGroupsCurrent();
       return { changed, source, missingName, snapshot: readSessionGroupCatalogSnapshot(db) };
     },
     { database, path: database.path, env },

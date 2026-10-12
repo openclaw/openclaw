@@ -1,8 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   readPersistedAuthProfileStateRaw,
   writePersistedAuthProfileStateRaw,
@@ -12,17 +11,21 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   encodeSessionArchiveContent,
   readSessionArchiveContentSync,
 } from "./archive-compression.js";
 import { isSessionArchiveArtifactName } from "./artifacts.js";
-import { closeSessionAccessorConformanceFixture } from "./session-accessor.conformance.test-support.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -50,18 +53,14 @@ import {
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
 } from "./session-accessor.js";
-import {
-  listSessionChildEntriesReadOnly,
-  listSessionEntryRows,
-  replaceSessionEntrySync,
-} from "./session-accessor.sqlite-entry.js";
-import {
-  observeSessionMaintenanceChanges,
-  observeSessionMaintenanceCompletion,
-} from "./session-accessor.sqlite-maintenance.test-support.js";
+import { listSessionEntryRows, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-maintenance-completion.test-support.js";
+import { observeSessionMaintenanceChanges } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
@@ -71,6 +70,25 @@ vi.mock("../config.js", async () => ({
 }));
 
 import { getRuntimeConfig } from "../config.js";
+
+type TestPaths = {
+  sqlitePath: string;
+  stateDir: string;
+  storePath: string;
+  tempDir: string;
+};
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-accessor-conf-");
+
+function createTestPaths(): TestPaths {
+  const tempDir = sessionDirs.make();
+  return {
+    sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
+    stateDir: path.join(tempDir, "state"),
+    storePath: path.join(tempDir, "sessions.json"),
+    tempDir,
+  };
+}
 
 type AccessorAdapter = {
   name: string;
@@ -102,7 +120,10 @@ type AccessorAdapter = {
   ): Promise<SessionEntry | null>;
   cleanupSessionLifecycleArtifactsCore: typeof cleanupSessionLifecycleArtifactsCore;
   loadTranscriptEvents(scope: SessionTranscriptReadScope): Promise<TranscriptEvent[]>;
-  appendTranscriptEvent(scope: SessionTranscriptAccessScope, event: TranscriptEvent): Promise<void>;
+  appendTranscriptEvent(
+    scope: SessionTranscriptAccessScope,
+    event: TranscriptEvent,
+  ): Promise<boolean>;
   appendTranscriptMessage<TMessage>(
     scope: SessionTranscriptWriteScope,
     options: TranscriptMessageAppendOptions<TMessage>,
@@ -111,13 +132,6 @@ type AccessorAdapter = {
     scope: SessionTranscriptWriteScope,
     update?: TranscriptUpdatePayload,
   ): Promise<void>;
-};
-
-type TestPaths = {
-  sqlitePath: string;
-  stateDir: string;
-  storePath: string;
-  tempDir: string;
 };
 
 const publicAccessorAdapter: AccessorAdapter = {
@@ -183,17 +197,12 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
     };
 
     beforeEach(() => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-accessor-conf-"));
-      paths = {
-        sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
-        stateDir: path.join(tempDir, "state"),
-        storePath: path.join(tempDir, "sessions.json"),
-        tempDir,
-      };
+      paths = createTestPaths();
     });
 
     afterEach(async () => {
-      await closeSessionAccessorConformanceFixture(paths.tempDir);
+      // Retire scheduled maintenance before the next case changes its configuration.
+      await closeOpenClawAgentDatabasesAsync(paths.tempDir);
     });
 
     it("conforms for entry load/list/timestamp/upsert/update/replace/patch", async () => {
@@ -1166,17 +1175,12 @@ describe("sqlite session normalization", () => {
   let paths: TestPaths;
 
   beforeEach(() => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-sqlite-norm-"));
-    paths = {
-      sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
-      stateDir: path.join(tempDir, "state"),
-      storePath: path.join(tempDir, "sessions.json"),
-      tempDir,
-    };
+    paths = createTestPaths();
   });
 
   afterEach(async () => {
-    await closeSessionAccessorConformanceFixture(paths.tempDir);
+    // Retire scheduled maintenance before the next case changes its configuration.
+    await closeOpenClawAgentDatabasesAsync(paths.tempDir);
   });
 
   it("maintains normalized session node and window rows", async () => {
@@ -1275,25 +1279,6 @@ describe("sqlite session normalization", () => {
     });
   });
 
-  it("marks identity-only row updates pending validation", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const sessionKey = "agent:main:identity-update";
-    await replaceSessionEntry(
-      { agentId: "main", env, sessionKey, storePath: paths.sqlitePath },
-      { sessionId: "identity-session", updatedAt: 10 },
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
-    database.db
-      .prepare("UPDATE session_nodes SET updated_at = 11 WHERE session_key = ?")
-      .run(sessionKey);
-
-    expect(
-      database.db
-        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
-        .get(sessionKey),
-    ).toEqual({ entry_valid: 0 });
-  });
-
   it("writes a valid session beside an unrelated malformed legacy row", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
@@ -1359,7 +1344,7 @@ describe("sqlite session normalization", () => {
       chatType: "group",
       displayName: "telegram:g-bucephalus-+-topics",
       sessionId: newSessionId,
-      status: "running",
+      status: undefined,
       updatedAt: 1_782_997_881_018,
     });
     await appendTranscriptEvent(
@@ -1453,13 +1438,14 @@ describe("sqlite session normalization", () => {
       ],
     );
 
-    const result = await forkSessionEntryFromParentTarget({
-      fallbackEntry: { sessionId: "", updatedAt: 1 },
-      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
-      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
-      storePath: paths.sqlitePath,
-      decisionSkipPatch: () => ({ forkedFromParent: true, updatedAt: 11 }),
-    });
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: paths.stateDir }, () =>
+      forkSessionEntryFromParentTarget({
+        fallbackEntry: { sessionId: "", updatedAt: 1 },
+        parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+        sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+        storePath: paths.sqlitePath,
+      }),
+    );
 
     expect(result).toMatchObject({
       status: "skipped",
@@ -1468,11 +1454,7 @@ describe("sqlite session normalization", () => {
         status: "skip",
         reason: "parent-too-large",
       },
-      sessionEntry: {
-        forkedFromParent: true,
-        sessionId: "",
-        updatedAt: expect.any(Number),
-      },
+      sessionEntry: { sessionId: "", updatedAt: 1 },
     });
     if (result.status !== "skipped" || result.reason !== "decision-skip") {
       throw new Error(`expected decision-skip, got ${result.status}`);
@@ -2185,7 +2167,7 @@ describe("sqlite session normalization", () => {
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
       )
       .run(legacyKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt);
-    // Exercise delivery-key rejection, not the INSERT trigger's pending-entry state.
+    // The entry identity is valid; admission must still reject its delivery-key alias.
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(legacyKey);
@@ -2241,11 +2223,12 @@ describe("sqlite session normalization", () => {
     ).rejects.toThrow("openclaw doctor --fix");
   });
 
-  it("fails loud for invalid live rows instead of treating them as retained tombstones", () => {
+  it("fails loud for invalid imported rows instead of treating them as retained tombstones", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:invalid-live-row";
     const sessionId = "invalid-live-session";
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    markCanonicalSessionValidationPending(database, [sessionKey]);
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
@@ -2262,7 +2245,7 @@ describe("sqlite session normalization", () => {
     ).toThrow("openclaw doctor --fix");
   });
 
-  it("fails loud when promoted lineage disagrees with canonical entry JSON", () => {
+  it("fails loud when imported lineage disagrees with canonical entry JSON", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:lineage-mismatch";
     const sessionId = "lineage-mismatch-session";
@@ -2272,6 +2255,7 @@ describe("sqlite session normalization", () => {
       updatedAt: 10,
     };
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    markCanonicalSessionValidationPending(database, [sessionKey]);
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key) VALUES (?, ?, ?, ?, ?)",
@@ -2281,14 +2265,14 @@ describe("sqlite session normalization", () => {
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sessionKey);
 
-    expect(() =>
+    await expect(
       listSessionChildEntriesReadOnly({
         agentId: "main",
         env,
         sessionKey: "agent:main:json-parent",
         storePath: paths.sqlitePath,
       }),
-    ).toThrow("openclaw doctor --fix");
+    ).rejects.toThrow("openclaw doctor --fix");
     expect(() =>
       listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
     ).toThrow("openclaw doctor --fix");

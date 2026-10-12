@@ -11,18 +11,25 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import {
+  createConfigMutationRunner,
+  type ConfigMutationOwner,
+} from "../config/config-mutation-runner.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
-import { runSkillConfigMutation, type SkillConfigMutationOwner } from "./config-mutations.ts";
 import { loadSkillStatusReport } from "./status-report.ts";
 
 export type ClawHubSkillDetail = SkillsDetailResult;
 export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
 
+const runSkillConfigMutation = createConfigMutationRunner(
+  "Connection changed before the skill update started.",
+);
+
 export type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
-  runtimeConfig: SkillConfigMutationOwner;
+  runtimeConfig: ConfigMutationOwner;
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
@@ -34,7 +41,7 @@ export type SkillsState = {
   skillsDetailTab: "overview" | "card";
   skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
-  skillMessages: SkillMessageMap;
+  skillMessages: Record<string, SkillMessage>;
   clawhubSearchQuery: string;
   clawhubSearchResults: ClawHubSearchResult[] | null;
   clawhubSearchLoading: boolean;
@@ -85,8 +92,6 @@ type SkillMessage = {
   kind: "success" | "error";
   message: string;
 };
-
-export type SkillMessageMap = Record<string, SkillMessage>;
 
 function setSkillMessage(state: SkillsState, key: string, message: SkillMessage) {
   if (!key.trim()) {
@@ -479,11 +484,14 @@ async function runSkillConfigUpdate(
   canDispatch: () => boolean,
 ) {
   await runSkillMutation(state, { kind: "skill", skillKey }, async (client) => {
-    const refreshError = await runSkillConfigMutation(
+    const configPatch = { skillKey, ...patch };
+    // Settings autosave and skills.update persist the same config; one owner
+    // prevents a pending draft from restoring an older skill credential/toggle.
+    const { refreshError } = await runSkillConfigMutation(
       state.runtimeConfig,
       client,
-      { skillKey, ...patch },
-      canDispatch,
+      (current) => current.request("skills.update", configPatch),
+      { canDispatch, dispatchError: "Access changed before the skill update started." },
     );
     return { kind: "success", message: refreshError ? `${message}\n${refreshError}` : message };
   });

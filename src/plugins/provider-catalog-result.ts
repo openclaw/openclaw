@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   copyArrayEntries,
@@ -75,22 +76,12 @@ function copyModelServiceTiers(
   value: unknown,
 ): NonNullable<ProviderCatalogOutcome["modelServiceTiers"]> {
   return copyArrayEntries(value).flatMap((entry) => {
-    const modelId = readRecordValue(entry, "modelId");
-    const runtimeId = readRecordValue(entry, "runtimeId");
-    const api = readRecordValue(entry, "api");
-    const baseUrl = readRecordValue(entry, "baseUrl");
+    const modelId = normalizeOptionalString(readRecordValue(entry, "modelId"));
+    const runtimeId = normalizeOptionalString(readRecordValue(entry, "runtimeId"));
+    const api = normalizeOptionalString(readRecordValue(entry, "api"));
+    const baseUrl = normalizeOptionalString(readRecordValue(entry, "baseUrl"));
     const tiers = readRecordValue(entry, "serviceTiers");
-    if (
-      typeof modelId !== "string" ||
-      !modelId.trim() ||
-      typeof runtimeId !== "string" ||
-      !runtimeId.trim() ||
-      typeof api !== "string" ||
-      !api.trim() ||
-      typeof baseUrl !== "string" ||
-      !baseUrl.trim() ||
-      !Array.isArray(tiers)
-    ) {
+    if (!modelId || !runtimeId || !api || !baseUrl || !Array.isArray(tiers)) {
       return [];
     }
     const serviceTiers = copyArrayEntries(tiers);
@@ -103,14 +94,24 @@ function copyModelServiceTiers(
     }
     return [
       {
-        modelId: modelId.trim(),
-        runtimeId: runtimeId.trim(),
-        api: api.trim(),
-        baseUrl: baseUrl.trim(),
+        modelId,
+        runtimeId,
+        api,
+        baseUrl,
         serviceTiers: [...new Set(serviceTiers.map((tier) => tier.trim()))],
       },
     ];
   });
+}
+
+function copyModelIds(value: unknown): string[] {
+  return [
+    ...new Set(
+      copyArrayEntries(value).flatMap((id) =>
+        typeof id === "string" && id.trim() ? [id.trim()] : [],
+      ),
+    ),
+  ];
 }
 
 /** Copies valid, secret-free provider outcomes out of a catalog hook result. */
@@ -126,6 +127,7 @@ export function copyProviderCatalogOutcomes(
     const rejectionScope = readRecordValue(entry, "rejectionScope");
     const status = readRecordValue(entry, "status");
     const rawModelOrder = readRecordValue(entry, "modelOrder");
+    const rawListedModelIds = readRecordValue(entry, "listedModelIds");
     if (
       typeof provider !== "string" ||
       provider.trim().length === 0 ||
@@ -137,16 +139,8 @@ export function copyProviderCatalogOutcomes(
     ) {
       return [];
     }
-    const modelOrder =
-      status === "ready" && rawModelOrder !== undefined
-        ? [
-            ...new Set(
-              copyArrayEntries(rawModelOrder).flatMap((value) =>
-                typeof value === "string" && value.trim() ? [value.trim()] : [],
-              ),
-            ),
-          ]
-        : [];
+    const ready = status === "ready";
+    const modelOrder = ready && rawModelOrder !== undefined ? copyModelIds(rawModelOrder) : [];
     return [
       {
         provider: provider.trim(),
@@ -159,6 +153,10 @@ export function copyProviderCatalogOutcomes(
             }
           : {}),
         ...(modelOrder.length > 0 ? { modelOrder } : {}),
+        // An empty successful listing remains authoritative.
+        ...(ready && Array.isArray(rawListedModelIds)
+          ? { listedModelIds: copyModelIds(rawListedModelIds) }
+          : {}),
       },
     ];
   });

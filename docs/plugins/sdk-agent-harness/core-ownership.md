@@ -39,6 +39,10 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
+### Prepared local execution environment
+
+`hostCapabilities.preparedEnvironment()` returns captured identity and execution facts for the admitted attempt. Its optional `localGitConfigParameters` is an append fragment, not a replacement for `GIT_CONFIG_PARAMETERS`. Apply it only to local child processes owned by the harness. Preserve unrelated inherited or explicitly configured Git parameters and the runtime's environment filters; an explicit native value, including an empty string, replaces its inherited base before the host fragment is appended. Keep inherited credentials in the child environment rather than copying them into tool request overrides or persisted native thread configuration. Remote, sandbox, and externally started peers retain their existing environment owners.
+
 ### Current input files for local execution
 
 A harness that has confirmed unsandboxed execution on the Gateway host may call
@@ -96,7 +100,7 @@ stale local copy.
 
 For automatic Memory context, the same read also returns `workspaceRelativePath`
 for files within the workspace mount. Memory Core classifies that source using
-its existing rules and Gateway provenance records, without probing Gateway-local
+its existing rules and Gateway provenance records, without checking Gateway-local
 files. Other Memory plugins must declare `supportsWorkspaceMemoryReadSources`
 and consume the classifier's `readSources` input; otherwise automatic remote
 Memory context is excluded. Missing source metadata cannot select a local copy.
@@ -327,7 +331,7 @@ host finalizer's model does not overwrite the native session's selection.
 ### Verified setup runtime artifacts
 
 A local harness that can supply inference for first-run setup must attest the
-implementation that completed the probe. When
+implementation that completed the check. When
 `params.captureRuntimeArtifact` is true, return an opaque
 `result.runtimeArtifact` with a stable id and content fingerprint. Register a
 matching `runtimeArtifact.validate(...)` capability that rechecks that binding
@@ -369,9 +373,11 @@ For auxiliary session control calls, `resolveSessionModelRef` from
 `openclaw/plugin-sdk/model-session-runtime` resolves the current model selection.
 `prepareAgentRuntimeAuth` from `openclaw/plugin-sdk/agent-harness-runtime` selects
 its auth route and ordered credential attempts from the caller's loaded auth
-snapshot. Preserve the selected attempt's profile, API, and fallback restrictions
-when materializing credentials; this keeps control calls on the same billing
-route as agent turns.
+snapshot. When the model has no concrete transport of its own, such as a natively
+listed model, pass the routes from the admission-captured published catalog (the
+catalog the model picker read) as `observedRoutes`. Preserve the
+selected attempt's profile, API, and fallback restrictions when materializing
+credentials; this keeps control calls on the same billing route as agent turns.
 
 For tools that support both standalone and Gateway execution,
 `hasGatewayToolRoutingContext()` from

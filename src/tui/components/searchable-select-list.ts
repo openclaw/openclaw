@@ -2,7 +2,6 @@ import {
   type Component,
   type Focusable,
   fuzzyFilter,
-  Input,
   isKeyRelease,
   matchesKey,
   type SelectItem,
@@ -16,6 +15,7 @@ import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-se
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import { sanitizeRenderableLine } from "../tui-formatters.js";
+import { SelectListInput } from "./select-list-input.js";
 
 export interface SearchableSelectListTheme extends SelectListTheme {
   searchPrompt: (text: string) => string;
@@ -25,9 +25,13 @@ export interface SearchableSelectListTheme extends SelectListTheme {
 
 export interface SearchableSelectItem extends SelectItem {
   searchText?: string;
+  /** Listed only while searching or after the user chooses an expander row. */
+  collapsed?: boolean;
+  /** Choosing this row reveals the collapsed rows in place instead of selecting it. */
+  expandsCollapsed?: boolean;
 }
 
-export class SearchableSelectList implements Component, Focusable {
+export class SearchableSelectList extends SelectListInput implements Component, Focusable {
   private items: SearchableSelectItem[];
   private preparedItems?: Array<{
     item: SearchableSelectItem;
@@ -38,9 +42,9 @@ export class SearchableSelectList implements Component, Focusable {
   private filteredItems: SearchableSelectItem[];
   private selectedIndex = 0;
   private retainedSelection?: string;
-  private searchInput: Input;
   private highlightPatterns?: RegExp[];
   private emptyMessage = "No matches";
+  private expanded = false;
 
   onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
@@ -56,18 +60,10 @@ export class SearchableSelectList implements Component, Focusable {
     private readonly maxVisible: number,
     private readonly theme: SearchableSelectListTheme,
   ) {
+    super();
     this.items = items;
-    this.filteredItems = items;
-    this.searchInput = new Input();
-    this.searchInput.onEscape = () => this.onCancel?.();
-  }
-
-  get focused(): boolean {
-    return this.searchInput.focused;
-  }
-
-  set focused(value: boolean) {
-    this.searchInput.focused = value;
+    this.filteredItems = items.filter((item) => !item.collapsed);
+    this.input.onEscape = () => this.onCancel?.();
   }
 
   setItems(items: SearchableSelectItem[], emptyMessage = "No matches", fallbackValue?: string) {
@@ -89,9 +85,11 @@ export class SearchableSelectList implements Component, Focusable {
   }
 
   private updateFilter() {
-    const query = this.searchInput.getValue().trim();
+    const query = this.input.getValue().trim();
 
-    this.filteredItems = query ? this.smartFilter(query) : this.items;
+    this.filteredItems = query
+      ? this.smartFilter(query)
+      : this.items.filter((item) => (this.expanded ? !item.expandsCollapsed : !item.collapsed));
     this.selectedIndex = 0;
   }
 
@@ -118,6 +116,9 @@ export class SearchableSelectList implements Component, Focusable {
       };
     });
     for (const prepared of this.preparedItems) {
+      if (prepared.item.expandsCollapsed) {
+        continue;
+      }
       const labelIndex = prepared.label.indexOf(q);
       if (labelIndex !== -1) {
         scoredItems.push({ item: prepared.item, tier: 0, score: labelIndex });
@@ -171,23 +172,18 @@ export class SearchableSelectList implements Component, Focusable {
     return parts.map((part) => part.value).join("");
   }
 
-  invalidate() {
-    this.searchInput.invalidate();
-  }
-
   render(width: number): string[] {
     const lines: string[] = [];
     const safeWidth = Math.max(0, width);
 
-    const promptText = "search: ";
-    const prompt = this.theme.searchPrompt(promptText);
-    const inputWidth = Math.max(0, safeWidth - visibleWidth(prompt));
-    const inputLines = this.searchInput.render(inputWidth);
-    const inputText = inputLines[0] ?? "";
-    lines.push(truncateToWidth(`${prompt}${this.theme.searchInput(inputText)}`, safeWidth, ""));
+    lines.push(
+      this.renderInput(safeWidth, this.theme.searchPrompt("search: "), (text) =>
+        this.theme.searchInput(text),
+      ),
+    );
     lines.push("");
 
-    const query = this.searchInput.getValue().trim();
+    const query = this.input.getValue().trim();
 
     if (this.filteredItems.length === 0) {
       const message = this.items.length === 0 ? this.emptyMessage : "No matches";
@@ -291,17 +287,21 @@ export class SearchableSelectList implements Component, Focusable {
 
     if (matchesKey(keyData, "enter")) {
       const item = this.filteredItems[this.selectedIndex];
+      if (item?.expandsCollapsed) {
+        // The expander's slot becomes the first revealed row; callers order rows to match.
+        const index = this.selectedIndex;
+        this.expanded = true;
+        this.updateFilter();
+        this.selectedIndex = Math.min(index, this.filteredItems.length - 1);
+        return;
+      }
       if (item && this.onSelect) {
         this.onSelect(item);
       }
       return;
     }
 
-    const prevValue = this.searchInput.getValue();
-    this.searchInput.handleInput(keyData);
-    const newValue = this.searchInput.getValue();
-
-    if (prevValue !== newValue) {
+    if (this.updateInput(keyData)) {
       // Only current-query patterns are reusable; retaining older edits grows without bound.
       this.highlightPatterns = undefined;
       this.updateFilter();

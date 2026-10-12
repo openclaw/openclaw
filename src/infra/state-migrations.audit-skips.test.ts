@@ -9,6 +9,7 @@ import {
   AuditMigrationFixture,
   buildAuditScrubbedContent,
   configAuditRecord,
+  failAuditMove,
   systemAuditEvent,
   writeAuditRestoreJournal,
 } from "./state-migrations.audit.test-support.js";
@@ -52,27 +53,7 @@ describe("Doctor legacy audit skips", () => {
       } else {
         await audit.writeJsonLines(audit.config.source, [record]);
         preservedPath = audit.config.source;
-        const nativeModule = (await import(
-          new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href
-        )) as {
-          requireNativeBinding(): {
-            renameNoReplace(...args: unknown[]): void;
-            linkBeneath(...args: unknown[]): void;
-          };
-        };
-        const native = nativeModule.requireNativeBinding();
-        for (const [method, code] of [
-          ["renameNoReplace", "EINVAL"],
-          ["linkBeneath", "EPERM"],
-        ] as const) {
-          const original = native[method].bind(native);
-          vi.spyOn(native, method).mockImplementation((...args) => {
-            if (args[1] === path.basename(audit.config.source)) {
-              throw Object.assign(new Error(`${method} unavailable: ${code}`), { code });
-            }
-            return original(...args);
-          });
-        }
+        failAuditMove(audit, audit.config.source);
       }
       const sourceBytes = await fs.readFile(preservedPath);
       const sanitizedBytes =

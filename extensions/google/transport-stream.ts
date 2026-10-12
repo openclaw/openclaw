@@ -43,6 +43,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleNativeVideoModelId } from "./provider-models.js";
@@ -194,14 +195,10 @@ function mapToolChoice(
 }
 
 function mapStopReasonString(reason: string): "stop" | "length" | "error" {
-  switch (reason) {
-    case "STOP":
-      return "stop";
-    case "MAX_TOKENS":
-      return "length";
-    default:
-      return "error";
+  if (reason === "STOP") {
+    return "stop";
   }
+  return reason === "MAX_TOKENS" || reason === "CONTINUATION" ? "length" : "error";
 }
 
 function normalizeToolCallId(id: string): string {
@@ -920,12 +917,7 @@ async function* parseGoogleSseChunks(
           completed = true;
           break;
         }
-        let trailingChunk: unknown;
-        try {
-          trailingChunk = JSON.parse(trailingPayload);
-        } catch {
-          throw new Error("Google SSE stream ended with an incomplete frame");
-        }
+        const trailingChunk = safeParseJson(trailingPayload);
         if (!isRecord(trailingChunk) || !isRecord(trailingChunk.error)) {
           throw new Error("Google SSE stream ended with an incomplete frame");
         }

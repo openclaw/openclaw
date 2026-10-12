@@ -28,6 +28,7 @@ vi.mock("./client.js", async (importOriginal) => ({
 function guestConfig(enabled = true): OpenClawConfig {
   return {
     ...config,
+    messages: { queue: { byChannel: { x: "followup" } } },
     agents: {
       entries: {
         maintainer: {
@@ -101,6 +102,7 @@ describe("X guest turns", () => {
 
   it.each([false, true])("preserves maintainer turns with guest mode %s", async (enabled) => {
     const cfg = guestConfig(enabled);
+    cfg.messages = { queue: { mode: "steer" } };
     const done = Promise.withResolvers<void>();
     const test = fixture({
       cfg,
@@ -227,6 +229,35 @@ describe("X guest turns", () => {
         expect(test.api.searchConversation).not.toHaveBeenCalled();
         expect(running.status()).toMatchObject({
           guestModeBlockedReason: expect.stringContaining("X guest mode requires"),
+        });
+      } finally {
+        await test.stop();
+      }
+    },
+  );
+
+  it.each(["steer", "interrupt", undefined] as const)(
+    "refuses guests before thread reads with queue mode %s",
+    async (mode) => {
+      const cfg = guestConfig();
+      cfg.messages = { queue: mode ? { byChannel: { x: mode } } : {} };
+      const done = Promise.withResolvers<void>();
+      const test = fixture({
+        cfg,
+        posts: [post("501", "99")],
+        queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
+      });
+      const running = test.start();
+      try {
+        await done.promise;
+        expect(test.dispatch).not.toHaveBeenCalled();
+        expect(test.api.searchConversation).not.toHaveBeenCalled();
+        expect(running.status()).toMatchObject({
+          guestModeBlockedReason: expect.stringContaining("messages.queue.byChannel.x"),
+          guests: {
+            admittedToday: 0,
+            blockedReason: expect.stringContaining("messages.queue.byChannel.x"),
+          },
         });
       } finally {
         await test.stop();

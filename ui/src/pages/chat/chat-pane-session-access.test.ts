@@ -78,7 +78,7 @@ describe("chat pane session access", () => {
 
       pane.beginHeaderRename(session);
 
-      expect(pane.headerEditing).toBe(false);
+      expect(Boolean(pane.headerRenameSession)).toBe(false);
       expect(state.chatError).toBeTruthy();
       expect(requestUpdate).toHaveBeenCalledOnce();
       expect(patch).not.toHaveBeenCalled();
@@ -138,7 +138,7 @@ describe("chat pane session access", () => {
     });
     pane.commitHeaderRename();
 
-    expect(pane.headerEditing).toBe(false);
+    expect(Boolean(pane.headerRenameSession)).toBe(false);
     expect(patch).not.toHaveBeenCalled();
   });
 

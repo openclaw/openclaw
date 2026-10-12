@@ -101,6 +101,7 @@ export function resolvePlacementComposer(params: {
   restartingKey: string | null;
   row: GatewaySessionRow | undefined;
   startupPending: boolean;
+  requiredWorkerInferenceProfileId?: string;
   workspaceResultReconciling: boolean;
   onRecover: () => void;
   onReclaim: () => void;
@@ -119,8 +120,17 @@ export function resolvePlacementComposer(params: {
     workspaceResultReconciling: canSendDuringWorkspaceSync,
   });
   const canSendDuringSetup = state.kind === "setup" && !params.startupPending;
-  const busyMessage = !params.startupPending && state.kind === "busy" ? state.message : null;
   const placement = params.row?.placement;
+  const hideRequiredWorkerSyncHint =
+    canSendDuringWorkspaceSync &&
+    placement?.state === "active" &&
+    placement.inference === "worker" &&
+    Boolean(params.requiredWorkerInferenceProfileId) &&
+    params.requiredWorkerInferenceProfileId === placement.profileId;
+  const busyMessage =
+    !params.startupPending && state.kind === "busy" && !hideRequiredWorkerSyncHint
+      ? state.message
+      : null;
   const canRecoverOnSend =
     !params.startupPending &&
     state.kind === "failed" &&
@@ -132,6 +142,7 @@ export function resolvePlacementComposer(params: {
   const common = {
     state,
     blocksSend:
+      !params.startupPending &&
       state.kind !== "ready" &&
       !canSendDuringWorkspaceSync &&
       !canSendDuringSetup &&
@@ -272,18 +283,11 @@ export function resolveChatPanePlacement(params: {
   const reclaiming = params.reclaimingKey === params.row?.key;
   const restarting = params.restartingKey === params.row?.key;
   const action = resolveCloudWorkerStopAction(params.row?.placement);
-  const moveAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.move",
-    requiredScope: "operator.write",
-  });
-  const reclaimAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.write",
-  });
-  const restartAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.dispatch",
-    requiredScope: "operator.write",
-  });
+  const readWriteAccess = (method: string) =>
+    readSessionMethodAccess(params.gatewaySnapshot, { method, requiredScope: "operator.write" });
+  const moveAccess = readWriteAccess("sessions.move");
+  const reclaimAccess = readWriteAccess("sessions.reclaim");
+  const restartAccess = readWriteAccess("sessions.dispatch");
   const placementState = params.row?.placement?.state;
   const dispatchRequired = repositorySessionNeedsWorker(params.row);
   const recoveryAction =

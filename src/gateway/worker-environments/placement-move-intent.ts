@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
-import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import {
   executeSqliteQuerySync,
@@ -18,13 +17,18 @@ import type {
 } from "../../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
+import type {
+  WorkerPlacementMoveIntent,
+  WorkerPlacementMoveSource,
+  WorkerPlacementMoveTarget,
+} from "./placement-move-intent.types.js";
 import {
   isForceAbandonedWorkerPlacement,
   normalizeEpoch,
   required,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
-import { getRequired, query, transitionValues } from "./placement-row-codec.js";
+import { find, fromRow, getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -42,25 +46,6 @@ type MoveSourceCompletion = {
   operationId: string;
   sessionId: string;
   expectedGeneration: number;
-};
-
-export type WorkerPlacementMoveTarget = SessionMoveTarget;
-
-export type WorkerPlacementMoveSource = {
-  generation: number;
-  environmentId: string;
-  ownerEpoch: number;
-};
-
-export type WorkerPlacementMoveIntent = {
-  operationId: string;
-  sessionId: string;
-  source: WorkerPlacementMoveSource;
-  target: WorkerPlacementMoveTarget;
-  abandonSource: boolean;
-  lastError: string | null;
-  createdAtMs: number;
-  updatedAtMs: number;
 };
 
 const moveQuery = (db: DatabaseSync) => getNodeSqliteKysely<MoveDatabase>(db);
@@ -198,7 +183,7 @@ function normalizeAbandonSource(value: number | null): boolean {
   throw new Error("Invalid worker placement move source abandonment value");
 }
 
-function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
+export function workerPlacementMoveFromRow(row: MoveRow): WorkerPlacementMoveIntent {
   const source = normalizeWorkerPlacementMoveSource({
     generation: row.source_generation,
     environmentId: row.source_environment_id,
@@ -275,7 +260,7 @@ export function readWorkerPlacementMovesReadOnly(
         .selectAll()
         .where("session_id", "in", sessionIds.slice(offset, offset + 250)),
     ).rows) {
-      const intent = fromRow({
+      const intent = workerPlacementMoveFromRow({
         ...row,
         target_machine_class: row.target_machine_class ?? null,
         target_os: row.target_os ?? null,
@@ -297,7 +282,7 @@ function requireExactMove(
   if (!row || row.session_id !== sessionId) {
     throw new Error(`Session ${sessionId} placement move changed before completion`);
   }
-  return fromRow(row);
+  return workerPlacementMoveFromRow(row);
 }
 
 function exactMoveValues(intent: WorkerPlacementMoveIntent) {
@@ -359,12 +344,12 @@ function requireExactAttachedEnvironment(
 }
 
 export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
-  const { read, write, now } = runtime;
+  const { write, now } = runtime;
   const completeSourceToLocal = (
     completion:
       | { state: "reconciling"; input: MoveSourceCompletion }
       | { state: "failed"; input: MoveSourceCompletion & { expectedRecoveryError: string } },
-  ): WorkerSessionPlacementRecord =>
+  ): { placement: WorkerSessionPlacementRecord; moveRemoved: boolean } =>
     write((db) => {
       const { state, input } = completion;
       const intent = requireExactMove(db, input);
@@ -397,30 +382,32 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       if (state === "failed") {
         statement = statement.where("recovery_error", "=", input.expectedRecoveryError);
       }
-      const result = executeSqliteQuerySync(db, statement.where("turn_claim_owner", "is", null));
-      if (result.numAffectedRows !== 1n) {
+      const result = executeSqliteQuerySync(
+        db,
+        statement.where("turn_claim_owner", "is", null).returningAll(),
+      );
+      const row = result.rows[0];
+      if (!row) {
         throw new Error(`Session ${intent.sessionId} changed during ${label} placement move`);
       }
       if (intent.target.kind === "gateway") {
         deleteExactMove(db, intent);
       }
-      const record = getRequired(db, intent.sessionId);
+      const record = fromRow(row);
       publishPlacementTurnClaimState(db, record);
-      return record;
+      return { placement: record, moveRemoved: intent.target.kind === "gateway" };
     });
 
   return {
-    getPlacementMove(sessionId: string): WorkerPlacementMoveIntent | undefined {
-      const row = findMoveRow(read(), "session_id", required(sessionId, "move session id"));
-      return row ? fromRow(row) : undefined;
-    },
-
-    beginPlacementMove(input: {
-      sessionId: string;
-      source: WorkerPlacementMoveSource;
-      target: WorkerPlacementMoveTarget;
-      abandonSource?: true;
-    }): {
+    beginPlacementMove(
+      input: {
+        sessionId: string;
+        source: WorkerPlacementMoveSource;
+        target: WorkerPlacementMoveTarget;
+        abandonSource?: true;
+      },
+      beforeBegin?: (placement: WorkerSessionPlacementRecord, joined: boolean) => void,
+    ): {
       intent: WorkerPlacementMoveIntent;
       placement: WorkerSessionPlacementRecord;
       joined: boolean;
@@ -436,7 +423,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       return write((db) => {
         const existingRow = findMoveRow(db, "session_id", sessionId);
         if (existingRow) {
-          const existing = fromRow(existingRow);
+          const existing = workerPlacementMoveFromRow(existingRow);
           if (
             !isDeepStrictEqual(existing.source, source) ||
             !isDeepStrictEqual(existing.target, target) ||
@@ -444,7 +431,9 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           ) {
             throw new Error(`Session ${sessionId} already has a conflicting placement move`);
           }
-          return { intent: existing, placement: getRequired(db, sessionId), joined: true };
+          const placement = getRequired(db, sessionId);
+          beforeBegin?.(placement, true);
+          return { intent: existing, placement, joined: true };
         }
         const current = getRequired(db, sessionId);
         if (
@@ -459,6 +448,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         if (current.state === "active") {
           requireExactAttachedEnvironment(db, { sessionId, ...source });
         }
+        beforeBegin?.(current, false);
         ensureWorkerPlacementMoveSchema(db);
         const timestamp = now();
         const row: MoveRow = {
@@ -490,7 +480,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
                 },
                 timestamp,
               );
-        return { intent: fromRow(row), placement, joined: false };
+        return { intent: workerPlacementMoveFromRow(row), placement, joined: false };
       });
     },
 
@@ -500,33 +490,46 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       error: string;
     }): boolean {
       return write((db) => {
-        const row = findMoveRow(db, "operation_id", normalizeOperationId(input.operationId));
-        if (!row || row.session_id !== required(input.sessionId, "move session id")) {
+        if (!tableExists(db, "worker_session_placement_moves")) {
           return false;
         }
-        const intent = fromRow(row);
         const statement = moveQuery(db)
           .updateTable("worker_session_placement_moves")
           .set({ last_error: boundedWorkerError(input.error), updated_at_ms: now() })
-          .where((eb) => eb.and(exactMoveValues(intent)));
-        sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
-        return executeSqliteQuerySync(db, statement).numAffectedRows === 1n;
+          .where("operation_id", "=", normalizeOperationId(input.operationId))
+          .where("session_id", "=", required(input.sessionId, "move session id"));
+        const changed = executeSqliteQuerySync(db, statement).numAffectedRows === 1n;
+        if (changed) {
+          sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
+        }
+        return changed;
       });
     },
 
-    cancelPlacementMove(input: { operationId: string; sessionId: string }): void {
-      write((db) => {
+    cancelPlacementMove(input: {
+      operationId: string;
+      sessionId: string;
+      expectedLocalGeneration?: number;
+    }): boolean {
+      return write((db) => {
+        if (input.expectedLocalGeneration !== undefined) {
+          const current = find(db, required(input.sessionId, "move session id"));
+          if (current?.state !== "local" || current.generation !== input.expectedLocalGeneration) {
+            return false;
+          }
+        }
         deleteExactMove(db, requireExactMove(db, input));
+        return true;
       });
     },
 
-    completePlacementMoveSourceToLocal(input: MoveSourceCompletion): WorkerSessionPlacementRecord {
+    completePlacementMoveSourceToLocal(input: MoveSourceCompletion) {
       return completeSourceToLocal({ state: "reconciling", input });
     },
 
     completeAbandonedPlacementMoveSourceToLocal(
       input: MoveSourceCompletion & { expectedRecoveryError: string },
-    ): WorkerSessionPlacementRecord {
+    ) {
       return completeSourceToLocal({ state: "failed", input });
     },
 

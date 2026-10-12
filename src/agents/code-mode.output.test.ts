@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  runCodeModeScriptHeadless,
+  createCodeModeTools,
+} from "./code-mode.js";
 import {
   createCodeModeHarness,
   createHeadlessCodeModeHarness,
@@ -13,12 +17,19 @@ import {
   resultDetails,
   testing,
   waitUntilCompleted,
+  fakeTool,
+  runUntilCompleted,
 } from "./code-mode.test-support.js";
-import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
+import { projectMcpCallToolResult } from "./mcp-content.js";
+import {
+  addClientToolsToToolCatalog,
+  registerHeadlessToolSearchCatalog,
+  restrictToolSearchCatalog,
+} from "./tool-search-catalog.js";
+import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-const fakeTool = pluginToolWithExecute;
-async function run(mode: string, code: string, targets: AnyAgentTool[] = []) {
+async function runOutput(mode: string, code: string, targets: AnyAgentTool[] = []) {
   if (mode === "headless") {
     return runCodeModeScriptHeadless({ ctx: createHeadlessCodeModeHarness(targets), code });
   }
@@ -30,11 +41,10 @@ async function run(mode: string, code: string, targets: AnyAgentTool[] = []) {
   return { ...final, output: [...(first.output as unknown[]), ...(final.output as unknown[])] };
 }
 
-afterEach(resetCodeModeTestState);
 describe("Code Mode output provenance", () => {
   it("settles final getter work exactly once across suspension", async () => {
     const writes: string[] = [];
-    const writer = fakeTool("getter_write", "Record a synthetic write", async () => {
+    const writer = pluginToolWithExecute("getter_write", "Record a synthetic write", async () => {
       writes.push("saved");
       return jsonResult({ ok: true });
     });
@@ -46,7 +56,7 @@ describe("Code Mode output provenance", () => {
           void yield_control();
           return reads;
         } };`;
-    const result = await run("interactive", code, [writer]);
+    const result = await runOutput("interactive", code, [writer]);
     expect(result).toEqual(
       expect.objectContaining({
         status: "completed",
@@ -89,15 +99,6 @@ describe("Code Mode output provenance", () => {
       cap: 1024,
       first: "�" + "🦞".repeat(1000),
       last: "é".repeat(80),
-      value: true,
-      fail: false,
-    },
-    {
-      name: "final value",
-      cap: 1024,
-      first: "x".repeat(700),
-      last: "",
-      value: { payload: "é".repeat(1000) },
       fail: false,
     },
     {
@@ -105,18 +106,17 @@ describe("Code Mode output provenance", () => {
       cap: 1024,
       first: "🦞".repeat(140),
       last: "é".repeat(240),
-      value: true,
       fail: true,
     },
   ])(
     "bounds original output and values across worker legs: $name",
-    async ({ cap, first, last, value, fail }) => {
-      const tool = fakeTool("output_boundary", "Output boundary", async () =>
+    async ({ cap, first, last, fail }) => {
+      const tool = pluginToolWithExecute("output_boundary", "Output boundary", async () =>
         jsonResult({ ok: true }),
       );
       const result = await runCodeModeScriptHeadless({
         ctx: createHeadlessCodeModeHarness([tool]),
-        code: `text(${JSON.stringify(first)}); await output_boundary({}); ${last ? `text(${JSON.stringify(last)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(4000));' : `return ${JSON.stringify(value)};`}`,
+        code: `text(${JSON.stringify(first)}); await output_boundary({}); ${last ? `text(${JSON.stringify(last)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(4000));' : "return true;"}`,
         ...(cap ? { overrides: { maxOutputBytes: cap } } : {}),
       });
       expect(result.status).toBe(fail ? "failed" : "completed");
@@ -127,11 +127,7 @@ describe("Code Mode output provenance", () => {
       ];
       expectOriginalCodeModeMarker(result.output[0], original);
       if (result.status === "completed") {
-        if (value === true) {
-          expect(result.value).toBe(true);
-        } else {
-          expectOriginalCodeModeMarker(result.value, value);
-        }
+        expect(result.value).toBe(true);
       } else {
         expect(result.code).toBe("internal_error");
         expect(result.error).toMatch(/^Error: DIAGNOSTIC.*\[error truncated\]$/s);
@@ -157,7 +153,7 @@ describe("Code Mode output provenance", () => {
       json(literal); json(undefined); text(undefined); json(12n);
       await yield_control(); mutable.label = "later"; json(mutable);
       return literal;`;
-    const result = await run("headless", code, []);
+    const result = await runOutput("headless", code, []);
     expect(result).toMatchObject({
       status: "completed",
       value: literal,
@@ -171,37 +167,6 @@ describe("Code Mode output provenance", () => {
         { type: "json", value: { label: "later" } },
       ],
     });
-  });
-
-  it("projects intact bridge data only when emitted", async () => {
-    const payload = { text: "🦞".repeat(1000) };
-    const fixture = fakeTool("marker_fixture", "Large nested result", async () =>
-      jsonResult(payload),
-    );
-    const h = createCodeModeHarness({ codeMode: { maxOutputBytes: 1024 } });
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, fixture] });
-    const marker = resultDetails(
-      await h.tools[0]!.execute("marker", { code: "return await marker_fixture({});" }),
-    ).value;
-    expect(marker).toMatchObject({
-      truncated: true,
-      reference: { id: expect.any(String), bytes: Buffer.byteLength(JSON.stringify(payload)) },
-    });
-    const result = await waitUntilCompleted({
-      details: resultDetails(
-        await h.tools[0]!.execute("emit-marker", {
-          code: "const marker = await marker_fixture({}); text(JSON.stringify(marker)); await yield_control(); json(marker); return true;",
-        }),
-      ),
-      waitTool: h.tools[1]!,
-    });
-    expect(result).toMatchObject({ status: "completed", value: true });
-    expectCodeModeSharedBudget(result, 1024);
-    expectOriginalCodeModeMarker((result.output as unknown[])[0], [
-      { type: "text", text: JSON.stringify(payload) },
-      { type: "json", value: payload },
-    ]);
-    expect(fixture.execute).toHaveBeenCalledTimes(2);
   });
 
   it("reports only unsettled calls without replaying clipped output", async () => {
@@ -329,34 +294,28 @@ describe("Code Mode direct metadata provenance", () => {
     expect(client.execute).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["throw new Error(client_metadata.description);", undefined, "internal_error"],
-    ["text(client_metadata.description); while (true) {}", 2000, "timeout"],
-  ] as const)(
-    "protects direct metadata on guest failure: %s",
-    async (code, timeoutMs, failureCode) => {
-      const { catalogRef, config, tools } = createCodeModeHarness({ codeMode: { timeoutMs } });
-      const client = pluginTool("client_metadata", hostile);
-      applyCodeModeCatalog({ tools, config, catalogRef });
-      addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
-      const result = await expectDefined(tools[0], "exec").execute("metadata-error", {
-        code,
-      });
-      expect(resultDetails(result)).toMatchObject({
-        status: "failed",
-        code: failureCode,
-        failurePhase: "guest",
-      });
-      expect(JSON.stringify(resultDetails(result))).toContain(hostile);
-      const text = result.content
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n");
-      expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-      expect(text).toContain("[REMOVED_SPECIAL_TOKEN]");
-      expect(text).not.toContain("<|endoftext|>");
-    },
-  );
+  it("protects direct metadata on guest timeout", async () => {
+    const { catalogRef, config, tools } = createCodeModeHarness({ codeMode: { timeoutMs: 2000 } });
+    const client = pluginTool("client_metadata", hostile);
+    applyCodeModeCatalog({ tools, config, catalogRef });
+    addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
+    const result = await expectDefined(tools[0], "exec").execute("metadata-error", {
+      code: "text(client_metadata.description); while (true) {}",
+    });
+    expect(resultDetails(result)).toMatchObject({
+      status: "failed",
+      code: "timeout",
+      failurePhase: "guest",
+    });
+    expect(JSON.stringify(resultDetails(result))).toContain(hostile);
+    const text = result.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(text).toContain("[REMOVED_SPECIAL_TOKEN]");
+    expect(text).not.toContain("<|endoftext|>");
+  });
 
   it("leaves a native declaration trusted when unused external metadata is present", async () => {
     const { catalogRef, config, tools } = createCodeModeHarness();
@@ -382,4 +341,340 @@ describe("Code Mode direct metadata provenance", () => {
     expect(text).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(text).not.toContain(hostile);
   });
+});
+
+const cleanups: Array<() => void> = [];
+afterEach(async () => {
+  await resetCodeModeTestState();
+  for (const cleanup of cleanups.splice(0)) {
+    cleanup();
+  }
+});
+
+function setup(
+  targets: AnyAgentTool[] = [],
+  options?: Parameters<typeof createCodeModeHarness>[0],
+) {
+  const h = createCodeModeHarness(options);
+  const abort = new AbortController();
+  const ctx = { ...h.ctx, abortSignal: abort.signal };
+  const tools = createCodeModeTools(ctx);
+  applyCodeModeCatalog({ ...ctx, tools: [...tools, ...targets] });
+  cleanups.push(() => clearToolSearchCatalog(ctx));
+  const execute = (code: string) => tools[0]!.execute("cell", { code });
+  return {
+    ctx,
+    abort,
+    tools,
+    execute,
+    run: async (code: string) => resultDetails(await execute(code)),
+  };
+}
+
+it("preserves saved data at the UTF-8 cap and reuses deleted capacity", async () => {
+  const { run } = setup([], { codeMode: { maxSnapshotBytes: 1024, maxOutputBytes: 1024 } });
+  const saved = await run('return await results.save("🦞".repeat(255));');
+  expect(saved).toMatchObject({
+    status: "completed",
+    value: {
+      id: expect.any(String),
+      bytes: 1022,
+      count: 1,
+      shape: "string",
+      previewTruncated: true,
+    },
+  });
+  const id = JSON.stringify((saved.value as { id: string }).id);
+  const result = await run(`
+    let overflow; try { await results.save(123); } catch (error) { overflow = error.message; }
+    const first = await results.load(${id});
+    await results.delete(${id});
+    const replacement = await results.save("🦞".repeat(255));
+    return {overflow, length:first.length, bytes:replacement.bytes};`);
+  expect(result).toMatchObject({
+    status: "completed",
+    value: {
+      overflow: expect.stringContaining("results capacity exceeded"),
+      length: 510,
+      bytes: 1022,
+    },
+  });
+  expect(await run(`return await results.load(${id});`)).toMatchObject({
+    status: "failed",
+    error: expect.stringContaining("unavailable or expired"),
+  });
+});
+
+it.each(["replacement", "restriction", "clear", "abort", "run", "session"] as const)(
+  "rejects saved data after %s invalidation",
+  async (transition) => {
+    const seed = pluginToolWithExecute("seed", "Fixture", async () => jsonResult(true));
+    const { ctx, abort, tools, run } = setup([seed]);
+    const saved = await run("return await results.save({value:42});");
+    expect(saved.status).toBe("completed");
+    const id = JSON.stringify((saved.value as { id: string }).id);
+    const parked =
+      transition === "replacement" || transition === "restriction"
+        ? await run(`await yield_control(); return await results.load(${id});`)
+        : undefined;
+    switch (transition) {
+      case "restriction":
+        restrictToolSearchCatalog({ ...ctx, allowedToolNames: new Set() });
+        break;
+      case "clear":
+        clearToolSearchCatalog(ctx);
+        registerHeadlessToolSearchCatalog({ catalogRef: ctx.catalogRef, tools: [seed] });
+        break;
+      case "replacement":
+        registerHeadlessToolSearchCatalog({ catalogRef: ctx.catalogRef, tools: [seed] });
+        break;
+      case "abort":
+        abort.abort();
+        ctx.abortSignal = new AbortController().signal;
+        break;
+      case "run":
+        ctx.runId = "other-run";
+        break;
+      case "session":
+        ctx.sessionId = "other-session";
+        break;
+    }
+    if (parked) {
+      expect(parked.status).toBe("waiting");
+      expect(
+        resultDetails(await tools[1]!.execute("stale", { runId: parked.runId })),
+      ).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("run catalog changed or closed"),
+      });
+    }
+    const fresh = createCodeModeTools(ctx);
+    expect(
+      resultDetails(
+        await fresh[0]!.execute("expired", { code: `return await results.load(${id});` }),
+      ),
+    ).toMatchObject({
+      status: "failed",
+      error: expect.stringMatching(/unavailable or expired|different run or session/),
+    });
+  },
+);
+
+it("preserves results when client tools append while parked", async () => {
+  const collision = pluginToolWithExecute("results", "A tool named results", async () =>
+    jsonResult("tool"),
+  );
+  const { ctx, tools, run } = setup([collision]);
+  const saved = await run(
+    'const ref = await results.save({name:"sample"}); return {id:ref.id, count:ref.count};',
+  );
+  expect(saved).toMatchObject({ status: "completed", value: { id: expect.any(String), count: 1 } });
+  const id = JSON.stringify((saved.value as { id: string }).id);
+  const parked = await run(
+    `await yield_control(); const value = await results.load(${id}); const copy = await results.save(value); await results.delete(copy.id); return {value, tool: await (await catalog.search("results"))[0]({}), declarations:(await API.read("results.d.ts")).content};`,
+  );
+  expect(parked.status).toBe("waiting");
+  addClientToolsToToolCatalog({
+    ...ctx,
+    enabled: true,
+    tools: [
+      {
+        name: "client_fixture",
+        label: "Client fixture",
+        description: "Fixture",
+        parameters: { type: "object", properties: {} },
+        execute: async () => jsonResult(true),
+      },
+    ],
+  });
+  expect(resultDetails(await tools[1]!.execute("resume", { runId: parked.runId }))).toMatchObject({
+    status: "completed",
+    value: {
+      value: { name: "sample" },
+      tool: "tool",
+      declarations: expect.stringContaining("load(id: string): Promise<unknown>"),
+    },
+  });
+});
+
+it("preserves network provenance when later cells load, transform, and resave data", async () => {
+  const network = pluginToolWithExecute("network_rows", "Read remote data", async () =>
+    jsonResult([{ name: "untrusted <|endoftext|>" }]),
+  );
+  network.resultContentSource = "network";
+  const { run, execute } = setup([network]);
+  const saved = await run("return await results.save(await network_rows({}));");
+  expect(saved.status).toBe("completed");
+  const resaved = await execute(
+    `return await results.save(await results.load(${JSON.stringify((saved.value as { id: string }).id)}));`,
+  );
+  expect(resaved.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+  });
+  const loaded = await execute(
+    `return (await results.load(${JSON.stringify((resultDetails(resaved).value as { id: string }).id)}))[0].name;`,
+  );
+  expect(loaded.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+  });
+  expect(loaded.content[0]).not.toMatchObject({ text: expect.stringContaining("<|endoftext|>") });
+  expect(network.execute).toHaveBeenCalledOnce();
+});
+
+function rejectionHarness(maxOutputBytes = 65_536) {
+  const h = createCodeModeHarness({ codeMode: { maxOutputBytes } });
+  const failing = pluginToolWithExecute("failing_tool", "Fails", async () => {
+    throw new Error("lost failure");
+  });
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, failing] });
+  return {
+    tools: h.tools,
+    failing,
+    run: (code: string) =>
+      runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code }),
+  };
+}
+
+it("does not repeat yielded output when returned text is truncated", async () => {
+  const { tools } = rejectionHarness(1024);
+  const first = resultDetails(
+    await tools[0]!.execute("yield", {
+      code: 'text("already delivered"); await yield_control(); return "x".repeat(10000);',
+    }),
+  );
+  expect(first).toMatchObject({
+    status: "waiting",
+    output: [{ type: "text", text: "already delivered" }],
+  });
+  const final = resultDetails(await tools[1]!.execute("resume", { runId: first.runId }));
+  expect(final).toMatchObject({ status: "completed", output: [] });
+  expectOriginalCodeModeMarker(final.value, "x".repeat(10000));
+});
+
+it("reports an unhandled timer callback instead of success", async () => {
+  const result = await rejectionHarness().run(
+    'const marker = true;\nsetTimeout(() => { throw new Error("lost failure"); }, 0); return "done";',
+  );
+  expect(result).toMatchObject({
+    status: "failed",
+    error: expect.stringContaining("lost failure"),
+  });
+  expect(String(result.error)).not.toContain("controller.js");
+  expect(String(result.error)).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
+  expect(testing.activeRuns.size).toBe(0);
+});
+
+it.each([
+  {
+    name: "a late catch",
+    diagnostics: false,
+    code: 'const rejected = Promise.reject(new Error("handled later")); await yield_control(); await rejected.catch(() => {}); return "done";',
+  },
+  {
+    name: "tool diagnostics",
+    diagnostics: true,
+    code: `
+    const results = await Promise.allSettled([failing_tool({}), Promise.resolve("ok")]);
+    const failure = results[0].reason;
+    failure.code = "SYNTHETIC";
+    await yield_control();
+    text(failure); json({ results }); return { results };
+  `,
+  },
+])("preserves handled rejection through wait: $name", async ({ code, diagnostics }) => {
+  const { run, failing } = rejectionHarness();
+  const result = await run(code);
+  expect(testing.activeRuns.size).toBe(0);
+  if (!diagnostics) {
+    expect(result).toMatchObject({ status: "completed", value: "done" });
+    return;
+  }
+  const failure = {
+    name: "Error",
+    message: "lost failure",
+    code: "SYNTHETIC",
+    effectStatus: "unknown",
+    location: expect.stringMatching(/openclaw-code-mode:user\.js:2:/),
+  };
+  const value = {
+    results: [
+      { status: "rejected", reason: failure },
+      { status: "fulfilled", value: "ok" },
+    ],
+  };
+  expect(result).toMatchObject({ status: "completed", value });
+  expect(result.output).toEqual([
+    { type: "text", text: expect.any(String) },
+    { type: "json", value },
+  ]);
+  expect(JSON.parse((result.output as Array<{ text: string }>)[0]!.text)).toEqual(failure);
+  expect(JSON.stringify(result.output)).not.toContain("controller.js");
+  expect(failing.execute).toHaveBeenCalledOnce();
+});
+
+it("projects nested Errors before their custom toJSON can hide the failure", async () => {
+  const result = await runCodeModeScriptHeadless({
+    ctx: createHeadlessCodeModeHarness(),
+    code: `let invoked = false;
+      const error = new TypeError("visible diagnostic");
+      error.toJSON = () => { invoked = true; throw new Error("hidden"); };
+      json({ error }); text(error); return { error, invoked };`,
+  });
+  const error = { name: "TypeError", message: "visible diagnostic" };
+  expect(result).toMatchObject({ status: "completed", value: { error, invoked: false } });
+  expect(result.output).toEqual([
+    { type: "json", value: { error } },
+    { type: "text", text: JSON.stringify(error) },
+  ]);
+});
+
+describe("Code Mode tool execution scheduling", () => {
+  it.each(["native", "mcp"] as const)(
+    "honors sequential-only %s tools through independent calls",
+    async (source) => {
+      let active = 0;
+      let maximumActive = 0;
+      let calls = 0;
+      const execute: AnyAgentTool["execute"] = async () => {
+        calls += 1;
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        try {
+          // A real host turn lets every incorrectly parallel invocation enter.
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          return source === "mcp"
+            ? projectMcpCallToolResult({ structuredContent: { ok: true } })
+            : jsonResult({ ok: true });
+        } finally {
+          active -= 1;
+        }
+      };
+      const tool: AnyAgentTool =
+        source === "mcp"
+          ? mcpTool({
+              name: "probe__ordered_probe",
+              serverName: "probe",
+              toolName: "ordered_probe",
+              execute,
+            })
+          : { ...fakeTool("ordered_probe", "Ordered probe"), execute };
+      tool.executionMode = "sequential";
+      const ctx = createHeadlessCodeModeHarness([tool]);
+      const call = source === "mcp" ? "MCP.probe.orderedProbe({})" : "ordered_probe({})";
+      const code = `const values = await Promise.all([${call}, ${call}]); return ${source === "mcp" ? "values.map(value => value.structuredContent)" : "values"};`;
+      const result =
+        source === "native"
+          ? await runCodeModeScriptHeadless({ ctx, code })
+          : resultDetails(await createCodeModeTools(ctx)[0]!.execute("ordered-call", { code }));
+
+      expect(result).toMatchObject({ status: "completed", value: [{ ok: true }, { ok: true }] });
+      expect(calls).toBe(2);
+      expect(maximumActive).toBe(1);
+      expect(active).toBe(0);
+    },
+  );
 });

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
-import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
+import { computeInlineScriptHashes } from "./control-ui-csp.js";
+import {
+  PUBLIC_SESSION_CONTENT_SECURITY_POLICY,
+  renderPublicSessionDocument,
+} from "./control-ui-public-session-render.js";
 
 function render(
   messages: unknown[],
@@ -13,11 +17,31 @@ function render(
     latestUrl: "/share/session?token=v1.opaque",
     canonicalUrl: "https://example.test/share/session/demo",
     cardUrl: "https://example.test/share/card.png",
+    assetBasePath: "/control",
     ...overrides,
   });
 }
 
 describe("public session document", () => {
+  it("adds only a protected login handoff, including unavailable conversations", () => {
+    const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
+    const html = render([], { entryUrl });
+    expect(html).toContain(`href="${entryUrl}"`);
+    expect(html).toContain("Log in");
+    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain('data-public-refresh="true"');
+    expect(html).toContain('redirect:"error"');
+    expect(html).not.toMatch(/new WebSocket|bootstrap|sessions.list/);
+    const unavailable = render([], {
+      entryUrl,
+      title: "Conversation unavailable",
+      unavailable: true,
+    });
+    expect(unavailable).toContain("not publicly available");
+    expect(unavailable).not.toContain("Public · Read-only");
+    expect(unavailable).not.toContain("Made with OpenClaw");
+    expect(unavailable).not.toContain('http-equiv="refresh"');
+  });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const html = render([
       { role: "system", content: "private system instructions" },
@@ -31,7 +55,7 @@ describe("public session document", () => {
         content: "[Inter-session message] sourceSession=private\nprivate legacy handoff",
       },
       { role: "toolResult", content: "private tool output" },
-      { role: "assistant", phase: "commentary", content: "private commentary" },
+      { role: "assistant", phase: "commentary", content: "Public progress" },
       {
         role: "assistant",
         content: "<think>private tagged reasoning</think>Public visible answer",
@@ -71,7 +95,7 @@ describe("public session document", () => {
           },
           {
             type: "text",
-            text: "Private phased commentary",
+            text: "Public phased commentary",
             textSignature: '{"v":1,"phase":"commentary"}',
           },
           {
@@ -85,6 +109,8 @@ describe("public session document", () => {
     ]);
     expect(html).toContain("First public question");
     expect(html).toContain("Public visible answer");
+    expect(html).toContain("Public progress");
+    expect(html).toContain("Public phased commentary");
     expect(html).toContain("Second public question");
     expect(html).toContain("<strong>Public final answer</strong>");
     expect(html).not.toMatch(
@@ -92,7 +118,124 @@ describe("public session document", () => {
     );
   });
 
-  it("strips generated envelopes and applies built-in and operator redaction", () => {
+  it("groups tool work between every assistant message with bounded unmasked summaries", () => {
+    const secret = `sk-${"a".repeat(48)}`;
+    const html = render([
+      { role: "assistant", phase: "commentary", content: "Checking the files." },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "exec",
+            arguments: { command: `cat file ${secret} ${"x".repeat(300)} TAIL_MARKER` },
+          },
+        ],
+      },
+      { role: "toolResult", content: "RESULT_BODY_MUST_STAY_PRIVATE" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "THOUGHT_MUST_STAY_PRIVATE" },
+          { type: "tool_use", name: "read", input: { path: "src/example.ts" } },
+        ],
+      },
+      { role: "assistant", phase: "commentary", content: "The cause is clear." },
+      { role: "assistant", phase: "final_answer", content: "Fixed the issue." },
+    ]);
+    expect(html).toContain("Checking the files.");
+    expect(html).toContain("The cause is clear.");
+    expect(html).toContain("Fixed the issue.");
+    expect(html.match(/<details class="tools">/g)).toHaveLength(1);
+    expect(html).toContain("Ran 2 tools");
+    expect(html).toContain("src/example.ts");
+    expect(html).not.toMatch(/RESULT_BODY_MUST_STAY_PRIVATE|THOUGHT_MUST_STAY_PRIVATE|TAIL_MARKER/);
+    expect(html).toContain(secret);
+    expect(html).not.toContain('<details class="tools" open');
+    expect(html.indexOf("Checking the files.")).toBeLessThan(html.indexOf("Ran 2 tools"));
+    expect(html.indexOf("Ran 2 tools")).toBeLessThan(html.indexOf("The cause is clear."));
+  });
+
+  it("links user, assistant, and tool images only through entry-scoped public media", () => {
+    const fileName = `sk-${"a".repeat(48)}.png`;
+    const html = render(
+      [
+        {
+          role: "user",
+          __openclaw: { id: "user-entry" },
+          content: [
+            { type: "image", data: "PRIVATE_BYTES", fileName },
+            { type: "file", fileName: "notes.pdf", url: "file:///private/notes.pdf" },
+          ],
+        },
+        {
+          role: "assistant",
+          __openclaw: { id: "assistant-entry" },
+          content: [{ type: "image", data: "PRIVATE_BYTES" }],
+        },
+        {
+          role: "toolResult",
+          __openclaw: { id: "tool-entry" },
+          content: [
+            { type: "image", data: "PRIVATE_BYTES" },
+            { type: "text", text: "PRIVATE_RESULT" },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "[Inter-session message] private input" },
+            { type: "image", data: "PRIVATE_BYTES", fileName: "HIDDEN_IMAGE" },
+          ],
+        },
+      ],
+      { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
+    );
+    expect(html.match(/<img /g)).toHaveLength(3);
+    expect(html).toContain(`alt="${fileName}"`);
+    for (const entry of ["user-entry", "assistant-entry", "tool-entry"]) {
+      expect(html).toContain(`&amp;entry=${entry}&amp;attachment=content-0`);
+    }
+    expect(html).toContain('loading="lazy"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('<span class="attachment">notes.pdf</span>');
+    expect(html).not.toMatch(/PRIVATE_BYTES|PRIVATE_RESULT|file:\/\/|HIDDEN_IMAGE/);
+    expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("img-src 'self'");
+  });
+
+  it("retains audio-only and video-only messages as filename chips without publishing their media", () => {
+    const html = render(
+      [
+        {
+          role: "user",
+          __openclaw: { id: "audio-entry" },
+          content: [{ type: "audio", fileName: "voice-note.mp3", url: "/private/audio" }],
+        },
+        {
+          role: "assistant",
+          __openclaw: { id: "video-entry" },
+          content: [{ type: "video", fileName: "walkthrough.mp4", url: "/private/video" }],
+        },
+        {
+          role: "toolResult",
+          content: [
+            { type: "audio", fileName: "hidden-audio.mp3", url: "/private/tool-audio" },
+            { type: "video", fileName: "hidden-video.mp4", url: "/private/tool-video" },
+          ],
+        },
+      ],
+      { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
+    );
+    expect(html).toContain("2 messages");
+    expect(html.match(/<article class="message /g)).toHaveLength(2);
+    expect(html).toContain('<span class="attachment">voice-note.mp3</span>');
+    expect(html).toContain('<span class="attachment">walkthrough.mp4</span>');
+    expect(html).not.toMatch(
+      /hidden-audio|hidden-video|\/private\/|<(?:audio|video)\b|&amp;attachment=/,
+    );
+  });
+
+  it("strips generated envelopes while preserving conversation text", () => {
     const token = `sk-${"a".repeat(48)}`;
     const operatorSecret = "internal-ticket-8315";
     applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
@@ -111,8 +254,9 @@ describe("public session document", () => {
       expect(html).toContain("Visible response");
       expect(html).not.toContain("private runtime context");
       expect(html).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-      expect(html).not.toContain(token);
-      expect(html).not.toContain(operatorSecret);
+      expect(html).toContain(token);
+      expect(html).toContain(operatorSecret);
+      expect(html).toContain(`<title>Shared ${token} ${operatorSecret} · OpenClaw</title>`);
     } finally {
       resetLogger();
     }
@@ -157,13 +301,27 @@ describe("public session document", () => {
       ],
       { title: '<img src=x onerror="unsafe">' },
     );
-    expect(html).toContain("&lt;script&gt;");
-    expect(html).toContain("&lt;iframe");
-    expect(html).toContain("[Image omitted]");
-    expect(html).toContain('href="https://example.test/docs" rel="noreferrer noopener nofollow"');
-    expect(html).not.toContain("tracker.png");
-    expect(html).not.toMatch(/<(script|iframe|img)\b/);
-    expect(html).not.toMatch(/href="(?:javascript:|\/api\/private)/);
+    const transcript = html.slice(
+      html.indexOf('<section class="transcript"'),
+      html.indexOf("</section>"),
+    );
+    expect(transcript).toContain("&lt;script&gt;");
+    expect(transcript).toContain("&lt;iframe");
+    expect(transcript).toContain("[Image omitted]");
+    expect(transcript).toContain(
+      'href="https://example.test/docs" rel="noreferrer noopener nofollow"',
+    );
+    expect(transcript).not.toContain("tracker.png");
+    expect(transcript).not.toMatch(/<(script|iframe|img)\b/);
+    expect(transcript).not.toMatch(/href="(?:javascript:|\/api\/private)/);
+    expect(transcript).toContain('<div class="code"><pre><code class="language-html">');
+    // The page's only script is the fixed entry script, whose hash the shared policy carries.
+    expect(html.match(/<script\b/g)).toHaveLength(1);
+    for (const hash of computeInlineScriptHashes(html)) {
+      expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain(hash);
+    }
+    expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("font-src 'self'");
+    expect(html).toContain('<link rel="stylesheet" href="/control/fonts/instrument-sans.css">');
   });
 
   it("bounds the newest public messages and visibly marks omitted history or text", () => {
@@ -211,13 +369,28 @@ describe("public session document", () => {
     const html = render([], { truncated: true });
     expect(html).toContain("No public conversation text yet");
     expect(html).toContain("Public · Read-only");
-    expect(html).toContain(
-      "Tool output, files, images, reasoning, and interactive content are omitted",
-    );
+    expect(html).toContain("Tool result text, reasoning, and interactive content are omitted");
     expect(html).toContain('http-equiv="refresh" content="15"');
     expect(html).toContain('property="og:title" content="A shared conversation"');
     expect(html).toContain('aria-label="Conversation"');
     expect(html).toContain('name="referrer" content="no-referrer"');
+    expect(html).toContain("Made with OpenClaw");
+    expect(html).toContain(
+      'href="https://docs.openclaw.ai/start/getting-started" rel="noreferrer noopener">Get started',
+    );
+  });
+
+  it("groups consecutive turns from one speaker under a single identity", () => {
+    const html = render([
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "First answer" },
+      { role: "assistant", content: "Follow-up answer" },
+    ]);
+    expect(html).toContain('class="message user" aria-label="User message"');
+    expect(html).toContain('class="message assistant" aria-label="Assistant message"');
+    expect(html).toContain('class="message assistant continued" aria-label="Assistant message"');
+    expect(html).toContain("3 messages");
+    expect(html.match(/class="avatar"/g)).toHaveLength(1);
   });
 
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {

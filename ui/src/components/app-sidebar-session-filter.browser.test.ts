@@ -18,6 +18,7 @@ import {
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
+import "../styles/settings-native-controls.css";
 import "./app-sidebar.ts";
 
 setupSidebarTest();
@@ -27,7 +28,7 @@ const ringStyle = (root: Element, selector: string) =>
 const ownerOptions = (root: Element) =>
   [
     ...root
-      .querySelector("#sidebar-sessions-owner")!
+      .querySelector("#sidebar-session-owner-title")!
       .closest("openclaw-select-picker")!
       .querySelectorAll<HTMLElement>(".picker-select__option:not([hidden]) .picker-select__label"),
   ].map((label) => label.textContent!.trim());
@@ -62,6 +63,7 @@ async function mountFilters(width: number, teammates = 0) {
     width < 560 ? "drawer" : "panel",
   );
   mounted.provider.style.cssText = "display:block;width:300px;height:100vh";
+  mounted.sidebar.setSessionOwnerFilter(null);
   await mounted.sidebar.updateComplete;
   return { ...mounted, sessions, page };
 }
@@ -124,15 +126,12 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         }
       };
       const owners = page.getByRole("button", { name: "Owners: All owners", exact: true });
-      await trigger.click();
-      await expect.element(owners).toHaveFocus();
-      await expect.poll(() => occlusion).toEqual([false, true]);
-      await expectFits();
+      (owners.element() as HTMLElement).focus();
       await userEvent.keyboard("{Enter}");
       await expect
         .element(page.getByRole("listbox", { name: "Owners", exact: true }))
         .toBeVisible();
-      expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", "Ada (You)", "Bob"]);
+      expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", "My sessions", "Bob"]);
       const search = page.getByRole("combobox", { name: "Search", exact: true });
       await expect.element(search).toHaveFocus();
       expect(getComputedStyle(sidebar.querySelector(".picker-select__search")!).boxShadow).not.toBe(
@@ -146,13 +145,14 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect.poll(() => ownerOptions(sidebar)).toHaveLength(4);
       await userEvent.keyboard("{Escape}");
       await expect.element(owners).toHaveFocus();
+      await trigger.click();
+      await expect.poll(() => occlusion).toEqual([false, true]);
       await expectFits();
-      await userEvent.tab();
       await expect.element(active).toHaveFocus();
-      await userEvent.keyboard("{ArrowRight}");
+      await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
       await expect.element(page.getByRole("radio", { name: "Snoozed", exact: true })).toHaveFocus();
       expect(loadStoredSidebarSessionStatusFilter()).toBe("snoozed");
-      await userEvent.keyboard("{ArrowRight}");
+      await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
       await expect
         .element(page.getByRole("radio", { name: "Archived", exact: true }))
         .toHaveFocus();
@@ -216,7 +216,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
       await expect.poll(() => occlusion).toEqual([false, true, false]);
       await trigger.click();
-      await expect.element(owners).toHaveFocus();
+      await expect
+        .element(page.getByRole("radio", { name: "Archived", exact: true }))
+        .toHaveFocus();
       await expect.poll(() => occlusion).toEqual([false, true, false, true]);
       // The phone sheet covers the toolbar; its backdrop dismisses it instead.
       if (width < 560) {
@@ -307,7 +309,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     const { sidebar, page } = await mountFilters(390);
     const { userEvent } = await import("vitest/browser");
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
-    const owners = page.getByRole("button", { name: "Owners: All owners", exact: true });
+    const owners = page.getByRole("radio", { name: "Active", exact: true });
     const sources = page.getByRole("link", { name: "Session sources", exact: true });
     await expect.element(owners).toHaveFocus();
     // The backdrop stays a pointer target, not a tab stop.
@@ -332,7 +334,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
 
   it("fades the owner list at the edges it scrolls past", async () => {
     const { sidebar, page } = await mountFilters(1440, 30);
-    await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
     await page.getByRole("button", { name: "Owners: All owners", exact: true }).click();
     const list = sidebar.querySelector<HTMLElement>('[role="listbox"][aria-label="Owners"]')!;
     await expect.element(list).toBeVisible();
@@ -440,11 +441,46 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     },
   );
 
+  it.each([
+    { ownerId: "profile-ada", selected: "My sessions", label: "My sessions" },
+    { ownerId: "profile-bob", selected: "Bob", label: "profile-bob" },
+  ])(
+    "keeps the selected owner display for an empty Archived list ($ownerId)",
+    async ({ ownerId, selected, label }) => {
+      const { sidebar, sessions, page } = await mountFilters(1440);
+      await page.getByRole("button", { name: "Owners: All owners", exact: true }).click();
+      await page.getByRole("option", { name: selected, exact: true }).click();
+      await expect
+        .element(page.getByRole("button", { name: `Owners: ${selected}`, exact: true }))
+        .toBeVisible();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      sessions.list.mockResolvedValue({
+        ...sessions.sessions.state.result!,
+        sessions: [],
+        // An unresolved facet keeps the explicit owner selected without inventing a name.
+        owners: ownerId === "profile-ada" ? [] : undefined,
+      });
+      await page.getByRole("radio", { name: "Archived", exact: true }).click();
+      await expect
+        .element(page.getByRole("radio", { name: "Archived", exact: true }))
+        .toBeChecked();
+      await expect.poll(() => sidebar.sessionData.sessionsResult?.sessions).toEqual([]);
+      await expect
+        .element(page.getByRole("button", { name: `Owners: ${label}`, exact: true }))
+        .toBeVisible();
+      expect(sessions.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ ownerId, archivedFilter: "archived" }),
+      );
+      await page.getByRole("button", { name: `Owners: ${label}`, exact: true }).click();
+      expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", label]);
+    },
+  );
+
   it("applies every preference instantly and resets filters and display", async () => {
-    const { sidebar, sessions, page } = await mountFilters(1440);
+    const { sidebar, page } = await mountFilters(1440);
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu")!;
-    // The toolbar dot and its description track Owners and Status only; Reset
+    // The toolbar dot and its description track Status only; Reset
     // also appears for automation, system, and Display choices.
     const expectFilterCount = async (count: number, resetVisible = count > 0) => {
       await expect
@@ -487,35 +523,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const before = read();
       await page.getByRole("switch", { name, exact: true }).click();
       expect(read()).toBe(!before);
-      // Only Owners and Status light the toolbar dot.
+      // Only Status lights the toolbar dot.
       await expectFilterCount(1);
     }
-    const owner = page.getByRole("button", { name: /^Owners:/ });
-    await owner.click();
-    await expect.element(page.getByRole("combobox", { name: "Search", exact: true })).toHaveFocus();
-    expect(ringStyle(sidebar, ".picker-select__search")).toBe("none");
-    expect(ringStyle(sidebar, ".picker-select__option[data-active]")).toBe("none");
-    expect(getComputedStyle(sidebar.querySelector("#sidebar-sessions-owner")!).boxShadow).toBe(
-      "none",
-    );
-    // The checked row is plain: no tint or inset border, just the trailing check.
-    const checked = getComputedStyle(
-      sidebar.querySelector('.picker-select__option[aria-selected="true"]')!,
-    );
-    expect([checked.backgroundColor, checked.boxShadow]).toEqual(["rgba(0, 0, 0, 0)", "none"]);
-    await page.getByRole("option", { name: "Involving me", exact: true }).click();
-    expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
-    await expectFilterCount(2);
-    await owner.click();
-    await page.getByRole("option", { name: "Bob", exact: true }).click();
-    expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
-    expect(
-      sidebar.querySelector(
-        "#sidebar-sessions-owner .picker-select__leading openclaw-viewer-avatar",
-      ),
-    ).not.toBeNull();
-    await expectFilterCount(2);
-    expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "profile-bob" }));
+    expect(menu.querySelector("#sidebar-sessions-owner")).toBeNull();
     await page.getByRole("button", { name: /^Hide empty groups:/ }).click();
     await page.getByRole("option", { name: "Never", exact: true }).click();
     await page.getByRole("button", { name: "Reset", exact: true }).click();

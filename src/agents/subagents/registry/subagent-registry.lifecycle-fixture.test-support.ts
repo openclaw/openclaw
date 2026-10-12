@@ -40,22 +40,10 @@ export function getAgentResultsForChildSession(
   childSessionKey: string,
 ): string[] {
   return requests
-    .filter((request) => {
-      const inputProvenance = request.params?.inputProvenance;
-      if (!inputProvenance || typeof inputProvenance !== "object") {
-        return false;
-      }
-      return (
-        (inputProvenance as { sourceSessionKey?: unknown }).sourceSessionKey === childSessionKey
-      );
-    })
+    .filter((request) => request.params?.inputProvenance?.sourceSessionKey === childSessionKey)
     .flatMap((request) => {
-      const internalEvents = request.params?.internalEvents;
-      const event =
-        Array.isArray(internalEvents) && internalEvents[0] && typeof internalEvents[0] === "object"
-          ? (internalEvents[0] as { result?: string })
-          : undefined;
-      return typeof event?.result === "string" ? [event.result] : [];
+      const result = request.params?.internalEvents?.[0]?.result;
+      return result === undefined ? [] : [result];
     });
 }
 

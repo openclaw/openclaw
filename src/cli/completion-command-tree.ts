@@ -15,10 +15,7 @@ export type ShellCompletionContext = {
   valueChoices: ShellCompletionValueChoice[];
 };
 
-export type ShellCompletionCommandTree = {
-  root: ShellCompletionContext;
-  descendants: ShellCompletionContext[];
-};
+export type ShellCompletionCommandTree = ReturnType<typeof collectShellCompletionCommandTree>;
 
 export function completionFlags(option: Option): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
@@ -38,7 +35,7 @@ export function visibleCompletionCommands(command: Command): Command[] {
     .filter((child) => command.commands.includes(child));
 }
 
-export function collectShellCompletionCommandTree(program: Command): ShellCompletionCommandTree {
+export function collectShellCompletionCommandTree(program: Command) {
   const descendants: ShellCompletionContext[] = [];
 
   const visit = (

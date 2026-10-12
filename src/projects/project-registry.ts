@@ -5,11 +5,13 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { withProjectCheckoutLifecycle } from "./project-checkout.js";
-import { registerResolvedProject } from "./project-registration.js";
+import {
+  prepareProjectRegistration,
+  registerPreparedProjectRegistry,
+} from "./project-registration.js";
 import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.types.js";
 
 export {
@@ -42,7 +44,14 @@ export async function registerProjectRegistry(
   input: { path: string; name?: string },
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<ProjectRegistryRecord> {
-  return await registerResolvedProject({ ...input, source: "registered" }, options);
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  const prepared = await prepareProjectRegistration({ ...input, source: "registered" });
+  return await withProjectCheckoutLifecycle(
+    prepared.project.repoRoot,
+    { path: context.admission.databasePath, env },
+    (lease) => registerPreparedProjectRegistry(prepared, lease, context),
+  );
 }
 
 export function listWorkspaceProjects(cfg: OpenClawConfig): ProjectRegistryRecord[] {
@@ -210,21 +219,6 @@ export async function selectStoredProjectRegistry(
       }
     },
   };
-}
-
-export async function resolveProjectCloneRefreshOwner(
-  project: ProjectRegistryIdentity,
-  lease: OpenClawStateLeaseContext,
-  context: OpenClawStateWorkerContext,
-): Promise<ProjectRegistryRecord | undefined> {
-  const { runWithOpenClawStateLeaseWorker } =
-    await import("../state/openclaw-state-lease-worker-operation.js");
-  return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
-    scope.execute({
-      type: "projects.resolveRefreshOwner",
-      input: { project, lease: identity },
-    }),
-  );
 }
 
 export async function resolveRecordedProjectRoot(

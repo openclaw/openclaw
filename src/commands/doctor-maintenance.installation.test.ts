@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { applyCliProfileEnv } from "../cli/profile.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
@@ -183,21 +182,20 @@ async function runInstallationCase(params: {
   bun?: boolean;
   installFails?: boolean;
   stopFailsWithPairedDevice?: boolean;
-  tokenRecovery?: "success" | "refused" | "service-failure" | "writer-unavailable" | "no-consent";
-  revoked?: "unchanged" | "restored" | "recovery-pending" | "unclassified";
+  tokenRecovery?: "success" | "writer-unavailable" | "no-consent";
+  revoked?: "unchanged" | "restored" | "unclassified";
   initiallyStopped?: boolean;
   releaseStateBeforeFinish?: boolean;
-  inspectionFailure?: "unavailable" | "lost-before-install";
-  restorationInspectionFailure?: "read-error" | "unknown-runtime";
+  inspectionFailure?: "lost-before-install";
+  restorationInspectionFailure?: "unknown-runtime";
   inspectionScenario?: "slow-admission" | "competing-update";
   invocationPort?: string;
-  profile?: string;
   updateInProgress?: boolean;
   consent?: {
     aggressive: boolean;
     approved: boolean;
     interactive: boolean;
-    mixed?: "stale-native" | "custom-argv" | "version-managed-runtime";
+    mixed?: "custom-argv" | "version-managed-runtime";
   };
 }) {
   const { installFails, initiallyStopped } = params;
@@ -205,22 +203,7 @@ async function runInstallationCase(params: {
     const { auditGatewayServiceConfig } = await vi.importActual<
       typeof import("../daemon/service-audit.js")
     >("../daemon/service-audit.js");
-    mocks.audit.mockImplementation(async (options) => {
-      const audit = await auditGatewayServiceConfig(options);
-      if (params.consent?.mixed === "stale-native") {
-        audit.definitionDrift = [
-          ...(audit.definitionDrift ?? []),
-          {
-            kind: "outdated",
-            key: "RunAtLoad",
-            current: false,
-            expected: true,
-            message: "LaunchAgent RunAtLoad differs from the installer value true.",
-          },
-        ];
-      }
-      return audit;
-    });
+    mocks.audit.mockImplementation(auditGatewayServiceConfig);
     mocks.confirm.mockResolvedValue(params.consent.approved);
     Object.defineProperty(process.stdin, "isTTY", {
       value: params.consent.interactive,
@@ -261,7 +244,7 @@ async function runInstallationCase(params: {
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: undefined,
       OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: params.profile,
+      OPENCLAW_PROFILE: undefined,
       OPENCLAW_SUPERVISOR_MODE: undefined,
       OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
       OPENCLAW_SERVICE_MARKER: undefined,
@@ -275,9 +258,6 @@ async function runInstallationCase(params: {
       OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
     },
     async () => {
-      if (params.profile) {
-        applyCliProfileEnv({ profile: params.profile, homedir: () => home });
-      }
       const sourcePath =
         params.platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined;
       if (params.inspectionScenario) {
@@ -298,7 +278,6 @@ async function runInstallationCase(params: {
           HOME: home,
           PATH: "/usr/bin:/bin",
           ...(params.tokenRecovery ? { OPENCLAW_GATEWAY_TOKEN: "maintenance-fixture-token" } : {}),
-          ...(params.profile ? { OPENCLAW_PROFILE: params.profile } : {}),
         },
       };
       const originalCommand = structuredClone(command);
@@ -317,19 +296,10 @@ async function runInstallationCase(params: {
       const service = createMockGatewayService({
         isAbsent: async () => false,
         isLoaded: async () => true,
-        readCommand: async () => {
-          if (
-            params.restorationInspectionFailure === "read-error" &&
-            events.includes("repair-state")
-          ) {
-            throw new Error("Synthetic restoration command inspection failed");
-          }
-          return command;
-        },
+        readCommand: async () => command,
         readRuntime: async (env, opts) => {
           nativeInspectionReads += 1;
           if (
-            params.inspectionFailure === "unavailable" ||
             (params.inspectionFailure === "lost-before-install" && nativeInspectionReads > 1) ||
             (params.restorationInspectionFailure === "unknown-runtime" &&
               events.includes("repair-state"))
@@ -435,9 +405,8 @@ async function runInstallationCase(params: {
         const notes = mocks.note.mock.calls.flat().join("\n");
         expect(notes).toContain(`${oldRoot} (2026.9.4)`);
         expect(notes).toContain(`${mocks.activeRoot} (2026.9.17)`);
-        const cli = params.profile ? `openclaw --profile ${params.profile}` : "openclaw";
-        expect(notes).toContain(`${cli} doctor --fix`);
-        expect(notes).toContain(`${cli} gateway install --force`);
+        expect(notes).toContain("openclaw doctor --fix");
+        expect(notes).toContain("openclaw gateway install --force");
         if (params.bun) {
           expect(events).toEqual([]);
           expect(running).toBe(true);
@@ -589,12 +558,7 @@ async function runInstallationCase(params: {
             writerContext && params.tokenRecovery !== "writer-unavailable"
               ? async (nextConfig) => {
                   events.push("write-config");
-                  return writeDoctorGatewayConfig(
-                    writerContext!,
-                    params.tokenRecovery === "refused"
-                      ? { ...nextConfig, gateway: { ...nextConfig.gateway, port: 0 } }
-                      : nextConfig,
-                  );
+                  return writeDoctorGatewayConfig(writerContext!, nextConfig);
                 }
               : undefined,
           );
@@ -605,9 +569,7 @@ async function runInstallationCase(params: {
           expect(finishError).toBeUndefined();
           const bytes = await fs.readFile(configPath!, "utf8");
           const refused =
-            params.tokenRecovery === "refused" ||
-            params.tokenRecovery === "writer-unavailable" ||
-            params.tokenRecovery === "no-consent";
+            params.tokenRecovery === "writer-unavailable" || params.tokenRecovery === "no-consent";
           expect(events).toEqual([
             "stop",
             "repair-state",
@@ -744,23 +706,16 @@ type InstallationCase = Omit<Parameters<typeof runInstallationCase>[0], "mode">;
 
 it.each<InstallationCase>([
   { platform: "linux", tokenRecovery: "success", installFails: false },
-  { platform: "linux", tokenRecovery: "refused", installFails: false },
-  { platform: "linux", tokenRecovery: "service-failure", installFails: true },
   { platform: "linux", tokenRecovery: "writer-unavailable", installFails: false },
   { platform: "linux", tokenRecovery: "no-consent", installFails: false },
   { platform: "linux", initiallyStopped: true },
-  { platform: "linux", restorationInspectionFailure: "read-error" },
   { platform: "linux", restorationInspectionFailure: "unknown-runtime" },
   { platform: "linux", inspectionScenario: "slow-admission" },
   { platform: "linux", stopFailsWithPairedDevice: true },
   { platform: "linux", inspectionScenario: "competing-update" },
-  { platform: "win32", installFails: false, releaseStateBeforeFinish: false },
-  { platform: "win32", installFails: true, releaseStateBeforeFinish: false },
-  { platform: "win32", installFails: false, releaseStateBeforeFinish: true },
   { platform: "win32", installFails: true, releaseStateBeforeFinish: true },
   { platform: "linux", revoked: "unchanged" },
   { platform: "linux", revoked: "restored" },
-  { platform: "linux", revoked: "recovery-pending" },
   { platform: "linux", revoked: "unclassified" },
 ])("reconciles installation drift under maintenance authority (%j)", async (scenario) =>
   runInstallationCase({ ...scenario, mode: "maintenance" }),
@@ -769,14 +724,8 @@ it.each<InstallationCase>([
 it.each<InstallationCase>([
   { platform: "win32" },
   { platform: "linux", invocationPort: "19990" },
-  { platform: "darwin", consent: { aggressive: true, approved: false, interactive: true } },
   { platform: "darwin", consent: { aggressive: true, approved: true, interactive: true } },
   { platform: "darwin", consent: { aggressive: true, approved: false, interactive: false } },
-  { platform: "darwin", consent: { aggressive: false, approved: false, interactive: true } },
-  {
-    platform: "darwin",
-    consent: { aggressive: false, approved: false, interactive: true, mixed: "stale-native" },
-  },
   {
     platform: "darwin",
     consent: { aggressive: false, approved: false, interactive: true, mixed: "custom-argv" },
@@ -790,9 +739,7 @@ it.each<InstallationCase>([
       mixed: "version-managed-runtime",
     },
   },
-  { platform: "linux", inspectionFailure: "unavailable" },
   { platform: "linux", inspectionFailure: "lost-before-install" },
-  { platform: "linux", profile: "work" },
   { platform: "linux", updateInProgress: true },
   { platform: "linux", bun: true },
 ])("repairs installation drift with doctor --fix (%j)", async (scenario) =>

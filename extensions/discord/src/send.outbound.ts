@@ -1,5 +1,5 @@
 import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
-import { ChannelType, Routes } from "discord-api-types/v10";
+import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
@@ -7,7 +7,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createThread } from "./internal/discord.js";
+import { createChannelMessage, createThread } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
@@ -16,11 +16,7 @@ import {
   createReusableDiscordReplyReference,
   type DiscordReplyReference,
 } from "./reply-reference.js";
-import {
-  createDiscordSendReceiptFromResults,
-  createDiscordSendResult,
-  type DiscordReceiptResultSource,
-} from "./send.receipt.js";
+import { createDiscordSendReceiptFromResults, createDiscordSendResult } from "./send.receipt.js";
 import {
   buildDiscordMessageRequest,
   buildDiscordSendError,
@@ -98,182 +94,195 @@ export async function sendMessageDiscord(
   opts: DiscordSendOpts,
 ): Promise<DiscordSendResult> {
   // The REST scheduler can retry after this sender's last handoff check.
-  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
-    sendMessageDiscordInternal(to, text, opts),
-  );
-}
-
-async function sendMessageDiscordInternal(
-  to: string,
-  text: string,
-  opts: DiscordSendOpts,
-): Promise<DiscordSendResult> {
-  const cfg = requireRuntimeConfig(opts.cfg, "Discord send");
-  const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
-  const chunkMode = opts.chunkMode ?? resolveChunkMode(cfg, "discord", accountInfo.accountId);
-  const maxLinesPerMessage = opts.maxLinesPerMessage ?? accountInfo.config.maxLinesPerMessage;
-  const suppressEmbeds = resolveDiscordSuppressEmbeds({
-    configured: accountInfo.config.suppressEmbeds,
-    override: opts.suppressEmbeds,
-  });
-  const mediaMaxBytes =
-    typeof accountInfo.config.mediaMaxMb === "number"
-      ? accountInfo.config.mediaMaxMb * 1024 * 1024
-      : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
-  const { renderedText, textWithMentions, textLimit } = prepareDiscordOutboundText(text ?? "", {
-    cfg,
-    account: accountInfo,
-    tableMode: opts.tableMode,
-    textLimit: opts.textLimit,
-  });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
-  const { channelId } = await resolveChannelId(rest, recipient, request);
-
-  // Forum/Media channels reject POST /messages; auto-create a thread post instead.
-  const channel = await resolveDiscordChannel(rest, channelId);
-  const deliveredResults: DiscordSendResult[] = [];
-  let deliveryThreadId: string | undefined;
-  const reportResult: DiscordSendProgress = async (progressResult, kind, replyToId) => {
-    const deliveredResult = createDiscordSendResult({
-      result: progressResult,
-      fallbackChannelId: deliveryThreadId ?? channelId,
-      kind,
-      threadId: deliveryThreadId,
-      reply: createReusableDiscordReplyReference(replyToId),
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, async () => {
+    const cfg = requireRuntimeConfig(opts.cfg, "Discord send");
+    const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
+    const chunkMode = opts.chunkMode ?? resolveChunkMode(cfg, "discord", accountInfo.accountId);
+    const maxLinesPerMessage = opts.maxLinesPerMessage ?? accountInfo.config.maxLinesPerMessage;
+    const suppressEmbeds = resolveDiscordSuppressEmbeds({
+      configured: accountInfo.config.suppressEmbeds,
+      override: opts.suppressEmbeds,
     });
-    deliveredResults.push(deliveredResult);
-    await opts.onDeliveryResult?.(deliveredResult);
-  };
+    const mediaMaxBytes =
+      typeof accountInfo.config.mediaMaxMb === "number"
+        ? accountInfo.config.mediaMaxMb * 1024 * 1024
+        : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
+    const { renderedText, textWithMentions, textLimit } = prepareDiscordOutboundText(text ?? "", {
+      cfg,
+      account: accountInfo,
+      tableMode: opts.tableMode,
+      textLimit: opts.textLimit,
+    });
+    const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
+    const { channelId } = await resolveChannelId(rest, recipient, request);
 
-  const textSendOptions = {
-    rest,
-    request,
-    maxLinesPerMessage,
-    chunkMode,
-    silent: opts.silent,
-    suppressEmbeds,
-    allowedMentions: opts.allowedMentions,
-    maxChars: textLimit,
-    onResult: reportResult,
-    onPlatformSendDispatch: opts.onPlatformSendDispatch,
-    assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
-  };
-  const mediaSendOptions = {
-    filename: opts.filename,
-    mediaAccess: opts.mediaAccess,
-    mediaLocalRoots: opts.mediaLocalRoots,
-    mediaReadFile: opts.mediaReadFile,
-    maxBytes: mediaMaxBytes,
-  };
+    // Forum/Media channels reject POST /messages; auto-create a thread post instead.
+    const channel = await resolveDiscordChannel(rest, channelId);
+    const deliveredResults: DiscordSendResult[] = [];
+    let deliveryThreadId: string | undefined;
+    const reportResult: DiscordSendProgress = async (progressResult, kind, replyToId) => {
+      const deliveredResult = createDiscordSendResult({
+        result: progressResult,
+        fallbackChannelId: deliveryThreadId ?? channelId,
+        kind,
+        threadId: deliveryThreadId,
+        reply: createReusableDiscordReplyReference(replyToId),
+      });
+      deliveredResults.push(deliveredResult);
+      await opts.onDeliveryResult?.(deliveredResult);
+    };
 
-  if (isForumLikeChannel(channel)) {
-    if (((channel.flags ?? 0) & DISCORD_FORUM_REQUIRE_TAG_FLAG) !== 0) {
-      throw new Error(
-        `Discord forum channel ${channelId} requires an applied tag; use thread-create with appliedTags, then send to the created thread.`,
-      );
-    }
-    const threadName = deriveForumThreadName(renderedText);
-    const chunks = buildDiscordTextChunks(textWithMentions, {
+    const textSendOptions = {
+      rest,
+      request,
       maxLinesPerMessage,
       chunkMode,
-      maxChars: textLimit,
-    });
-    const starterContent = chunks[0]?.trim() ? chunks[0] : threadName;
-    const starterComponents = resolveDiscordSendComponents({
-      components: opts.components,
-      text: starterContent,
-      isFirst: true,
-    });
-    const starterEmbeds = resolveDiscordSendEmbeds({ embeds: opts.embeds, isFirst: true });
-    const starterFlags = resolveDiscordMessageFlags({
       silent: opts.silent,
-      suppressEmbeds: suppressEmbeds && !starterEmbeds?.length,
-    });
-    const starterBody = buildDiscordMessageRequest({
-      endpoint: "forum-thread",
-      text: starterContent,
-      components: starterComponents,
-      embeds: starterEmbeds,
-      flags: starterFlags,
+      suppressEmbeds,
       allowedMentions: opts.allowedMentions,
-    });
-    let threadRes: { id: string; message?: { id: string; channel_id: string } };
-    try {
-      threadRes = (await request(
-        async () => {
-          await opts.onPlatformSendDispatch?.();
-          opts.assertPlatformSendAuthorized?.();
-          return createThread<{ id: string; message?: { id: string; channel_id: string } }>(
-            rest,
-            channelId,
-            {
-              body: {
-                name: threadName,
-                // Discord clients preselect the parent default; the REST endpoint otherwise
-                // falls back to 4320 minutes, so carry the fetched parent value explicitly.
-                ...(channel.default_auto_archive_duration === undefined
-                  ? {}
-                  : { auto_archive_duration: channel.default_auto_archive_duration }),
-                message: starterBody,
-              },
-            },
-          );
-        },
-        "forum-thread",
-        { safety: "non-idempotent-create" },
-      )) as { id: string; message?: { id: string; channel_id: string } };
-    } catch (err) {
-      throw await buildDiscordSendError(err, {
-        channelId,
-        cfg,
-        rest,
-        token,
-        hasMedia: Boolean(opts.mediaUrl),
-      });
-    }
+      maxChars: textLimit,
+      onResult: reportResult,
+      onPlatformSendDispatch: opts.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
+    };
+    const mediaSendOptions = {
+      filename: opts.filename,
+      mediaAccess: opts.mediaAccess,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+      maxBytes: mediaMaxBytes,
+    };
 
-    const threadId = threadRes.id;
-    deliveryThreadId = threadId;
-    const messageId = threadRes.message?.id ?? threadId;
-    const resultChannelId = threadRes.message?.channel_id ?? threadId;
-    const remainingChunks = chunks.slice(1);
-    const starterResult = createDiscordSendResult({
-      result: {
-        id: messageId,
-        channel_id: resultChannelId,
-      },
-      fallbackChannelId: channelId,
-      kind: "text",
-      threadId,
-    });
-    deliveredResults.push(starterResult);
-    await opts.onDeliveryResult?.(starterResult);
-
-    try {
-      let textChunks = remainingChunks;
-      if (opts.mediaUrl) {
-        const [mediaCaption, ...afterMediaChunks] = remainingChunks;
-        await sendDiscordMedia({
-          ...textSendOptions,
-          ...mediaSendOptions,
-          channelId: threadId,
-          text: mediaCaption ?? "",
-          mediaUrl: opts.mediaUrl,
+    async function sendWithError<T>(targetChannelId: string, send: () => Promise<T>): Promise<T> {
+      try {
+        return await send();
+      } catch (err) {
+        throw await buildDiscordSendError(err, {
+          channelId: targetChannelId,
+          cfg,
+          rest,
+          token,
+          hasMedia: Boolean(opts.mediaUrl),
         });
-        textChunks = afterMediaChunks;
       }
-      for (const chunk of textChunks) {
-        await sendDiscordText({ ...textSendOptions, channelId: threadId, text: chunk });
-      }
-    } catch (err) {
-      throw await buildDiscordSendError(err, {
-        channelId: threadId,
-        cfg,
-        rest,
-        token,
-        hasMedia: Boolean(opts.mediaUrl),
-      });
     }
+
+    if (isForumLikeChannel(channel)) {
+      if (((channel.flags ?? 0) & DISCORD_FORUM_REQUIRE_TAG_FLAG) !== 0) {
+        throw new Error(
+          `Discord forum channel ${channelId} requires an applied tag; use thread-create with appliedTags, then send to the created thread.`,
+        );
+      }
+      const threadName = deriveForumThreadName(renderedText);
+      const chunks = buildDiscordTextChunks(textWithMentions, {
+        maxLinesPerMessage,
+        chunkMode,
+        maxChars: textLimit,
+      });
+      const starterContent = chunks[0]?.trim() ? chunks[0] : threadName;
+      const starterComponents = resolveDiscordSendComponents({
+        components: opts.components,
+        text: starterContent,
+        isFirst: true,
+      });
+      const starterEmbeds = resolveDiscordSendEmbeds({ embeds: opts.embeds, isFirst: true });
+      const starterFlags = resolveDiscordMessageFlags({
+        silent: opts.silent,
+        suppressEmbeds: suppressEmbeds && !starterEmbeds?.length,
+      });
+      const starterBody = buildDiscordMessageRequest({
+        endpoint: "forum-thread",
+        text: starterContent,
+        components: starterComponents,
+        embeds: starterEmbeds,
+        flags: starterFlags,
+        allowedMentions: opts.allowedMentions,
+      });
+      const threadRes = await sendWithError(channelId, () =>
+        request(
+          async () => {
+            await opts.onPlatformSendDispatch?.();
+            opts.assertPlatformSendAuthorized?.();
+            return createThread<{ id: string; message?: { id: string; channel_id: string } }>(
+              rest,
+              channelId,
+              {
+                body: {
+                  name: threadName,
+                  // Discord clients preselect the parent default; the REST endpoint otherwise
+                  // falls back to 4320 minutes, so carry the fetched parent value explicitly.
+                  ...(channel.default_auto_archive_duration === undefined
+                    ? {}
+                    : { auto_archive_duration: channel.default_auto_archive_duration }),
+                  message: starterBody,
+                },
+              },
+            );
+          },
+          "forum-thread",
+          { safety: "non-idempotent-create" },
+        ),
+      );
+
+      const threadId = threadRes.id;
+      deliveryThreadId = threadId;
+      const messageId = threadRes.message?.id ?? threadId;
+      const resultChannelId = threadRes.message?.channel_id ?? threadId;
+      const remainingChunks = chunks.slice(1);
+      const starterResult = createDiscordSendResult({
+        result: {
+          id: messageId,
+          channel_id: resultChannelId,
+        },
+        fallbackChannelId: channelId,
+        kind: "text",
+        threadId,
+      });
+      deliveredResults.push(starterResult);
+      await opts.onDeliveryResult?.(starterResult);
+
+      await sendWithError(threadId, async () => {
+        let textChunks = remainingChunks;
+        if (opts.mediaUrl) {
+          const [mediaCaption, ...afterMediaChunks] = remainingChunks;
+          await sendDiscordMedia({
+            ...textSendOptions,
+            ...mediaSendOptions,
+            channelId: threadId,
+            text: mediaCaption ?? "",
+            mediaUrl: opts.mediaUrl,
+          });
+          textChunks = afterMediaChunks;
+        }
+        for (const chunk of textChunks) {
+          await sendDiscordText({ ...textSendOptions, channelId: threadId, text: chunk });
+        }
+      });
+
+      recordChannelActivity({
+        channel: "discord",
+        accountId: accountInfo.accountId,
+        direction: "outbound",
+      });
+      return {
+        ...starterResult,
+        receipt: createDiscordSendReceiptFromResults({ results: deliveredResults, threadId }),
+      };
+    }
+
+    const result = await sendWithError(channelId, async () => {
+      const message = {
+        ...textSendOptions,
+        channelId,
+        text: textWithMentions,
+        reply: opts.reply,
+        components: opts.components,
+        embeds: opts.embeds,
+      };
+      return opts.mediaUrl
+        ? await sendDiscordMedia({ ...message, ...mediaSendOptions, mediaUrl: opts.mediaUrl })
+        : await sendDiscordText(message);
+    });
 
     recordChannelActivity({
       channel: "discord",
@@ -281,43 +290,10 @@ async function sendMessageDiscordInternal(
       direction: "outbound",
     });
     return {
-      ...starterResult,
-      receipt: createDiscordSendReceiptFromResults({ results: deliveredResults, threadId }),
+      ...createDiscordSendResult({ result, fallbackChannelId: channelId, kind: "text" }),
+      receipt: createDiscordSendReceiptFromResults({ results: deliveredResults }),
     };
-  }
-
-  let result: DiscordReceiptResultSource;
-  try {
-    const message = {
-      ...textSendOptions,
-      channelId,
-      text: textWithMentions,
-      reply: opts.reply,
-      components: opts.components,
-      embeds: opts.embeds,
-    };
-    result = opts.mediaUrl
-      ? await sendDiscordMedia({ ...message, ...mediaSendOptions, mediaUrl: opts.mediaUrl })
-      : await sendDiscordText(message);
-  } catch (err) {
-    throw await buildDiscordSendError(err, {
-      channelId,
-      cfg,
-      rest,
-      token,
-      hasMedia: Boolean(opts.mediaUrl),
-    });
-  }
-
-  recordChannelActivity({
-    channel: "discord",
-    accountId: accountInfo.accountId,
-    direction: "outbound",
   });
-  return {
-    ...createDiscordSendResult({ result, fallbackChannelId: channelId, kind: "text" }),
-    receipt: createDiscordSendReceiptFromResults({ results: deliveredResults }),
-  };
 }
 
 export async function sendStickerDiscord(
@@ -377,11 +353,7 @@ async function sendDiscordStructuredMessage(
       async () => {
         await opts.onPlatformSendDispatch?.();
         opts.assertPlatformSendAuthorized?.();
-        // SAFETY: Discord's Create Message response includes its message and channel IDs.
-        return (await rest.post(Routes.channelMessages(channelId), { body })) as {
-          id: string;
-          channel_id: string;
-        };
+        return createChannelMessage(rest, channelId, { body });
       },
       kind,
       { safety: "nonce-protected-create" },

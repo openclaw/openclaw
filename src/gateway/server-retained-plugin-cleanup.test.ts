@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   emptySqliteCounts,
@@ -11,10 +12,18 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../plugins/managed-npm-retention.js";
+import { getProcessPluginCache } from "../plugins/plugin-cache.js";
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "../plugins/plugin-lifecycle-lease-identity.js";
 import * as metadataState from "../plugins/plugin-metadata-state-worker.js";
-import { createPluginNativeCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
-import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+import {
+  createPluginNativeCaptureRoot,
+  retainPluginNativeCapturePath,
+} from "../plugins/plugin-source-capture-directory.js";
+import { resolvePluginSourceCapturesDirectory } from "../plugins/plugin-source-capture-path.js";
+import {
+  createInstalledPluginIndex,
+  seedInstalledPluginIndex,
+} from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import {
   openOpenClawStateDatabase,
@@ -22,6 +31,48 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupGatewayRetiredPluginArtifacts } from "./server-retained-plugin-cleanup.js";
+
+it.each(["empty", "state", "temporary"] as const)(
+  "leaves shared state and hot metadata untouched with only %s captures",
+  async (placement) => {
+    await withOpenClawTestState({ label: "gateway-retained-plugin-empty" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      loadInstalledPluginIndexInstallRecordsSync();
+      const cache = getProcessPluginCache();
+      const fact = cache.persistedInstalledIndex.get(database.path);
+      expect(fact).toBeDefined();
+      const capture =
+        placement === "empty"
+          ? undefined
+          : createPluginNativeCaptureRoot(state.stateDir, placement);
+      const witness = new DatabaseSync(database.path, { readOnly: true });
+      const version = () => witness.prepare("PRAGMA data_version").get()?.data_version;
+      const before = version();
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const observer = observeParentSqlite();
+      try {
+        try {
+          await cleanupGatewayRetiredPluginArtifacts({
+            log,
+            startupInstallPaths: [],
+            signal: new AbortController().signal,
+            assertCurrent: () => {},
+          });
+          expect(observer.counts).toEqual(emptySqliteCounts());
+        } finally {
+          observer.restore();
+        }
+        expect(version()).toBe(before);
+        expect(cache.persistedInstalledIndex.get(database.path)).toBe(fact);
+        expect(log.info).not.toHaveBeenCalled();
+        expect(log.warn).not.toHaveBeenCalled();
+      } finally {
+        witness.close();
+        await capture?.disposeAsync();
+      }
+    });
+  },
+);
 
 it("preserves package files retained by plugin uninstall", async () => {
   await withOpenClawTestState({ label: "gateway-retained-plugin-cleanup" }, async (state) => {
@@ -104,6 +155,7 @@ it.each(["project", "legacy"] as const)(
       });
       const log = { info: vi.fn(), warn: vi.fn() };
       const observer = observeParentSqlite();
+      const reads = vi.spyOn(metadataState, "readPluginMetadataStateRow");
       try {
         await cleanupGatewayRetiredPluginArtifacts({
           log,
@@ -112,10 +164,15 @@ it.each(["project", "legacy"] as const)(
           assertCurrent: () => {},
         });
         expect(observer.counts).toEqual(emptySqliteCounts());
+        expect(reads).toHaveBeenCalledTimes(1);
       } finally {
         observer.restore();
+        reads.mockRestore();
       }
 
+      expect(loadInstalledPluginIndexInstallRecordsSync()["obsolete-plugin"]?.installPath).toBe(
+        obsoletePackage,
+      );
       expect(fs.existsSync(startupPackage)).toBe(true);
       expect(fs.existsSync(desiredPackage)).toBe(true);
       expect(fs.existsSync(obsoletePackage)).toBe(false);
@@ -124,6 +181,81 @@ it.each(["project", "legacy"] as const)(
     });
   },
 );
+
+it.each([false, true])(
+  "checks partially retained native roots without losing malformed receipt protection (%s)",
+  async (malformed) => {
+    await withOpenClawTestState({ label: "gateway-retained-native-mixed" }, async (state) => {
+      const retained = createPluginNativeCaptureRoot(state.stateDir);
+      const orphan = createPluginNativeCaptureRoot(state.stateDir);
+      const retainedFile = path.join(retained.directory, "retained.node");
+      const orphanFile = path.join(orphan.directory, "orphan.node");
+      fs.writeFileSync(retainedFile, "synthetic retained native artifact");
+      fs.writeFileSync(orphanFile, "synthetic orphan native artifact");
+      retained.commit();
+      orphan.commit();
+      const release = retainPluginNativeCapturePath(retainedFile);
+      await retained.disposeAsync();
+      await orphan.disposeAsync();
+      const live = createPluginNativeCaptureRoot(state.stateDir);
+      const liveFile = path.join(live.directory, "live.node");
+      fs.writeFileSync(liveFile, "synthetic live native artifact");
+      await seedInstalledPluginIndex({}, { env: state.env, candidates: [] });
+      if (malformed) {
+        const plugin = createInstalledPluginIndex().plugins[0];
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.prepare(
+            "UPDATE config_machine_state SET value_json = json_set(value_json, '$.index.plugins', json(?)) WHERE state_key = 'plugins.installedIndex'",
+          ).run(JSON.stringify([{ ...plugin, sourceAdmissions: { malformed: true } }]));
+        });
+      }
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const reads = vi.spyOn(metadataState, "readPluginMetadataStateRow");
+      try {
+        await cleanupGatewayRetiredPluginArtifacts({
+          log,
+          startupInstallPaths: [],
+          signal: new AbortController().signal,
+          assertCurrent: () => {},
+        });
+        expect(reads).toHaveBeenCalledTimes(1);
+        expect(fs.readFileSync(retainedFile, "utf8")).toBe("synthetic retained native artifact");
+        expect(fs.readFileSync(liveFile, "utf8")).toBe("synthetic live native artifact");
+        expect(fs.existsSync(orphanFile)).toBe(malformed);
+        if (malformed) {
+          expect(log.warn).toHaveBeenCalledWith(
+            expect.stringContaining("Plugin native admission receipts are invalid"),
+          );
+        } else {
+          expect(log.warn).not.toHaveBeenCalled();
+        }
+      } finally {
+        reads.mockRestore();
+        release();
+        await live.disposeAsync();
+      }
+    });
+  },
+);
+
+it("reports an unreadable candidate root instead of declaring cleanup empty", async () => {
+  await withOpenClawTestState({ label: "gateway-retained-plugin-unreadable" }, async (state) => {
+    const root = resolvePluginSourceCapturesDirectory(state.stateDir);
+    fs.mkdirSync(path.dirname(root), { recursive: true });
+    fs.writeFileSync(root, "synthetic non-directory capture root");
+    const log = { info: vi.fn(), warn: vi.fn() };
+    await cleanupGatewayRetiredPluginArtifacts({
+      log,
+      startupInstallPaths: [],
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("retired plugin cleanup unavailable"),
+    );
+    expect(fs.readFileSync(root, "utf8")).toBe("synthetic non-directory capture root");
+  });
+});
 
 it.each(["lease", "caller"] as const)(
   "preserves native and npm artifacts when %s authority is revoked during inventory read",

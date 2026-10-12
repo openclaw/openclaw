@@ -5,17 +5,12 @@ const REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
 
 type RealtimeVoiceAudioOverflowPolicy = "drop-oldest" | "reject-newest";
 
-export type RealtimeVoiceAudioQueue = {
-  clear: () => void;
-  dequeue: () => Buffer | undefined;
-  drain: () => Buffer[];
-  enqueue: (audio: Buffer) => boolean;
-};
+export type RealtimeVoiceAudioQueue = ReturnType<typeof createRealtimeVoiceAudioQueue>;
 
 export function createRealtimeVoiceAudioQueue(
   overflowPolicy: RealtimeVoiceAudioOverflowPolicy,
   onOverflow?: () => void,
-): RealtimeVoiceAudioQueue {
+) {
   let chunks: Buffer[] = [];
   let bytes = 0;
 
@@ -38,7 +33,7 @@ export function createRealtimeVoiceAudioQueue(
       clear();
       return drained;
     },
-    enqueue: (audio) => {
+    enqueue: (audio: Buffer) => {
       if (audio.byteLength > REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES) {
         onOverflow?.();
         return false;

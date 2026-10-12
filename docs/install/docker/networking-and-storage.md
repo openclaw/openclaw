@@ -87,13 +87,13 @@ docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
   openclaw-cli models list --provider anthropic
 ```
 
-Then use the bundled `claude-cli` backend:
+The login keeps `anthropic/*` model refs and runs them through the bundled `claude-cli` backend:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
   openclaw-cli agent \
   --agent main \
-  --model claude-cli/claude-sonnet-4-6 \
+  --model anthropic/claude-sonnet-4-6 \
   --message "Say hello from Docker Claude CLI"
 ```
 

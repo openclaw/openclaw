@@ -30,7 +30,7 @@ export async function reactivateCompletedSubagentSession(params: {
     params.sessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
   );
-  const existing = paused ?? getLatestSubagentRunByChildSessionKey(params.sessionKey);
+  const existing = paused ?? (await getLatestSubagentRunByChildSessionKey(params.sessionKey));
   if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }

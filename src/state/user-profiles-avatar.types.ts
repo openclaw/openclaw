@@ -20,10 +20,8 @@ export type UserProfileAvatarInspection = {
   emails: string[];
 };
 
-export type UserProfileAvatarRepresentation = {
+export type UserProfileAvatarRepresentation = Pick<UserProfileAvatar, "sha256" | "mime"> & {
   canonicalProfileId: string;
-  sha256: string;
-  mime: UserProfileAvatarMime;
 };
 
 export type UserProfileAvatarReadCommand =

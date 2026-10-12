@@ -1,16 +1,26 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
+import {
+  resetDiagnosticSessionStateForTest,
+  type SessionState,
+} from "../logging/diagnostic-session-state.js";
+import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import {
   addSession,
   appendOutput,
   deleteSession,
   markExited,
   recordNotifyOnExitRemoval,
+  type ProcessSession,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
+import {
+  detectToolCallLoop,
+  recordToolCall,
+  recordToolCallOutcome,
+} from "./tool-loop-detection.js";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -38,6 +48,156 @@ function harness() {
 
 type Result = Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>;
 const text = (result: Result) => (result.content[0]?.type === "text" ? result.content[0].text : "");
+
+function writableSession() {
+  const session = createProcessSessionFixture({
+    id: "input",
+    command: "cat",
+    backgrounded: true,
+    startedAt: Date.now() - 20_000,
+  });
+  const stdin = {
+    write: vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, done) => done?.(null)),
+    end: vi.fn(),
+    destroyed: false,
+    writableEnded: false,
+  };
+  session.stdin = stdin;
+  addSession(session);
+  return { session, stdin };
+}
+
+const inputCall = (action: string, extra: Record<string, unknown> = {}) =>
+  createProcessTool().execute(action, { action, sessionId: "input", ...extra });
+
+test("does not close stdin when requester authority is revoked during a write", async () => {
+  let current = true;
+  const controller = new AbortController();
+  const budget = createAgentToolExecutionBudget({
+    signal: controller.signal,
+    abort: (error) => controller.abort(error),
+    isCurrent: () => current,
+  });
+  const { stdin } = writableSession();
+  stdin.write.mockImplementation((_data, done) => {
+    current = false;
+    done?.(null);
+  });
+  await expect(
+    budget.run(() => inputCall("write", { data: "allowed input", eof: true })),
+  ).rejects.toThrow("execution scope is no longer active");
+  expect(stdin.write).toHaveBeenCalledOnce();
+  expect(stdin.end).not.toHaveBeenCalled();
+});
+
+test("exposes idle input controls only while stdin remains writable", async () => {
+  const { session, stdin } = writableSession();
+  appendOutput(session, "stdout", "Name? ");
+  const details = {
+    status: "running",
+    sessionId: session.id,
+    stdinWritable: true,
+    waitingForInput: true,
+    idleMs: 20_000,
+    lastOutputAt: Date.now() - 20_000,
+  };
+  const log = await inputCall("log");
+  expect(text(log)).toContain("may be waiting for input");
+  expect(log.details).toMatchObject(details);
+  await inputCall("poll");
+  const poll = await inputCall("poll");
+  expect(text(poll)).toContain("(no new output)");
+  expect(text(poll)).toContain("may be waiting for input");
+  expect(poll.details).toMatchObject(details);
+  const listed = await inputCall("list");
+  expect(text(listed)).toContain("[input-wait]");
+  expect(listed.details).toMatchObject({ sessions: [details] });
+  expect(text(await inputCall("write", { data: "你好😀" }))).toBe(
+    "Wrote 10 bytes to session input.",
+  );
+  stdin.writableEnded = true;
+  const closed = await inputCall("log");
+  expect(text(closed)).not.toContain("provide input");
+  expect(closed.details).toMatchObject({
+    status: "running",
+    stdinWritable: false,
+    waitingForInput: false,
+  });
+  const write = await inputCall("write", { data: "answer\n" });
+  expect(text(write)).toContain("stdin is not writable");
+  expect(write.details).toMatchObject({ status: "failed" });
+});
+
+test.each(["poll", "log"])(
+  "blocks repeated %s input waits despite elapsed time, then recognizes new output",
+  async (action) => {
+    const { session } = writableSession();
+    const tool = createProcessTool();
+    const params = { action, sessionId: session.id };
+    const state: SessionState = { lastActivity: Date.now(), state: "processing", queueDepth: 0 };
+    let sequence = 0;
+    const observe = async () => {
+      const toolCallId = `process-${sequence++}`;
+      recordToolCall(state, "process", params, toolCallId);
+      const result = await tool.execute(toolCallId, params);
+      recordToolCallOutcome(state, { toolName: "process", toolParams: params, toolCallId, result });
+      acknowledgeInternalToolResult(result);
+      return result;
+    };
+
+    for (let index = 0; index < 20; index++) {
+      vi.setSystemTime(Date.now() + 1_000);
+      await observe();
+    }
+    expect(detectToolCallLoop(state, "process", params)).toMatchObject({
+      stuck: true,
+      level: "critical",
+      detector: "known_poll_no_progress",
+      count: 20,
+    });
+
+    appendOutput(session, "stdout", "New prompt: ");
+    const progressed = await observe();
+    expect(text(progressed)).toContain("New prompt:");
+    expect(progressed.details).toMatchObject({
+      idleMs: 40_000,
+      lastOutputAt: session.startedAt,
+    });
+    expect(detectToolCallLoop(state, "process", params)).toEqual({ stuck: false });
+  },
+);
+
+test("sorts by start time then registration order across terminal transitions", async () => {
+  const sessions = (
+    [
+      ["later", 3_000],
+      ["oldest", 1_000],
+      ["middle", 2_000],
+      ["newest-tie", 2_000],
+    ] as const
+  ).map(([id, startedAt]) => {
+    const session = createProcessSessionFixture({ id, startedAt, backgrounded: true });
+    addSession(session);
+    return session;
+  });
+  const expected = ["later", "newest-tie", "middle", "oldest"];
+  const expectOrder = async () => {
+    const result = await inputCall("list");
+    expect(result.details).toMatchObject({
+      sessions: expected.map((sessionId) => ({ sessionId })),
+    });
+    expect(
+      text(result)
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    ).toEqual(expected);
+  };
+  for (const session of sessions) {
+    await expectOrder();
+    markExited(session, 0, null, "completed");
+  }
+  await expectOrder();
+});
 
 test("poll returns a new interactive prompt before its wait expires", async () => {
   const { session, poll } = harness();
@@ -180,9 +340,7 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
 });
 
 test.each([
-  [7, null, "completed", "exit", false, "code 7"],
   [null, null, "failed", "manual-cancel", false, "unknown exit code"],
-  [0, null, "failed", "overall-timeout", true, "code 0"],
   [null, "SIGKILL", "failed", "no-output-timeout", true, "signal SIGKILL"],
 ] as const)(
   "preserves exit %s/%s as %s (%s) across waiting and retained observations",
@@ -233,26 +391,6 @@ test("poll rejects timeoutMs with a correction before consuming output", async (
   expect(text(await poll())).toContain("ready");
 });
 
-test("poll still tolerates unrelated model-added parameters", async () => {
-  const { call } = harness();
-  expect((await call("poll", { description: "model-added explanation" })).details).toMatchObject({
-    status: "running",
-  });
-});
-
-test("poll clamps a long wait to 30 seconds", async () => {
-  const { poll } = harness();
-  let settled = false;
-  const pending = poll(120_000).then((result) => {
-    settled = true;
-    return result;
-  });
-  await vi.advanceTimersByTimeAsync(29_999);
-  expect(settled).toBe(false);
-  await vi.advanceTimersByTimeAsync(1);
-  expect((await pending).details).toMatchObject({ status: "running" });
-});
-
 test("poll aborts while waiting for completion", async () => {
   const { poll } = harness();
   const controller = new AbortController();
@@ -261,18 +399,4 @@ test("poll aborts while waiting for completion", async () => {
   await vi.advanceTimersByTimeAsync(500);
   controller.abort();
   await rejected;
-});
-
-test("poll backoff grows while idle, resets on output, and clears on completion", async () => {
-  const { session, poll } = harness();
-  for (const retryInMs of [5_000, 10_000, 30_000, 60_000, 60_000]) {
-    expect((await poll()).details).toMatchObject({ retryInMs });
-  }
-  appendOutput(session, "stdout", "step complete\n");
-  expect((await poll()).details).toMatchObject({ retryInMs: 5_000 });
-  markExited(session, 0, null, "completed");
-  const completed = await poll();
-  expect(completed.details).toMatchObject({ status: "completed" });
-  expect(completed.details).not.toHaveProperty("retryInMs");
-  expect((await poll()).details).not.toHaveProperty("retryInMs");
 });

@@ -408,11 +408,10 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
   }
   state.observer?.disconnect();
   state.events.abort();
-  if (state.adjustmentFrame !== null) {
-    cancelAnimationFrame(state.adjustmentFrame);
-  }
-  if (state.overflowFrame !== null) {
-    cancelAnimationFrame(state.overflowFrame);
+  for (const frame of [state.adjustmentFrame, state.overflowFrame]) {
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+    }
   }
 }
 

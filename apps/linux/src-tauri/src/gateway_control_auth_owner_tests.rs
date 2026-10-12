@@ -24,12 +24,13 @@ impl Fixture {
             None,
             GatewayOwnership::Remote,
         )));
-        *client.inner.native_control_session.lock().unwrap() = NativeControlSession::from_hello(
-            GatewayAuth::DeviceToken("first-grant".into()),
-            Some("device-token"),
-            Some(vec!["operator.read".into()]),
-            None,
-        );
+        client.inner.config.lock().unwrap().native_control_session =
+            NativeControlSession::from_hello(
+                GatewayAuth::DeviceToken("first-grant".into()),
+                Some("device-token"),
+                Some(vec!["operator.read".into()]),
+                None,
+            );
         client
             .inner
             .connection_state
@@ -120,9 +121,10 @@ fn native_control_owner_rejects_disconnect_route_switch_and_stale_generation() {
     )));
     assert!(client
         .inner
-        .native_control_session
+        .config
         .lock()
         .unwrap()
+        .native_control_session
         .is_none());
     client
         .inner
@@ -155,7 +157,7 @@ fn desktop_route_action_can_read_native_bootstrap_and_rejects_same_url_replaceme
         .expect("desktop navigation can project its currently accepted native owner");
     assert_eq!(dashboard.as_str(), "https://gateway.example/control");
 
-    let same_url = client.inner.config.lock().unwrap().clone();
+    let same_url = client.inner.config.lock().unwrap().config.clone();
     client.replace_configuration(same_url);
     assert!(client
         .with_desktop_route::<()>(generation.0, |_| {
@@ -194,12 +196,13 @@ fn native_control_bootstrap_projects_only_live_accepted_shared_bindings() {
             json!({"password":"rotated-password","token":null}),
         ),
     ] {
-        *client.inner.native_control_session.lock().unwrap() = NativeControlSession::from_hello(
-            accepted,
-            Some(method),
-            Some(vec!["operator.read".into()]),
-            None,
-        );
+        client.inner.config.lock().unwrap().native_control_session =
+            NativeControlSession::from_hello(
+                accepted,
+                Some(method),
+                Some(vec!["operator.read".into()]),
+                None,
+            );
         client
             .with_native_control_bootstrap(generation, |dashboard, script| {
                 assert_eq!(dashboard.as_str(), "https://gateway.example/control");
@@ -220,7 +223,7 @@ fn native_control_bootstrap_projects_only_live_accepted_shared_bindings() {
         })
         .expect("disconnected owner publishes only a native marker without retired credentials");
     expected.push(json!({}));
-    *client.inner.native_control_session.lock().unwrap() = None;
+    client.inner.config.lock().unwrap().native_control_session = None;
     client
         .inner
         .connection_state
@@ -294,23 +297,25 @@ fn native_control_owner_uses_accepted_session_secret_not_current_configuration_o
             "auth":{"method":method,"role":"operator","scopes":["operator.read"]},
         }))
         .unwrap();
-        *client.inner.native_control_session.lock().unwrap() = NativeControlSession::from_hello(
-            auth.clone(),
-            hello.auth_method.as_deref(),
-            hello.operator_scopes,
-            hello.device_token.as_deref(),
-        );
+        client.inner.config.lock().unwrap().native_control_session =
+            NativeControlSession::from_hello(
+                auth.clone(),
+                hello.auth_method.as_deref(),
+                hello.operator_scopes,
+                hello.device_token.as_deref(),
+            );
         let result = client
             .native_control_auth(generation, &dashboard, &challenge)
             .unwrap();
         assert_eq!(result["auth"], expected);
         assert_eq!(result["scopes"], json!(["operator.read"]));
-        *client.inner.native_control_session.lock().unwrap() = NativeControlSession::from_hello(
-            auth,
-            Some("trusted-proxy"),
-            Some(vec!["operator.read".into()]),
-            None,
-        );
+        client.inner.config.lock().unwrap().native_control_session =
+            NativeControlSession::from_hello(
+                auth,
+                Some("trusted-proxy"),
+                Some(vec!["operator.read".into()]),
+                None,
+            );
         assert!(
             client
                 .native_control_auth(generation, &dashboard, &challenge)
@@ -345,12 +350,13 @@ fn verified_network_session_uses_only_its_issued_current_device_grant() {
                 hello.device_token.as_deref().unwrap(),
             )
             .unwrap();
-        *client.inner.native_control_session.lock().unwrap() = NativeControlSession::from_hello(
-            GatewayAuth::SharedToken("unaccepted-configured-secret".into()),
-            hello.auth_method.as_deref(),
-            hello.operator_scopes,
-            hello.device_token.as_deref(),
-        );
+        client.inner.config.lock().unwrap().native_control_session =
+            NativeControlSession::from_hello(
+                GatewayAuth::SharedToken("unaccepted-configured-secret".into()),
+                hello.auth_method.as_deref(),
+                hello.operator_scopes,
+                hello.device_token.as_deref(),
+            );
         let result = client
             .native_control_auth(generation, &dashboard, &challenge)
             .unwrap();

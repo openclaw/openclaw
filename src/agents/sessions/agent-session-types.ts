@@ -15,14 +15,31 @@ import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
+/** The embedded request boundary owns threshold checks while this flag is set. */
+export const agentSessionDeferThresholdCompaction: unique symbol = Symbol(
+  "openclaw.agent-session.defer-threshold-compaction",
+);
+
+/** Runs provider checkpoint work without aborting or restarting the current tool loop. */
+export const agentSessionRunProviderCompaction: unique symbol = Symbol(
+  "openclaw.agent-session.run-provider-compaction",
+);
+
 type AgentSessionCompactionOutcome =
-  | { status: "completed"; tokensBefore: number; tokensAfter: number; willRetry: boolean }
+  | {
+      status: "completed";
+      tokensBefore: number;
+      tokensAfter: number;
+      willRetry: boolean;
+      qualityDegraded?: true;
+    }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string }
   | { status: "aborted" };
 
 type AgentSessionCompactionEndEvent = {
   type: "compaction_end";
+  hooksHandled?: boolean;
   itemId?: string;
   reason: "manual" | "threshold" | "overflow";
   outcome: AgentSessionCompactionOutcome;
@@ -39,7 +56,12 @@ export type AgentSessionEvent =
   | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
   | { type: "agent_settled" }
   | { type: "agent_handoff" }
-  | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow"; itemId?: string }
+  | {
+      type: "compaction_start";
+      reason: "manual" | "threshold" | "overflow";
+      itemId?: string;
+      hooksHandled?: boolean;
+    }
   | { type: "session_info_changed"; name: string | undefined }
   | { type: "thinking_level_changed"; level: ThinkingLevel }
   | AgentSessionCompactionEndEvent
@@ -62,11 +84,9 @@ export interface AgentSessionConfig {
   sessionManager: SessionManager;
   settingsManager: SettingsManager;
   cwd: string;
-  /** Resource loader for extensions, skills, prompts, and themes. */
   resourceLoader: ResourceLoader;
   /** SDK custom tools registered outside extensions. */
   customTools?: ToolDefinition[];
-  /** Model registry for API key resolution and model discovery. */
   modelRegistry: ModelRegistry;
   /** Runtime-owned tool allowlist, also used for initial activation. */
   allowedToolNames: string[];
@@ -96,7 +116,6 @@ export interface ExtensionBindings {
 export interface PromptOptions {
   /** Expand file-based prompt templates. Defaults to true. */
   expandPromptTemplates?: boolean;
-  /** Image attachments. */
   images?: ImageContent[];
   /** Queue behavior when an agent is already streaming. */
   streamingBehavior?: "steer" | "followUp";

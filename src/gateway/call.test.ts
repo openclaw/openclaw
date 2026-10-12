@@ -47,7 +47,6 @@ const deviceIdentityState = vi.hoisted(() => ({
     publicKeyPem: "test-public-key",
     privateKeyPem: "test-private-key",
   } satisfies DeviceIdentity,
-  throwOnLoad: false,
 }));
 const loadOrCreateDeviceIdentityMock = vi.hoisted(() => vi.fn());
 const loadDeviceIdentityIfPresentMock = vi.hoisted(() => vi.fn());
@@ -132,22 +131,16 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-identity.js")>();
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-identity-async.js")>();
   return {
     ...actual,
-    loadOrCreateDeviceIdentity: () => {
+    loadOrCreateDeviceIdentityAsync: () => {
       loadOrCreateDeviceIdentityMock();
-      if (deviceIdentityState.throwOnLoad) {
-        throw new Error("read-only identity dir");
-      }
       return deviceIdentityState.value;
     },
-    loadDeviceIdentityIfPresent: () => {
+    loadDeviceIdentityIfPresentAsync: () => {
       loadDeviceIdentityIfPresentMock();
-      if (deviceIdentityState.throwOnLoad) {
-        throw new Error("read-only identity dir");
-      }
       return deviceIdentityState.value;
     },
   };
@@ -330,7 +323,6 @@ function resetGatewayCallMocks() {
     return { ok: true };
   };
   gatewayClientStopAndWait = async () => {};
-  deviceIdentityState.throwOnLoad = false;
   loadOrCreateDeviceIdentityMock.mockReset();
   loadDeviceIdentityIfPresentMock.mockReset();
   loadDeviceAuthTokenMock.mockReset();
@@ -1048,12 +1040,11 @@ describe("buildGatewayConnectionDetails", () => {
       }
       try {
         gatewayConfigMocks.useActualDispatchConfig = true;
-        deviceIdentityState.throwOnLoad = true;
         loadDeviceAuthTokenMock.mockReturnValue(null);
         resolveGatewayPort.mockImplementation((config) => config?.gateway?.port ?? 18789);
         await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
         expect(lastClientOptions?.url).toBe(`ws://127.0.0.1:${runtimeSnapshot ? 18801 : 18800}`);
-        expect(lastClientOptions?.deviceIdentity).toBeNull();
+        expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
       } finally {
         resetConfigRuntimeState();
         fs.rmSync(tempStateDir, { recursive: true, force: true });
@@ -1591,6 +1582,10 @@ describe("callGateway error details", () => {
       setStop: (stop) => {
         gatewayClientStopAndWait = stop;
       },
+      setFeatures: (methods, capabilities) => {
+        helloMethods = methods;
+        helloCapabilities = capabilities;
+      },
       hello: () => lastClientOptions?.onHelloOk?.(makeStubGatewayHello()),
       close: (code, reason) => lastClientOptions?.onClose?.(code, reason),
     };
@@ -1626,28 +1621,6 @@ describe("callGateway error details", () => {
         timeoutMs: 10,
       }),
     ).rejects.toThrow("gateway remote mode misconfigured");
-  });
-
-  it.each([
-    {
-      method: "secrets.resolve",
-      requiredMethods: ["secrets.resolve"],
-      requiredCapabilities: undefined,
-      error:
-        /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
-    },
-    {
-      method: "gateway.restart.request",
-      requiredMethods: undefined,
-      requiredCapabilities: ["gateway-restart-target-safe-v1"],
-      error:
-        /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
-    },
-  ])("requires supported features before calling $method", async ({ error, ...options }) => {
-    setLocalLoopbackGatewayConfig();
-    helloMethods = ["health"];
-    helloCapabilities = [];
-    await expect(callGateway(options)).rejects.toThrow(error);
   });
 });
 

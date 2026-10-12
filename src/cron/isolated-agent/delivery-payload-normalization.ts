@@ -1,4 +1,4 @@
-// Normalizes direct cron payloads before TTS, custody, transport, or mirroring.
+// Normalizes cron result and notification payloads before custody, TTS, or transport.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplyOutcome } from "../../auto-reply/reply/normalize-reply.js";
@@ -80,7 +80,16 @@ export function normalizeDirectCronDeliveryPayloads(params: {
     }
   }
   if (accepted.length === 0) {
-    return { kind: "suppress", reason: channelSuppressed ? "channel_transform" : "empty" };
+    const silent = [
+      params.outputText,
+      params.summary,
+      params.synthesizedText,
+      ...params.deliveryPayloads.map((payload) => payload.text),
+    ].some((text) => typeof text === "string" && text.trim().length > 0);
+    return {
+      kind: "suppress",
+      reason: channelSuppressed ? "channel_transform" : silent ? "silent" : "empty",
+    };
   }
 
   const acceptedFallbackIndex = accepted.findIndex(

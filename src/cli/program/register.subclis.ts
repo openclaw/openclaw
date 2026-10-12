@@ -92,7 +92,6 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<
   [["connect"], async (program) => (await import("../connect-cli.js")).registerConnectCli(program)],
   [["worker"], async (program) => (await import("../worker-cli.js")).registerWorkerCli(program)],
   [["sandbox"], async (program) => (await import("../sandbox-cli.js")).registerSandboxCli(program)],
-  [["fleet"], async (program) => (await import("../fleet-cli.js")).registerFleetCli(program)],
   [
     ["worktrees"],
     async (program) => (await import("../worktrees-cli.js")).registerWorktreesCli(program),

@@ -9,7 +9,6 @@ import {
   type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
-  type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
@@ -54,26 +53,23 @@ function hasPersistedAcpSession(params: {
 }
 
 function isBackendDelegatedSession(
-  entry: StoredSessionEntry,
+  storedEntry: StoredSessionEntry,
   entries: AgentSessionEntry[],
   hasStoredAcpSession: boolean,
 ): boolean {
   const hasBackendSession =
     hasStoredAcpSession ||
-    hasNonEmptyString(entry.claudeCliSessionId) ||
-    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
+    hasNonEmptyString(storedEntry.claudeCliSessionId) ||
+    Object.values(storedEntry.cliSessionBindings ?? {}).some((binding) =>
       hasNonEmptyString(binding?.sessionId),
     ) ||
-    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString);
+    Object.values(storedEntry.cliSessionIds ?? {}).some(hasNonEmptyString);
   if (!hasBackendSession) {
     return false;
   }
-  const messages = entries.filter(
-    (transcriptEntry): transcriptEntry is SessionMessageEntry => transcriptEntry.type === "message",
-  );
   return (
-    messages.length > 0 &&
-    messages.every((transcriptEntry) => transcriptEntry.message.role === "user")
+    entries.some((entry) => entry.type === "message") &&
+    entries.every((entry) => entry.type !== "message" || entry.message.role === "user")
   );
 }
 
@@ -219,7 +215,7 @@ async function readSessionDataFromIdentity(params: {
     ? rawEntries.map((entry) => {
         const node = tree.byId.get(entry.id);
         return node && entry.parentId !== node.parentId
-          ? ({ ...entry, parentId: node.parentId } as AgentSessionEntry)
+          ? { ...entry, parentId: node.parentId }
           : entry;
       })
     : rawEntries;

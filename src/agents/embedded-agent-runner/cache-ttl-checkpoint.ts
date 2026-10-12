@@ -131,23 +131,18 @@ export function readCacheTtlCheckpoint(
       continue;
     }
     const data = entry.data;
-    if (isRecord(data) && "cacheTtlDelta" in data) {
-      const delta = deltaSchema.safeParse(data);
-      if (delta.success) {
-        deltas.push(delta.data);
-      } else {
+    const isDelta = isRecord(data) && "cacheTtlDelta" in data;
+    const parsed = isDelta ? deltaSchema.safeParse(data) : snapshotSchema.safeParse(data);
+    if (!parsed.success) {
+      if (isDelta || !isCacheTtlTouch(data)) {
         // A damaged patch also invalidates later patches that depended on it.
         deltas.length = 0;
         damaged = true;
       }
       continue;
     }
-    const parsed = snapshotSchema.safeParse(data);
-    if (!parsed.success) {
-      if (!isCacheTtlTouch(data)) {
-        deltas.length = 0;
-        damaged = true;
-      }
+    if ("cacheTtlDelta" in parsed.data) {
+      deltas.push(parsed.data);
       continue;
     }
     if (!deltas.length) {

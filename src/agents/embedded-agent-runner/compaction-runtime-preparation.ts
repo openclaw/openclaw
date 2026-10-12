@@ -12,8 +12,8 @@ import {
 import { projectPreparedModelProvider } from "../harness/support.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../model-auth.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { isOpenAIProvider } from "../openai-routing.js";
@@ -80,15 +80,9 @@ export function resolveCompactionRuntimeSelection(params: {
       ? undefined
       : params.agentId);
   const policyTarget = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    modelSelectionLocked: params.modelSelectionLocked,
+    ...params,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
   });
   const policyProvider = policyTarget.provider ?? DEFAULT_PROVIDER;
   const policyModelId = policyTarget.model ?? DEFAULT_MODEL;
@@ -122,14 +116,13 @@ export function resolveCompactionRuntimeSelection(params: {
   const provider = target.provider ?? DEFAULT_PROVIDER;
   const modelId = target.model ?? DEFAULT_MODEL;
   const selectedRuntime = normalizeOptionalAgentRuntimeId(selectedHarnessRuntime);
-  const attemptNativeHarnessCompaction = Boolean(
-    selectedRuntime &&
-    selectedRuntime !== "auto" &&
-    selectedRuntime !== "openclaw" &&
-    (!isOpenAIProvider(provider) || target.nativeHarnessCompaction === true),
-  );
   return {
-    attemptNativeHarnessCompaction,
+    attemptNativeHarnessCompaction: Boolean(
+      selectedRuntime &&
+      selectedRuntime !== "auto" &&
+      selectedRuntime !== "openclaw" &&
+      (!isOpenAIProvider(provider) || target.nativeHarnessCompaction === true),
+    ),
     runtimePolicySessionKey,
     runtimePolicyAgentId,
     boundHarnessRuntime,
@@ -169,23 +162,22 @@ export async function prepareCompactionHarnessAuth(params: {
 }): Promise<
   | {
       ok: true;
-      runtimeAuthProfileStore: ReturnType<typeof ensureAuthProfileStore>;
+      runtimeAuthProfileStore: Awaited<ReturnType<typeof ensureAuthProfileStoreAsync>>;
       runtimeAuthPreparation: PreparedAgentRuntimeAuth;
       selectedPreparedHarness: AgentHarness;
       providerUsesProfileScopedModelMetadata: boolean;
     }
   | { ok: false; error: unknown }
 > {
-  const runtimeAuthProfileStore = isOpenAIProvider(params.provider)
-    ? ensureAuthProfileStore(params.agentDir, {
-        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
-        externalCliProviderIds: ["openai"],
-        allowKeychainPrompt: false,
-      })
-    : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
-        allowKeychainPrompt: false,
-      });
+  const useOpenAi = isOpenAIProvider(params.provider);
+  const ensureStore = useOpenAi
+    ? ensureAuthProfileStoreAsync
+    : ensureAuthProfileStoreWithoutExternalProfilesAsync;
+  const runtimeAuthProfileStore = await ensureStore(params.agentDir, {
+    profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
+    ...(useOpenAi ? { externalCliProviderIds: ["openai"] } : {}),
+    allowKeychainPrompt: false,
+  });
   const harnessSelectionParams = {
     provider: params.provider,
     modelId: params.modelId,
@@ -276,11 +268,8 @@ export async function prepareCompactionHarnessAuth(params: {
     runtimeAuthPreparation,
     selectedPreparedHarness,
     providerUsesProfileScopedModelMetadata: providerUsesCredentialScopedModelMetadata({
+      ...params,
       provider: params.metadataProvider ?? params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
     }),
   };
 }

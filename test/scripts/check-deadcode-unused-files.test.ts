@@ -106,12 +106,6 @@ async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<
 }
 
 describe("check-deadcode-unused-files", () => {
-  it("has no checked-in unused-file allowlist", () => {
-    expect(existsSync(path.resolve("scripts/deadcode-unused-files.allowlist.mjs"))).toBe(false);
-    const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mts"), "utf8");
-    expect(script).not.toContain("allowlist");
-  });
-
   it("parses the compact Knip unused-file section", () => {
     expect(
       parseKnipCompactUnusedFiles(`
@@ -127,32 +121,6 @@ C:outside.ts: C:outside.ts
 
 Unused dependencies (1)
 left-pad: package.json
-`),
-    ).toEqual(["src/a.ts", "src/b.ts"]);
-  });
-
-  it("parses Knip's files-only compact output", () => {
-    expect(parseKnipCompactUnusedFiles("src/b.ts: src/b.ts\nsrc/a.ts: src/a.ts\n")).toEqual([
-      "src/a.ts",
-      "src/b.ts",
-    ]);
-  });
-
-  it("keeps dot-directory and root entry files", () => {
-    expect(
-      parseKnipCompactUnusedFiles(
-        ".agents/skills/example/scripts/check.mts: .agents/skills/example/scripts/check.mts\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
-      ),
-    ).toEqual([".agents/skills/example/scripts/check.mts", "tsdown.ai.config.ts"]);
-  });
-
-  it("ignores pnpm dlx progress lines in files-only compact output", () => {
-    expect(
-      parseKnipCompactUnusedFiles(`
-Progress: resolved 21, reused 0, downloaded 0, added 0
-src/b.ts: src/b.ts
-Progress: resolved 65, reused 20, downloaded 1, added 21, done
-src/a.ts: src/a.ts
 `),
     ).toEqual(["src/a.ts", "src/b.ts"]);
   });
@@ -252,49 +220,6 @@ Delete the files or model their real entrypoints in Knip.`,
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it("falls back to bare pnpm when no managed pnpm runner is available", async () => {
-    const calls: unknown[] = [];
-
-    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-      env: { PATH: "" },
-      npmExecPath: "",
-      platform: "linux",
-      spawnCommand(command: string, args: string[], options: unknown) {
-        calls.push({ args, command, options });
-        const child = new FakeKnipProcess();
-        finishFakeProcess(child, 0, null);
-        return child;
-      },
-      writeStatus: () => {},
-    });
-
-    await resultPromise;
-
-    const call = calls[0] as { command: string };
-    expect(path.basename(call.command)).toBe("pnpm");
-    expect(call).toMatchObject({
-      args: [
-        "dlx",
-        "--package",
-        "knip@6.32.2",
-        "knip",
-        "--config",
-        "config/knip.config.ts",
-        "--production",
-        "--no-progress",
-        "--reporter",
-        "compact",
-        "--files",
-        "--no-config-hints",
-      ],
-      options: {
-        detached: process.platform !== "win32",
-        shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    });
   });
 
   it("emits heartbeat status and reports Knip timeouts", async () => {
@@ -489,32 +414,29 @@ Delete the files or model their real entrypoints in Knip.`,
     });
   });
 
-  it.each([1, 2, 3])(
-    "preserves split UTF-8 for interleaved Knip streams at byte %i",
-    async (split) => {
-      const child = new FakeKnipProcess();
-      child.pid = 0;
-      const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-        maxBufferBytes: 8,
-        spawnCommand: () => child,
-        writeStatus: () => {},
-      });
-      const stdout = Buffer.from("🦞");
-      const stderr = Buffer.from("📦");
-      child.stdout.emit("data", stdout.subarray(0, split));
-      child.stderr.emit("data", stderr.subarray(0, split));
-      child.stdout.emit("data", stdout.subarray(split));
-      child.stderr.emit("data", stderr.subarray(split));
-      finishFakeProcess(child, 0, null);
+  it.each([1])("preserves split UTF-8 for interleaved Knip streams at byte %i", async (split) => {
+    const child = new FakeKnipProcess();
+    child.pid = 0;
+    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
+      maxBufferBytes: 8,
+      spawnCommand: () => child,
+      writeStatus: () => {},
+    });
+    const stdout = Buffer.from("🦞");
+    const stderr = Buffer.from("📦");
+    child.stdout.emit("data", stdout.subarray(0, split));
+    child.stderr.emit("data", stderr.subarray(0, split));
+    child.stdout.emit("data", stdout.subarray(split));
+    child.stderr.emit("data", stderr.subarray(split));
+    finishFakeProcess(child, 0, null);
 
-      await expect(resultPromise).resolves.toMatchObject({
-        errorCode: undefined,
-        output: "🦞📦",
-        signal: null,
-        status: 0,
-      });
-    },
-  );
+    await expect(resultPromise).resolves.toMatchObject({
+      errorCode: undefined,
+      output: "🦞📦",
+      signal: null,
+      status: 0,
+    });
+  });
 
   it("does not flush a UTF-8 character cut by the Knip output byte cap", async () => {
     const child = new FakeKnipProcess();

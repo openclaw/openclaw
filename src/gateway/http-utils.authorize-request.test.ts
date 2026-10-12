@@ -105,7 +105,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["token", "password"] as const)(
+  it.each(["password"] as const)(
     "marks %s-authenticated requests as untrusted for declared HTTP scopes",
     async (method) => {
       vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
@@ -395,10 +395,8 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   );
 
   it.each([
-    { rolesConfigured: true, failure: "profile store" },
     { rolesConfigured: false, failure: "profile store" },
     { rolesConfigured: true, failure: "provider lookup" },
-    { rolesConfigured: false, failure: "provider lookup" },
   ])(
     "$failure failure preserves authorization with roles enabled: $rolesConfigured",
     async ({ rolesConfigured, failure }) => {

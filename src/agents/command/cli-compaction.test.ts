@@ -1287,7 +1287,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       },
     });
     const { compactCalls, recordCliCompactionInStore } = scenario;
-    await scenario.run();
+    await scenario.run({ cliBackendId: "codex" });
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(compactCalls).toHaveLength(0);

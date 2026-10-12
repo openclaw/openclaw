@@ -9,7 +9,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
+import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -47,7 +47,7 @@ describe("suggestion dispatch through real chat input custody", () => {
     const suggestionId = "custody-suggestion";
     const runId = `session-suggestion:${suggestionId}`;
     const text = "Review this synthetic suggestion after the current task.";
-    addSessionSuggestion(fixture.scope, { id: suggestionId, authorId: profile.id, text });
+    await addSessionSuggestion(fixture.scope, { id: suggestionId, authorId: profile.id, text });
     await initializeSessionReadContext(fixture.context);
     const { db } = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(fixture.scope)));
     const claim = () =>

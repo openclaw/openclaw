@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { joinJsonlFrames, claudeStreamEvent, claudeTextDelta } from "./cli-output.test-helpers.js";
 
@@ -236,6 +236,69 @@ describe("createCliJsonlStreamingParser", () => {
       sessionId: "hook-stopped",
       usage: undefined,
     });
+  });
+
+  it.each([
+    {
+      name: "raw tool protocol",
+      text: '<invoke name="Bash">\n<parameter name="command">echo 1</parameter>\n</invoke>',
+      rejected: true,
+    },
+    {
+      name: "incomplete tool protocol",
+      text: '<invoke name="Bash">\n<parameter name="command">echo 1',
+      rejected: true,
+    },
+    {
+      name: "incomplete opening tag",
+      text: '<invoke name="Ba',
+      rejected: true,
+    },
+    {
+      name: "plain prose",
+      text: "partial answer",
+      rejected: false,
+    },
+    {
+      name: "fenced example",
+      text: 'Example:\n```xml\n<invoke name="Bash">\n<parameter name="command">echo 1',
+      rejected: false,
+    },
+    {
+      name: "first-line indented example",
+      text: '    <invoke name="Bash">\n    <parameter name="command">echo 1',
+      rejected: false,
+    },
+  ])("retains only usable interrupted $name without synthetic callbacks", ({ text, rejected }) => {
+    const parseJsonlEvent = vi.fn(() => null);
+    const parser = createClaudeParser({ parseJsonlEvent });
+    const frame = claudeTextDelta(text);
+    finishFrames(parser, frame);
+    expect(parser.hasTerminalResult()).toBe(false);
+    expect(parser.getOutput()).toMatchObject({ text: rejected ? "" : text.trim() });
+    expect(parser.getOutput()?.errorText).toEqual(rejected ? expect.any(String) : undefined);
+    expect(parseJsonlEvent).toHaveBeenCalledOnce();
+    expect(parseJsonlEvent).toHaveBeenCalledWith(
+      JSON.stringify(frame),
+      expect.objectContaining({ backendId: "claude-cli" }),
+    );
+  });
+
+  it("keeps incomplete tool markup in a completed explanation", () => {
+    const text = 'Example:\n<invoke name="Bash">\n<parameter name="command">echo 1';
+    const parser = createClaudeParser();
+    finishFrames(parser, claudeTextDelta(text), result(text));
+    expect(parser.getOutput()).toMatchObject({ text });
+    expect(parser.getOutput()?.errorText).toBeUndefined();
+  });
+
+  it("rejects interrupted protocol projected by a custom Claude parser", () => {
+    const text = '<invoke name="Bash">\n<parameter name="command">echo 1';
+    const parser = createClaudeParser({
+      parseJsonlEvent: () => ({ kind: "text", text }),
+    });
+    finishFrames(parser, { type: "custom-assistant", text });
+    expect(parser.getOutput()).toMatchObject({ text: "", errorText: expect.any(String) });
   });
 
   it.each([

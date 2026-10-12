@@ -28,10 +28,7 @@ export function serializeSystemdEnvironmentFile(environment: Record<string, stri
     .join("\n");
 }
 
-export async function readSystemdEnvironmentFile(pathname: string): Promise<{
-  environment: Record<string, string>;
-  literalShellReferenceKeys: Set<string>;
-}> {
+export async function readSystemdEnvironmentFile(pathname: string) {
   const environment: Record<string, string> = {};
   const literalShellReferenceKeys = new Set<string>();
   const content = await fs.readFile(pathname, "utf8");

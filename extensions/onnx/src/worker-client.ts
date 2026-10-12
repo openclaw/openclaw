@@ -176,16 +176,13 @@ export class InferenceWorkerClient {
     };
     this.worker = worker;
     child.on("message", (message: unknown) => this.receive(worker, message));
-    child.on("error", () => {
+    const onFailure = () => {
       if (this.worker === worker) {
         this.retire(new OnnxWorkerError("runtime"));
       }
-    });
-    child.once("disconnect", () => {
-      if (this.worker === worker) {
-        this.retire(new OnnxWorkerError("runtime"));
-      }
-    });
+    };
+    child.on("error", onFailure);
+    child.once("disconnect", onFailure);
     child.once("close", () => {
       if (this.worker === worker) {
         this.worker = undefined;

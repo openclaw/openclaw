@@ -26,10 +26,7 @@ export function buildDiscordPreflightHistoryEntry(params: {
         timestamp: resolveTimestampMs(params.message.timestamp),
         messageId: params.message.id,
         mediaIds: resolveDiscordHistoryMediaIds(params.message),
-        senderProvenance: createDiscordHistorySenderProvenance({
-          sender: params.sender,
-          memberRoleIds: params.memberRoleIds,
-        }),
+        senderProvenance: createDiscordHistorySenderProvenance(params),
       }
     : undefined;
 }

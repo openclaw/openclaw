@@ -33,12 +33,6 @@ export type ZaloWebhookIngressLifecycle = ReturnType<
 export const ZaloWebhookPayloadError = createChannelIngressError("ZaloWebhookPayloadError");
 export type ZaloWebhookPayloadError = InstanceType<typeof ZaloWebhookPayloadError>;
 
-type ZaloWebhookIngress = {
-  accept: (rawEvent: string) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 function parseRawRecord(rawEvent: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -53,11 +47,7 @@ function parseRawRecord(rawEvent: string): Record<string, unknown> {
   return envelope.data;
 }
 
-function inspectZaloWebhookEvent(rawEvent: string): {
-  eventId: string;
-  laneKey: string;
-  update: Record<string, unknown>;
-} {
+function inspectZaloWebhookEvent(rawEvent: string) {
   const update = parseRawRecord(rawEvent);
   const admission = webhookAdmissionSchema.safeParse(update);
   if (!admission.success) {
@@ -160,7 +150,7 @@ function createZaloWebhookIngress(options: {
   runtime: Pick<ZaloRuntimeEnv, "error" | "log">;
   deliver: (update: ZaloUpdate, lifecycle: ZaloWebhookIngressLifecycle) => Promise<void>;
   queue?: ChannelIngressQueue<ZaloWebhookSpoolPayload>;
-}): ZaloWebhookIngress {
+}) {
   const queue =
     options.queue ??
     getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({
@@ -220,7 +210,7 @@ function createZaloWebhookIngress(options: {
   });
 
   return {
-    accept: async (rawEvent) => {
+    accept: async (rawEvent: string) => {
       await monitor.admit(rawEvent);
     },
     start: monitor.start,

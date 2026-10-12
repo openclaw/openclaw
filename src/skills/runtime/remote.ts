@@ -88,7 +88,7 @@ function logRemoteBinProbeFailure(
   const details = `command=${context.command} timeoutMs=${context.timeoutMs} requiredBins=${context.requiredBinCount} connected=${remoteNodes.get(nodeId)?.connected === true ? "yes" : "no"}`;
   if (phase === "preflight") {
     log.info(
-      `remote bin probe skipped: node connectivity unavailable (${label}; ${details}): ${
+      `remote bin check skipped: node connectivity unavailable (${label}; ${details}): ${
         message ?? "unknown"
       }`,
     );
@@ -97,16 +97,16 @@ function logRemoteBinProbeFailure(
   // Node unavailable errors (not connected or disconnected mid-operation) are expected
   // when nodes have transient connections - log at info level instead of warn
   if (message?.includes("node not connected") || message?.includes("node disconnected")) {
-    log.info(`remote bin probe skipped: node unavailable (${label}; ${details})`);
+    log.info(`remote bin check skipped: node unavailable (${label}; ${details})`);
     return;
   }
   if (message?.includes("invoke timed out") || message?.includes("timeout")) {
     log.warn(
-      `remote bin probe timed out (${label}; ${details}); check node connectivity for ${label}`,
+      `remote bin check timed out (${label}; ${details}); check node connectivity for ${label}`,
     );
     return;
   }
-  log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`);
+  log.warn(`remote bin check error (${label}; ${details}): ${message ?? "unknown"}`);
 }
 
 function upsertNode(

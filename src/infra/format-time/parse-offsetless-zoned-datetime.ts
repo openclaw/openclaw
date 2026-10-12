@@ -4,6 +4,11 @@ import {
   isOffsetlessIsoDateTime,
   parseIsoCalendarTimeMs,
 } from "../../shared/iso-time.js";
+import { pruneMapToMaxSize } from "../map-size.js";
+
+const ZONED_PARSE_FORMATTER_CACHE_MAX = 64;
+// Locale and options are fixed for this cache; only the explicit zone varies.
+const zonedParseFormatters = new Map<string, Intl.DateTimeFormat>();
 
 type ZonedDateTimeParseResult =
   | { ok: true; iso: string }
@@ -18,21 +23,25 @@ export function parseOffsetlessIsoDateTimeInTimeZone(
   if (naiveMs === undefined) {
     return { ok: false, reason: "invalid-datetime" };
   }
-  let formatter: Intl.DateTimeFormat;
-  try {
-    formatter = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      era: "short",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    });
-  } catch {
-    return { ok: false, reason: "invalid-timezone" };
+  let formatter = zonedParseFormatters.get(timeZone);
+  if (!formatter) {
+    try {
+      formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        era: "short",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      });
+    } catch {
+      return { ok: false, reason: "invalid-timezone" };
+    }
+    pruneMapToMaxSize(zonedParseFormatters, ZONED_PARSE_FORMATTER_CACHE_MAX - 1);
+    zonedParseFormatters.set(timeZone, formatter);
   }
   try {
     // Probe both sides of the local day so non-hour DST folds use their first

@@ -26,11 +26,13 @@ import {
   readSessionHistorySubagentLookup,
 } from "./session-history-delta-visibility.js";
 import {
-  buildPaginatedSessionHistory,
   readSessionHistorySnapshotKernel,
   type IncognitoSessionHistoryReader,
 } from "./session-history-snapshot.js";
-import { readChatHistoryMessageSeq as resolveMessageSeq } from "./session-history-tail.js";
+import {
+  buildPaginatedSessionHistory,
+  readChatHistoryMessageSeq as resolveMessageSeq,
+} from "./session-history-tail.js";
 import {
   readTranscriptMessageIdempotencyKey,
   attachOpenClawTranscriptMeta,
@@ -47,10 +49,21 @@ type InlineSessionHistoryAppend = {
 
 export async function readSessionHistorySnapshotAsync(
   params: SessionHistoryReadParams,
-  incognito?: IncognitoSessionHistoryReader,
+  suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<SessionHistorySnapshot> {
+  const incognito =
+    suppliedIncognito ??
+    sessionTranscriptReaders.captureIncognitoSessionHistoryReader(params.target);
   if (incognito) {
-    return incognito.http(params);
+    const reader = incognito;
+    return reader.consume(params.target, async () => {
+      const snapshot = await reader.http(params);
+      const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+        snapshot.history.messages,
+      );
+      const messages = projectForwardedMessages(snapshot.history.messages, resolveCronJobName);
+      return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
+    });
   }
   if (
     !params.target.storePath ||
@@ -126,7 +139,9 @@ export class SessionHistorySseState {
       incognito?: IncognitoSessionHistoryReader;
     },
   ) {
-    this.incognito = params.incognito;
+    this.incognito =
+      params.incognito ??
+      sessionTranscriptReaders.captureIncognitoSessionHistoryReader(params.target);
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
@@ -190,6 +205,13 @@ export class SessionHistorySseState {
     let subagentCoordination: SubagentCoordinationDisplayResolver | undefined =
       this.incognito?.readers.subagentCoordination;
     const lookup = readSessionHistorySubagentLookup(message);
+    if (this.incognito && lookup) {
+      // Shared ACP visibility custody ends with the prepared history operation.
+      return () => {
+        this.incognito?.assertCurrent();
+        return { shouldRefresh: true };
+      };
+    }
     if (
       lookup &&
       this.target.storePath &&

@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
 // Probes gateway state for upgrade-survivor E2E scenarios.
-import fs from "node:fs";
-import path from "node:path";
 import { readBoundedResponseText } from "../../../lib/bounded-response.mjs";
+import { writeJson } from "../fixtures/common.mjs";
 
 const args = process.argv.slice(2);
 
@@ -31,11 +30,6 @@ function optionValue(name, envName, fallback) {
     label: envName,
     value: process.env[envName] ?? fallback,
   };
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function readStrictInteger({ allowZero = false, label, value }) {

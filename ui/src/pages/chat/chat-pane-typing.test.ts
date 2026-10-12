@@ -50,8 +50,38 @@ function createTypingPane() {
 }
 
 describe("chat pane typing presence", () => {
+  it("renders selection-only updates at the received caret without changing draft whitespace", () => {
+    vi.useFakeTimers();
+    const { pane, state } = createTypingPane();
+    const preview = "First line\n😀 second line\nLast line  \n";
+    const event = {
+      sessionKey: state.sessionKey,
+      sessionId: "session-a",
+      agentId: "work",
+      actor: { type: "human" as const, id: "alice", label: "Alice" },
+      typing: true,
+      preview,
+      cursor: 14,
+      ts: 1,
+    };
+    const container = document.createElement("div");
+    for (const cursor of [14, 0, preview.length]) {
+      pane.handleSessionTypingEvent({ ...event, cursor });
+      render(renderChatTypingIndicator(pane.typingActorViews()), container);
+      const text = container.querySelector(".agent-chat__typing-preview-text")!;
+      const caret = text.querySelector(".agent-chat__typing-caret")!;
+      expect(caret).not.toBeNull();
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      range.setEndBefore(caret);
+      expect(range.toString()).toBe(preview.slice(0, cursor));
+      expect(text.textContent).toBe(preview);
+    }
+    pane.clearTypingActors();
+  });
+
   it.each(["auto", "manual"] as const)(
-    "remote typing preserves the viewport with a pending %s scroll",
+    "remote typing preserves a pending %s follow command",
     (source) => {
       vi.useFakeTimers();
       const { pane, state } = createTestChatPane({
@@ -97,7 +127,7 @@ describe("chat pane typing presence", () => {
       expect(pane.typingActorViews()).toHaveLength(1);
       extent += 83;
       vi.advanceTimersToNextFrame();
-      expect(scrollport.scrollTop).toBe(1500);
+      expect(scrollport.scrollTop).toBe(source === "manual" ? 1500 : 1583);
       // Smooth sends wait through layout measurement; a peer update during
       // that frame must not cancel the reader’s pending manual command.
       pane.handleSessionTypingEvent({
@@ -107,7 +137,7 @@ describe("chat pane typing presence", () => {
       });
       expect(pane.typingActorViews()).toHaveLength(2);
       vi.advanceTimersToNextFrame();
-      expect(scrollport.scrollTop).toBe(source === "manual" ? 1583 : 1500);
+      expect(scrollport.scrollTop).toBe(1583);
       scheduleCommittedChatScroll(state, false, false, { source: "manual" });
       vi.advanceTimersToNextFrame();
       expect(scrollport.scrollTop).toBe(1583);
@@ -709,7 +739,7 @@ describe("chat pane typing presence", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("sends only the last 300 draft code points and omits previews when typing stops", () => {
+  it("sends the last 300 draft code points including whitespace and omits previews when typing stops", () => {
     const { pane, request } = createTypingPane();
 
     pane.sendTypingState(true, `  prefix${"😀".repeat(300)}  `);
@@ -721,17 +751,32 @@ describe("chat pane typing presence", () => {
         sessionId: "session-a",
         agentId: "work",
         typing: true,
-        preview: "😀".repeat(300),
+        preview: "😀".repeat(298) + "  ",
+        cursor: 598,
       }),
     );
 
     pane.sendTypingState(false, "must not leak");
     expect(request.mock.calls[1]?.[1]).toMatchObject({ typing: false });
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("preview");
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("cursor");
 
     pane.sendTypingState(true, "   ");
     expect(request.mock.calls[2]?.[1]).not.toHaveProperty("preview");
   });
+
+  it.each([
+    { cursor: 0, preview: "😀".repeat(300), offset: 0 },
+    { cursor: 601, preview: "😀".repeat(149) + "AB" + "z".repeat(149), offset: 299 },
+    { cursor: 902, preview: "z".repeat(300), offset: 300 },
+  ])(
+    "keeps long-draft caret $cursor inside the preview in UTF-16 units",
+    ({ cursor, preview, offset }) => {
+      const { pane, request } = createTypingPane();
+      pane.sendTypingState(true, "😀".repeat(300) + "AB" + "z".repeat(300), cursor);
+      expect(request.mock.calls[0]?.[1]).toMatchObject({ preview, cursor: offset });
+    },
+  );
 
   it.each([
     { stop: false, edits: Array.from({ length: 10 }, (_, index) => `draft ${index}`) },

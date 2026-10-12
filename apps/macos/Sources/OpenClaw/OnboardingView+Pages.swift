@@ -100,7 +100,8 @@ extension OnboardingView {
                     self.connectionChoiceButton(
                         title: "On another computer",
                         badge: nil,
-                        subtitle: self.remoteChoiceSubtitle,
+                        subtitle: Self
+                            .remoteChoiceSubtitle(discoveredGatewayCount: self.gatewayDiscovery.gateways.count),
                         systemImage: "network",
                         selected: self.selectedConnectionMode == .remote)
                     {
@@ -186,14 +187,7 @@ extension OnboardingView {
     }
 
     private var localGatewaySubtitle: String {
-        guard let probe = localGatewayProbe else {
-            return "Private to this computer. Installs and starts automatically."
-        }
-        return probe.subtitle
-    }
-
-    private var remoteChoiceSubtitle: String {
-        Self.remoteChoiceSubtitle(discoveredGatewayCount: gatewayDiscovery.gateways.count)
+        self.localGatewayProbe?.subtitle ?? "Private to this computer. Installs and starts automatically."
     }
 
     static func remoteChoiceSubtitle(discoveredGatewayCount count: Int) -> String {
@@ -536,7 +530,7 @@ extension OnboardingView {
         title: String,
         badge: String? = nil,
         subtitle: String?,
-        systemImage: String? = nil,
+        systemImage: String,
         monospacedSubtitle: Bool = false,
         selected: Bool,
         action: @escaping () -> Void) -> some View
@@ -547,12 +541,10 @@ extension OnboardingView {
             }
         } label: {
             HStack(alignment: .center, spacing: 12) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                        .frame(width: 26)
-                }
+                Image(systemName: systemImage)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .frame(width: 26)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(title)

@@ -8,13 +8,12 @@ import type {
   TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
 
+type PendingBindingMutation = { preparedValueJson?: string | null };
+
 type TelegramThreadBindingsState = {
   managersByAccountId: Map<string, TelegramThreadBindingManager>;
   queues: Map<string, StoreWriterQueue>;
-  pendingMutations: WeakMap<
-    TelegramThreadBindingManager,
-    Map<string, { preparedValueJson?: string | null }>
-  >;
+  pendingMutations: WeakMap<TelegramThreadBindingManager, Map<string, PendingBindingMutation>>;
   bindingsByAccountConversation: Map<string, TelegramThreadBindingRecord>;
 };
 
@@ -47,10 +46,7 @@ export function getThreadBindingsState(): TelegramThreadBindingsState {
     queues: state.queues ?? new Map<string, StoreWriterQueue>(),
     pendingMutations:
       state.pendingMutations ??
-      new WeakMap<
-        TelegramThreadBindingManager,
-        Map<string, { preparedValueJson?: string | null }>
-      >(),
+      new WeakMap<TelegramThreadBindingManager, Map<string, PendingBindingMutation>>(),
   }));
 }
 
@@ -76,9 +72,8 @@ export function captureBindingMutation(
   const state = getThreadBindingsState();
   const key = resolveBindingKey({ accountId: manager.accountId, conversationId });
   const previous = state.bindingsByAccountConversation.get(key);
-  const pending =
-    state.pendingMutations.get(manager) ?? new Map<string, { preparedValueJson?: string | null }>();
-  const receipt: { preparedValueJson?: string | null } = {};
+  const pending = state.pendingMutations.get(manager) ?? new Map<string, PendingBindingMutation>();
+  const receipt: PendingBindingMutation = {};
   pending.set(conversationId, receipt);
   state.pendingMutations.set(manager, pending);
   const isCurrent = () =>
