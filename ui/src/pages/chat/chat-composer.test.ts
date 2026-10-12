@@ -517,14 +517,6 @@ describe("renderChatComposer controls", () => {
       onToggleRealtimeTalk,
     });
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
-    await vi.waitFor(() =>
-      expect(
-        container.querySelector(
-          '[data-chat-talk-capability="dictation"][data-status="unavailable"]',
-        ),
-      ).not.toBeNull(),
-    );
-
     const microphone = button(container, t("chat.composer.startVoiceInput"));
     microphone.dispatchEvent(dictationPointer("pointerdown", 10));
     await vi.advanceTimersByTimeAsync(801);
@@ -532,6 +524,13 @@ describe("renderChatComposer controls", () => {
       "wa-dropdown.chat-talk-input-picker",
     );
     expect(dropdown?.open).toBe(true);
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector(
+          '[data-chat-talk-capability="dictation"][data-status="unavailable"]',
+        ),
+      ).not.toBeNull(),
+    );
 
     document.dispatchEvent(dictationPointer("pointerup", 10));
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));

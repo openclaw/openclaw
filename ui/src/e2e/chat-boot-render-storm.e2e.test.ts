@@ -20,7 +20,12 @@ const sessionKey = "agent:main:render-storm";
 const label = "Synthetic busy conversation";
 
 async function nextFrame(page: Page) {
-  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      }),
+  );
 }
 
 // The same performUpdate boundary used by the campaign's browser-init census.
@@ -81,13 +86,13 @@ suite.define(() => {
         void pageError.catch(() => {});
         await installRenderProbe(page);
         await page.addInitScript(
-          ({ key, sessionKey }) =>
+          ({ key, sessionKey: initialSessionKey }) =>
             localStorage.setItem(
               key,
               JSON.stringify({
-                sessionKey,
+                sessionKey: initialSessionKey,
                 sidebarSessionLayouts: {
-                  [sessionKey]: {
+                  [initialSessionKey]: {
                     columns: [
                       {
                         id: "side-panel-column",
@@ -221,7 +226,7 @@ suite.define(() => {
             "CHAT_BOOT_FAILURE",
             JSON.stringify(
               await page.evaluate(() => ({
-                text: document.body.innerText.slice(-12000),
+                text: document.body.textContent?.slice(-12000),
                 state: (() => {
                   const pane = document.querySelector("openclaw-chat-pane") as HTMLElement & {
                     state?: {
