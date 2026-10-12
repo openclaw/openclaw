@@ -1,5 +1,8 @@
 /** Collects core config secret refs during runtime preparation. */
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import {
@@ -39,7 +42,6 @@ type ProviderLike = {
   headers?: unknown;
   request?: unknown;
   enabled?: unknown;
-  localService?: unknown;
 };
 
 type SkillEntryLike = Pick<ProviderLike, "apiKey" | "enabled">;
@@ -74,7 +76,8 @@ function collectModelOrSkillAssignments(params: {
         contract: entry,
       } satisfies SecretAssignmentOwner,
     };
-    const usesManagedLocalService = isModel && entry.localService !== undefined;
+    const usesManagedLocalService =
+      isModel && params.context.managedSyntheticAuthProviders?.has(normalizeProviderId(id));
     collect(entry, "apiKey", `${entryPath}.apiKey`, {
       ...activity,
       active: active && !usesManagedLocalService,

@@ -1,5 +1,6 @@
 /** Prepares secrets runtime snapshots from config, auth stores, plugins, and env. */
 import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   loadAuthProfileStoreForRuntimeAsync,
@@ -242,6 +243,17 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   });
 
   if (includeConfigRefs) {
+    const managedSyntheticAuthProviders = new Set<string>();
+    for (const [provider, entry] of Object.entries(sourceConfig.models?.providers ?? {})) {
+      if (!entry.localService) {
+        continue;
+      }
+      const { resolveManagedLocalProviderAuth } = await import("../agents/model-auth-runtime.js");
+      if (resolveManagedLocalProviderAuth({ cfg: sourceConfig, provider, env: runtimeEnv })) {
+        managedSyntheticAuthProviders.add(normalizeProviderId(provider));
+      }
+    }
+    context.managedSyntheticAuthProviders = managedSyntheticAuthProviders;
     collectConfigAssignments({
       config: resolvedConfig,
       context,

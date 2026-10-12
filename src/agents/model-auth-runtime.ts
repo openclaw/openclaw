@@ -12,7 +12,11 @@ import { mintSecretSentinel } from "../secrets/sentinel.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
-import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  isNonSecretApiKeyMarker,
+  isSecretRefHeaderValueMarker,
+} from "./model-auth-markers.js";
 import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
@@ -287,11 +291,32 @@ function syntheticAuthLookup(
   };
 }
 
+/** A managed process owns auth only when its provider supplies a non-secret credential. */
+export function resolveManagedLocalProviderAuth(
+  params: SyntheticProviderAuthParams,
+): ResolvedProviderAuth | undefined {
+  const lookup = syntheticAuthLookup(params, params.cfg);
+  if (!lookup.context.providerConfig?.localService) {
+    return undefined;
+  }
+  const auth = resolveProviderSyntheticAuthWithPlugin(lookup);
+  return auth?.mode === "api-key" &&
+    !auth.nativeAuth &&
+    isNonSecretApiKeyMarker(auth.apiKey, { includeEnvVarName: false }) &&
+    !isSecretRefHeaderValueMarker(auth.apiKey)
+    ? auth
+    : undefined;
+}
+
 function resolveProviderSyntheticRuntimeAuth(
   params: SyntheticProviderAuthParams,
   resolveFromConfig: ResolveSyntheticProviderAuth = (config) =>
     resolveProviderSyntheticAuthWithPlugin(syntheticAuthLookup(params, config)),
 ): SyntheticProviderAuthResolution {
+  const managedLocalAuth = resolveManagedLocalProviderAuth(params);
+  if (managedLocalAuth) {
+    return { auth: managedLocalAuth };
+  }
   const runtimeAuth = resolveManagedSecretRefRuntimeProviderAuth(params);
   if (runtimeAuth) {
     return { auth: runtimeAuth };
