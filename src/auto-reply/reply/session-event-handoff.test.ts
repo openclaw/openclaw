@@ -40,6 +40,9 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
@@ -619,6 +622,117 @@ describe("session event target custody", () => {
       });
     },
   );
+
+  it("re-admits an accepted deferred occurrence under the current policy after a config publication", async () => {
+    await withTargetFixture(async ({ env }) => {
+      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      let adoption: TurnAdoptionLifecycle | undefined;
+      let readmissionConfig: { tools?: { deny?: string[] } } | undefined;
+      dispatch
+        .mockImplementationOnce(
+          async (params: { replyOptions?: { turnAdoptionLifecycle?: TurnAdoptionLifecycle } }) => {
+            adoption = params.replyOptions?.turnAdoptionLifecycle;
+            adoption?.onDeferred?.();
+            return { deferredToActiveRun: true };
+          },
+        )
+        .mockImplementationOnce(
+          async (params: {
+            cfg?: { tools?: { deny?: string[] } };
+            replyOptions?: { internalEventExecution?: { onStarted?: () => void } };
+          }) => {
+            readmissionConfig = params.cfg;
+            params.replyOptions?.internalEventExecution?.onStarted?.();
+            return {};
+          },
+        );
+      const operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: "original-session",
+        resetTriggered: false,
+      });
+      try {
+        const receipt = enqueueSessionEventForHost("Process completed", {
+          agentId: "main",
+          sessionKey,
+          source: "exec",
+          expectedTarget: target,
+        });
+        await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
+        const onAdopted = adoption?.onAdopted;
+        if (!onAdopted || !adoption) {
+          throw new Error(
+            "Expected a deferred turn adoption lifecycle for the accepted occurrence",
+          );
+        }
+        // The operator publishes a new config after acceptance, before the occurrence starts.
+        setRuntimeConfigSnapshot({
+          ...getRuntimeConfigSnapshot(),
+          tools: { deny: ["write", "message"] },
+        });
+
+        // Adoption under the stale policy rejects; the queued run still holds the old config.
+        await expect(onAdopted()).rejects.toThrow("configuration changed");
+        adoption.onSettled?.();
+        operation.complete();
+
+        // The occurrence is re-admitted from scratch and executes under the published policy.
+        await expect(receipt.settled).resolves.toMatchObject({
+          status: "completed",
+          executionStarted: true,
+          delivered: false,
+        });
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(readmissionConfig?.tools?.deny).toEqual(["write", "message"]);
+        // The completed re-admission consumed the occurrence; nothing waits for a later turn.
+        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      } finally {
+        replyRunTesting.resetReplyRunRegistry();
+      }
+    });
+  });
+
+  it("consumes a deferred occurrence the queue owner abandons, even after a config publication", async () => {
+    await withTargetFixture(async ({ env }) => {
+      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      let adoption: TurnAdoptionLifecycle | undefined;
+      dispatch.mockImplementationOnce(
+        async (params: { replyOptions?: { turnAdoptionLifecycle?: TurnAdoptionLifecycle } }) => {
+          adoption = params.replyOptions?.turnAdoptionLifecycle;
+          adoption?.onDeferred?.();
+          return { deferredToActiveRun: true };
+        },
+      );
+      const receipt = enqueueSessionEventForHost("Process completed", {
+        agentId: "main",
+        sessionKey,
+        source: "exec",
+        expectedTarget: target,
+      });
+      await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
+      if (!adoption) {
+        throw new Error("Expected a deferred turn adoption lifecycle for the accepted occurrence");
+      }
+      setRuntimeConfigSnapshot({
+        ...getRuntimeConfigSnapshot(),
+        tools: { deny: ["write", "message"] },
+      });
+
+      // Stop removes the queued followup before adoption; abandonment is terminal.
+      adoption.onAbandoned?.();
+      adoption.onSettled?.();
+
+      await expect(receipt.settled).resolves.toMatchObject({
+        status: "failed",
+        executionStarted: false,
+        delivered: false,
+        error: expect.stringContaining("abandoned"),
+      });
+      // No policy re-admission and no passive leak into the next ordinary turn.
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    });
+  });
 
   it("settles a pending occurrence as cancelled when ephemeral queues close", async () => {
     await withTargetFixture(async ({ env }) => {
