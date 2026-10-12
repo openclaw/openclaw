@@ -751,6 +751,8 @@ type SessionsJsonPayload = {
     model?: string | null;
     agentRuntime?: { id: string; source: string };
     contextTokens?: number | null;
+    archived?: boolean;
+    archivedAt?: number;
   }>;
 };
 
@@ -930,6 +932,40 @@ describe("sessionsCommand model resolution", () => {
           agentRuntime: { id: "openclaw", source: "model" },
           contextTokens: 272_000,
         });
+      },
+    );
+  });
+
+  it("projects archived state and timestamp for archived sessions", async () => {
+    const archivedAt = Date.now() - 3_600_000;
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    await withSqliteStore(
+      "sessions-archived-state",
+      {
+        "agent:main:main": {
+          sessionId: "archived-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          archivedAt,
+        },
+      },
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+        expect(session?.archived).toBe(true);
+        expect(session?.archivedAt).toBe(archivedAt);
       },
     );
   });
