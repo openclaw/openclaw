@@ -113,8 +113,6 @@ export function deleteSessionWithNativeBindings(
         current,
         (stage, facts) => {
           context.admit(stage, facts);
-          if (stage === "commit") {
-          }
         },
         candidate,
         wrapReceipt,

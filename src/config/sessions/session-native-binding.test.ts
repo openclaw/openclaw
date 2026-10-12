@@ -8,7 +8,6 @@ import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
-import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 
 const delivery = vi.hoisted(() => ({ afterExecution: undefined as (() => void) | undefined }));

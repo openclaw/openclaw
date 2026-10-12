@@ -358,12 +358,6 @@ export async function runReclamationWorkerPort(
                   // Deferred periodic work outside this synchronous page unit still needs its relay.
                   checkpointResultOwnedByRequest =
                     request.type === "reclaim" && request.plan.kind === "maintenance-pages";
-                  const authorizeCommit = () => {
-                    // The parent admitted this operation through its FIFO. Recheck
-                    // actual session ownership here, without a second host round trip.
-                    if (request.type === "reclaim") {
-                    }
-                  };
                   const reclaimed =
                     request.type === "canonical-validation"
                       ? runOpenClawAgentWriteTransaction(
@@ -390,7 +384,6 @@ export async function runReclamationWorkerPort(
                             }
                             const hasMore =
                               canonical.hasPendingCanonicalSessionValidation(transactionDatabase);
-                            authorizeCommit();
                             if (!hasMore) {
                               recordOpenClawAgentCanonicalValidation(transactionDatabase);
                               if (!markOpenClawAgentCanonicalValidation(transactionDatabase)) {
@@ -411,7 +404,6 @@ export async function runReclamationWorkerPort(
                           { ...request.plan, databaseOptions: options },
                           {
                             beforeMutation: currentClaim.assertCurrent,
-                            onCommit: authorizeCommit,
                           },
                         );
                   // Warm results must not revive proof invalidated by the parent between requests.
