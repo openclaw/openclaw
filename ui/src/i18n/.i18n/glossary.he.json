@@ -1,0 +1,158 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway"
+  },
+  {
+    "source": "Control UI",
+    "target": "Control UI"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Settings",
+    "target": "הגדרות"
+  },
+  {
+    "source": "Dashboard",
+    "target": "לוח בקרה"
+  },
+  {
+    "source": "Overview",
+    "target": "סקירה כללית"
+  },
+  {
+    "source": "Chat",
+    "target": "צ'אט"
+  },
+  {
+    "source": "Sessions",
+    "target": "שיחות"
+  },
+  {
+    "source": "Agents",
+    "target": "סוכנים"
+  },
+  {
+    "source": "Channels",
+    "target": "ערוצים"
+  },
+  {
+    "source": "Plugins",
+    "target": "תוספים"
+  },
+  {
+    "source": "Tools",
+    "target": "כלים"
+  },
+  {
+    "source": "Memory",
+    "target": "זיכרון"
+  },
+  {
+    "source": "Models",
+    "target": "מודלים"
+  },
+  {
+    "source": "Providers",
+    "target": "ספקים"
+  },
+  {
+    "source": "Workspace",
+    "target": "סביבת עבודה"
+  },
+  {
+    "source": "Browser",
+    "target": "דפדפן"
+  },
+  {
+    "source": "Terminal",
+    "target": "טרמינל"
+  },
+  {
+    "source": "Nodes",
+    "target": "צמתים"
+  },
+  {
+    "source": "Devices",
+    "target": "מכשירים"
+  },
+  {
+    "source": "Pairing",
+    "target": "צימוד"
+  },
+  {
+    "source": "Automations",
+    "target": "אוטומציות"
+  },
+  {
+    "source": "Tasks",
+    "target": "משימות"
+  },
+  {
+    "source": "Approvals",
+    "target": "אישורים"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "דופק"
+  },
+  {
+    "source": "Logs",
+    "target": "לוגים"
+  },
+  {
+    "source": "Usage",
+    "target": "שימוש"
+  },
+  {
+    "source": "Configuration",
+    "target": "תצורה"
+  },
+  {
+    "source": "Secrets",
+    "target": "סודות"
+  },
+  {
+    "source": "Token",
+    "target": "טוקן"
+  },
+  {
+    "source": "Thread",
+    "target": "שרשור"
+  },
+  {
+    "source": "Debug",
+    "target": "ניפוי באגים"
+  }
+]

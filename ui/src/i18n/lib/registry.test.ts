@@ -20,6 +20,8 @@ describe("resolveNavigatorLocale", () => {
     ["pt-PT", "pt-BR"],
     ["DE-at", "de"],
     ["ja-JP", "ja-JP"],
+    ["he-IL", "he"],
+    ["he", "he"],
     ["sv-SE", "en"],
     ["", "en"],
   ] as const)("maps browser language %s to %s", (browserLanguage, expectedLocale) => {
