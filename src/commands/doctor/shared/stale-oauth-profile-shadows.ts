@@ -22,6 +22,7 @@ import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/st
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hasErrnoCode } from "../../../infra/errno.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../doctor-auth-legacy-paths.js";
 
@@ -34,9 +35,18 @@ type StaleOAuthProfileShadow = {
 async function loadRawAuthProfileStore(authPath: string): Promise<Record<string, unknown> | null> {
   try {
     const raw = JSON.parse(await fs.readFile(authPath, "utf8")) as unknown;
-    return isRecord(raw) ? raw : null;
-  } catch {
-    return null;
+    if (!isRecord(raw)) {
+      throw new Error("Expected an auth profile store object");
+    }
+    return raw;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return null;
+    }
+    throw new Error(
+      `Cannot read legacy auth profile store ${shortenHomePath(authPath)}; skipped OAuth shadow cleanup. Inspect or restore the file and rerun doctor.`,
+      { cause: error },
+    );
   }
 }
 
@@ -88,7 +98,7 @@ function shouldRemoveLocalOAuthShadow(params: {
   now: number;
 }): boolean {
   const { local, main, now } = params;
-  if (!main || main.type !== "oauth" || local.provider !== main.provider) {
+  if (!main || isLegacyOAuthRef(local.oauthRef) || local.provider !== main.provider) {
     return false;
   }
   if (!isSafeToAdoptMainStoreOAuthIdentity(local, main)) {
@@ -113,30 +123,33 @@ export async function scanStaleOAuthProfileShadows(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: number;
-}): Promise<StaleOAuthProfileShadow[]> {
+}): Promise<{ hits: StaleOAuthProfileShadow[]; warnings: string[] }> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
   const mainAuthPath = path.resolve(resolveAuthStorePath(resolveSharedMainAuthAgentDir(env)));
   const mainStore = loadPersistedSharedAuthProfileStore(env);
   if (!mainStore) {
-    return [];
+    return { hits: [], warnings: [] };
   }
   const hits: StaleOAuthProfileShadow[] = [];
+  const warnings: string[] = [];
   for (const agentDir of await collectCandidateAgentDirs(params.cfg, env)) {
     const authPath = path.resolve(resolveAuthStorePath(agentDir));
     if (authPath === mainAuthPath) {
       continue;
     }
-    const rawLocalStore = await loadRawAuthProfileStore(authPath);
+    const rawLocalStore = await loadRawAuthProfileStore(authPath).catch((error: unknown) => {
+      warnings.push(String(error));
+    });
+    if (rawLocalStore === undefined) {
+      continue;
+    }
     const localStore = loadPersistedAuthProfileStore(agentDir);
     if (!localStore) {
       continue;
     }
     for (const [profileId, local] of Object.entries(localStore.profiles)) {
-      if (local.type !== "oauth") {
-        continue;
-      }
-      if (hasLegacyOAuthSidecarRef(rawLocalStore, profileId)) {
+      if (local.type !== "oauth" || hasLegacyOAuthSidecarRef(rawLocalStore, profileId)) {
         continue;
       }
       const main = mainStore.profiles[profileId];
@@ -151,7 +164,7 @@ export async function scanStaleOAuthProfileShadows(params: {
       }
     }
   }
-  return hits;
+  return { hits, warnings };
 }
 
 function removeStaleProfilesFromStore(params: {
@@ -274,9 +287,8 @@ export async function repairStaleOAuthProfileShadows(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
-  const hits = await scanStaleOAuthProfileShadows({ ...params, env, now });
+  const { hits, warnings } = await scanStaleOAuthProfileShadows({ ...params, env, now });
   const changes: string[] = [];
-  const warnings: string[] = [];
   const byAgentDir = new Map<string, StaleOAuthProfileShadow[]>();
   for (const hit of hits) {
     const existing = byAgentDir.get(hit.agentDir) ?? [];
