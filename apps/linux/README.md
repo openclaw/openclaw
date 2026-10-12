@@ -1,6 +1,6 @@
-# OpenClaw for Linux
+# OpenClaw for Linux and Windows
 
-The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
+The desktop app is a Tauri v2 shell for Linux and Windows, supporting local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
 On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated.
 
@@ -87,6 +87,41 @@ The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
 With the matching desktop app running, it uses the app’s Primary Gateway and
 keeps a single visible OpenClaw icon. See [Omarchy support](https://docs.openclaw.ai/platforms/omarchy)
 for installation, app handoff, shortcuts, and troubleshooting.
+
+## Windows
+
+Windows x64 NSIS installers ship beside Linux bundles in regular OpenClaw
+releases. The Windows updater uses the `windows-stable` channel and verifies
+Tauri updater signatures. Installer Authenticode signing is opt-in through the
+release workflow's Foundation Azure signing job; no credentials are needed for
+non-publishing builds.
+
+Local setup seeds the private Windows Bun runtime, installs the CLI with its
+package manager, and delegates service installation and health checks to
+`openclaw gateway`. System Node.js and npm are not required. The managed launcher
+is `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; app actions execute Bun directly,
+without interpreting arguments in a command shell. Stable and Beta use published
+packages; Windows source development uses `OPENCLAW_DESKTOP_CLI`.
+
+Production runtime admission requires a matching Windows entry in the pinned
+OpenClaw Bun release with `authenticodeSigned: true` and `testOnly: false`.
+When a pin has no Windows entry, local setup reports an actionable missing-runtime
+error while remote Gateways remain available. The pin must include the signed
+Windows fork release before shipping local setup. Unsigned dry-run binaries
+are never admitted by production builds.
+
+Build on Windows with Rust's MSVC toolchain, Visual Studio C++ build tools, and
+the repository's Node/pnpm development tools:
+
+```powershell
+pnpm install
+cd apps/linux/src-tauri
+pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+The Tauri hook stages the Windows runtime. When its signed pin is unavailable,
+it stages an unavailable sentinel so the app can still build and connect remotely.
+See [Windows setup and troubleshooting](https://docs.openclaw.ai/platforms/windows).
 
 ## Linux prerequisites
 
@@ -258,9 +293,9 @@ against a synthetic CLI/service, including explicit runtime activation.
 The welcome screen explains what OpenClaw can do and asks where your assistant
 should live:
 
-- **On this computer** installs the CLI when needed and, on Linux, runs fresh installations
-  on the bundled OpenClaw Bun fork, then starts the Gateway as a systemd user
-  service. Release builds install their matching stable version; development builds ask for a release channel
+- **On this computer** installs the CLI when needed and runs fresh Linux and Windows
+  installations on the bundled OpenClaw Bun fork, then starts the Gateway through
+  the platform's service owner. Release builds install their matching stable version; development builds ask for a release channel
   and preselect Development.
 - **On another computer** connects to an existing Gateway without installing or
   starting a local Gateway service. Select a nearby discovered Gateway, enter a
@@ -372,13 +407,13 @@ the additional sign-in options.
 
 ## Gateway runtime
 
-On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
+On Linux and Windows, fresh local setup installs the Gateway on the bundled OpenClaw Bun
 fork through the CLI. The install carries an `--expected-runtime-pin`
 guard with `definition: null`, so it refuses if a service has appeared since
 setup observed no service. The app records an informational marker; it never uses
 that marker as permission to change a service automatically.
 
-**Use bundled runtime…** appears in the tray whenever the existing Gateway uses
+On Linux, **Use bundled runtime…** appears in the tray whenever the existing Gateway uses
 another runtime, including Node, an older bundled Bun, or an operator-selected
 runtime. The action shows the current runtime and asks for confirmation. It
 passes that observation's service definition and runtime pin to the CLI's
@@ -395,15 +430,15 @@ a particular previous executable, use
 `openclaw gateway install --force --runtime-path /absolute/path/to/node-or-bun`.
 
 Startup and desktop updates leave existing Gateway services and runtime pins
-unchanged, including services previously installed by the app. After an app
-update provides a newer Bun, choose **Use bundled runtime…** again to switch.
-The CLI owns service installation. These runtime actions are Linux-only; macOS
-Tauri keeps its existing behavior, separate from the native macOS app.
+unchanged, including services previously installed by the app. On Linux, after an
+app update provides a newer Bun, choose **Use bundled runtime…** again to switch.
+The CLI owns service installation on both Linux and Windows; macOS Tauri keeps
+its existing behavior, separate from the native macOS app.
 Switching an existing Gateway's runtime leaves its CLI launcher unchanged.
 
 ## Updates
 
-The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
+The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. Windows uses the regular `windows-stable` channel, downloads the update first, and runs its installer only after **Restart to update**. The macOS test build uses the separate opt-in desktop-test channel and self-updates like the AppImage build.
 
 If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
 
@@ -487,16 +522,16 @@ Quick Chat pins its native request identity before sending, so activity from oth
 
 ## Installer resource
 
-The Rust build assembles the repository's `scripts/install-cli.sh` and shared `scripts/install-policy.sh` into the standalone `install-cli.sh` resource. The app never keeps a forked copy. Fresh release installs select the app version. Existing unmarked stable installs, beta installs, and development installs retain `latest`, `beta`, and the managed Git `main` checkout respectively, under `~/.openclaw`.
+On Linux, the Rust build assembles the repository's `scripts/install-cli.sh` and shared `scripts/install-policy.sh` into the standalone `install-cli.sh` resource. The app never keeps a forked copy. Fresh release installs select the app version. Existing unmarked stable installs, beta installs, and development installs retain `latest`, `beta`, and the managed Git `main` checkout respectively, under `~/.openclaw`.
 
-Tauri build/dev hooks stage the runtime through `scripts/stage-openclaw-bun.sh`
+Tauri build/dev hooks stage the runtime through `apps/linux/scripts/stage-runtime.mjs`
 and the shared `scripts/lib/openclaw-bun.json` pin. Linux x64/arm64 use the same
 admitted fork release as the native macOS app and CI. Build-time downloads
 verify the release checksums, committed hashes, executable architecture, and fork
 revision. The app copies verified resource bytes to an immutable directory under
 `~/.openclaw/tools/desktop-runtime`; services never reference a temporary AppImage
 mount. Immutable runtime directories are retained, including every directory
-referenced by an existing service. Node remains installation/build tooling.
+referenced by an existing service. On Linux, Node remains installation/build tooling.
 Fresh local setup also selects bundled Bun for the app-installed CLI launcher.
 
 Linux resources carry a fixed `OPENCLAW-BUN-RUNTIME-V1` header so linuxdeploy
@@ -506,10 +541,8 @@ the resource and checks its architecture and symbol versions against the
 AppImage's existing compatibility floor.
 
 macOS Tauri keeps its existing runtime behavior; its native macOS sibling owns
-the Mac's bundled runtime. Windows retains its existing runtime behavior and
-unavailable CLI auto-install in test builds. No Windows Bun payload ships until
-a signed fork build exists;
-the unsigned dry-run is not eligible. See
+the Mac's bundled runtime. Windows stages its signed fork payload from the same
+pin and installs the CLI through Bun; unsigned dry-run builds are not eligible. See
 [Bun compatibility](https://docs.openclaw.ai/install/bun-compatibility) for runtime
 admission and the shared pin's repin gates.
 
@@ -580,7 +613,7 @@ validation does not publish a release.
 
 ## Releases
 
-Regular stable publication automatically requests Linux bundles after the
+Regular stable publication automatically requests Linux and Windows bundles after the
 GitHub release becomes visible. `OpenClaw Release Publish` and `OpenClaw Release
 Button` both use the same Linux release owner; the request can finish before
 the build, signing, and publication do. Their summaries report Linux as pending
@@ -590,7 +623,7 @@ not request Linux bundles.
 For independent recovery, manually dispatch `Linux App Release Request` from `main`. Provide the existing
 stable release tag in `tag`; prerelease tags are rejected because their semver
 suffix breaks Debian upgrade ordering. Enable the optional
-`desktop-test-bundles` input only when unsigned macOS and Windows test bundles
+`desktop-test-bundles` input only when unsigned macOS test bundles
 are needed.
 
 A successful request automatically triggers `Linux App Release`. It builds from

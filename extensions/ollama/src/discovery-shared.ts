@@ -317,9 +317,9 @@ export async function resolveOllamaDiscoveryResult(params: {
         ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
       });
       const api = explicit?.api ?? provider.api;
-      // Configured rows own their settings (for example `compat.supportsTools: false` for models
-      // that fail on tool schemas), so discovery only adds models the config does not list.
-      const configuredIds = new Set(explicit?.models?.map((model) => model.id));
+      // Keep configured settings, including tool workarounds, while filling missing native
+      // thinking metadata so mandatory-thinking models keep reasoning out of answer text.
+      const configuredModels = new Map(explicit?.models?.map((model) => [model.id, model]));
       return {
         ...(modelIds
           ? {
@@ -335,13 +335,25 @@ export async function resolveOllamaDiscoveryResult(params: {
           : {}),
         provider: {
           ...provider,
-          models: provider.models
-            .filter((model) => !configuredIds.has(model.id))
-            .map((model) =>
+          models: provider.models.flatMap((model) => {
+            const configured = configuredModels.get(model.id);
+            if (configured) {
+              const sameEndpoint =
+                !configured.baseUrl ||
+                resolveOllamaApiBase(configured.baseUrl) === resolveOllamaApiBase(provider.baseUrl);
+              return (configured.api ?? api) === "ollama" &&
+                sameEndpoint &&
+                configured.thinkingLevelMap === undefined &&
+                model.thinkingLevelMap
+                ? [{ ...configured, thinkingLevelMap: model.thinkingLevelMap }]
+                : [];
+            }
+            return [
               api !== "ollama" && model.thinkingLevelMap
                 ? Object.assign({}, model, { thinkingLevelMap: undefined })
                 : model,
-            ),
+            ];
+          }),
           baseUrl: resolveOllamaRuntimeBaseUrl({
             api,
             configuredBaseUrl,

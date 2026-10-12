@@ -12,7 +12,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as sessionEntryWriter from "../config/sessions/session-entry-patch.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -505,8 +505,8 @@ describe("native transcript catalog SDK", () => {
         parentId: "message-3",
         targetId: "message-0",
       });
-      // The source writer owns rewind reconciliation; catalog reads cannot rebuild it.
-      await reconcileSessionTranscriptIndexes({ agentId: scope.agentId });
+      // Join the writer's scheduled rebuild before testing read-only cursor validation.
+      await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
       expect((await read(2)).items.map((item) => item.text)).toEqual(["one"]);
       await expect(read(2, first.nextCursor)).rejects.toThrow("no longer matches");
       for (const [eventId, parentId] of [
@@ -519,7 +519,7 @@ describe("native transcript catalog SDK", () => {
           message: { role: "user", content: eventId },
         });
       }
-      await reconcileSessionTranscriptIndexes({ agentId: scope.agentId });
+      await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
       // Equal-length branch replacements must not reuse the old ordinal as an anchor.
       await expect(read(2, first.nextCursor)).rejects.toThrow("no longer matches");
     });
