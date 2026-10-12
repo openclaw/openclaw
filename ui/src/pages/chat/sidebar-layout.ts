@@ -147,7 +147,11 @@ function selectPanel(layout: SidebarLayout, column: SidebarColumn, panelId: stri
   }
 }
 
-export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
+export function openSlot(
+  layout: SidebarLayout,
+  slot: SidebarSlotId,
+  options?: { activate?: boolean },
+): SidebarLayout {
   const next = structuredClone(layout);
   if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
     return next.expandedSide ? setSidebarExpanded(next, false) : next;
@@ -160,7 +164,9 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
     panel = { id: nextPanelId(next, slot), slot };
     column.panels.push(panel);
   }
-  selectPanel(next, column, panel.id);
+  if (options?.activate !== false) {
+    selectPanel(next, column, panel.id);
+  }
   return next;
 }
 

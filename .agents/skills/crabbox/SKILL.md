@@ -5,10 +5,10 @@ description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-pl
 
 # Crabbox
 
-Use only for exceptional proof under the [proof policy](../openclaw-testing/SKILL.md#proof-policy)
-and only when a box is granted right away. If it queues, stop your queued
-allocation and run locally; preserve the untrusted-code boundary and report
-uncovered requirements. Never wait on queues or chain provider fallbacks.
+- Exceptional proof only: follow [proof policy](../openclaw-testing/SKILL.md#proof-policy).
+  Box must be granted right away. Queued: stop owned allocation, run locally;
+  preserve untrusted-code boundary, report uncovered requirements.
+- Never wait on queues or chain provider fallbacks.
 
 Backends:
 
@@ -22,37 +22,37 @@ Crabbox.”
 
 ## Repository Contract
 
-Resolve example commands, bootstrap, container image, and PR from trusted
-consumer instructions; never invent commands or copy another consumer's setup.
-Consumer-specific setup stays outside this portable skill. See
-[placeholder definitions](references/operations.md#repository-contract).
+- Resolve example commands, bootstrap, container image, PR from trusted consumer
+  instructions. Never invent commands or copy another consumer's setup.
+- Consumer-specific setup stays outside portable skill. See
+  [placeholder definitions](references/operations.md#repository-contract).
 
 ## Authorization and Isolation
 
-Task-needed creation, reuse, cleanup, temporary state, and clean checkouts are
-pre-approved. Preserve existing branches, checkouts, and unrelated edits.
-Source trust, credentials, production access, budget, and publication remain
-authority boundaries. Use isolated state; never touch an operator Gateway
-without per-task approval.
+- Task-needed creation, reuse, cleanup, temporary state, clean checkouts:
+  pre-approved. Preserve existing branches, checkouts, unrelated edits.
+- Source trust, credentials, production access, budget, publication remain
+  authority boundaries. Isolated state; never touch operator Gateway without
+  per-task approval.
 
 ## Route First
 
-- Preserve the resolved provider: Testbox for trusted source, direct AWS when
-  its semantics are required, secretless CI/AWS for untrusted code. Never run
-  untrusted wrappers/config locally or hydrate an untrusted lease.
-- Acquire when the command is ready, reuse the owned ID, then stop.
-- Use the smallest proven profile. Larger profiles need recorded memory evidence
-  or measured total-cost benefit, not generic failure, delay, or timeout. Do not
-  raise worker counts to compensate.
-- Testbox sizing uses `--blacksmith-workflow`, not direct `--class`/`--type`;
+- Preserve resolved provider: Testbox for trusted source; direct AWS when its
+  semantics required; secretless CI/AWS for untrusted code. Never run untrusted
+  wrappers/config locally or hydrate untrusted lease.
+- Acquire when command ready; reuse owned ID; stop afterward.
+- Smallest proven profile. Larger: recorded memory evidence or measured
+  total-cost benefit required, not generic failure/delay/timeout. Do not raise
+  worker counts to compensate.
+- Testbox sizing: `--blacksmith-workflow`, never direct `--class`/`--type`;
   profile changes require fresh leases.
-- Size, duration, hydration failure, and capacity do not authorize provider
-  overrides; explicit user selection or required backend semantics do.
+- Size, duration, hydration failure, capacity never authorize provider overrides;
+  explicit user selection or required backend semantics do.
 
 ## Preflight
 
-From the trusted repo root, read `.crabbox.yaml`, resolve the installed binary,
-and inspect its provider and commands:
+Trusted repo root: read `.crabbox.yaml`, resolve installed binary, inspect
+provider/commands:
 
 ```sh
 export CRABBOX="$(command -v crabbox)"
@@ -62,14 +62,14 @@ test -n "$CRABBOX"
 "$CRABBOX" run --help
 ```
 
-Use the consumer's trusted wrapper/install instructions. For repairs, verify
-upstream and use a clean task-owned checkout; preserve the installed binary
-and unrelated source. Never trust a sibling checkout merely by its name.
+- Use consumer's trusted wrapper/install instructions.
+- Repairs: verify upstream; use clean task-owned checkout; preserve installed
+  binary + unrelated source. Never trust sibling checkout merely by name.
 
 ## Trusted Testbox
 
-When the resolved provider is Testbox (or explicitly requested), these commands
-preserve it. Add `--provider blacksmith-testbox` only for an explicit override:
+Resolved provider = Testbox (or explicitly requested): commands preserve it.
+Add `--provider blacksmith-testbox` only for explicit override:
 
 ```sh
 "$CRABBOX" run --timing-json -- CI=1 <check-command>
@@ -86,32 +86,30 @@ Several commands: warm once, save id, reuse, stop.
 Rules:
 
 - One lease, one active command. No sync/reclaim during run.
-- Prefer `bash -c`; login profiles can change directories. Assert physical
-  checkout and expected source/patch in the executing shell; HEAD alone does
-  not prove dirty sync. Follow a consumer's documented hydration shell contract.
+- Prefer `bash -c`; login profiles can change directories. In executing shell,
+  assert physical checkout + expected source/patch; HEAD alone ≠ dirty-sync proof.
+  Follow consumer's documented hydration shell contract.
 - Native Testbox runs own sync, including reused `--id` runs. Never rely on
-  `--no-sync` to preserve a remote baseline: Blacksmith has no native bypass,
-  and released Crabbox versions can silently ignore the flag. An unchanged
-  intentional rerun is not a Testbox exception.
-- `--reclaim` only deliberate checkout-path ownership transfer.
-- Base/head change: stop. Rewarm. No stale-lease override.
+  `--no-sync` for remote baseline: Blacksmith has no native bypass; released
+  Crabbox versions can silently ignore flag. Unchanged intentional rerun ≠ exception.
+- `--reclaim` only for deliberate checkout-path ownership transfer.
+- Base/head change: stop; rewarm. No stale-lease override.
 - Raw SHA unreliable for `warmup --ref`; use branch/tag.
-- `blacksmith testbox list` hides states. Use `list --all` or
-  `status --id <tbx_id>`.
+- `blacksmith testbox list` hides states. Use `list --all` or `status --id <tbx_id>`.
 - Testbox status/stop: `--id`. No status `--json`.
 - Delegated provider rejects `--fresh-pr`, `--full-resync`, `--script*`,
   `--env-helper`, capture/download flags.
 
 ### Blacksmith directory downloads
 
-For recursive downloads and the required remote trailing slash, read
+Recursive downloads + required remote trailing slash:
 [directory downloads](references/operations.md#blacksmith-directory-downloads).
 
 ## Untrusted AWS
 
-Clean trusted default-branch checkout. Installed trusted Crabbox binary. Fresh
-lease per reviewed full head SHA. No instance role. No Tailscale. No hydration.
-Only `CI` forwarded. Trusted bootstrap uploaded beside `--fresh-pr`.
+- Clean trusted default-branch checkout. Installed trusted Crabbox binary.
+- Fresh lease per reviewed full head SHA. No instance role, Tailscale, hydration.
+- Forward only `CI`. Upload trusted bootstrap beside `--fresh-pr`.
 
 ```sh
 cd <clean-trusted-default-branch-checkout>
@@ -149,34 +147,35 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   "$CRABBOX" stop --provider aws <cbx_id>
 ```
 
-The trusted bootstrap must prove IMDSv2 IAM credentials return 404, verify SHA,
-remove runtime injection variables, pin the toolchain, and isolate `HOME` before
-install/test. Changed head needs a fresh lease. Missing remote PR or no-role
-proof means secretless fork CI.
+- Trusted bootstrap must prove IMDSv2 IAM credentials return 404; verify SHA;
+  remove runtime injection variables; pin toolchain; isolate `HOME` before
+  install/test.
+- Changed head: fresh lease. Missing remote PR or no-role proof: secretless fork CI.
 
 ## Direct AWS
 
-For trusted AWS commands, auth diagnostics, resync, or clean PR/container
-runs, read [direct providers](references/operations.md#direct-aws). Preserve
-`--no-hydrate` on container runs and report local-container proof as local.
+- Trusted AWS commands, auth diagnostics, resync, clean PR/container runs: read
+  [direct providers](references/operations.md#direct-aws).
+- Preserve `--no-hydrate` on container runs; report local-container proof as local.
 
 ## Observability
 
-Read [capture and environment flags](references/operations.md#observability)
-when collecting artifacts or injecting credentials. Exact key, one command;
-never print secrets, write them in the repo, or put them in shell history.
-No safe injection path means live auth is blocked, not fake-key proof.
+- Collecting artifacts/injecting credentials: read
+  [capture and environment flags](references/operations.md#observability).
+- Exact key, one command. Never print secrets, write in repo, or put in shell history.
+- No safe injection path: live auth blocked; fake-key proof insufficient.
 
 ## Real E2E
 
-Exercise the requested user entry point with isolated consumer state, not just
-remote unit tests. Read [E2E procedure](references/operations.md#real-e2e) for
-install/provider/interactive proof and comparing revisions safely.
+- Exercise requested user entry point with isolated consumer state, not just
+  remote unit tests.
+- For install/provider/interactive proof + safe revision comparison: read
+  [E2E procedure](references/operations.md#real-e2e).
 
 ## Desktop / Cross-OS
 
-Read [desktop and cross-OS commands](references/operations.md#desktop-and-cross-os)
-for SSH targets, paid macOS preflight, WebVNC, and app handoff verification.
+SSH targets, paid macOS preflight, WebVNC, app handoff verification: read
+[desktop and cross-OS commands](references/operations.md#desktop-and-cross-os).
 
 ## Failure Triage
 
@@ -192,9 +191,9 @@ blacksmith testbox list --all
 blacksmith testbox status --id <tbx_id>
 ```
 
-Queued capacity: stop owned allocations and follow proof policy. No retry
-storm or provider switching. Stale sync: `--debug --timing-json`, then
-`--full-resync` once on direct providers. Read failed phase/JUnit before a
-focused rerun. Diagnose a broken wrapper with the installed CLI on the same
-provider; update through the consumer's trusted path. Stop only owned IDs;
-`stop` takes no `--timing-json`.
+- Queued capacity: stop owned allocations; follow proof policy. No retry storm
+  or provider switching.
+- Stale sync: `--debug --timing-json`, then `--full-resync` once on direct providers.
+- Read failed phase/JUnit before focused rerun. Broken wrapper: diagnose with
+  installed CLI on same provider; update through consumer's trusted path.
+- Stop only owned IDs; `stop` takes no `--timing-json`.

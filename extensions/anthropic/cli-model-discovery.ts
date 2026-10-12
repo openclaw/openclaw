@@ -87,6 +87,9 @@ export async function discoverClaudeCliModels(params: {
       throw new Error("Claude CLI initialization did not return a model menu.");
     }
     const models = new Map<string, ModelDefinitionConfig>();
+    // Claude Code lists its "default" alias first with a "Default (recommended)" label; the
+    // explicit option for the same model carries the model's own name.
+    const defaultAliasIds = new Set<string>();
     for (const option of response.models) {
       if (
         !isRecord(option) ||
@@ -96,8 +99,16 @@ export async function discoverClaudeCliModels(params: {
         continue;
       }
       const id = option.resolvedModel.trim();
-      if (models.has(id)) {
+      const displayName = typeof option.displayName === "string" ? option.displayName : id;
+      const existing = models.get(id);
+      if (existing) {
+        if (option.value !== "default" && defaultAliasIds.delete(id)) {
+          existing.name = displayName;
+        }
         continue;
+      }
+      if (option.value === "default") {
+        defaultAliasIds.add(id);
       }
       const levels = NATIVE_EFFORT_LEVELS.filter(
         (level) =>
@@ -106,7 +117,7 @@ export async function discoverClaudeCliModels(params: {
       );
       models.set(id, {
         id,
-        name: typeof option.displayName === "string" ? option.displayName : id,
+        name: displayName,
         reasoning: levels.length > 0,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

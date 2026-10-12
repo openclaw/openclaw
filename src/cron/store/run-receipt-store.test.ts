@@ -829,6 +829,7 @@ describe("cron run receipt store", () => {
       activateCronRunReceiptInDatabase({
         database: db,
         handle: foreign.handle,
+        job,
         startedAtMs: Date.now(),
         resolveAgentId: () => job.agentId!,
       }),

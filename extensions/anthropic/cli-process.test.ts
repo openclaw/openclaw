@@ -581,7 +581,7 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
   );
 });
 
-it("discovers deduplicated native model IDs through initialize without a turn", async () => {
+async function discoverFromNativeMenu(models: unknown[]) {
   const context = await contextForChild(`
     import { createInterface } from "node:readline";
     createInterface({ input: process.stdin }).on("line", (line) => {
@@ -590,14 +590,8 @@ it("discovers deduplicated native model IDs through initialize without a turn", 
         process.exit(7);
       }
       process.stdout.write(JSON.stringify({ type: "control_response", response: {
-        subtype: "success", request_id: message.request_id, response: { models: [
-          { value: "default", resolvedModel: "claude-future[1m]", displayName: "Default",
-            supportedEffortLevels: ["low", "max"] },
-          { value: "future", resolvedModel: "claude-future[1m]", displayName: "Future",
-            supportedEffortLevels: ["low", "max"] },
-          { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus",
-            supportedEffortLevels: ["low", "max"] },
-        ] },
+        subtype: "success", request_id: message.request_id,
+        response: { models: ${JSON.stringify(models)} },
       } }) + "\\n");
     });
   `);
@@ -612,9 +606,35 @@ it("discovers deduplicated native model IDs through initialize without a turn", 
     });
     return owner;
   });
-  expect(await discoverClaudeCliModels({ env: context.env })).toEqual([
+  return discoverClaudeCliModels({ env: context.env });
+}
+
+it("discovers deduplicated native model IDs through initialize without a turn", async () => {
+  expect(
+    await discoverFromNativeMenu([
+      {
+        value: "default",
+        resolvedModel: "claude-future[1m]",
+        displayName: "Default (recommended)",
+        supportedEffortLevels: ["low", "max"],
+      },
+      {
+        value: "future",
+        resolvedModel: "claude-future[1m]",
+        displayName: "Future",
+        supportedEffortLevels: ["low", "max"],
+      },
+      {
+        value: "opus",
+        resolvedModel: "claude-opus-5-5",
+        displayName: "Opus",
+        supportedEffortLevels: ["low", "max"],
+      },
+    ]),
+  ).toEqual([
     expect.objectContaining({
       id: "claude-future[1m]",
+      name: "Future",
       thinkingLevelMap: {
         off: "off",
         minimal: null,
@@ -627,7 +647,20 @@ it("discovers deduplicated native model IDs through initialize without a turn", 
     }),
     expect.objectContaining({
       id: "claude-opus-5-5",
+      name: "Opus",
       thinkingLevelMap: expect.objectContaining({ off: null, low: "low", max: "max" }),
     }),
+  ]);
+});
+
+it("keeps the default label when no explicit option names its model", async () => {
+  expect(
+    await discoverFromNativeMenu([
+      { value: "default", resolvedModel: "claude-hidden", displayName: "Default (recommended)" },
+      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus" },
+    ]),
+  ).toEqual([
+    expect.objectContaining({ id: "claude-hidden", name: "Default (recommended)" }),
+    expect.objectContaining({ id: "claude-opus-5-5", name: "Opus" }),
   ]);
 });

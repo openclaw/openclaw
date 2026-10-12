@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import type { ReactiveControllerHost } from "lit";
 import { createMemo } from "solid-js";
 import type {
@@ -217,10 +216,6 @@ export function PluginSkillPreview(props: {
       )}
     </>
   );
-}
-
-export function renderPluginSkillPreview(controller: PluginPreviewController): JSX.Element {
-  return <PluginSkillPreview controller={controller} state={controller.state} />;
 }
 
 export function renderPluginSkillsSection(

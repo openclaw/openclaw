@@ -227,6 +227,39 @@ describe("renderPanelTabStrip", () => {
     expect(contentRef.mock.contexts.at(-1)).toBe(renderHost);
   });
 
+  it("retains icon content when tab projections and callbacks change", async () => {
+    const iconRef = vi.fn();
+    const icon = (label: string) => html`<span ${ref(iconRef)}>${label}</span>`;
+    const firstIcon = icon("First icon");
+    const tabs = [
+      { ...TAB, icon: firstIcon },
+      { ...TAB, id: "tab-2", domId: "test-tab-2" },
+    ];
+    const container = await renderStrip({ tabs });
+    const iconElement = container.querySelector(".tabstrip-tab__icon span span");
+    expect(iconRef).toHaveBeenCalledExactlyOnceWith(iconElement);
+
+    const onSelect = vi.fn();
+    await renderStrip({
+      tabs: tabs.map((tab) => ({ ...tab })),
+      activeId: "tab-2",
+      onSelect,
+      container,
+    });
+    expect(container.querySelector(".tabstrip-tab__icon span span")).toBe(iconElement);
+    expect(iconRef).toHaveBeenCalledOnce();
+    requestTabSelection(container, TAB.id);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(TAB.id);
+
+    await renderStrip({
+      tabs: [{ ...TAB, icon: icon("Updated icon") }, tabs[1]!],
+      container,
+    });
+    expect(container.querySelector(".tabstrip-tab__icon span span")).toBe(iconElement);
+    expect(iconElement?.textContent).toBe("Updated icon");
+    expect(iconRef).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { groups: [undefined, undefined, undefined, undefined], before: [2, 3, 4] },
     { groups: ["files", "browser", "browser", "terminal"], before: [2, 4] },

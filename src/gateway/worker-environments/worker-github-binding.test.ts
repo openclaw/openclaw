@@ -6,7 +6,13 @@ import {
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
+
+async function prepareWorkerGitHubBinding(
+  params: Parameters<typeof prepareGitHubPublicationFact>[0],
+) {
+  return (await prepareGitHubPublicationFact(params))?.github;
+}
 
 const mocks = vi.hoisted(() => ({
   snapshot: vi.fn(),
@@ -212,7 +218,7 @@ describe("worker GitHub launch binding", () => {
     },
   );
 
-  it("uses a refreshed profile on the next turn", async () => {
+  it("publishes a refreshed profile on the next background preparation", async () => {
     const profileDir = await installProfile();
     const first = await prepareWorkerGitHubBinding(session);
     await fs.rm(profileDir, { recursive: true });

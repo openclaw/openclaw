@@ -109,8 +109,6 @@ export function loadSessionEntryReadOnly(scope: SessionEntryReadScope): SessionE
 
 export { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
 
-export { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
-
 /** Resolves the persisted session key for a SQLite transcript session id. */
 export function resolveSessionKeyBySessionId(
   scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
@@ -469,6 +467,8 @@ async function patchSqliteSessionEntrySnapshot(
       agentId: resolved.agentId,
       selection: params.selection,
       assertCurrent: () => assertCurrent?.(),
+      assertCommitAllowed: options.assertCommitAllowed,
+      shouldCommit: options.shouldCommit,
       guard: options.workerGuard,
       preparedSource,
       retainedExecution: options.retainedExecution,

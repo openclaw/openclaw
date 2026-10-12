@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -18,13 +17,12 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadArchivedSessions,
   loadArchivedSessionsAsync,
-  loadMemorySessionMetadata,
-  loadMemorySessionMetadataBatch,
+  loadMemorySessionMetadataAsync,
+  loadMemorySessionMetadataBatchAsync,
   resolveMemorySessionTargets,
   resolveMemorySessionTargetsAsync,
 } from "./memory-core-host-engine-sessions.js";
@@ -63,14 +61,16 @@ describe("memory source sessions", () => {
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
 
-        expect(loadMemorySessionMetadata({ ...scope, sessionId, sessionKey })).toMatchObject({
+        expect(
+          await loadMemorySessionMetadataAsync({ ...scope, sessionId, sessionKey }),
+        ).toMatchObject({
           sessionId,
           sessionKey,
           hookExternalContentSource: "gmail",
           chatType: "group",
         });
         expect(
-          loadMemorySessionMetadataBatch({
+          await loadMemorySessionMetadataBatchAsync({
             ...scope,
             sessions: [{ sessionId, sessionKey }, { sessionId: "missing" }],
           }),
@@ -78,7 +78,7 @@ describe("memory source sessions", () => {
           expect.objectContaining({ sessionId, sessionKey, hookExternalContentSource: "gmail" }),
         ]);
         expect(
-          loadMemorySessionMetadataBatch({
+          await loadMemorySessionMetadataBatchAsync({
             ...scope,
             sessions: [{ sessionId, sessionKey: "agent:main:another-session" }],
           }),
@@ -88,6 +88,10 @@ describe("memory source sessions", () => {
         ]);
         const targetSql = observeHostDataSql();
         try {
+          expect(await loadMemorySessionMetadataAsync({ ...scope, sessionId })).toMatchObject({
+            sessionId,
+            hookExternalContentSource: "gmail",
+          });
           expect(
             await resolveMemorySessionTargetsAsync({ ...scope, participants: ["profile-source"] }),
           ).toEqual([expect.objectContaining({ sessionId, sessionKey, resolution: "live" })]);
@@ -191,14 +195,14 @@ describe("memory source sessions", () => {
         ]);
       }
       expect(
-        loadMemorySessionMetadata({
+        await loadMemorySessionMetadataAsync({
           ...mainScope,
           sessionId: "other-source",
           sessionKey: "agent:other:source",
         }),
       ).toBeUndefined();
       expect(
-        loadMemorySessionMetadataBatch({
+        await loadMemorySessionMetadataBatchAsync({
           ...mainScope,
           sessions: [{ sessionId: "other-source", sessionKey: "agent:other:source" }],
         }),
@@ -226,7 +230,9 @@ describe("memory source sessions", () => {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       for (const source of ["email", "webhook"] as const) {
-        expect(loadMemorySessionMetadata({ agentId: "main", sessionId: source })).toMatchObject({
+        expect(
+          await loadMemorySessionMetadataAsync({ agentId: "main", sessionId: source }),
+        ).toMatchObject({
           hookExternalContentSource: source,
         });
         expect(
@@ -239,19 +245,20 @@ describe("memory source sessions", () => {
         agentId: "main",
         sessions: [{ sessionId: "email" }, { sessionId: "webhook" }],
       };
-      expect(loadMemorySessionMetadataBatch(batch)).toEqual([
+      expect(await loadMemorySessionMetadataBatchAsync(batch)).toEqual([
         expect.objectContaining({ sessionId: "email", hookExternalContentSource: "email" }),
         expect.objectContaining({ sessionId: "webhook", hookExternalContentSource: "webhook" }),
       ]);
-      const foreign = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
-      try {
-        foreign
-          .prepare("UPDATE session_windows SET chat_type = 'group' WHERE session_id = ?")
-          .run("email");
-      } finally {
-        foreign.close();
-      }
-      expect(loadMemorySessionMetadataBatch(batch)).toContainEqual(
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:email" },
+        {
+          sessionId: "email",
+          updatedAt: 1_001,
+          hookExternalContentSource: "email",
+          chatType: "group",
+        },
+      );
+      expect(await loadMemorySessionMetadataBatchAsync(batch)).toContainEqual(
         expect.objectContaining({ sessionId: "email", chatType: "group" }),
       );
       const emailScope = { agentId: "main", sessionKey: "agent:main:email" };
@@ -260,10 +267,12 @@ describe("memory source sessions", () => {
         { message: { role: "user", content: "Retained email content." } },
       );
       await replaceSessionEntry(emailScope, { sessionId: "replacement", updatedAt: 2_000 });
-      expect(loadMemorySessionMetadata({ agentId: "main", sessionId: "email" })).toMatchObject({
+      expect(
+        await loadMemorySessionMetadataAsync({ agentId: "main", sessionId: "email" }),
+      ).toMatchObject({
         hookExternalContentSource: null,
       });
-      expect(loadMemorySessionMetadataBatch(batch)).toContainEqual(
+      expect(await loadMemorySessionMetadataBatchAsync(batch)).toContainEqual(
         expect.objectContaining({ sessionId: "email", hookExternalContentSource: null }),
       );
       expect(
@@ -281,9 +290,12 @@ describe("memory source sessions", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = path.join(state.root, "absent", "sessions.json");
       const scope = { agentId: "main", storePath, sessionId: "missing" };
-      expect(loadMemorySessionMetadata(scope)).toBeUndefined();
+      expect(await loadMemorySessionMetadataAsync(scope)).toBeUndefined();
       expect(
-        loadMemorySessionMetadataBatch({ ...scope, sessions: [{ sessionId: "missing" }] }),
+        await loadMemorySessionMetadataBatchAsync({
+          ...scope,
+          sessions: [{ sessionId: "missing" }],
+        }),
       ).toEqual([]);
       expect(await loadArchivedSessionsAsync({ ...scope, sessionIds: ["missing"] })).toEqual([]);
       expect(await resolveMemorySessionTargetsAsync({ ...scope, sessionIds: ["missing"] })).toEqual(
