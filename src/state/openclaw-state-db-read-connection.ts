@@ -218,7 +218,6 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
           }
         });
       }
-      assertSource();
       scheduleReaderRetirement(retained);
       return retained;
     } catch (error) {
@@ -488,12 +487,20 @@ export function readOpenClawStateReadOnlyLocation<T>(
     errors.push(error);
   }
   try {
+    // Conservative runtimes can retain native handles after logical close. The
+    // snapshot owner warns and keeps its cleanup custody until process exit.
+    const allowDeferredSnapshotCleanup =
+      typeof source !== "string" &&
+      errors.length === 0 &&
+      result?.status === "available" &&
+      !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources;
     if (
       !opened.close(
         errors.length === 0 &&
           result?.status === "available" &&
           !corruptedReaders.has(opened.database.db),
-      )
+      ) &&
+      !allowDeferredSnapshotCleanup
     ) {
       throw new SnapshotCleanupIncompleteError("Shared-state snapshot cleanup is incomplete.");
     }

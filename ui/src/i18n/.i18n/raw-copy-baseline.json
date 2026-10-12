@@ -348,7 +348,14 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
+      "path": "ui/src/pages/chat/components/chat-message-stream-view.tsx",
+      "text": "Assistant"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp-view.tsx",
       "text": "% ctx"
     },
     {
@@ -357,6 +364,20 @@
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-pane-header.test-support.ts",
       "text": "Session title"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
+      "text": "Open in editor"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
+      "text": "Open in editor"
     },
     {
       "count": 1,
@@ -439,7 +460,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/debug/view.ts",
+      "path": "ui/src/pages/debug/view.tsx",
       "text": "openclaw security audit --deep"
     },
     {
@@ -490,6 +511,13 @@
       "name": "label",
       "path": "ui/src/pages/new-session/where-chip.test-support.ts",
       "text": "Duplicate runner"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugin/logbook-view.tsx",
+      "text": "0s"
     },
     {
       "count": 1,
@@ -635,7 +663,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/systems/systems-backups.ts",
+      "path": "ui/src/pages/systems/systems-backups.tsx",
       "text": "openclaw backup enable --to &lt;location&gt;"
     }
   ]

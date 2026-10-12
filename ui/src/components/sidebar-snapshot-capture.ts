@@ -41,6 +41,8 @@ export function captureSidebarSnapshotModel(
   const roster = rosterActivityStore(context).snapshot;
   if (
     host.sidebarSnapshot ||
+    (host.navigationView === "pages" &&
+      host.navigationCatalog.dashboards?.readSucceeded !== true) ||
     host.sessionData.sessionMutationError !== null ||
     context.sessions.state.error !== null ||
     host.sessionData.ownerCounts.error !== null ||

@@ -75,7 +75,7 @@ type PreparedReplyDispatchPublicationHost = Readonly<{
   ) => PreparedModelRuntimeLease;
   isGatewayLifecycleActive: () => boolean;
   getConfiguredOwner: (agentId: string) => PreparedModelRuntimeOwner | undefined;
-  getPendingReplacement: () => Promise<void> | undefined;
+  getPendingReplacement: (agentId: string) => Promise<void> | undefined;
   isStartupPending: () => boolean;
   ensureReady: (params: PreparedReplyDispatchLoadParams) => Promise<void>;
 }>;
@@ -164,7 +164,7 @@ export class PreparedReplyDispatchPublicationOwner {
       if (!this.host.isGatewayLifecycleActive()) {
         return undefined;
       }
-      const replacement = this.host.getPendingReplacement();
+      const replacement = this.host.getPendingReplacement(agentId);
       const pendingOwner = replacement ? undefined : this.host.getConfiguredOwner(agentId);
       if (replacement) {
         assertPreparedModelRuntimeAdmissionCanWait();

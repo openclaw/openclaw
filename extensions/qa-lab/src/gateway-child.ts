@@ -109,7 +109,7 @@ async function startOwnedGatewayChild(
     });
     // Register synchronously: acceptance/readiness may reject with descendants
     // still alive, and replacement must immediately supersede its stopped parent.
-    active = lifetime.register(child, prepared);
+    const owned = (active = lifetime.register(child, prepared));
     for (const [stream, label, log] of [
       [child.stdout, "stdout", stdoutLog],
       [child.stderr, "stderr", stderrLog],
@@ -120,7 +120,11 @@ async function startOwnedGatewayChild(
         log.write(buffer);
       });
     }
-    getChildFailure = monitorQaGatewayChildFailure(child, output);
+    getChildFailure = monitorQaGatewayChildFailure(
+      child,
+      output,
+      () => owned.ready && !lifetime.signal.aborted && owned.settlement === undefined,
+    );
     active.checkFailure = () => throwQaGatewayChildFailure(getChildFailure, logs);
     try {
       if (prepared && lifetime.controller) {
@@ -260,7 +264,6 @@ async function startOwnedGatewayChild(
       mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
     ) {
       return lifetime.run(async () => {
-        throwActiveChildFailure();
         await stopAttempt();
         await mutateState({ configPath, runtimeEnv: runningEnv, stateDir, tempRoot });
         // Mutation can reopen parent stores; release them before child startup maintenance.

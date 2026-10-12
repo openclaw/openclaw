@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import {
@@ -30,7 +31,7 @@ const preamble = (text: string, timestamp: number, itemId: string, owner = runId
 });
 
 it("keeps successive commentary inline and formatted across the live-to-history handoff", () => {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   const earlier = preamble("Reading the files.", 2, "read");
   const detail = "Checking the caller and its lifecycle. ".repeat(25);
   const text = "**Checking** tests.\n\n" + detail + "End of the explanation.";
@@ -65,7 +66,7 @@ it("keeps successive commentary inline and formatted across the live-to-history 
 it.each(["explicit", "segment", "tool", "cached"] as const)(
   "keeps only active durable commentary with %s run identity when retention is off",
   (source) => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const props = {
       runActive: true,
       runId: source === "explicit" ? runId : null,
@@ -127,7 +128,7 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
 );
 
 it("leaves unphased answers and mixed-phase narration and final text in the transcript", () => {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   renderChatInto(container, {
     runActive: true,
     runId,

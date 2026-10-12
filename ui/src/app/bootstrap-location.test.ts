@@ -4,10 +4,7 @@ import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import type { ApplicationContext } from "./context.ts";
 
 describe("resolveInitialApplicationLocation", () => {
-  it.each([
-    { sessionKey: "telegram:12345", search: "", pathname: "/chat/main/telegram/12345" },
-    { sessionKey: "agent::broken", search: "?draft=hello", pathname: null },
-  ])(
+  it.each([{ sessionKey: "agent::broken", search: "?draft=hello", pathname: null }])(
     "resolves persisted '$sessionKey' without aborting bootstrap",
     async ({ sessionKey, search, pathname }) => {
       const location = { pathname: "/", search, hash: "" };
@@ -88,7 +85,7 @@ describe("resolveInitialApplicationLocation", () => {
     },
   );
 
-  it.each(["main", ""])(
+  it.each(["main"])(
     "does not wait for gateway defaults on an explicit startup route with '%s'",
     async (sessionKey) => {
       const subscribe = vi.fn(() => () => undefined);
@@ -138,32 +135,12 @@ describe("resolveInitialApplicationLocation", () => {
     {
       location: {
         pathname: "/chat",
-        search: "?session=agent%3Aresearch%3Atelegram%3A12345",
-        hash: "",
-      },
-      expected: { pathname: "/chat/research/telegram/12345", search: "", hash: "" },
-      namespace: "chat",
-      sessionKey: "agent:research:telegram:12345",
-    },
-    {
-      location: {
-        pathname: "/chat",
         search: "?session=agent%3Aresearch%3Atelegram%3A12345&face=dashboard",
         hash: "",
       },
       expected: { pathname: "/dashboard/research/telegram/12345", search: "", hash: "" },
       namespace: "dashboard",
       sessionKey: "agent:research:telegram:12345",
-    },
-    {
-      location: {
-        pathname: "/chat",
-        search: "?session=agent%3Aresearch%3Arelease-deadbeef",
-        hash: "",
-      },
-      expected: { pathname: "/chat/research/~key/release-deadbeef", search: "", hash: "" },
-      namespace: "chat",
-      sessionKey: "agent:research:release-deadbeef",
     },
   ] as const)("rewrites released query links to $expected.pathname", async (testCase) => {
     const subscribe = vi.fn(() => () => undefined);

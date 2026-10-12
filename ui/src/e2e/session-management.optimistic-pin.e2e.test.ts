@@ -24,7 +24,7 @@ const companionKey = "agent:main:companion";
 const pinRef = "session:agent:main:candidate";
 const profileId = "profile-pin-owner";
 const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-const pinsKey = "ui.sidebarEntries";
+const pinsKey = "ui.railShortcuts";
 
 function profilePreferences(sidebarEntries: string[]) {
   return { status: "ok", entries: { [pinsKey]: sidebarEntries } };
@@ -62,7 +62,7 @@ function candidateRow(page: Page) {
 async function storedPins(page: Page) {
   return page.evaluate(
     ({ key, profile }) =>
-      JSON.parse(localStorage.getItem(key) ?? "{}").navigationByProfile?.[profile]?.sidebarEntries,
+      JSON.parse(localStorage.getItem(key) ?? "{}").navigationByProfile?.[profile]?.railShortcuts,
     { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), profile: profileId },
   );
 }
@@ -72,7 +72,7 @@ async function pendingPinWrites(page: Page) {
     Object.keys(localStorage)
       .filter((key) => key.startsWith("openclaw.control.serverPrefs.pending.v1:"))
       .map((key) => JSON.parse(localStorage.getItem(key) ?? "null"))
-      .filter((value) => value && Object.hasOwn(value, "sidebarEntries")),
+      .filter((value) => value && Object.hasOwn(value, "railShortcuts")),
   );
 }
 
@@ -125,7 +125,7 @@ suite.define(() => {
       await row.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
       await expect.poll(() => storedPins(page)).toEqual([pinRef]);
       expect(await pendingPinWrites(page)).toEqual([
-        expect.objectContaining({ sidebarEntries: [pinRef], sidebarEntriesBase: [] }),
+        expect.objectContaining({ railShortcuts: [pinRef], railShortcutsBase: [] }),
       ]);
       await expectNoSharedPinWrites(gateway);
       await captureUiProof(suite, page, "optimistic-pin-02-pinned-while-in-flight.png");
@@ -186,7 +186,7 @@ suite.define(() => {
       });
       await expect.poll(() => storedPins(page)).toEqual([]);
       expect(await pendingPinWrites(page)).toEqual([
-        expect.objectContaining({ sidebarEntries: [], sidebarEntriesBase: [pinRef] }),
+        expect.objectContaining({ railShortcuts: [], railShortcutsBase: [pinRef] }),
       ]);
       await gateway.deferNext("users.prefs.set");
       await gateway.closeLatest(1001, "retry personal unpin");

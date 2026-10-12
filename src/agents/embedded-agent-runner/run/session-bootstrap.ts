@@ -385,6 +385,7 @@ export async function prepareInitialSessionWriter(params: {
   // attempting to acquire an admission that their enclosing mutation excludes.
   await assertAbsent();
   const admission = await beginSessionWorkAdmission({
+    agentId: ownerTarget.agentId,
     scope: presence.storePath,
     identities: [ownerTarget.sessionKey, presence.sessionKey, ownerTarget.sessionId],
     signal,
@@ -524,6 +525,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   | {
       expectedLifecycleRevision: string | undefined;
       expectedWriterRunId: string;
+      entry: InternalSessionEntry;
     }
   | undefined
 > {
@@ -600,5 +602,6 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   return {
     expectedLifecycleRevision,
     expectedWriterRunId: params.runId,
+    entry: claimed,
   };
 }

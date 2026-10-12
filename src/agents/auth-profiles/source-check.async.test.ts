@@ -39,6 +39,7 @@ it("retains the read failure classification when reader cleanup also fails", asy
   await withOpenClawTestState({ label: "auth-source-cleanup" }, async (state) => {
     const failure = new SqliteWorkerError("source read closed", "closed");
     const prepare = vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockReturnValue({
+      identity: undefined,
       read: async () => {
         throw failure;
       },

@@ -1,11 +1,18 @@
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
+  SessionActorAuthority,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
   SessionActorHotState,
 } from "./session-actor-state.types.js";
+import type {
+  SessionActorStorageAuthority,
+  SessionActorStorageOutcome,
+  SessionActorStorageReads,
+  SessionActorStorageWrites,
+} from "./session-actor-storage-contract.js";
 import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
@@ -29,29 +36,14 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type {
+  SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
   SessionActorHotState,
   SessionActorSettlement,
 } from "./session-actor-state.types.js";
-
-/** Entry policy and physical/version identity; transcript indexes are not authority. */
-export type SessionActorAuthorityFacts = Pick<
-  SessionActorHotState,
-  "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
->;
-
-/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
-export type SessionActorAuthority = {
-  assertCurrent(): void;
-  authorize(
-    stage: "transaction" | "commit",
-    facts: SessionActorAuthorityFacts,
-    /** Existing kernel source/custody evidence remains subject to its owner's checks. */
-    publication?: unknown,
-  ): void;
-};
 
 /** Serializable, pure bookkeeping. These reducers cannot change session identity or authority. */
 export type SessionActorReducer = SessionEntryBookkeepingReducer;
@@ -325,6 +317,31 @@ type SessionActorCommands = {
   ) => Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
 };
 
+type SessionActorStorageCommitObserver<Value> = {
+  committed(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+};
+
+/** Bound at acquisition; shares the actor's accepted work, FIFO, and state owner. */
+export type SessionActorStorage = {
+  /** Synchronous current facts for an actual effect; never reads an uninstalled working copy. */
+  readCurrent<Key extends keyof SessionActorStorageReads>(
+    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
+    authority: SessionActorStorageAuthority,
+  ): SessionActorStorageReads[Key]["output"];
+  /** Acquire a separately releasable handle from this already-selected owner. */
+  acquire(sessionKey: string, lifetime?: SessionActorLifetime): Promise<SessionActor>;
+
+  read<Key extends keyof SessionActorStorageReads>(
+    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
+    authority: SessionActorStorageAuthority,
+  ): Promise<SessionActorStorageReads[Key]["output"]>;
+  mutate<Key extends keyof SessionActorStorageWrites>(
+    command: { type: Key; input: SessionActorStorageWrites[Key]["input"] },
+    authority: SessionActorStorageAuthority,
+    observer?: SessionActorStorageCommitObserver<SessionActorStorageWrites[Key]["output"]>,
+  ): Promise<SessionActorStorageOutcome<SessionActorStorageWrites[Key]["output"]>>;
+};
+
 /**
  * One command is one synchronous writer transaction. No mailbox hold crosses an await.
  * Unknown outcomes fence disclosure until read() reconciles; commands are never replayed.
@@ -333,6 +350,8 @@ type SessionActorCommands = {
 export type SessionActor = SessionActorLifetime &
   SessionActorCommands & {
     readonly target: SessionActorTarget;
+    /** Present only when the selected backend owns the storage domain. */
+    readonly storage?: SessionActorStorage;
     /** Detached installed MAIN state; undefined means fenced/missing. Never opens SQLite or dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;

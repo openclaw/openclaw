@@ -1,7 +1,7 @@
 import { onCleanup } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../app/context-types.ts";
-import { projectGateway, projectGatewayEvents } from "../lib/reactive/application.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { mountSolid } from "./mount-solid.ts";
 import {
@@ -28,8 +28,7 @@ it("provides shared Gateway snapshots/events and retires replaced consumers", ()
     const context = useApplication();
     seen.push(context);
     const gateway = projectGateway(context.gateway);
-    const eventStream = projectGatewayEvents(context.gateway);
-    eventStream.subscribe(events);
+    onCleanup(context.gateway.subscribeEvents(events));
     onCleanup(retired);
     return (
       <output>

@@ -302,10 +302,11 @@ export function buildEmbeddedRunPayloads(params: {
             fallbackAnswerDirectiveState.mediaUrls?.length)) ||
         storedDelivery?.tts?.text?.trim(),
       );
+      // An empty canonical terminal is still authoritative; accumulated text may precede tools.
       const answerDirectives =
         shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText
           ? [fallbackAnswerDirectiveState ?? parseReplyDirectives(fallbackAnswerSourceText)]
-          : nonEmptyAssistantTexts.length > 0
+          : !assistantForPayload && nonEmptyAssistantTexts.length > 0
             ? nonEmptyAssistantTexts.map((text) => parseReplyDirectives(text))
             : fallbackAnswerDirectiveState
               ? [fallbackAnswerDirectiveState]

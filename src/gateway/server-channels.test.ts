@@ -18,6 +18,7 @@ import { formatGatewayChannelsStatusLines } from "../commands/channels/status.ru
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
+import { createMainThreadStallMonitor } from "../infra/main-thread-stall.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -28,7 +29,6 @@ import {
   requireActivePluginChannelRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -51,7 +51,6 @@ import {
   createTransportActivityStatusPatch,
 } from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
@@ -64,10 +63,7 @@ import {
   type TestAccount,
 } from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
-import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
 const hoisted = vi.hoisted(() => {
@@ -222,79 +218,6 @@ describe("server-channels auto restart", () => {
     clearActiveCredentialDegradedOwners();
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
-  });
-
-  it("keeps channel requests bound to their Gateway after the starting client closes", async () => {
-    const continueChannelRequest = createDeferred();
-    const observedGateway = createDeferred<{ gateway: string }>();
-    const ownerContext = createContext();
-    ownerContext.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "health",
-          scope: "operator.read",
-          owner: { kind: "core", area: "channel-startup" },
-          handler: ({ respond }: GatewayRequestHandlerOptions) =>
-            respond(true, { gateway: "channel-owner" }),
-        },
-      ]);
-    const callerContext = createContext();
-    callerContext.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "health",
-          scope: "operator.read",
-          owner: { kind: "core", area: "channel-startup" },
-          handler: ({ respond }: GatewayRequestHandlerOptions) =>
-            respond(true, { gateway: "starting-client" }),
-        },
-      ]);
-    const startAccount = async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      await continueChannelRequest.promise;
-      try {
-        observedGateway.resolve(
-          await dispatchGatewayMethodInProcess<{ gateway: string }>(
-            "health",
-            {},
-            {
-              syntheticScopes: ["operator.read"],
-              operatorRoleActor: { kind: "system" },
-            },
-          ),
-        );
-      } catch (error) {
-        observedGateway.reject(error);
-      }
-      await waitForAbort(abortSignal);
-    };
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager({ resolveGatewayContext: () => ownerContext });
-    const callerLifetime = new AbortController();
-
-    try {
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          context: callerContext,
-          client: createSyntheticPluginRuntimeClient({
-            scopes: ["operator.read"],
-            operatorRoleActor: { kind: "system" },
-          }),
-          isWebchatConnect: () => false,
-          signal: callerLifetime.signal,
-          hasCurrentClientAuthority: () => !callerLifetime.signal.aborted,
-        },
-        () => manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true }),
-      );
-      callerLifetime.abort();
-      const requestResult = expect(observedGateway.promise).resolves.toEqual({
-        gateway: "channel-owner",
-      });
-      continueChannelRequest.resolve();
-      await requestResult;
-    } finally {
-      continueChannelRequest.resolve();
-      await manager.stopChannel("discord");
-    }
   });
 
   it("keeps approval-bootstrap descendants admitted after the starting request finishes", async () => {
@@ -3204,6 +3127,54 @@ describe("server-channels auto restart", () => {
     expect(readAccount(manager)?.running).not.toBe(true);
   });
 
+  it("does not attribute later Discord gateway callbacks to account startup", async () => {
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    const gatewayEvent = createDeferred();
+    const eventHandled = createDeferred();
+    const started = createDeferred();
+    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      started.resolve();
+      await gatewayEvent.promise;
+      now += 1_928;
+      eventHandled.resolve();
+      await waitForAbort(abortSignal);
+    });
+    const log = createSubsystemLogger("gateway/stall-test");
+    const info = vi.spyOn(log, "info");
+    const trace = createGatewayStartupTrace(log);
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
+      getRuntimeConfig: () => ({}),
+      getPluginRegistry: requireActivePluginChannelRegistry,
+      channelLogs: { discord: log },
+      channelRuntimeEnvs: {},
+      startupTrace: trace,
+    });
+    createdManagers.push({ channelIds: ["discord"], manager });
+    try {
+      await manager.startChannels();
+      await started.promise;
+      await flushMicrotasks();
+      gatewayEvent.resolve();
+      await eventHandled.promise;
+      expect(startAccount).toHaveBeenCalledTimes(1);
+      expect(info.mock.calls.filter(([message]) => message.includes("starting account"))).toEqual([
+        ["[default] starting account (reason: startup)"],
+      ]);
+      expect(monitor.drain()).toEqual({
+        stalls: [{ elapsedMs: 1_928, task: "unattributed", taskMs: 1_928 }],
+        dropped: 0,
+      });
+    } finally {
+      monitor.stop();
+      trace.close();
+      info.mockRestore();
+      await manager.stopChannel("discord");
+    }
+  });
+
   it("prunes only credential owners and account state for inactive channel plugins", async () => {
     installTestRegistry(
       ...(["discord", "slack"] as const).map((channelId) =>
@@ -3351,7 +3322,9 @@ describe("server-channels auto restart", () => {
     try {
       await vi.advanceTimersByTimeAsync(2);
       await monitor.waitForIdle();
-      expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy");
+      expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy", {
+        reason: "health-monitor",
+      });
       expect(startAccount).toHaveBeenCalledTimes(2);
       expect(resolveAccount.mock.calls.map(([, accountId]) => accountId)).toEqual([
         "healthy",

@@ -135,9 +135,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
   "scripts/e2e/lib/session-cold-storage/client.mjs!",
-  // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
-  "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
-  "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
   // abandoned-update.sh invokes the upgrade ledger assertions through Node.
   "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   // backup-rollback.sh invokes capture and verification through this CLI.
@@ -896,11 +893,7 @@ const config = {
         "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",
-        // Dormant Solid 2 foundation (#168305 smoke fixture, #168405 state-owner projections):
-        // only their tests import them until Control UI views adopt Solid; drop these entries
-        // with the first production importer.
-        "src/lib/reactive/*.ts!",
-        "!src/lib/reactive/*.test.ts!",
+        // The standalone Solid compiler smoke is not a production import.
         "src/solid-smoke/solid-smoke.tsx!",
         // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
         // before their page and chat consumers; drop each entry with its first production importer.

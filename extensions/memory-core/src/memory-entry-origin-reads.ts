@@ -8,7 +8,6 @@ import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqli
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  sqliteStringSet,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
@@ -18,7 +17,6 @@ import {
 } from "./memory-entry-origins-task.js";
 
 type OriginReadDatabase = {
-  memory_entry_origins: { entry_key: string; agent_id: string; session_id: string };
   memory_session_tombstones: { session_id: string; agent_id: string };
 };
 
@@ -34,21 +32,6 @@ function queryOrigins(
           ? readMemoryEntryOriginsInDatabase(db, request)
           : [],
     };
-  }
-  if (request.kind === "origin-exists") {
-    let exists = false;
-    if (db && tableExists(db, "memory_entry_origins")) {
-      let query = getNodeSqliteKysely<OriginReadDatabase>(db)
-        .selectFrom("memory_entry_origins")
-        .select("entry_key")
-        .where("agent_id", "=", request.agentId)
-        .where("entry_key", "in", sqliteStringSet(request.entryKeys));
-      if (request.sessionIds) {
-        query = query.where("session_id", "in", sqliteStringSet(request.sessionIds));
-      }
-      exists = executeSqliteQuerySync(db, query.limit(1)).rows.length > 0;
-    }
-    return { kind: request.kind, exists };
   }
   if (!db || !tableExists(db, "memory_session_tombstones")) {
     return { kind: request.kind, indices: [] };

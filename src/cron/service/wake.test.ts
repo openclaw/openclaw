@@ -17,17 +17,17 @@ function createState() {
 }
 
 describe("wake (cron timer)", () => {
-  it("returns ok:false on empty text without enqueueing or waking", () => {
+  it("returns ok:false on empty text without enqueueing or waking", async () => {
     const { state, enqueueSystemEvent, requestHeartbeat } = createState();
-    expect(wake(state, { mode: "now", text: "   " })).toEqual({ ok: false });
+    expect(await wake(state, { mode: "now", text: "   " })).toEqual({ ok: false });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 
-  it("threads sessionKey to both enqueue and heartbeat on mode=now", () => {
+  it("threads sessionKey to both enqueue and heartbeat on mode=now", async () => {
     const { state, enqueueSystemEvent, requestHeartbeat } = createState();
     expect(
-      wake(state, {
+      await wake(state, {
         mode: "now",
         text: "ping",
         sessionKey: "agent:main:telegram:dm:42",
@@ -44,17 +44,17 @@ describe("wake (cron timer)", () => {
     });
   });
 
-  it("does not fire a wake on mode=next-heartbeat when no sessionKey is supplied", () => {
+  it("does not fire a wake on mode=next-heartbeat when no sessionKey is supplied", async () => {
     const { state, enqueueSystemEvent, requestHeartbeat } = createState();
-    expect(wake(state, { mode: "next-heartbeat", text: "ping" })).toEqual({ ok: true });
+    expect(await wake(state, { mode: "next-heartbeat", text: "ping" })).toEqual({ ok: true });
     expect(enqueueSystemEvent).toHaveBeenCalledWith("ping", undefined);
     expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 
-  it("rejects subagent sessionKey targets without enqueueing or waking", () => {
+  it("rejects subagent sessionKey targets without enqueueing or waking", async () => {
     const { state, enqueueSystemEvent, requestHeartbeat } = createState();
     expect(
-      wake(state, {
+      await wake(state, {
         mode: "now",
         text: "ping",
         sessionKey: "agent:main:subagent:worker",

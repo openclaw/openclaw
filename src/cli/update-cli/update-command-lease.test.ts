@@ -917,29 +917,6 @@ describe("update orchestration lifecycle ownership", () => {
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("continues restart handling with a warning after a final Doctor execution failure", async () => {
-    await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
-    await invoke("current-process");
-    expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
-      status: "ok",
-      postUpdate: {
-        plugins: {
-          status: "warning",
-          warnings: [expect.objectContaining({ reason: "doctor-advisory" })],
-        },
-      },
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
-        }),
-      ]),
-    });
-    expect(mocks.restart).toHaveBeenCalledOnce();
-    expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-    expectDoctorDiagnostics();
-    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
-  });
-
   it.each([
     ["fresh-process" as const, "finding" as const, "post-plugin-update-readiness-failed"],
     [

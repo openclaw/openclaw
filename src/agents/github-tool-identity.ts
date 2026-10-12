@@ -364,7 +364,9 @@ async function resolveGitHubIdentityFacts(
     ? await readManagedGitHubToken(identity.profileDir)
     : await readNativeGitHubToken(probeEnv, false, host);
   const [probe, author] = await Promise.all([
-    token ? verifyGitHubCredential(token, managed ? undefined : { apiBaseUrl }) : undefined,
+    token
+      ? verifyGitHubCredential(token, { ...(managed ? {} : { apiBaseUrl }), allowStale: true })
+      : undefined,
     readGitAuthor(probeEnv, params.cwd),
   ]);
   const account = probe?.status === "available" ? probe.account : null;
@@ -390,6 +392,7 @@ async function resolveGitHubIdentityFacts(
             (oauth.record.refreshExpiresAtMs <= Date.now() ? "expired" : "available"));
   return {
     source: identity.source,
+    ...(probe?.status === "available" && probe.stale ? { stale: true } : {}),
     credentialKind: !managed
       ? "native"
       : identity.config.kind === "oauth"
@@ -417,6 +420,8 @@ export async function preparePersonalGitHubPublicationIdentity(params: {
   profileId: string;
   accountId: number;
   assertCurrent: () => void;
+  /** Display reads never use these facts to authorize publication. */
+  forDisplay?: true;
 }): Promise<PreparedGitHubPublicationIdentity> {
   params.assertCurrent();
   const host = resolveGitHubHost();
@@ -442,7 +447,7 @@ export async function preparePersonalGitHubPublicationIdentity(params: {
     GH_CONFIG_DIR: profileDir,
     GH_PROMPT_DISABLED: "1",
   };
-  const probe = await verifyGitHubCredential(token);
+  const probe = await verifyGitHubCredential(token, { allowStale: params.forDisplay });
   assertSelected();
   if (probe.status !== "available") {
     throw new Error("My GitHub credential could not be verified; reconnect My GitHub.");
@@ -452,6 +457,7 @@ export async function preparePersonalGitHubPublicationIdentity(params: {
   }
   return Object.freeze({
     source: "personal",
+    ...(probe.stale ? { stale: true as const } : {}),
     profileId: params.profileId,
     host: GITHUB_HOST,
     account: probe.account,
@@ -478,6 +484,7 @@ async function prepareSharedGitHubIdentity(
     assertCurrent?: () => void;
     startCurrent?: GitHubReadIdentityStarter;
     allowAnonymous?: boolean;
+    allowStale?: boolean;
   },
   readNativeToken = readNativeGitHubToken,
   host = resolveGitHubHost(),
@@ -504,13 +511,13 @@ async function prepareSharedGitHubIdentity(
   if (!token) {
     return startGitHubIdentityOperation(() => {
       if (!managed && params.allowAnonymous) {
-        return { prepared: undefined, token: undefined, readToken };
+        return { prepared: undefined, token: undefined, readToken, stale: undefined };
       }
       throw new GitHubIdentityError("unavailable");
     }, params);
   }
   const probe = await startGitHubIdentityOperation(
-    () => verifyGitHubCredential(token, { apiBaseUrl }),
+    () => verifyGitHubCredential(token, { apiBaseUrl, allowStale: params.allowStale }),
     params,
   );
   return startGitHubIdentityOperation(() => {
@@ -526,7 +533,7 @@ async function prepareSharedGitHubIdentity(
       // retirement cannot redirect an already-admitted operation.
       env: Object.freeze(withGitHubToken(env, token)),
     }) satisfies PreparedGitHubPublicationIdentity;
-    return { prepared, token, readToken };
+    return { prepared, token, readToken, ...(probe.stale ? { stale: true as const } : {}) };
   }, params);
 }
 
@@ -545,11 +552,14 @@ export async function prepareGitHubPublicationIdentity(
 export async function prepareGitHubPublicationOptionsIdentity(
   params: GitHubIdentityPreparation & { assertCurrent?: () => void },
 ) {
-  const { prepared } = await prepareSharedGitHubIdentity(params, readCachedNativeGitHubToken);
+  const { prepared, stale } = await prepareSharedGitHubIdentity(
+    { ...params, allowStale: true },
+    readCachedNativeGitHubToken,
+  );
   if (!prepared) {
     throw new GitHubIdentityError("unavailable");
   }
-  return { source: prepared.source, account: prepared.account };
+  return { source: prepared.source, account: prepared.account, ...(stale ? { stale } : {}) };
 }
 
 export function prepareGitHubReadIdentity(
@@ -580,7 +590,7 @@ export async function prepareGitHubReadIdentity(
   const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
   await startGitHubIdentityOperation(params.refresh, caller);
   assertSelected();
-  const { token, readToken, prepared } = await prepareSharedGitHubIdentity(
+  const { token, readToken, prepared, stale } = await prepareSharedGitHubIdentity(
     { ...params, ...caller },
     readCachedNativeGitHubToken,
     params.issuer,
@@ -591,6 +601,7 @@ export async function prepareGitHubReadIdentity(
     assertSelected,
     startActive: params.startActive,
     readToken,
+    ...(stale ? { stale } : {}),
     ...(!prepared || token === undefined
       ? { token: undefined, selection: { source: "anonymous" as const } }
       : {

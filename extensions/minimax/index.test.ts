@@ -811,7 +811,7 @@ describe("minimax provider hooks", () => {
     const resolveOAuthToken = vi.fn(async (params?: { provider?: string }) =>
       params?.provider === "minimax-portal" ? { token: "portal-oauth-token" } : null,
     );
-    const resolveApiKeyFromConfigAndStore = vi.fn(() => undefined);
+    const resolveApiKeyCandidatesFromConfigAndStore = vi.fn(async () => []);
 
     await expect(
       apiProvider.resolveUsageAuth?.({
@@ -819,12 +819,12 @@ describe("minimax provider hooks", () => {
         config: {},
         env: {},
         resolveOAuthToken,
-        resolveApiKeyFromConfigAndStore,
+        resolveApiKeyCandidatesFromConfigAndStore,
       } as never),
     ).resolves.toEqual({ token: "portal-oauth-token" });
 
     expect(resolveOAuthToken).toHaveBeenCalledWith({ provider: "minimax-portal" });
-    expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
+    expect(resolveApiKeyCandidatesFromConfigAndStore).not.toHaveBeenCalled();
   });
 
   it("uses the configured MiniMax base URL for usage snapshots", async () => {

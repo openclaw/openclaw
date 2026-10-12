@@ -323,7 +323,13 @@ function ViewportContent(props: ControllerProps) {
           ) : null}
         </div>
       </Match>
-      <Match when={!props.controller.native.activeTab && props.controller.running === false}>
+      <Match
+        when={
+          !props.controller.native.activeTab &&
+          props.controller.running === false &&
+          !props.controller.loading
+        }
+      >
         <PanelEmptyState
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
@@ -469,7 +475,7 @@ export function BrowserPanelChrome(
           {props.controller.noticeText}
         </div>
       ) : null}
-      <wa-tab-panel
+      <div
         ref={(element) => {
           // Remote scrolling must cancel local scrolling before the event bubbles.
           element.addEventListener("wheel", (event) => props.controller.handleWheel(event), {
@@ -478,8 +484,8 @@ export function BrowserPanelChrome(
         }}
         id={panelId}
         class="bp-viewport"
-        name={props.controller.activeTargetId ?? "browser"}
-        prop:active={true}
+        role="tabpanel"
+        aria-hidden="false"
         aria-labelledby={
           rendersTabStrip() && props.controller.activeTargetId
             ? `${panelId}-tab-${props.controller.activeTargetId}`
@@ -491,7 +497,7 @@ export function BrowserPanelChrome(
         aria-busy={props.controller.loading ? "true" : "false"}
       >
         <ViewportContent controller={props.controller} />
-      </wa-tab-panel>
+      </div>
     </section>
   );
 }

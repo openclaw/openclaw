@@ -38,12 +38,18 @@ If you need transcript storage details, see
 
 Slash commands and their delivered replies from the shared dispatcher are ordinary
 conversation messages, not runtime-only prompt context. Native command menus,
-button selections, and acknowledgements on Discord and Telegram are also retained
-after delivery; other channels' native direct-send adapters are not covered.
+button selections, and acknowledgements on Discord and Telegram, Slack
+argument menus, and Mattermost model pickers are also retained after delivery.
 Login device codes, pairing codes, login URLs, and sensitive `/config set` or `/debug set` values
 (including nested object assignments) are redacted before appending the exchange.
 These rows remain available to later provider requests and chat history without rewriting earlier
 rows. `/btw` and `/side` remain ephemeral.
+
+## Delivered automation results
+
+Canonical `openclaw` / `automation-result` assistant rows remain in model history,
+even when their text matches the preceding assistant reply and their usage is
+zero. The historical duplicate filter still removes marker-free delivery mirrors.
 
 ## Failed attempts and recovery
 
