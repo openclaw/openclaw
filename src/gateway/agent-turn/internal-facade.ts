@@ -5,6 +5,7 @@ import {
   validateAgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
@@ -73,13 +74,20 @@ export function createInternalAgentTurnFacade(
     let preparationOwnedByExecution = false;
     try {
       const methodRegistry = getMethodRegistry();
-      const authorization = await authorizeGatewayRequestPreDispatch({
-        method,
-        requestParams: request,
-        client: options.client,
-        context,
-        methodRegistry,
-      });
+      const authorizeRequest = () =>
+        authorizeGatewayRequestPreDispatch({
+          method,
+          requestParams: request,
+          client: options.client,
+          context,
+          methodRegistry,
+        });
+      // Native completion callbacks can retain a drained foreground scope. Move
+      // only that stale preflight into the live Gateway owner before projection
+      // reads; ordinary requests keep their existing single execution entry.
+      const authorization = getAsyncWorkSignal()?.aborted
+        ? await context.trackExecution(authorizeRequest)
+        : await authorizeRequest();
       throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
       entry?.assertOpen();
       if (authorization.error) {

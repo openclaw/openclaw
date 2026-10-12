@@ -5,7 +5,11 @@ import {
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
+import {
+  AsyncWorkScope,
+  getAsyncWorkSignal,
+  trackAsyncWork,
+} from "../../shared/async-work-scope.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
@@ -632,4 +636,31 @@ describe("createInternalAgentTurnFacade", () => {
       }
     },
   );
+
+  it("authorizes inside the Gateway execution owner", async () => {
+    const owner = new AsyncWorkScope();
+    const context = createContext();
+    context.trackExecution = (run) => owner.track(run);
+    authorize.mockImplementationOnce(async () => {
+      expect(getAsyncWorkSignal()).toBe(owner.signal);
+      return { error: null };
+    });
+    startTurn.mockImplementationOnce(async ({ io }) => {
+      io.emitAcceptance([true, { runId: "owned-admission" }, undefined]);
+    });
+    try {
+      const stale = new AsyncWorkScope();
+      stale.beginClose();
+      await stale.run(async () =>
+        expect(
+          await createFacade(context).dispatch({
+            message: "run the owned admission probe",
+            idempotencyKey: "owned-admission",
+          }),
+        ).toMatchObject({ runId: "owned-admission" }),
+      );
+    } finally {
+      await owner.drain();
+    }
+  });
 });
