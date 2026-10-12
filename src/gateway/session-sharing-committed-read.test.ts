@@ -20,9 +20,11 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
@@ -49,12 +51,20 @@ describe("committed session mutation authorization", () => {
     "revokes %s worker grants after committed membership changes without main-thread reads",
     async (mode) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        ensureUserProfilesSchema({});
+        const profileCatalog = await prepareUserProfileCatalog();
+        const releaseForeground = retainSessionListForegroundWork();
+        using _ = {
+          [Symbol.dispose]() {
+            releaseForeground();
+            profileCatalog.release();
+          },
+        };
         const cfg = rolePolicyConfig();
         if (mode === "fixed") {
           cfg.session = { store: state.statePath("legacy", "sessions.json") };
         }
         const client = roleClient("view", `worker-grant-${mode}`);
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const sessionKey = "agent:main:worker-grant";
         const sessionId = "worker-grant-session";
         const scope = { agentId: "main", sessionKey, storePath: cfg.session?.store };
@@ -149,9 +159,10 @@ describe("committed session mutation authorization", () => {
     "keeps committed guards current without unrelated entries (resident: %s)",
     async (resident) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cfg = rolePolicyConfig();
         const client = roleClient("view", "committed-reader");
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const sessionKey = "agent:main:committed-authorization";
         const scope = { agentId: "main", sessionKey };
         const shared = { sessionId: "original", updatedAt: 1, visibility: "shared" as const };
@@ -333,9 +344,10 @@ describe("committed session mutation authorization", () => {
     "revalidates a committed main-key change with a reader first opened %s the uncommitted setter",
     async (opened) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cfg = rolePolicyConfig();
         const client = roleClient("write", "committed-main-key");
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const sessionKey = "agent:main:committed-authorization";
         replaceSessionEntrySync(
           { agentId: "main", sessionKey },

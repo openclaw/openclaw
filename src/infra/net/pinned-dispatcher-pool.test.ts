@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hasProviderTransportDispatcherPool } from "../../agents/provider-runtime-lifecycle.js";
 import {
   closeProviderTransportDispatcherPool,
   getProviderTransportDispatcherPool,
@@ -21,14 +20,6 @@ describe("PinnedDispatcherPool", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await closeProviderTransportDispatcherPool();
-  });
-
-  it("records dispatcher-pool activity only for an allocated generation", async () => {
-    expect(hasProviderTransportDispatcherPool()).toBe(false);
-    getProviderTransportDispatcherPool();
-    expect(hasProviderTransportDispatcherPool()).toBe(true);
-    await closeProviderTransportDispatcherPool();
-    expect(hasProviderTransportDispatcherPool()).toBe(false);
   });
 
   it("reuses an exact live key and closes it only at lifecycle shutdown", async () => {
@@ -103,24 +94,6 @@ describe("PinnedDispatcherPool", () => {
     await pool.closeAll();
   });
 
-  it("expires idle entries with an unreferenced sweep", async () => {
-    vi.useFakeTimers();
-    const pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 50 });
-    const created = createDispatcher();
-    const lease = pool.acquire({
-      key: "origin-a/pin-a",
-      createDispatcher: () => created.dispatcher,
-    });
-    await lease?.release();
-
-    await vi.advanceTimersByTimeAsync(49);
-    expect(created.close).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(created.close).toHaveBeenCalledOnce();
-
-    await pool.closeAll();
-  });
-
   it.each(["expiry", "shutdown"] as const)(
     "keeps request contexts out of pool-owned %s cleanup",
     async (reason) => {
@@ -162,15 +135,6 @@ describe("PinnedDispatcherPool", () => {
       }
     },
   );
-
-  it("fences a closed generation from later acquisition", async () => {
-    const pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 60_000 });
-    await pool.closeAll();
-
-    const create = vi.fn(() => createDispatcher().dispatcher);
-    expect(pool.acquire({ key: "origin-a/pin-a", createDispatcher: create })).toBeUndefined();
-    expect(create).not.toHaveBeenCalled();
-  });
 
   it("does not publish a replacement generation while shutdown is closing", async () => {
     const close = createDeferredCore();

@@ -1,6 +1,5 @@
 // Codex tests cover dynamic tool build plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import "./dynamic-tool-build.test-support.js";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -59,6 +58,7 @@ const {
   bindProductionCodexHostCapabilities,
   buildDynamicToolsForTest,
   cleanupDynamicToolBuildFixture,
+  setupDynamicToolBuildFixture,
   createCodexRuntimePlanFixture,
   createParams: createBaseParams,
   createRuntimeDynamicTool,
@@ -529,19 +529,11 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   beforeEach(async () => {
-    setRuntimeConfigSnapshot({});
-    hoisted.loadNodeExecAvailability.mockResolvedValue({
-      cacheKey: "eligible",
-      isAvailable: () => true,
-    });
-    hoisted.normalizeAgentRuntimeTools.mockClear();
-    hoisted.resolveWebSearchToolPolicy.mockClear();
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
+    tempDir = await setupDynamicToolBuildFixture();
   });
 
   afterEach(async () => {
     await cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers);
-    clearRuntimeConfigSnapshot();
   });
 
   const sandboxEnvironment = { environmentId: "sandbox-1", cwd: "/workspace" };

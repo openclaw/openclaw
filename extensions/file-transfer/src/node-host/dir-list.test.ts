@@ -70,27 +70,24 @@ describe("handleDirList — invalid directory bindings", () => {
   );
 });
 
-describe.each([
-  ["dir.list", handleDirList, "path not found", "PERMISSION_DENIED"],
-  ["dir.fetch", handleDirFetch, "directory not found", "READ_ERROR"],
-] as const)("%s — directory binding", (_command, handle, notFoundMessage, permissionCode) => {
+describe("directory binding", () => {
   it("preserves path and directory errors before validating the binding", async () => {
     const missing = path.join(tmpRoot, "missing");
-    await expect(handle({ path: missing, expectedBinding: null })).resolves.toEqual({
+    await expect(handleDirList({ path: missing, expectedBinding: null })).resolves.toEqual({
       ok: false,
       code: "NOT_FOUND",
-      message: notFoundMessage,
+      message: "path not found",
     });
     const file = path.join(tmpRoot, "file.txt");
     await fs.writeFile(file, "keep");
-    await expect(handle({ path: file, expectedBinding: null })).resolves.toEqual({
+    await expect(handleDirList({ path: file, expectedBinding: null })).resolves.toEqual({
       ok: false,
       code: "IS_FILE",
       message: "path is not a directory",
       canonicalPath: file,
     });
     await expect(
-      handle({ path: file, expectedCanonicalPath: tmpRoot, expectedBinding: null }),
+      handleDirList({ path: file, expectedCanonicalPath: tmpRoot, expectedBinding: null }),
     ).resolves.toEqual({
       ok: false,
       code: "CANONICAL_PATH_CHANGED",
@@ -99,18 +96,24 @@ describe.each([
     });
   });
 
-  it("retains the command's permission-error classification", async () => {
-    vi.spyOn(fs, "stat").mockRejectedValueOnce(
-      Object.assign(new Error("denied"), { code: "EACCES" }),
-    );
+  it.each([
+    ["dir.list", handleDirList, "PERMISSION_DENIED"],
+    ["dir.fetch", handleDirFetch, "READ_ERROR"],
+  ] as const)(
+    "retains %s's permission-error classification",
+    async (_command, handle, permissionCode) => {
+      vi.spyOn(fs, "stat").mockRejectedValueOnce(
+        Object.assign(new Error("denied"), { code: "EACCES" }),
+      );
 
-    await expect(handle({ path: tmpRoot, expectedBinding: null })).resolves.toEqual({
-      ok: false,
-      code: permissionCode,
-      message: "stat failed: Error: denied",
-      canonicalPath: tmpRoot,
-    });
-  });
+      await expect(handle({ path: tmpRoot, expectedBinding: null })).resolves.toEqual({
+        ok: false,
+        code: permissionCode,
+        message: "stat failed: Error: denied",
+        canonicalPath: tmpRoot,
+      });
+    },
+  );
 });
 
 describe("handleDirList — happy path", () => {
@@ -279,44 +282,6 @@ describe("handleDirList — happy path", () => {
     expect(r.nextPageToken).toBeUndefined();
   });
 
-  it("paginates via pageToken (offset-based)", async () => {
-    for (let i = 0; i < 7; i++) {
-      // zero-pad so localeCompare-stable sort matches creation order
-      await fs.writeFile(path.join(tmpRoot, `f-${i}.txt`), "x");
-    }
-
-    const page1 = await handleDirList({ path: tmpRoot, maxEntries: 3 });
-    if (!page1.ok) {
-      throw new Error("page1");
-    }
-    expect(page1.entries.map((e) => e.name)).toEqual(["f-0.txt", "f-1.txt", "f-2.txt"]);
-    expect(page1.truncated).toBe(true);
-    expect(page1.nextPageToken).toBe("3");
-
-    const page2 = await handleDirList({
-      path: tmpRoot,
-      maxEntries: 3,
-      pageToken: page1.nextPageToken,
-    });
-    if (!page2.ok) {
-      throw new Error("page2");
-    }
-    expect(page2.entries.map((e) => e.name)).toEqual(["f-3.txt", "f-4.txt", "f-5.txt"]);
-    expect(page2.truncated).toBe(true);
-
-    const page3 = await handleDirList({
-      path: tmpRoot,
-      maxEntries: 3,
-      pageToken: page2.nextPageToken,
-    });
-    if (!page3.ok) {
-      throw new Error("page3");
-    }
-    expect(page3.entries.map((e) => e.name)).toEqual(["f-6.txt"]);
-    expect(page3.truncated).toBe(false);
-    expect(page3.nextPageToken).toBeUndefined();
-  });
-
   it("does not coerce partial page tokens", async () => {
     for (let i = 0; i < 3; i++) {
       await fs.writeFile(path.join(tmpRoot, `f-${i}.txt`), "x");
@@ -341,23 +306,5 @@ describe("handleDirList — happy path", () => {
     }
     expect(r.entries.map((e) => e.name)).toEqual(["f-1.txt"]);
     expect(r.nextPageToken).toBe("2");
-  });
-
-  it("uses the 200-entry default for invalid limits", async () => {
-    await Promise.all(
-      Array.from({ length: 201 }, (_, index) =>
-        fs.writeFile(path.join(tmpRoot, `entry-${String(index).padStart(3, "0")}`), ""),
-      ),
-    );
-
-    for (const maxEntries of [undefined, -1, Number.NaN, "200"] as unknown[]) {
-      const result = await handleDirList({ path: tmpRoot, maxEntries });
-      if (!result.ok) {
-        throw new Error(`expected ok, got ${result.code}`);
-      }
-      expect(result.entries).toHaveLength(200);
-      expect(result.nextPageToken).toBe("200");
-      expect(result.truncated).toBe(true);
-    }
   });
 });

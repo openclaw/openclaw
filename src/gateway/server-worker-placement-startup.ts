@@ -401,6 +401,7 @@ export function createGatewayWorkerPlacementRuntime(
     workspaceOperations,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
+    persistAbandonedPartial: params.persistAbandonedPartial,
   });
   const startRuntime = async (hooks: {
     isClosePreludeStarted: () => boolean;

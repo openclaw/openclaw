@@ -113,6 +113,13 @@ cache refreshes. Row receipts do not grant permission, and a missing receipt is
 not proof of absence. Outside processes use the Gateway or exclusive offline
 ownership; ordinary readers do not poll for foreign commits.
 
+Memory retrieval workers borrow the existing agent read-only owner across query
+awaits and release each borrow before replying. The owner retains the idle reader
+and its prepared statements, with committed-write invalidation and physical-file
+replacement handled by its existing lifecycle. Vector-extension probing keeps a
+separate extension-capable connection. Search queries, ranking, result bounds,
+schemas, and update behavior are unchanged.
+
 Transcript readers retain bounded hot/cold facts under the existing session write
 receipts. Archive, restore, session deletion, and native writes invalidate those
 facts; an unknown receipt falls back to the durable marker. Each new transcript
@@ -597,7 +604,9 @@ reuses the database owner's admitted table and index facts.
 
 Durable Board writes with ordinary request callbacks use the existing worker.
 Cross-store source authority and native incognito retain their explicit native
-adapter. Board reads inside a transaction reuse its snapshot without a nested
+adapter. Cross-store writes check the captured target session identity once in
+the mutation kernel's transaction, without a second session-existence read.
+Board reads inside a transaction reuse its snapshot without a nested
 savepoint. Ambient-watch preparation uses the existing read worker; the released
 synchronous prompt adapter remains deprecated with a runtime warning.
 
