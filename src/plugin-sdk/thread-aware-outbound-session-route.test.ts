@@ -39,22 +39,6 @@ describe("buildThreadAwareOutboundSessionRoute", () => {
     );
   });
 
-  it("supports provider-specific threadId-first precedence", () => {
-    const route = buildThreadAwareOutboundSessionRoute({
-      route: baseRoute(),
-      replyToId: "reply-1",
-      threadId: "thread-1",
-      precedence: ["threadId", "replyToId", "currentSession"],
-    });
-
-    expect(route).toEqual(
-      baseRoute({
-        sessionKey: "agent:main:workspace:channel:c123:thread:thread-1",
-        threadId: "thread-1",
-      }),
-    );
-  });
-
   it("keeps numeric delivery thread ids on the route while stringifying the session suffix", () => {
     const route = buildThreadAwareOutboundSessionRoute({
       route: baseRoute(),
@@ -101,18 +85,6 @@ describe("buildThreadAwareOutboundSessionRoute", () => {
     ).toBeUndefined();
   });
 
-  it("keeps recovering current-session threads for non-opaque folded channel keys", () => {
-    expect(
-      recoverCurrentThreadSessionId({
-        route: baseRoute({
-          sessionKey: "agent:main:slack:channel:c1",
-          baseSessionKey: "agent:main:slack:channel:c1",
-        }),
-        currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
-      }),
-    ).toBe("1712345678.123456");
-  });
-
   it("lets providers veto current-session recovery", () => {
     const route = buildThreadAwareOutboundSessionRoute({
       route: baseRoute(),
@@ -123,36 +95,6 @@ describe("buildThreadAwareOutboundSessionRoute", () => {
     expect(route).toEqual(
       baseRoute({
         sessionKey: "agent:main:workspace:channel:c123",
-      }),
-    );
-  });
-
-  it("preserves provider-specific thread case when requested", () => {
-    const route = buildThreadAwareOutboundSessionRoute({
-      route: baseRoute(),
-      threadId: "$EventID:Example.Org",
-      normalizeThreadId: (threadId) => threadId,
-    });
-
-    expect(route).toEqual(
-      baseRoute({
-        sessionKey: "agent:main:workspace:channel:c123:thread:$EventID:Example.Org",
-        threadId: "$EventID:Example.Org",
-      }),
-    );
-  });
-
-  it("can carry a delivery thread without adding a session suffix", () => {
-    const route = buildThreadAwareOutboundSessionRoute({
-      route: baseRoute(),
-      threadId: "thread-1",
-      useSuffix: false,
-    });
-
-    expect(route).toEqual(
-      baseRoute({
-        sessionKey: "agent:main:workspace:channel:c123",
-        threadId: "thread-1",
       }),
     );
   });

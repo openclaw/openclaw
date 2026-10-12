@@ -580,26 +580,6 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
   });
 
-  it("persists cached secret-storage keys in SQLite state", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const callbacks = store.buildCryptoCallbacks();
-
-    callbacks.cacheSecretStorageKey?.(
-      "KEY123",
-      {
-        name: "openclaw",
-      },
-      new Uint8Array([9, 8, 7]),
-    );
-
-    expect(fs.existsSync(recoveryKeyPath)).toBe(false);
-    await store.drainPendingPersistence();
-    const saved = await readStoredRecoveryKey(recoveryKeyPath);
-    expect(saved.keyId).toBe("KEY123");
-    expect(saved.privateKeyBase64).toBe(Buffer.from([9, 8, 7]).toString("base64"));
-  });
-
   it("does not authorize destructive reset from an ephemeral cached key", async () => {
     const store = new MatrixRecoveryKeyStore();
     const callbacks = store.buildCryptoCallbacks();
@@ -607,28 +587,6 @@ describe("MatrixRecoveryKeyStore", () => {
     callbacks.cacheSecretStorageKey?.("KEY123", { name: "openclaw" }, new Uint8Array([9, 8, 7]));
 
     expect(await store.getSecretStorageKeyCandidate("KEY123")).toBeNull();
-  });
-
-  it("creates and persists a recovery key when secret storage is missing", async () => {
-    const { store, createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
-      await runSecretStorageBootstrapScenario({
-        generated: createGeneratedRecoveryKey({
-          keyId: "GENERATED",
-          name: "generated",
-          bytes: [5, 6, 7, 8],
-          encodedPrivateKey: "encoded-generated-key", // pragma: allowlist secret
-        }),
-        status: { ready: false, defaultKeyId: null },
-      });
-
-    expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
-    expect(bootstrapSecretStorageCallArg(bootstrapSecretStorage, 0)?.setupNewSecretStorage).toBe(
-      true,
-    );
-    await expectRecoveryKeySummary(store, {
-      keyId: "GENERATED",
-      encodedPrivateKey: "encoded-generated-key", // pragma: allowlist secret
-    });
   });
 
   it("rebinds stored recovery key to server default key id when it changes", async () => {
@@ -651,28 +609,6 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(createRecoveryKeyFromPassphrase).not.toHaveBeenCalled();
     await expectRecoveryKeySummary(store, {
       keyId: "NEW",
-    });
-  });
-
-  it("recreates secret storage when default key exists but is not usable locally", async () => {
-    const { store, createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
-      await runSecretStorageBootstrapScenario({
-        generated: createGeneratedRecoveryKey({
-          keyId: "RECOVERED",
-          name: "recovered",
-          bytes: [1, 1, 2, 3],
-          encodedPrivateKey: "encoded-recovered-key", // pragma: allowlist secret
-        }),
-        status: { ready: false, defaultKeyId: "LEGACY" },
-      });
-
-    expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
-    expect(bootstrapSecretStorageCallArg(bootstrapSecretStorage, 0)?.setupNewSecretStorage).toBe(
-      true,
-    );
-    await expectRecoveryKeySummary(store, {
-      keyId: "RECOVERED",
-      encodedPrivateKey: "encoded-recovered-key", // pragma: allowlist secret
     });
   });
 

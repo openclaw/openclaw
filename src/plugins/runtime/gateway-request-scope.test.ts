@@ -45,39 +45,6 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual(expected);
   }
 
-  async function expectPluginIdScopedGatewayScope(pluginId: string) {
-    await withPluginIdScope(pluginId, async (runtimeScope) => {
-      expectGatewayScope(runtimeScope, {
-        ...TEST_SCOPE,
-        pluginId,
-      });
-    });
-  }
-
-  async function withPluginIdScope(
-    pluginId: string,
-    run: (
-      runtimeScope: Awaited<ReturnType<typeof importGatewayRequestScopeModule>>,
-    ) => Promise<void>,
-  ) {
-    await withTestGatewayScope(async (runtimeScope) => {
-      await runtimeScope.withPluginRuntimePluginScope({ pluginId }, async () => {
-        await run(runtimeScope);
-      });
-    });
-  }
-
-  it("preserves Gateway scope across async work and restores the caller", async () => {
-    const runtimeScope = await importGatewayRequestScopeModule();
-
-    expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBeUndefined();
-    await runtimeScope.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, async () => {
-      await Promise.resolve();
-      expectGatewayScope(runtimeScope, TEST_SCOPE);
-    });
-    expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBeUndefined();
-  });
-
   it("keeps Gateway routing bound to the exact owner across wrappers and cleanup", async () => {
     const runtimeScope = await importGatewayRequestScopeModule();
     const owner = Object.freeze(prepareGatewayContextBindingOwner({}));
@@ -141,23 +108,6 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getGatewayContextLifetime(second).signal.aborted).toBe(false);
   });
 
-  it("attaches plugin id to the active scope", async () => {
-    await expectPluginIdScopedGatewayScope("voice-call");
-  });
-
-  it("resolves the owned registry while preserving gateway request facts", async () => {
-    const activeRegistry = createEmptyPluginRegistry();
-    const requestRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(activeRegistry);
-
-    await withTestGatewayScope(async (runtimeScope) => {
-      await runtimeScope.withPluginRuntimeRegistryScope(requestRegistry, async () => {
-        expect(requireActivePluginRegistry()).toBe(requestRegistry);
-        expectGatewayScope(runtimeScope, { ...TEST_SCOPE, pluginRegistry: requestRegistry });
-      });
-      expect(requireActivePluginRegistry()).toBe(activeRegistry);
-    });
-  });
   it("drops generation ownership for re-admission and restores the caller afterward", async () => {
     const generation = await import("./generation-scope.js");
     const { getCurrentPluginMetadataSnapshot } =

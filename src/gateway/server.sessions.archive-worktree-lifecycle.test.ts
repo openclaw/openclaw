@@ -590,9 +590,10 @@ test.each(["ready", "cleared-selection"] as const)(
     await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
 
     if (catalogMode === "cleared-selection") {
+      // Model changes preserve thinking; a stored context window still needs catalog validation.
       await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({
         thinkingLevel: "off",
-        contextWindow: "extended",
+        contextWindow: "128k",
       }));
     }
     const restore = vi.spyOn(ManagedWorktreeService.prototype, "restore");
@@ -615,9 +616,11 @@ test.each(["ready", "cleared-selection"] as const)(
       expect(await restored).toMatchObject({ ok: true });
       expect(restore).toHaveBeenCalledOnce();
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
-      expect(loadSessionEntry({ storePath, sessionKey: key })?.thinkingLevel).toBe(
+      const restoredEntry = loadSessionEntry({ storePath, sessionKey: key });
+      expect(restoredEntry?.thinkingLevel).toBe(
         catalogMode === "cleared-selection" ? undefined : "off",
       );
+      expect(restoredEntry?.contextWindow).toBeUndefined();
     } finally {
       catalogRelease.resolve();
       await Promise.allSettled([restored]);
