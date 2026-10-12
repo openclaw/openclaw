@@ -41,7 +41,9 @@ type PreparedModelRuntimeLeaseContext = {
   retainedGatewayRunOwners: PreparedModelRuntimeOwnerRetention;
   getBuildTimeoutMs(): number;
   getGatewayLifecycleActive(): boolean;
-  getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
+  getPendingReplacement(
+    input?: PreparedModelRuntimeInput,
+  ): PreparedModelRuntimeReplacement | undefined;
 };
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
@@ -96,13 +98,13 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     }
   };
   assertAdmission();
-  let replacement = context.getPendingReplacement();
+  let replacement = context.getPendingReplacement(rawInput);
   // Drain, retirement, and failed-activation recovery each own one gate; further churn is best effort.
   for (let waits = 0; replacement && waits < 3; waits += 1) {
     assertPreparedModelRuntimeAdmissionCanWait();
     await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
     assertAdmission();
-    replacement = context.getPendingReplacement();
+    replacement = context.getPendingReplacement(rawInput);
   }
   if (replacement) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -115,13 +117,15 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     preserveWorkspaceDirOnRefresh:
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
   });
-  if (provenance === "run" && !options.pluginGeneration && context.getGatewayLifecycleActive()) {
+  if (provenance === "run" && context.getGatewayLifecycleActive()) {
     const configured = resolveConfiguredOwner(context.owners, input);
     if (configured?.pending) {
       assertPreparedModelRuntimeAdmissionCanWait(configured);
       await racePromiseWithAbortSignal(configured.pending, options.abortSignal);
       assertAdmission();
     }
+  }
+  if (provenance === "run" && !options.pluginGeneration && context.getGatewayLifecycleActive()) {
     try {
       input = rebindInputToCommittedConfiguredOwner(context.owners, input);
     } catch (error) {

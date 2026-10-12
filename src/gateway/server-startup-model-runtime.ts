@@ -6,7 +6,11 @@ type StartupExternalAuthHydrationDeps = {
   listAgentIds: (cfg: OpenClawConfig) => string[];
   resolveAgentDir: (cfg: OpenClawConfig, agentId: string) => string;
   collectConfiguredRefs: (cfg: OpenClawConfig, agentId: string) => readonly { value: string }[];
-  hydrate: (cfg: OpenClawConfig, agentDir: string, providers: readonly string[]) => void;
+  hydrate: (
+    cfg: OpenClawConfig,
+    agentDir: string,
+    providers: readonly string[],
+  ) => void | Promise<void>;
 };
 
 export async function hydrateConfiguredExternalCliAuth(params: {
@@ -25,12 +29,12 @@ export async function hydrateConfiguredExternalCliAuth(params: {
       listAgentIds: scope.listAgentIds,
       resolveAgentDir: scope.resolveAgentDir,
       collectConfiguredRefs: configured.collectPreparedModelRuntimeConfiguredRefs,
-      hydrate: (cfg: OpenClawConfig, agentDir: string, providers: readonly string[]) => {
+      hydrate: async (cfg: OpenClawConfig, agentDir: string, providers: readonly string[]) => {
         const discovery = external.externalCliDiscoveryForProviders({ cfg, providers });
         if (discovery.mode === "none") {
           return;
         }
-        store.ensureAuthProfileStore(agentDir, {
+        await store.ensureAuthProfileStoreAsync(agentDir, {
           config: cfg,
           externalCli: discovery,
           allowKeychainPrompt: false,
@@ -52,7 +56,7 @@ export async function hydrateConfiguredExternalCliAuth(params: {
     }
     hydratedDirs.add(agentDir);
     try {
-      deps.hydrate(cfg, agentDir, providers);
+      await deps.hydrate(cfg, agentDir, providers);
     } catch (error) {
       params.log.warn(
         `startup external CLI auth hydration failed for agent ${agentId}: ${String(error)}`,

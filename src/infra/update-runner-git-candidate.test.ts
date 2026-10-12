@@ -747,6 +747,7 @@ describe("Git candidate activation", () => {
       const candidateSha = await advanceRemote();
       const command = runCommand;
       let resetFaultInjected = false;
+      const rollbackFailure = new Error("rollback command unavailable");
       const recoveryTimeouts: Array<number | undefined> = [];
       runCommand = async (argv, options) => {
         if (faultInjected && argv[0] === "git" && argv[2] === root) {
@@ -762,7 +763,7 @@ describe("Git candidate activation", () => {
         ) {
           resetFaultInjected = true;
           if (restoreSource === "throw") {
-            throw new Error("rollback command unavailable");
+            throw rollbackFailure;
           }
           return { code: 1, stdout: "", stderr: "source restoration failed" };
         }
@@ -798,7 +799,12 @@ describe("Git candidate activation", () => {
       });
       const execution = update({ timeoutMs, progress: { onRollbackOutcome } });
       if (restoreSource === "throw") {
-        await expect(execution).rejects.toThrow("rollback command unavailable");
+        const failure = await execution.catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(failure).toMatchObject({
+          cause: rollbackFailure,
+          errors: expect.arrayContaining([rollbackFailure]),
+        });
         expect(resetFaultInjected).toBe(true);
         expect(onRollbackOutcome).toHaveBeenLastCalledWith({
           status: "failed",

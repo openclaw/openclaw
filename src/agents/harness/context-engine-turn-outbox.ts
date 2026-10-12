@@ -1,5 +1,5 @@
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import type { ClosedTranscriptTurnReadResult } from "../../config/sessions/session-accessor.transcript-range.js";
+import type { ClosedTranscriptTurnReadResult } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
@@ -85,6 +85,25 @@ export type ContextEngineTurnOutboxStore = Readonly<{
   recordFailure(advancementKey: string, message: string, attemptedAt: number): Promise<void>;
   hasPending(filter: ContextEngineTurnOutboxFilter & { sessionId?: string }): Promise<boolean>;
 }>;
+
+/** The durable context-engine turn outbox of one agent database, executed in its worker. */
+export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
+  Readonly<{
+    [
+      Type in
+        | "prepareRun"
+        | "enqueueIntent"
+        | "acceptIntent"
+        | "publishClosedTurn"
+        | "discardIntent"
+    ]: (
+      input: ContextEngineTurnOutboxWorkerOperations[Type]["input"],
+    ) => Promise<
+      ContextEngineTurnOutboxWorkerOperations[Type]["output"] extends undefined
+        ? void
+        : ContextEngineTurnOutboxWorkerOperations[Type]["output"]
+    >;
+  }>;
 
 export async function drainContextEngineTurnOutbox(params: {
   store: ContextEngineTurnOutboxStore;

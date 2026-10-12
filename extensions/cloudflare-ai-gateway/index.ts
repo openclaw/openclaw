@@ -2,7 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
   type ProviderAuthContext,
@@ -102,7 +102,7 @@ export default definePluginEntry({
             };
           },
           runNonInteractive: async (ctx) => {
-            const authStore = ensureAuthProfileStore(ctx.agentDir, {
+            const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
               allowKeychainPrompt: false,
             });
             const credential = authStore.profiles[PROFILE_ID];
@@ -154,7 +154,7 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: async (ctx) => {
-          const authStore = ensureAuthProfileStore(ctx.agentDir, {
+          const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
             allowKeychainPrompt: false,
           });
           const envManagedApiKey = normalizeOptionalString(ctx.env[PROVIDER_ENV_VAR])

@@ -3,7 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import * as chatMessage from "./chat-message-group.ts";
 import {
@@ -26,6 +27,12 @@ function requireElement(container: ParentNode, selector: string): HTMLElement {
 describe("chat transcript replies", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  function commitLayout() {
+    flush();
+    vi.advanceTimersToNextFrame();
+    flush();
+  }
 
   function replyMessages(
     client?: readonly [id: string, mode: string, displayName: string] | null,
@@ -65,6 +72,12 @@ describe("chat transcript replies", () => {
   ])(
     "reveals loaded replies and owns their flash lifetime: $name",
     async ({ reducedMotion, textless }) => {
+      const flushFrames = stubAnimationFrames();
+      const commitReplyLayout = () => {
+        flush();
+        flushFrames();
+        flush();
+      };
       vi.stubGlobal("matchMedia", (query: string) => ({
         matches: query.includes("prefers-reduced-motion") && reducedMotion,
         addEventListener: vi.fn(),
@@ -103,10 +116,11 @@ describe("chat transcript replies", () => {
         (bubble) => bubble.dataset.entryId === "source-message",
       )!;
       const duration = reducedMotion ? 1_000 : 1_200;
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
       try {
         preview?.click();
         await Promise.resolve();
+        commitReplyLayout();
         expect(open).not.toHaveBeenCalled();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         if (!textless) {
@@ -118,12 +132,14 @@ describe("chat transcript replies", () => {
         vi.advanceTimersByTime(duration / 2);
         preview?.click();
         await Promise.resolve();
+        commitReplyLayout();
         vi.advanceTimersByTime(duration - 1);
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         vi.advanceTimersByTime(1);
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
         preview?.click();
         await Promise.resolve();
+        commitReplyLayout();
         transcript.hostDisconnected();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
       } finally {
@@ -271,13 +287,16 @@ describe("chat transcript replies", () => {
     transcript.hostConnected();
     transcript.hostUpdated();
     await flushDeferredRowPrune();
-    transcript.hostDisconnected();
-    const strips = [...container.querySelectorAll(".chat-reply-attribution--reply")].map((strip) =>
-      strip.querySelector(".chat-reply-attribution__name")?.textContent?.trim(),
-    );
-    // No reply cue renders beyond the named strips.
-    expect(container.textContent?.split("Replying to").length).toBe(strips.length + 1);
-    return strips;
+    try {
+      const strips = [...container.querySelectorAll(".chat-reply-attribution--reply")].map(
+        (strip) => strip.querySelector(".chat-reply-attribution__name")?.textContent?.trim(),
+      );
+      // No reply cue renders beyond the named strips.
+      expect(container.textContent?.split("Replying to").length).toBe(strips.length + 1);
+      return strips;
+    } finally {
+      transcript.hostDisconnected();
+    }
   }
 
   const currentReplyCases = [
@@ -490,6 +509,7 @@ describe("chat transcript replies", () => {
       expect(threadContainer.querySelector(sourceSelector)).toBeNull();
       requireElement(threadContainer, ".chat-reply-attribution button").click();
       await vi.advanceTimersByTimeAsync(0);
+      commitLayout();
 
       expect(searchContainer.querySelector("input")).toBeNull();
       if (loaded) {

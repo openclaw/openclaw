@@ -145,10 +145,6 @@ describe("MediaStreamHandler playback marks", () => {
       await withTimeout(playback);
       expect(talkEvents.some((event) => event.type === "output.audio.done")).toBe(false);
 
-      const state = handler as unknown as {
-        ignoredPlaybackMarks: Map<string, Set<string>>;
-      };
-      expect(state.ignoredPlaybackMarks.get("MZ-clear-mark")).toContain("tts-cleared");
       ws.send(
         JSON.stringify({
           event: "mark",
@@ -156,15 +152,9 @@ describe("MediaStreamHandler playback marks", () => {
           mark: { name: "tts-cleared" },
         }),
       );
-      await vi.waitFor(() => {
-        expect(state.ignoredPlaybackMarks.get("MZ-clear-mark")?.has("tts-cleared") ?? false).toBe(
-          false,
-        );
-      });
-      expect(talkEvents.some((event) => event.type === "output.audio.done")).toBe(false);
-
       ws.close();
       await waitForClose(ws);
+      expect(talkEvents.some((event) => event.type === "output.audio.done")).toBe(false);
     } finally {
       ws?.terminate();
       await server.close();

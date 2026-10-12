@@ -50,7 +50,7 @@ import {
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionEntryProjection } from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";

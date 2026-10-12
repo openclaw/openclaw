@@ -5,7 +5,7 @@ import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "./bundle-mc
 
 const authMocks = vi.hoisted(() => ({
   loadExecApprovalsReadOnlyAsync: vi.fn(),
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
+  loadAuthProfileStoreForRuntimeAsync: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
   resolveMcpOAuthAccessToken: vi.fn(),
 }));
@@ -14,8 +14,9 @@ vi.mock("../../infra/exec-approvals-store.js", () => ({
   loadExecApprovalsReadOnlyAsync: authMocks.loadExecApprovalsReadOnlyAsync,
 }));
 
+// mock-isolation: MCP projection consumes synthetic profile snapshots without reading host stores.
 vi.mock("../auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));
 
 vi.mock("../auth-profiles/oauth.js", () => ({
@@ -31,7 +32,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     authMocks.loadExecApprovalsReadOnlyAsync
       .mockReset()
       .mockResolvedValue({ version: 1, agents: {} });
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockReset();
     authMocks.resolveApiKeyForProfile.mockReset();
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
@@ -505,7 +506,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
   });
 
   it("preserves tool filters while projecting auth-profile backed MCP bearers at runtime", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValueOnce({
       version: 1,
       profiles: {
         "ducktape:mcp": {

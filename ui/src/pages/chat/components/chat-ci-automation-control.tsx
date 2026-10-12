@@ -374,34 +374,15 @@ function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) 
     model.connect({ sessionId: host.sessionId });
     return () => model.dispose();
   });
-  return (
-    <ChatCiAutomationView
-      options={read().options}
-      pending={read().pending}
-      jobs={read().jobs}
-      schedulerEnabled={read().schedulerEnabled}
-      loading={read().loading}
-      saving={read().saving}
-      error={read().error}
-      disabled={read().disabled}
-      disabledReason={read().disabledReason}
-      retryDisabled={read().retryDisabled}
-      onChange={(option, enabled) => model.view().onChange(option, enabled)}
-      onRetry={() => model.view().onRetry()}
-    />
-  );
+  return <ChatCiAutomationView {...read()} />;
 }
 
-export const ChatCiAutomation = defineSolidBridge<Props>(
-  "openclaw-chat-ci-automation",
-  ChatCiAutomationContent,
-  {
-    properties: {
-      gateway: { default: undefined, attribute: false },
-      pullRequest: { default: undefined, attribute: false },
-      sessionKey: { default: "", attribute: false },
-      sessionId: { default: "", attribute: false },
-      presented: { default: true, type: Boolean },
-    },
+defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {
+  properties: {
+    gateway: { default: undefined, attribute: false },
+    pullRequest: { default: undefined, attribute: false },
+    sessionKey: { default: "", attribute: false },
+    sessionId: { default: "", attribute: false },
+    presented: { default: true, type: Boolean },
   },
-);
+});

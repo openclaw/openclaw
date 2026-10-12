@@ -41,7 +41,6 @@ export type SqliteReadOnlyWorkerResult =
   | { ok: false; message: string };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
-export class SqliteSnapshotAllocationRefusedError extends Error {}
 
 // Released updater parents require exactly { ok, message }. A negotiated worker
 // protocol can replace this owner-generated tag when those parents are retired.
@@ -214,9 +213,6 @@ export function readSqliteReadOnlyWorkerValue(
     if (contention) {
       const failure = new SqliteReadOnlyInspectionContentionError(error.message);
       throw allocationRefused ? markPrivateDirectoryCreationRefused(failure) : failure;
-    }
-    if (allocationRefused) {
-      throw new SqliteSnapshotAllocationRefusedError(error.message);
     }
     throw error;
   }

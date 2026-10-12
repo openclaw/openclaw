@@ -10,7 +10,7 @@ type GitHubPublicationMutableFacts = {
   effect_state?: string | null;
 };
 
-type GitHubPublicationEffectTransition =
+export type GitHubPublicationEffectTransition =
   | { operation: "updateHead"; headCommit: string }
   | { operation: "complete"; result: SessionGitHubPublicationResult }
   | {
@@ -21,7 +21,7 @@ type GitHubPublicationEffectTransition =
   | { operation: "interrupt" };
 
 /** Effect observations retain custody but never restore permission for another action. */
-function githubPublicationEffectFacts(
+export function githubPublicationEffectFacts(
   transition: GitHubPublicationEffectTransition,
   interruptedStatus: "requested" | "needs_confirmation",
 ): { values: GitHubPublicationMutableFacts; requireAction: boolean } {

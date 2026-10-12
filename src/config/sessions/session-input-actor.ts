@@ -4,15 +4,29 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureSessionPendingInputWorkerCustody } from "./session-accessor.sqlite-pending-inputs.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
-import type { SessionActor, SessionActorLifetime } from "./session-actor-contract.js";
+import type {
+  SessionActor,
+  SessionActorAuthority,
+  SessionActorLifetime,
+} from "./session-actor-contract.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+
+type SessionInputActorAcquisition = {
+  actor: SessionActor;
+  target: SessionEntryTargetPatchScope;
+  storageAuthority?: SessionActorStorageAuthority;
+};
 
 export type SessionInputActorBinding = {
   phase: "acceptInput" | "adoptRun";
-  acquire(): Promise<{ actor: SessionActor; target: SessionEntryTargetPatchScope } | undefined>;
+  acquire(): Promise<SessionInputActorAcquisition | undefined>;
 };
 
 const recorderBindings = new WeakMap<
@@ -43,7 +57,7 @@ export function bindUserTurnInputActor(
 export async function acquireSessionInputActor(
   requestedTarget: SessionEntryTargetPatchScope,
   lifetime: SessionActorLifetime,
-): Promise<{ actor: SessionActor; target: SessionEntryTargetPatchScope } | undefined> {
+): Promise<SessionInputActorAcquisition | undefined> {
   const agentId = requestedTarget.readSource?.agentId ?? requestedTarget.agentId;
   if (!agentId) {
     throw new Error("Input actor requires its captured agent owner");
@@ -63,6 +77,30 @@ export async function acquireSessionInputActor(
     env: target.env,
   };
   lifetime.assertCurrent();
+  const memory = getSessionActorStorageBinding({
+    ...database,
+    storePath: database.path,
+    sessionKey,
+  });
+  if (memory) {
+    const actor = await memory.actor.storage!.acquire(sessionKey, lifetime);
+    const identity = actor.target.database;
+    if (identity.kind !== "memory") {
+      throw new Error("Memory input actor requires its selected memory owner");
+    }
+    return {
+      actor,
+      storageAuthority: memory.authority,
+      target: {
+        ...target,
+        readSource: {
+          agentId: memory.agentId,
+          path: memory.path,
+          databaseIdentity: identity.incarnation,
+        },
+      },
+    };
+  }
   const { createSessionActorFactory } = await import("./session-actor-durable.js");
   lifetime.assertCurrent();
   const bound = captureIncognitoSessionOperation({
@@ -142,6 +180,34 @@ export function withSessionInputActor<T>(
 export async function getSessionInputActor(scope: { agentId: string; sessionKey: string }) {
   const binding = inputActor.getStore();
   if (!binding) {
+    const memory = getSessionActorStorageBinding(scope);
+    if (memory) {
+      const identity = memory.actor.target.database;
+      if (identity.kind !== "memory") {
+        throw new Error("Memory input actor requires its selected memory owner");
+      }
+      return {
+        actor: memory.actor,
+        phase: "adoptRun" as const,
+        storageAuthority: memory.authority,
+        target: {
+          agentId: memory.agentId,
+          storePath: memory.path,
+          target: {
+            canonicalKey: memory.actor.target.sessionKey,
+            storeKeys: [memory.actor.target.sessionKey],
+          },
+          readSource: {
+            agentId: memory.agentId,
+            path: memory.path,
+            databaseIdentity: identity.incarnation,
+          },
+        } satisfies SessionEntryTargetPatchScope,
+        snapshot(authority: SessionActorAuthority) {
+          return memory.actor.snapshot(authority);
+        },
+      };
+    }
     return undefined;
   }
   const acquired = await binding.acquire();
@@ -153,7 +219,25 @@ export async function getSessionInputActor(scope: { agentId: string; sessionKey:
   ) {
     throw new Error("Input actor differs from the recorder's admitted target");
   }
-  return { ...acquired, phase: binding.phase };
+  const custody = captureSessionPendingInputWorkerCustody();
+  return {
+    ...acquired,
+    phase: binding.phase,
+    storageAuthority: acquired.storageAuthority ?? getSessionActorStorageBinding(scope)?.authority,
+    snapshot(authority: SessionActorAuthority) {
+      try {
+        return acquired.actor.snapshot(authority);
+      } catch (error) {
+        // A closed input actor must remain a custody refusal, not enable fallback.
+        if (custody) {
+          throw new SessionPendingInputCustodyError("Pending input actor is unavailable", {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    },
+  };
 }
 
 export function throwSessionInputActorFailure(

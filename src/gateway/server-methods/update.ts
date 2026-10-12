@@ -32,7 +32,6 @@ import {
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import { devUpdateTargetFromGitTarget } from "../../infra/update-dev-target.js";
-import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   cancelManagedServiceUpdateHandoff,
@@ -57,6 +56,7 @@ import {
 import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
+import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
@@ -123,7 +123,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     const restartDelayMs = normalizeGatewayRestartDelayMs(requestedRestartDelayMs);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
-      extractDeliveryInfo(sessionKey, { cfg: config });
+      await extractDeliveryInfo(sessionKey, { cfg: config });
     let deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
     const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMs = params.timeoutMs === undefined ? undefined : Math.max(1000, params.timeoutMs);
@@ -593,7 +593,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         }
       }
     } catch (error) {
-      if (error instanceof FreeBsdPkgOwnershipError) {
+      if (error instanceof SystemPackageOwnershipError) {
         outcomeMessage = error.message;
       }
       context?.logGateway?.warn(`update.run failed error=${formatErrorMessage(error)}`);

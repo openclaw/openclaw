@@ -424,7 +424,7 @@ export function renderChat(props: ChatProps) {
   // The composer keeps the outbox queue; only the transcript includes the
   // placement initial turn, whose retry action belongs to startup.
   const notices = renderChatComposerNotices(props);
-  // Transcript invalidation replaces its render context; bind submission afterward.
+  // The outer view owns submission callbacks across deferred transcript commits.
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
   const inputDisplay = selectChatInputDisplay(
@@ -500,7 +500,7 @@ export function renderChat(props: ChatProps) {
           </div>
           ${taskSuggestionTray}
         </div>`;
-  // Keep the affordance mounted so visibility changes can finish their exit transition.
+  // Keep the affordance mounted so showing it never changes the transcript layout.
   const scrollToBottomButton = props.onScrollToBottom
     ? html`
         <div class="chat-scroll-to-bottom-wrap">

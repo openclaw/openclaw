@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
@@ -11,25 +12,25 @@ import { makeTerminalGatewayOpts as makeOpts } from "./terminal.test-helpers.js"
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sessionMocks = vi.hoisted(() => ({
-  loadGatewaySessionEntryReadOnly: vi.fn(
-    (
-      _sessionKey: string,
-      _opts?: unknown,
-    ): {
+  loadGatewaySessionEntryReadOnlyInWorker: vi.fn(
+    async (_params: {
+      key: string;
+      agentId?: string;
+    }): Promise<{
       entry?: Pick<InternalSessionEntry, "sessionId" | "pendingProjectGitUrl" | "pendingWorktree">;
-    } => ({
+    }> => ({
       entry: { sessionId: "ui-session-id" },
     }),
   ),
 }));
 
-vi.mock("../session-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: sessionMocks.loadGatewaySessionEntryReadOnlyInWorker,
 }));
 
 afterEach(() => {
-  sessionMocks.loadGatewaySessionEntryReadOnly.mockReset().mockReturnValue({
+  sessionMocks.loadGatewaySessionEntryReadOnlyInWorker.mockReset().mockResolvedValue({
     entry: { sessionId: "ui-session-id" },
   });
 });
@@ -87,10 +88,55 @@ describe("terminal session ownership", () => {
     expect(
       manager.snapshotAgent({ ...agentOwner, agentId: "main" }, session.sessionId),
     ).toBeUndefined();
-    expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
+    expect(sessionMocks.loadGatewaySessionEntryReadOnlyInWorker).toHaveBeenCalledWith({
+      cfg: runtimeConfig,
+      key: agentSessionKey,
       agentId: "research",
-      clone: false,
     });
+  });
+
+  it.each([
+    { change: "connection", message: "terminal connection closed" },
+    { change: "disabled", message: "terminal is disabled" },
+    { change: "sandbox", message: "runs in a sandbox" },
+  ])("rejects $change changes during the session lookup", async ({ change, message }) => {
+    const reading = createDeferred();
+    const entry = createDeferred<{ entry: { sessionId: string } }>();
+    sessionMocks.loadGatewaySessionEntryReadOnlyInWorker.mockImplementationOnce(() => {
+      reading.resolve();
+      return entry.promise;
+    });
+    const terminalConfig = { enabled: true };
+    const sandbox: { mode: "off" | "all" } = { mode: "off" };
+    const { opts, sessions, respond, runtimeConfig, isConnectionActive } = makeOpts(
+      { agentId: "research", sessionKey: "agent:research:ui-session", cols: 80, rows: 24 },
+      terminalConfig,
+    );
+    runtimeConfig.agents = {
+      ownership: "explicit",
+      entries: { main: {}, research: { sandbox } },
+    };
+
+    const opening = Promise.resolve(
+      expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts),
+    );
+    await awaitGateBeforeSettlement(reading.promise, opening, "terminal did not read the session");
+    if (change === "connection") {
+      isConnectionActive.mockReturnValue(false);
+    } else if (change === "disabled") {
+      terminalConfig.enabled = false;
+    } else {
+      sandbox.mode = "all";
+    }
+    entry.resolve({ entry: { sessionId: "ui-session-id" } });
+    await opening;
+
+    expect(sessions.open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining(message) }),
+    );
   });
 
   it.each([
@@ -111,7 +157,7 @@ describe("terminal session ownership", () => {
       },
     },
   ])("rejects UI ownership when the session $state", async ({ entry, error }) => {
-    sessionMocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry });
+    sessionMocks.loadGatewaySessionEntryReadOnlyInWorker.mockResolvedValue({ entry });
     const { opts, sessions, respond } = makeOpts({}, { enabled: true });
 
     await openTerminalSession(opts, {

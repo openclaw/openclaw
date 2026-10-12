@@ -27,7 +27,7 @@ import {
 import { icons } from "./icons.ts";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
-import "./elapsed-time.ts";
+import "./elapsed-time.tsx";
 import "./viewer-facepile.ts";
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
@@ -287,7 +287,7 @@ class PersonActivityCard extends Directive {
   }
 }
 
-export const renderPersonActivityCard = directive(PersonActivityCard);
+const renderPersonActivityCard = directive(PersonActivityCard);
 
 /** The card owner keeps its Lit children separate from either host renderer. */
 export function updatePersonActivityCard(container: HTMLElement, input?: PersonCardInput | string) {

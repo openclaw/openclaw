@@ -9,6 +9,123 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Await GitHub publication operations
+
+The Gateway context's `githubPublicationService` provides versioned requests and
+awaited lifecycle operations for shared, personal, and repository publication.
+Use the same service from `GatewayRequestHandlerOptions` in `core` or
+`gateway-runtime`, or from the current `plugin-runtime` request scope. There is
+no new GitHub-specific SDK subpath.
+
+| Deprecated method           | Replacement                        |
+| --------------------------- | ---------------------------------- |
+| `requestForSession`         | `requestForSessionV2`              |
+| `requestForClaim`           | `requestForClaimV2`                |
+| `requestPersonalForSession` | `requestPersonalForSessionV2`      |
+| `confirmPersonal`           | `confirmPersonalV2`                |
+| `deferClaimPreparation`     | `await deferClaimPreparationAsync` |
+| `deferOrphanedRequests`     | `await deferOrphanedRequestsAsync` |
+| `listUnreportedResults`     | `await listUnreportedResultsAsync` |
+| `markReported`              | `await markReportedAsync`          |
+
+The same Gateway context exposes personal connection operations through
+`githubOAuthService.personal`. Replace
+`personal.cancelAuthorization(action, requestId)` with
+`await personal.cancelAuthorizationAsync(action, requestId)`, and
+`personal.disconnect(action)` with `await personal.disconnectAsync(action)`.
+The arguments are unchanged. The legacy methods retain their synchronous
+`boolean` and `void` results and commit before returning; the async methods
+resolve after the worker commits and installs the connection facts. They share
+the publication family's deprecation warning and removal window below.
+
+The V2 request methods require the host's `GitHubPublicationRequesterV2`;
+personal methods require `PersonalGitHubSessionActionV2`. Prepare them through
+`prepareGitHubPublicationRequesterV2` or `preparePersonalGitHubSessionActionV2`
+from `openclaw/plugin-sdk/gateway-runtime`, passing the admitted Gateway handler
+options and selected session. Forward the original object through adapters.
+These capabilities include `version: 2`,
+a lifetime `signal`, and `prepareSource`, in addition to their existing caller
+assertions. Do not synthesize them from request parameters, a saved requester
+snapshot, or a legacy callback. Their source capability is bound to the admitted
+session and physical database lifetime and cannot be reconstructed from JSON.
+
+Replace the legacy call `await service.requestForSession({ ...input, requester })`
+and its opaque requester assertions with a retained host preparation:
+
+```ts
+import {
+  prepareGitHubPublicationRequesterV2,
+  type GatewayRequestHandlerOptions,
+} from "openclaw/plugin-sdk/gateway-runtime";
+
+type Publications = NonNullable<
+  GatewayRequestHandlerOptions["context"]["githubPublicationService"]
+>;
+type PublicationInput = Omit<
+  Parameters<Publications["requestForSessionV2"]>[0],
+  "requester" | "sessionKey"
+> & { sessionKey: string };
+
+async function publish(options: GatewayRequestHandlerOptions, input: PublicationInput) {
+  const service = options.context.githubPublicationService;
+  if (!service) throw new Error("GitHub publication is unavailable.");
+  const prepared = await prepareGitHubPublicationRequesterV2(options, {
+    agentId: input.agentId,
+    sessionKey: input.sessionKey,
+  });
+  try {
+    return await service.requestForSessionV2({ ...input, requester: prepared.requester });
+  } finally {
+    prepared.release();
+  }
+}
+```
+
+For personal publication, call
+`await preparePersonalGitHubSessionActionV2(options, { sessionKey, agentId })`,
+pass its `action` to `requestPersonalForSessionV2` or `confirmPersonalV2`, and
+release it in the same `try`/`finally` pattern. The factory derives personal and
+session authority from the admitted handler context; a claimed profile ID does
+not grant access.
+
+V2 prepares host policy before acquiring database reservations. The worker
+compares the selected session lifecycle, requester, connection, and workspace
+facts under source exclusion, then commits the request and lifecycle binding in
+one destination transaction. The source remains reserved until that transaction
+settles. Async completion includes installation of its committed facts. Keep the
+requester's owner alive until the operation and its cleanup settle.
+
+Legacy requester assertions may read or mutate SQLite. The service selects their
+native compatibility route before invoking them; it does not serialize closures
+or invoke arbitrary host policy from inside a reserved worker transaction.
+Migrating to V2 changes that callback ordering: preparation precedes reservation,
+and typed predicates authorize commit. It does not preserve arbitrary
+transaction-local callback visibility. A failed or uncertain worker operation
+never retries through the legacy route or replays an accepted external effect.
+
+Await deferral and reporting before dependent reads or shutdown. Reporting and
+claim deferral each update the relevant publication kinds in one worker transaction. Accepted
+bookkeeping, including execution claims, head updates, dispatch markers, observed effects, and completion, can settle
+after action cancellation while the execution owner retains custody. The worker
+applies its request and execution predicates inside its transaction; it does not
+request another host grant for each bookkeeping commit. This grants no authority
+for another push or pull request. New external effects always require current
+caller and source authority at the point of effect.
+An attempted-dispatch marker can remain when that final guard refuses the action;
+only an observed response records the effect as observed.
+
+Checkpoint-preparation failure and stale-request retirement also record outcomes
+without source reservations. A checkpoint becoming available or a session being
+restored after the check may require a new publication request; the original
+content and recorded GitHub effects remain intact.
+
+The deprecated methods retain their released signatures and completion timing;
+synchronous mutations still commit before returning. Actual legacy use emits one
+warning per plugin and the `github-publication` family per Gateway process,
+through the shared SDK warning helper. Unknown direct SDK consumers share one
+bounded family warning. These methods will be **removed in the next Plugin SDK
+major**. No schema, stored-data, retention, or update migration is required.
+
 ## Replace native SQLite runtime writes
 
 Plugins using the internal `sqlite-runtime` facade should send data-only commands
@@ -267,13 +384,34 @@ unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await skill-command discovery
+
+Use `prepareSkillCommandsForAgents` and `prepareSkillCommandsForWorkspace` from
+`openclaw/plugin-sdk/skill-commands-runtime` when building native command menus.
+`command-auth-native` also exposes `prepareSkillCommandsForAgents` alongside its
+existing command helpers. Await preparation before registering commands or
+publishing a menu so managed-library selection runs through its database worker.
+
+The synchronous `listSkillCommandsForAgents` and `listSkillCommandsForWorkspace`
+methods retain their array results until the next Plugin SDK major. They are
+deprecated and warn once per plugin and capability family on use. Bundled
+Discord, Mattermost, Slack, and Telegram menus use the awaited methods.
+Command names, filtering, stored selections, and update behavior are unchanged.
+
 ## Await placement preparation
 
-Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
-`retireSessionPlacementAsync`. Await their results before using placement facts,
+Gateway contexts provide `workerSessionPlacementService.getAsync`, `getManyAsync`,
+`listAsync`, `listForReconcileAsync`, and `retireSessionPlacementAsync`.
+Await their results before using placement facts,
 starting dependent work, or releasing request resources. Their synchronous
 counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
 compatibility methods until the next Plugin SDK major.
+
+Placement activation callbacks receive the committed active placement directly.
+Use that result for maintenance scheduling instead of reading it again. Native
+readers remain available for final synchronous execution or disclosure guards;
+prepared placement facts do not replace those checks. Legacy placement reads
+warn once per plugin and capability family.
 
 Startup also awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
 state-directory lock, before admitting turns. The placement worker clears stale
@@ -424,6 +562,25 @@ the next Plugin SDK major and explicit breaking-release approval. Their
 deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
+
+## Await session metadata listings
+
+Use `listSessionEntriesAsync` from `openclaw/plugin-sdk/session-store-runtime`,
+or `api.runtime.agent.session.listSessionEntriesAsync`, to enumerate session
+metadata before preparing work. Pass an explicit `agentId` and optionally the
+existing `storePath` and `env`, then await the result. The read runs through the
+session worker and never creates or registers a missing agent database.
+
+The async listing retains session IDs, initialization status, plugin metadata,
+and derived participants while omitting detached snapshots such as saved skill
+prompts. Use `getSessionEntryAsync` when a complete entry is needed. The async
+listing is always read-only, so it does not take `readOnly`, snapshot hydration,
+or synchronous source-capture options. Keep final deletion or disclosure guards
+at their existing effect boundary.
+
+The synchronous `listSessionEntries` API is deprecated until the next Plugin SDK
+major. Its existing arguments and complete-entry behavior remain available for
+compatibility, with a one-time deprecation warning on legacy use.
 
 ## Prepare session entry changes
 
@@ -1227,3 +1384,112 @@ The released synchronous preparation and before-commit callbacks retain their
 durable-target behavior through the next Plugin SDK major, with a one-time
 warning per plugin. They are refused for incognito and actor-bound targets.
 No stored data migration or update step is required.
+
+## Await auth-profile and provider-availability operations
+
+Use the awaited auth APIs before publishing model choices, registering provider
+availability, or starting work that depends on a stored credential. Their
+database reads and writes run through the existing auth owner and workers.
+Keep the same arguments and await the replacement's result:
+
+| SDK subpath                              | Synchronous API                               | Awaited replacement                                |
+| ---------------------------------------- | --------------------------------------------- | -------------------------------------------------- |
+| `provider-auth`                          | `ensureAuthProfileStore`                      | `ensureAuthProfileStoreAsync`                      |
+| `provider-auth`                          | `ensureAuthProfileStoreForLocalUpdate`        | `ensureAuthProfileStoreForLocalUpdateAsync`        |
+| `provider-auth`                          | `upsertAuthProfile`                           | `upsertAuthProfileAsync`                           |
+| `provider-auth`, `provider-auth-api-key` | `upsertApiKeyProfile`                         | `upsertApiKeyProfileAsync`                         |
+| `provider-auth`                          | `isProviderApiKeyConfigured`                  | `isProviderApiKeyConfiguredAsync`                  |
+| `provider-auth`                          | `isProviderAuthProfileConfigured`             | `isProviderAuthProfileConfiguredAsync`             |
+| `provider-auth`                          | `listUsableProviderAuthProfileIds`            | `listUsableProviderAuthProfileIdsAsync`            |
+| `provider-auth-runtime`                  | `resolveProviderAuthProfileMetadata`          | `resolveProviderAuthProfileMetadataAsync`          |
+| `agent-runtime`                          | `loadAuthProfileStoreWithoutExternalProfiles` | `loadAuthProfileStoreWithoutExternalProfilesAsync` |
+| `agent-runtime`                          | `findPersistedAuthProfileCredential`          | `findPersistedAuthProfileCredentialAsync`          |
+| `agent-runtime`                          | `resolvePersistedAuthProfileOwnerAgentDir`    | `resolvePersistedAuthProfileOwnerAgentDirAsync`    |
+| `agent-harness-runtime`                  | `resolveModelAuthMode`                        | `resolveModelAuthModeAsync`                        |
+| `models-provider-runtime`                | `formatModelsAvailableHeader`                 | `formatModelsAvailableHeaderAsync`                 |
+| `image-generation-core`                  | `resolveCapabilityModelCandidates`            | `resolveCapabilityModelCandidatesAsync`            |
+| `provider-selection-runtime`             | `resolveConfiguredCapabilityProvider`         | `resolveConfiguredCapabilityProviderAsync`         |
+| `realtime-voice`                         | `resolveConfiguredRealtimeVoiceProvider`      | `resolveConfiguredRealtimeVoiceProviderAsync`      |
+| `tts-runtime`, `agent-runtime`           | `getTtsProvider`                              | `getTtsProviderAsync`                              |
+| `tts-runtime`                            | `isTtsProviderConfigured`                     | `isTtsProviderConfiguredAsync`                     |
+| `tts-runtime`                            | `resolveExplicitTtsOverrides`                 | `resolveExplicitTtsOverridesAsync`                 |
+
+The deprecated broad `agent-runtime` subpath also exposes
+`ensureAuthProfileStoreAsync`; use the focused `provider-auth` subpath for new imports.
+
+Use `loadAuthProfileStoreWithoutExternalProfilesAsync` when an existing
+`agent-runtime` integration needs persisted credential or usage facts without
+runtime external-profile overlays. It preserves inherited profiles and the
+selected personal profile while reading through the worker; it does not use
+the runtime snapshot-first selection of `ensureAuthProfileStoreAsync`.
+
+`resolveProviderAuthProfileMetadataAsync` preserves the existing optional
+`profileId` and OAuth `accountId` result fields and returns an empty object when
+no profile matches. Use it to prepare provider discovery metadata without
+reading the auth database on the Gateway thread.
+
+Existing `agent-runtime` integrations can also await
+`findPersistedAuthProfileCredentialAsync({ agentDir, profileId })` when preparing
+credential facts. It resolves to the stored credential or `undefined`. Its
+synchronous counterpart remains available for a current credential-authority
+check at an actual effect boundary; earlier prepared facts do not replace that
+check.
+
+For preparatory owner selection, await
+`resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir, profileId })`. It
+preserves inherited OAuth ownership: `undefined` selects the shared/default
+owner, while an independently owned local profile resolves to its agent
+directory. The synchronous resolver remains available for effect-time callers
+through the compatibility window. A prepared owner directory does not authorize
+later credential use.
+
+Injected runtimes provide the same migration through
+`api.runtime.modelAuth.ensureAuthProfileStoreAsync` and
+`api.runtime.modelAuth.isProviderApiKeyConfiguredAsync`. For subscription CLI
+dispatch selection, await
+`api.runtime.agent.resolveCliBackendDispatchEligibilityAsync` in place of
+`resolveCliBackendDispatchEligibility`.
+
+Await each upsert before using its result or starting a dependent read.
+`upsertAuthProfileAsync` resolves after the canonical writer updates the selected
+profile; it preserves neighboring profiles. `upsertApiKeyProfileAsync` resolves
+to the profile ID after the write completes. A store returned for local update
+is a snapshot, not permission to replace newer owner state; use the owner-backed
+mutation API for the write.
+
+Image, music, video, speech, realtime voice, and realtime transcription provider
+plugins should implement
+`isConfiguredAsync(context): Promise<boolean>` instead of `isConfigured` when
+checking stored credentials. Capability selection awaits this hook and prefers
+it when both hooks exist. The legacy synchronous hook remains supported;
+an async failure is not retried through it. Availability and model-auth labels
+describe configured choices, not live service health or authorization to use a
+credential.
+
+Realtime voice providers can also implement `resolveConfigAsync(context)` when
+configuration needs stored credentials. The awaited realtime selector prefers
+it over `resolveConfig`. The generic
+`resolveConfiguredCapabilityProviderAsync` accepts awaited
+`resolveProviderConfig` and `isProviderConfigured` callbacks while preserving
+explicit selection, automatic ordering, and existing result envelopes.
+
+For speech selection, await `getTtsProviderAsync` before using the selected
+provider and `isTtsProviderConfiguredAsync` before presenting configured-state
+results. Await `resolveExplicitTtsOverridesAsync` when model or voice overrides
+depend on selecting a provider. These preserve the synchronous methods'
+selection and override semantics while allowing stored-credential checks to
+run in the worker. Existing external speech providers that only implement
+`isConfigured` remain supported.
+
+The synchronous APIs shipped in 2026.10.1 retain their signatures, immediate
+results, and completion timing through the next Plugin SDK major and explicit
+breaking-release approval. They are deprecated; synchronous auth storage
+entrypoints warn once per plugin and capability family per process.
+Bundled callers use the awaited APIs. This migration changes no schema,
+stored format, retention, or update behavior.
+
+Native web-search selection no longer repeats a credential-presence lookup
+already owned by the model request. A stale availability hint may therefore
+select native search for a request that subsequently fails credential admission.
+The model request still resolves and validates current credentials before its
+external effect; prepared availability never replaces that authority check.

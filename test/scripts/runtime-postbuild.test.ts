@@ -1492,6 +1492,147 @@ describe("previous release update compatibility", () => {
 
   it.each([
     {
+      access: "exact Promise.all destructuring",
+      statement:
+        'const [{ x: selected }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [["x"], ["y"]],
+    },
+    {
+      access: "namespace binding",
+      statement:
+        'const [left, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "object rest binding",
+      statement:
+        'const [{ x, ...rest }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "array rest binding",
+      statement:
+        'const [{ x }, ...rest] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "default binding",
+      statement:
+        'const [{ x = 0 }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "intermediate array",
+      statement:
+        'const modules = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]); const [{ x }, { y }] = modules;',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "empty object binding",
+      statement:
+        'const [{}, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "nested binding",
+      statement:
+        'const [{ x: { value } }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "omitted array binding",
+      statement:
+        'const [, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "optional call",
+      statement:
+        'const [{ x }, { y }] = await Promise.all?.([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "spread import array",
+      statement:
+        'const [{ x }, { y }] = await Promise.all([...[], import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "unawaited Promise.all",
+      statement:
+        'const modules = Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "different combiner",
+      statement:
+        'const [{ x }, { y }] = await Promise.race([import("./left-abcdefgh.js"), import("./right-abcdefgh.js")]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+    {
+      access: "mixed array",
+      statement:
+        'const [{ x }, { y }] = await Promise.all([import("./left-abcdefgh.js"), import("./right-abcdefgh.js"), 1]);',
+      names: [
+        ["x", "y"],
+        ["x", "y"],
+      ],
+    },
+  ])("records conservative module contracts for $access", ({ statement, names }) => {
+    const { inventory } = recordImportedFixture(`await (async () => { ${statement} })()`, {
+      "left-abcdefgh.js": "//#region src/infra/left.ts\nexport const x = 1, y = 2;\n",
+      "right-abcdefgh.js": "//#region src/infra/right.ts\nexport const x = 3, y = 4;\n",
+    });
+    expect(
+      inventory.releases[0]?.chunks.map((chunk) => ({
+        path: chunk.path,
+        imported: chunk.imports.flatMap((entry) => entry.exports),
+        exported: chunk.exports.map((entry) => entry.exported),
+      })),
+    ).toEqual([
+      { path: "left-abcdefgh.js", imported: names[0], exported: names[0] },
+      { path: "right-abcdefgh.js", imported: names[1], exported: names[1] },
+    ]);
+  });
+
+  it.each([
+    {
       access: "then",
       expression: 'import("./surface-abcdefgh.js").then((module) => module.x)',
       names: ["x", "y"],

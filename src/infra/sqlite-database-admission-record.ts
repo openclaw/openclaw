@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
+import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
-import { readWorkerAncestors, workerAncestors } from "./worker-ancestry.js";
+import {
+  readDatabaseIdentityBirthtime,
+  normalizeDatabasePath,
+  readDatabaseFileIdentity,
+  type DatabaseFileIdentity,
+} from "./sqlite-worker-identity.js";
 
 export function readSqliteDatabaseAdmissionIdentity(file: BigIntStats): string {
   return `${file.dev}:${file.ino}:${readDatabaseIdentityBirthtime(file)}`;
@@ -15,11 +20,10 @@ export const SqliteDatabaseGenerationSlot = {
   factRevision: 1,
   publicationRevision: 2,
   retired: 3,
-  writerCount: 4,
-  writeRevision: 5,
-  hostRevision: 6,
-  unscopedWriteRevision: 7,
-  writeScopeCount: 8,
+  writeRevision: 4,
+  hostRevision: 5,
+  unscopedWriteRevision: 6,
+  writeScopeCount: 7,
 } as const;
 const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
 
@@ -33,9 +37,9 @@ export type AdmissionFact = {
 export type StagedAdmissionFact = Pick<AdmissionFact, "value" | "revision" | "schemaDependent"> & {
   ddlRevision: number;
 };
-type Writer = { cell: SharedArrayBuffer; ancestors: readonly number[] };
 export type Admission = {
   identity: string;
+  physicalIdentity: DatabaseFileIdentity;
   location: string;
   descriptor: number;
   descriptorOwner: number;
@@ -43,7 +47,6 @@ export type Admission = {
   generation: SharedArrayBuffer;
   /** Last complete host snapshot; relays preserve this value without advancing it. */
   hostRevision?: number;
-  writers: Map<number, Writer>;
   writeScopes: Map<string, SharedArrayBuffer>;
   facts: Map<string, AdmissionFact>;
 };
@@ -97,26 +100,14 @@ function readInheritedAdmission(value: unknown): Admission | undefined {
   ) {
     return undefined;
   }
-  if (!(value.writers instanceof Map) || !(value.writeScopes instanceof Map)) {
+  if (!(value.writeScopes instanceof Map)) {
     return undefined;
   }
-  const writers = new Map<number, Writer>();
-  for (const [writer, custody] of value.writers) {
-    if (
-      typeof writer !== "number" ||
-      !Number.isInteger(writer) ||
-      writer < 0 ||
-      !isRecord(custody) ||
-      !(custody.cell instanceof SharedArrayBuffer) ||
-      custody.cell.byteLength !== 3 * Int32Array.BYTES_PER_ELEMENT
-    ) {
-      return undefined;
-    }
-    const ancestors = readWorkerAncestors(custody.ancestors);
-    if (!ancestors || ancestors.includes(writer)) {
-      return undefined;
-    }
-    writers.set(writer, { cell: custody.cell, ancestors });
+  let physicalIdentity: DatabaseFileIdentity;
+  try {
+    physicalIdentity = readDatabaseFileIdentity(value.physicalIdentity);
+  } catch {
+    return undefined;
   }
   const writeScopes = new Map<string, SharedArrayBuffer>();
   for (const [key, revision] of value.writeScopes) {
@@ -139,13 +130,13 @@ function readInheritedAdmission(value: unknown): Admission | undefined {
   }
   return {
     identity: value.identity,
+    physicalIdentity,
     location: value.location,
     descriptor: value.descriptor,
     descriptorOwner: value.descriptorOwner,
     generationId: value.generationId,
     generation: value.generation,
     ...(value.hostRevision !== undefined ? { hostRevision: value.hostRevision } : {}),
-    writers,
     writeScopes,
     facts,
   };
@@ -172,20 +163,6 @@ export function isSqliteDatabaseAdmissionRetired(record: Admission): boolean {
   );
 }
 
-function registerWriterCustody(record: Admission): void {
-  if (threadId !== 0) {
-    return;
-  }
-  for (const { cell } of record.writers.values()) {
-    const writer = new Int32Array(cell);
-    if (Atomics.load(writer, 1) === 0) {
-      // Only thread 0 allocates registrations, after installing their metadata.
-      Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.writerCount, 1);
-      Atomics.store(writer, 1, 1);
-    }
-  }
-}
-
 export function isSqliteDatabaseAdmissionFactCurrent(
   record: Admission,
   fact: AdmissionFact,
@@ -195,6 +172,11 @@ export function isSqliteDatabaseAdmissionFactCurrent(
     Atomics.load(new Int32Array(fact.current), 0) === 1 &&
     fact.revision === readSqliteDatabaseFactRevision(record, fact.schemaDependent)
   );
+}
+
+export function hasSqliteDatabaseSchemaAdmission(record: Admission | undefined): boolean {
+  const fact = record?.facts.get("sqlite-schema");
+  return Boolean(record && fact && isSqliteDatabaseAdmissionFactCurrent(record, fact));
 }
 
 export function readSqliteDatabaseFactRevision(
@@ -209,103 +191,12 @@ export function readSqliteDatabaseFactRevision(
   );
 }
 
-export function activeSqliteDatabaseWriters(
-  record: Admission,
-  index: 0 | 2,
-  refresh?: (record: Admission) => void,
-): number | undefined {
-  const generation = new Int32Array(record.generation);
-  let registrations = Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount);
-  const known = () =>
-    [...record.writers.values()].filter(({ cell }) => Atomics.load(new Int32Array(cell), 1) === 1)
-      .length;
-  if (known() < registrations) {
-    if (!refresh) {
-      return undefined;
-    }
-    refresh(record);
-    registrations = Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount);
-    if (known() < registrations) {
-      return undefined;
-    }
-  }
-  let active = 0;
-  for (const { cell } of record.writers.values()) {
-    active += Atomics.load(new Int32Array(cell), index);
-  }
-  return registrations === Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount)
-    ? active
-    : undefined;
+export function readSqliteDatabaseRecordWriteRevision(record: Admission): number {
+  return Atomics.load(
+    new Int32Array(record.generation),
+    SqliteDatabaseGenerationSlot.writeRevision,
+  );
 }
-
-export function readSqliteDatabaseRecordWriteRevision(
-  record: Admission,
-  ownWriters: number,
-  refresh?: (record: Admission) => void,
-): number | undefined {
-  const cell = new Int32Array(record.generation);
-  const revision = Atomics.load(cell, SqliteDatabaseGenerationSlot.writeRevision);
-  const active = activeSqliteDatabaseWriters(record, 2, refresh);
-  if (
-    active === undefined ||
-    active > ownWriters ||
-    revision !== Atomics.load(cell, SqliteDatabaseGenerationSlot.writeRevision)
-  ) {
-    return undefined;
-  }
-  return revision;
-}
-
-export function retireSqliteDatabaseWriter(record: Admission, id: number): void {
-  const joined: Int32Array[] = [];
-  for (const [writer, { cell, ancestors }] of record.writers) {
-    if (writer === id || ancestors.includes(id)) {
-      joined.push(new Int32Array(cell));
-    }
-  }
-  if (joined.some((cell) => Atomics.load(cell, 0) > 0)) {
-    // Native parent exit also joins descendants whose JS exit listeners cannot run.
-    // Revoke possibly unpublished commits before releasing their shared writer fence.
-    Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.schemaRevision, 1);
-    for (const cell of joined) {
-      Atomics.store(cell, 0, 0);
-    }
-  }
-  if (joined.some((cell) => Atomics.load(cell, 2) > 0)) {
-    // The joined native connection may have committed before its JS receipt ran.
-    Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.writeRevision, 1);
-    // A lost writer cannot attest which of its accepted keys reached COMMIT.
-    Atomics.add(
-      new Int32Array(record.generation),
-      SqliteDatabaseGenerationSlot.unscopedWriteRevision,
-      1,
-    );
-    for (const cell of joined) {
-      Atomics.store(cell, 2, 0);
-    }
-  }
-}
-
-export function ensureSqliteDatabaseWriter(record: Admission, publish: () => void): void {
-  let custody = record.writers.get(threadId);
-  if (!custody) {
-    custody = {
-      cell: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 3),
-      ancestors: workerAncestors,
-    };
-    record.writers.set(threadId, custody);
-  }
-  const { cell } = custody;
-  if (Atomics.load(new Int32Array(cell), 1) === 0) {
-    registerWriterCustody(record);
-    // Publish custody before native work starts, so an exit can retire this cell.
-    publish();
-    if (Atomics.load(new Int32Array(cell), 1) === 0) {
-      throw new Error("SQLite mutation requires host custody");
-    }
-  }
-}
-
 export function publishSqliteDatabaseFact(
   record: Admission,
   key: { name: string; schemaDependent?: boolean; writer?: "host" },
@@ -349,12 +240,35 @@ export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCu
 
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
+  private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, Admission>();
   private revision = 0;
+
+  observeLocation(location: string, identity: string): void {
+    this.locations.set(normalizeDatabasePath(path.resolve(location)), identity);
+  }
+
+  forLocation(location: string): Admission | undefined {
+    const identity = this.locations.get(normalizeDatabasePath(path.resolve(location)));
+    const record = identity === undefined ? undefined : this.records.get(identity);
+    return record && !isSqliteDatabaseAdmissionRetired(record) ? record : undefined;
+  }
+
+  hasSchemaAdmissionForIdentity(physicalIdentity: DatabaseFileIdentity): boolean {
+    if (!physicalIdentity.key.startsWith("file:") || physicalIdentity.birthtime === undefined) {
+      return false;
+    }
+    const key = `${physicalIdentity.key.slice("file:".length)}:${physicalIdentity.birthtime}`;
+    return hasSqliteDatabaseSchemaAdmission(this.records.get(key));
+  }
 
   retainDescriptor(location: string, descriptor: number, opened: BigIntStats): Admission {
     const record: Admission = {
       identity: readSqliteDatabaseAdmissionIdentity(opened),
+      physicalIdentity: {
+        key: `file:${opened.dev}:${opened.ino}`,
+        birthtime: readDatabaseIdentityBirthtime(opened),
+      },
       location,
       descriptor,
       descriptorOwner: 0,
@@ -362,11 +276,11 @@ export class SqliteDatabaseAdmissionRegistry {
       generation: new SharedArrayBuffer(
         Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
       ),
-      writers: new Map(),
       writeScopes: new Map(),
       facts: new Map(),
     };
     this.records.set(record.identity, record);
+    this.observeLocation(location, record.identity);
     this.publish(record);
     return record;
   }
@@ -386,7 +300,6 @@ export class SqliteDatabaseAdmissionRegistry {
       this.published.set(record.identity, {
         ...record,
         facts: new Map(record.facts),
-        writers: new Map(record.writers),
         writeScopes: new Map(record.writeScopes),
         hostRevision:
           threadId === 0
@@ -448,6 +361,7 @@ export class SqliteDatabaseAdmissionRegistry {
       if (!record) {
         record = { ...incoming, hostRevision: undefined };
         this.records.set(incoming.identity, record);
+        this.observeLocation(incoming.location, incoming.identity);
         changed = true;
       } else if (record.generationId !== incoming.generationId) {
         // Only the host creates a generation; unrelated revocation cells cannot certify its facts.
@@ -459,12 +373,6 @@ export class SqliteDatabaseAdmissionRegistry {
           record.facts.get(key)?.publication !== fact.publication
         ) {
           record.facts.set(key, fact);
-          changed = true;
-        }
-      }
-      for (const [writer, cell] of incoming.writers) {
-        if (!record.writers.has(writer)) {
-          record.writers.set(writer, cell);
           changed = true;
         }
       }
@@ -496,7 +404,6 @@ export class SqliteDatabaseAdmissionRegistry {
         record.hostRevision = incoming.hostRevision;
         changed = true;
       }
-      registerWriterCustody(record);
       if (changed) {
         this.publish(record);
       }

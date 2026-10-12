@@ -162,7 +162,7 @@ export async function prepareCodexAttemptTurnRequest(
       resourceState.client,
       resourceState.thread.threadId,
     );
-    const turnStartParams = buildTurnStartParams(runtimeParams, {
+    const turnStartParams = await buildTurnStartParams(runtimeParams, {
       threadId: resourceState.thread.threadId,
       cwd: resourceState.codexExecutionCwd,
       appServer: turnAppServer,

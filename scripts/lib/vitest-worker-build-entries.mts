@@ -13,7 +13,7 @@ import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/g
 import { teamReportsSqliteBackendEntrypoint } from "../../extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts";
 import { workboardSqliteBackendEntrypoint } from "../../extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts";
 import { agentCoreRetentionEntrypoints } from "../../packages/agent-core/src/retention-runtime.test-support.ts";
-import { cleanForGeminiEntrypoint } from "../../packages/ai/src/providers/clean-for-gemini-runtime.test-support.ts";
+import { toolSchemaDepthEntrypoint } from "../../packages/ai/src/providers/tool-schema-depth-runtime.test-support.ts";
 import { eventStreamRetentionEntrypoint } from "../../packages/llm-core/src/retention-runtime.test-support.ts";
 import { eventHubRetentionEntrypoint } from "../../packages/sdk/src/retention-runtime.test-support.ts";
 import { tableStackEntrypoint } from "../../packages/terminal-core/src/table-runtime.test-support.ts";
@@ -37,6 +37,7 @@ import {
   updateExecutorEntrypoints,
   stateDirGatewayFixtureEntrypoint,
   updateCandidateExitEntrypoints,
+  windowsProcessJobRetentionEntrypoint,
   windowsProcessOwnershipEntrypoint,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { updateExecutorNativeEntrypoints } from "../../src/cli/update-cli/update-command-executor-native-runtime.test-support.ts";
@@ -327,7 +328,7 @@ export const vitestWorkerBuildEntries = {
     eventHubRetentionEntrypoint,
     eventStreamRetentionEntrypoint,
     ...Object.values(agentCoreRetentionEntrypoints),
-    cleanForGeminiEntrypoint,
+    toolSchemaDepthEntrypoint,
     tableStackEntrypoint,
     ...Object.values(triageTestRuntimeEntrypoints),
     ...Object.values(triageMaintenanceRuntimeEntrypoints),
@@ -345,6 +346,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(cliRecoveryEntrypoints),
     ...Object.values(cliMessageExitEntrypoints),
     windowsProcessOwnershipEntrypoint,
+    windowsProcessJobRetentionEntrypoint,
     ...Object.values(updateCandidateExitEntrypoints),
     ...Object.values(updateExecutorNativeEntrypoints),
     ...Object.values(updateExecutorEntrypoints),

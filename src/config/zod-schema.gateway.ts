@@ -207,6 +207,8 @@ export const GatewayConfigSchema = z
           .strictObject({
             /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
             customPlugins: z.boolean().optional(),
+            /** Enable experimental speech bubbles in the Control UI (default false). */
+            chatBubbles: z.boolean().optional(),
           })
           .optional(),
         /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */

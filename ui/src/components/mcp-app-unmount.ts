@@ -27,19 +27,22 @@ function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTar
 }
 
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
-export class McpAppUnmountGate<T = unknown> {
+export class McpAppUnmountGate<Value = unknown> {
   private renderedKey: McpAppUnmountKey | null = null;
-  private renderedValue: T | undefined;
+  private renderedValue!: Value;
   private pending = false;
   private restartTargets: McpAppUnmountTarget[] | null = null;
 
-  constructor(private readonly host: { requestUpdate(): void }) {}
+  constructor(
+    private readonly host: { requestUpdate(): void },
+    private readonly afterCommit?: () => Promise<void>,
+  ) {}
 
   get retiring(): boolean {
     return this.pending || this.restartTargets !== null;
   }
 
-  private apply(key: McpAppUnmountKey, renderValue: () => T): T | undefined {
+  private apply(key: McpAppUnmountKey, renderValue: () => Value): Value {
     this.renderedValue = renderValue();
     this.renderedKey = key;
     return this.renderedValue;
@@ -47,25 +50,31 @@ export class McpAppUnmountGate<T = unknown> {
 
   render(
     key: McpAppUnmountKey,
-    renderValue: () => T,
+    renderValue: () => Value,
     leavingRoots: () => Iterable<ParentNode>,
-    options: { retainRenderedValue?: boolean } = {},
-  ): T | undefined {
+    options: { retainRenderedValue?: boolean; afterCommit?: (effect: () => void) => void } = {},
+  ): Value {
     if (this.pending) {
       return this.renderedValue;
     }
     if (this.restartTargets) {
       const targets = this.restartTargets;
       this.restartTargets = null;
-      // Restart only torn-down views that survived the parent commit;
-      // retained siblings stay intact.
-      queueMicrotask(() => {
+      // Restart only torn-down views that survived the owning renderer's commit.
+      const restart = () => {
         for (const target of targets) {
           if (target.isConnected) {
             target.restartAfterTeardown();
           }
         }
-      });
+      };
+      if (options.afterCommit) {
+        options.afterCommit(restart);
+      } else if (this.afterCommit) {
+        void this.afterCommit().then(restart);
+      } else {
+        queueMicrotask(restart);
+      }
       return this.renderedKey === key && options.retainRenderedValue
         ? this.renderedValue
         : this.apply(key, renderValue);

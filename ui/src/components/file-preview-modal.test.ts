@@ -1,16 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 import "./file-preview-modal-registration.ts";
-import { icons } from "./icons.ts";
+import { Icon } from "./solid/icon.tsx";
 
-type FilePreviewModalElement = OpenClawFilePreviewModal;
+type FilePreviewModalElement = HTMLElementTagNameMap["openclaw-file-preview-modal"];
 
 let container: HTMLDivElement;
 
@@ -32,7 +31,7 @@ const files = [
 type RenderPreviewOptions = {
   query?: string;
   activePath?: string;
-  previewFiles?: OpenClawFilePreviewModal["files"];
+  previewFiles?: FilePreviewModalElement["files"];
   layout?: "files" | "document";
 };
 
@@ -101,7 +100,7 @@ describe("openclaw-file-preview-modal", () => {
       ],
     });
     const reference = document.createElement("div");
-    render(icons.pencilSparkles, reference);
+    mountSolid(() => createComponent(Icon, { name: "pencilSparkles" }), { container: reference });
     const paths = (element: Element | null | undefined) =>
       [...(element?.querySelectorAll("path") ?? [])].map((path) => path.getAttribute("d"));
     const expectedIcon = paths(reference.querySelector("svg"));

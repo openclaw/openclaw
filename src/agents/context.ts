@@ -248,7 +248,7 @@ export function resolveModelContextTokenProjection(
 ): ModelContextTokenProjection {
   prepareContextWindowCache({
     allowAsyncLoad: params.allowAsyncLoad,
-    skipRuntimeConfigLoad: Boolean(params.cfg),
+    skipRuntimeConfigLoad: Boolean(params.cfg) || params.allowCacheLookup === false,
   });
   return resolveModelContextTokenProjectionFromCache(params);
 }
