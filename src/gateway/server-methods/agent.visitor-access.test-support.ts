@@ -174,7 +174,7 @@ export async function startVisitorGateway({
     ),
     "users.list": expectDefined(usersHandlers["users.list"], "users.list handler missing"),
   };
-  const loaded = loadGatewayPlugins({
+  const loaded = await loadGatewayPlugins({
     cfg: config,
     autoEnabledReasons: {},
     workspaceDir: state.workspaceDir,

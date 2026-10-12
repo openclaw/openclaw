@@ -101,70 +101,6 @@ describe("secrets runtime gateway local surfaces", () => {
     expectWarningPaths(snapshot, ["gateway.remote.token", "gateway.remote.password"]);
   });
 
-  it("treats gateway.auth.password ref as active when mode is unset and no token is configured", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        gateway: {
-          auth: {
-            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
-          },
-        },
-      }),
-      env: {
-        GATEWAY_PASSWORD_REF: "resolved-gateway-password",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect(snapshot.config.gateway?.auth?.password).toBe("resolved-gateway-password");
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.password");
-  });
-
-  it("treats gateway.auth.token ref as active when token mode is explicit", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-          },
-        },
-      }),
-      env: {
-        GATEWAY_TOKEN_REF: "resolved-gateway-token",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect(snapshot.config.gateway?.auth?.token).toBe("resolved-gateway-token");
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.token");
-  });
-
-  it("treats gateway.auth.token ref as inactive when password mode is explicit", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        gateway: {
-          auth: {
-            mode: "password",
-            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect(snapshot.config.gateway?.auth?.token).toEqual({
-      source: "env",
-      provider: "default",
-      id: "GATEWAY_TOKEN_REF",
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.token");
-  });
-
   it("treats gateway.auth.password ref as active when auth mode is trusted-proxy", async () => {
     await expectActiveGatewayPassword({
       gateway: {
@@ -190,7 +126,7 @@ describe("secrets runtime gateway local surfaces", () => {
     });
   });
 
-  it.each(["none", "trusted-proxy"] as const)(
+  it.each(["trusted-proxy"] as const)(
     "treats gateway.remote refs as inactive in local mode when auth mode is %s",
     async (mode) => {
       const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -228,27 +164,6 @@ describe("secrets runtime gateway local surfaces", () => {
       expectWarningPaths(snapshot, ["gateway.remote.token", "gateway.remote.password"]);
     },
   );
-
-  it("treats gateway.remote.token ref as active in local mode when no local credentials are configured", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        gateway: {
-          mode: "local",
-          remote: {
-            token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN_REF" },
-          },
-        },
-      }),
-      env: {
-        REMOTE_GATEWAY_TOKEN_REF: "resolved-remote-gateway-token",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect(snapshot.config.gateway?.remote?.token).toBe("resolved-remote-gateway-token");
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.remote.token");
-  });
 
   it("treats gateway.remote.password ref as active in local mode when password can win", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({

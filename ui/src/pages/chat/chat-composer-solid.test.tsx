@@ -1,4 +1,5 @@
-import { render, nothing } from "lit";
+import { html, render, nothing } from "lit";
+import { createSignal } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
@@ -10,7 +11,9 @@ import {
   createComposerProps,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
+import { LitContent } from "./components/chat-composer-interop.tsx";
 import { renderChatComposer } from "./components/chat-composer.tsx";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationController } from "./composer-dictation.ts";
@@ -107,6 +110,25 @@ it("updates an existing private draft recovery error when the locale changes", a
   expect(document.querySelector('[role="alert"]')).toBe(error);
   expect(error.textContent).toBe(
     "Dieser Anhang kann nicht mehr heruntergeladen werden. Lassen Sie den Entwurf geöffnet und stellen Sie die Originaldatei wieder her, bevor Sie ihn verwerfen.",
+  );
+});
+
+it("mounts nested Solid content when opaque Lit content changes after mount", async () => {
+  const Label = (props: { text: string }) => <b class="nested-label">{props.text}</b>;
+  const [value, setValue] = createSignal<unknown>(html`<i>initial</i>`);
+  const view = mountSolid(() => <LitContent value={value()} />);
+
+  // Composer updates reach LitContent from its render effect, where nested
+  // directives must not create roots without an owner.
+  setValue(html`${solidTemplate(Label, { text: "attached" })}`);
+  flush();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".nested-label")?.textContent).toBe("attached"),
+  );
+
+  setValue(html`${solidTemplate(Label, { text: "still reactive" })}`);
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".nested-label")?.textContent).toBe("still reactive"),
   );
 });
 

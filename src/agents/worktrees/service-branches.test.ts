@@ -130,9 +130,11 @@ describe("ManagedWorktreeService branch discovery", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("coalesces concurrent default discovery and fetch without retaining settled refs", async ({
+  it("coalesces default discovery and refreshes settled refs after their freshness window", async ({
     signal,
   }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const remote = await createRemote();
     const head = await git(repo, "rev-parse", "HEAD");
     const nested = path.join(repo, "nested");
@@ -193,6 +195,7 @@ describe("ManagedWorktreeService branch discovery", () => {
       );
       await git(remote, "update-ref", "refs/heads/next", next);
       await git(remote, "symbolic-ref", "HEAD", "refs/heads/next");
+      clock.mockReturnValue(now + 30_000);
       await expect(resolveWorktreeBase(repo)).resolves.toMatchObject({
         commit: next,
         recordRef: "origin/next",

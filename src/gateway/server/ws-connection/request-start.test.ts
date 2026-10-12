@@ -3,7 +3,8 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { prepareGatewayReceiverHandoff, raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
 import { GatewayRequestStartTimeoutError, scheduleGatewayRequestStart } from "./request-start.js";
 

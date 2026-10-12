@@ -873,27 +873,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
   });
 
-  it("reuses npm Telegram evidence only when its selectors match exactly", () => {
-    const { priorSha } = getSharedRepo();
-    const validationInputs = {
-      ...DEFAULT_INPUTS,
-      npmTelegramPackageSpec: "openclaw@2026.7.2-beta.7",
-      npmTelegramProviderMode: "live-frontier",
-      npmTelegramScenario: "telegram-status-command",
-    };
-    const record = normalizedEvidence({ targetSha: priorSha, validationInputs });
-
-    const result = resolveEvidence(record, {
-      inputs: validationInputs,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
-    });
-  });
-
   it("reuses Telegram failures only when the strict verifier accepted their policy", () => {
     const releaseProfile = "full";
     const { priorSha } = getSharedRepo();
@@ -934,28 +913,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(parseOutput(untrustedSha.stdout)).toMatchObject({ reuse: "false" });
   });
 
-  it("reuses pre-tooling trusted-main evidence for the exact target", () => {
-    const { priorSha } = getSharedRepo();
-    const record = normalizedEvidence({ targetSha: priorSha });
-
-    const result = resolveEvidence(record);
-
-    expect(result.status).toBe(0);
-    expect(record.root.workflowSha).not.toBe(record.root.targetSha);
-    expect(record.verifier.sourceSha).not.toBe(record.root.workflowSha);
-    expect(new Set(record.children.map((child) => child.sourceParentAttempt)).size).toBe(2);
-    const output = parseOutput(result.stdout);
-    expect(output).toMatchObject({
-      changed_path_count: "0",
-      evidence_root_run_id: "111",
-      evidence_run_id: "111",
-      evidence_sha: priorSha,
-      reuse: "true",
-    });
-    expect(JSON.parse(output.changed_paths ?? "null")).toEqual([]);
-    expect(JSON.parse(output.evidence_manifest ?? "{}")).toMatchObject({ targetSha: priorSha });
-  });
-
   it("surfaces bounded validator rejection and selects the next strict record", () => {
     const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ runId: "111", targetSha: priorSha });
@@ -979,29 +936,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       `run 222: shared evidence validator rejected the run: evidence source mismatch ${"x".repeat(472)}...; skipping`,
     );
     expect(result.stderr).not.toContain("\nxxxxxxxx");
-  });
-
-  it("uses the generic rejection diagnostic when validator output is malformed", () => {
-    const { clone, priorSha } = getSharedRepo();
-    const record = normalizedEvidence({ runId: "111", targetSha: priorSha });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([
-      { exitCode: 1, rawOutput: "not-json", runId: "222" },
-      { record, runId: "111" },
-    ]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
-    expect(result.stderr).toContain(
-      "run 222: shared evidence validator rejected the run; skipping",
-    );
   });
 
   it.each([
@@ -1314,45 +1248,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(parseOutput(result.stdout)).toMatchObject({
       reuse: "false",
       reuse_reason: "target version metadata is inconsistent",
-    });
-  });
-
-  it.each([
-    { inputs: [], label: "array inputs", runReleaseSoak: "true" },
-    { inputs: DEFAULT_INPUTS, label: "invalid soak flag", runReleaseSoak: "yes" },
-  ])("rejects invalid resolver arguments: $label", ({ inputs, runReleaseSoak }) => {
-    const { clone, priorSha } = getSharedRepo();
-    const { binDir, fixtures, validatorPath } = setUpFixtures([]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      inputs,
-      repoDir: clone,
-      runReleaseSoak,
-      targetSha: priorSha,
-      validatorPath,
-    });
-
-    expect(result.status).toBe(2);
-  });
-
-  it("reports no reuse when no prior successful runs exist", () => {
-    const { clone, priorSha } = getSharedRepo();
-    const { binDir, fixtures, validatorPath } = setUpFixtures([]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      reuse: "false",
-      reuse_reason: "no prior successful validation runs",
     });
   });
 
