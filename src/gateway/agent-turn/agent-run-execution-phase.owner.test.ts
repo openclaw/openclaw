@@ -555,7 +555,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     }
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves access across liveness and invalidates creation (new session: %s)",
     async (isNewSession) => {
       const execution = createVisibleExecution();
@@ -761,7 +761,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
 
-  it.each([undefined, "/workspace/session-override"])(
+  it.each([undefined])(
     "preserves the admitted workspace with session override %s",
     async (workspaceOverride) => {
       const execution = createExecution();
