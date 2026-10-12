@@ -25,7 +25,7 @@ import {
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {

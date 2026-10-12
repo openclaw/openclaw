@@ -39,7 +39,7 @@ import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { isChatRunWorking } from "./components/chat-composer.ts";
+import { isChatRunWorking } from "./components/chat-composer.tsx";
 import "./components/chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,

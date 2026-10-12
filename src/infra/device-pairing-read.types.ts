@@ -14,11 +14,9 @@ export type DevicePairingReadCommand =
     };
 
 export type DevicePairingBinding = { identity: string; generation?: string };
-type DevicePairingOperatorBinding = { identity: string; scopes: readonly string[] };
 export type DevicePairingBindingFact = {
   deviceId: string;
   binding: DevicePairingBinding | null;
-  operatorBinding?: DevicePairingOperatorBinding | null;
 };
 export type DevicePairingNodeSnapshot = {
   readonly paired: readonly PairedDevice[];

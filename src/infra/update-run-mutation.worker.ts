@@ -64,13 +64,13 @@ export function recordUpdateRunMutationInWorker(
   }
   let entered = false;
   try {
+    assertCurrent("transaction");
     return writer().run(({ db }) => {
       entered = true;
       // The longer wait is for BEGIN only; mutation and commit keep the normal lock budget.
       if (busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
         setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       }
-      assertCurrent("transaction");
       if (input.requireNoRecovery) {
         const recovery = readRecovery(db, input.runId);
         if (recovery) {
