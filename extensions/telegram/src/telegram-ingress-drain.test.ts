@@ -403,6 +403,72 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
+  it("replays legacy spool rows without adoptedDmThreadId unchanged and restores it from new rows", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const eventId = (updateId: number) => String(updateId).padStart(16, "0");
+      // Row written before the optional field existed: same shape as any root message.
+      const legacy: TelegramSpooledUpdatePayload = {
+        version: 1,
+        updateId: 501,
+        receivedAt: 501,
+        update: dmRootMessageUpdate(),
+      };
+      const root = dmRootMessageUpdate();
+      const adopted: TelegramSpooledUpdatePayload = {
+        version: 1,
+        updateId: 502,
+        receivedAt: 502,
+        update: { ...root, update_id: 502, message: { ...root.message, message_id: 502 } },
+        adoptedDmThreadId: 500,
+      };
+      await queue.enqueue(eventId(501), legacy, { laneKey: "telegram:1001" });
+      await queue.enqueue(eventId(502), adopted, { laneKey: "telegram:1001:topic:500" });
+      const lanes = new Map<number, string | undefined>();
+      const resolved = new Map<number, ReturnType<typeof resolveTelegramMessageThreadSpec>>();
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        getConfig: () => cfg,
+        accountId: "default",
+        botInfo: dmTopicsBotInfo,
+        dispatch: async (update) => {
+          const { update_id: updateId, message } = update as {
+            update_id: number;
+            message: Parameters<typeof resolveTelegramMessageThreadSpec>[0];
+          };
+          const claims = await queue.listClaims();
+          lanes.set(updateId, claims.find((claim) => claim.id === eventId(updateId))?.laneKey);
+          resolved.set(updateId, resolveTelegramMessageThreadSpec(message));
+          return { kind: "completed" as const };
+        },
+      });
+      try {
+        monitor.start();
+        await monitor.waitForIdle();
+        expect(lanes).toEqual(
+          new Map([
+            [501, "telegram:1001"],
+            [502, "telegram:1001:topic:500"],
+          ]),
+        );
+        expect(resolved).toEqual(
+          new Map([
+            [501, { scope: "dm" }],
+            [502, { id: 500, scope: "dm" }],
+          ]),
+        );
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("scopes client-created DM topic adoption to the receiving bot account", async () => {
     await withTempState(async (stateDir) => {
       const resolved: Record<

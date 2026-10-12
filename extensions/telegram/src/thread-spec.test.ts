@@ -1,7 +1,11 @@
 // Telegram tests cover canonical thread-scope resolution and encoding.
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
-import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  resolveTelegramMessageThreadSpec,
+  withResolvedTelegramForumFlag,
+} from "./bot/helpers.js";
 import { adoptTelegramDmTopicMessage, createTelegramDmTopicAdoptState } from "./dm-topic-adopt.js";
 
 describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
@@ -31,6 +35,20 @@ describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
     const next = { ...rootMessage(), message_id: 502 } as Message;
     expect(adoptTelegramDmTopicMessage(next, state)).toBeUndefined();
     expect(resolveTelegramMessageThreadSpec(next)).toEqual({ scope: "dm" });
+  });
+
+  it("keeps the adopted topic on normalized message copies but not in serialized JSON", () => {
+    const state = createTelegramDmTopicAdoptState();
+    adoptTelegramDmTopicMessage(topicCreated, state);
+    const message = rootMessage();
+    expect(adoptTelegramDmTopicMessage(message, state)).toBe(500);
+    // Inbound normalization spreads a private message without `is_forum` into a copy.
+    const normalized = withResolvedTelegramForumFlag(message, false);
+    expect(normalized).not.toBe(message);
+    expect(resolveTelegramMessageThreadSpec(normalized)).toEqual({ id: 500, scope: "dm" });
+    // Durable rows carry the fact as explicit payload metadata, never as message state.
+    expect(JSON.stringify(message)).toBe(JSON.stringify(rootMessage()));
+    expect(resolveTelegramMessageThreadSpec(structuredClone(message))).toEqual({ scope: "dm" });
   });
 
   it("keeps a root DM message that no account adopted in the root session", () => {

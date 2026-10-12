@@ -35,15 +35,30 @@ type TelegramDmTopicMessage = Pick<
 >;
 
 const log = createSubsystemLogger("telegram/dm-topic-adopt");
-// Adopted thread id keyed by the message object the decision was made for.
+// The decision travels on the message itself: inbound normalization spreads
+// the message into a copy before authorization, and a symbol key survives
+// `{ ...message }` while JSON serialization and structured clone skip it.
+const ADOPTED_DM_THREAD_ID = Symbol("telegramAdoptedDmThreadId");
+type AdoptedDmTopicCarrier = { [ADOPTED_DM_THREAD_ID]?: number };
+// Fallback for non-extensible message objects, keyed by the decided object.
 const adoptedDmThreadIds = new WeakMap<object, number>();
+
+function recordTelegramAdoptedDmThreadId(message: object, threadId: number): void {
+  adoptedDmThreadIds.set(message, threadId);
+  if (Object.isExtensible(message)) {
+    // SAFETY: Only the module-private symbol key is written onto the message.
+    (message as AdoptedDmTopicCarrier)[ADOPTED_DM_THREAD_ID] = threadId;
+  }
+}
 
 export function createTelegramDmTopicAdoptState(): TelegramDmTopicAdoptState {
   return { pending: new Map(), consumed: new Map() };
 }
 
 export function getTelegramAdoptedDmThreadId(message: object): number | undefined {
-  return adoptedDmThreadIds.get(message);
+  // SAFETY: Only the module-private symbol key is read from the message.
+  const carried = (message as AdoptedDmTopicCarrier)[ADOPTED_DM_THREAD_ID];
+  return typeof carried === "number" ? carried : adoptedDmThreadIds.get(message);
 }
 
 function resolveTelegramUpdateMessage(update: unknown): object | undefined {
@@ -55,15 +70,15 @@ function resolveTelegramUpdateMessage(update: unknown): object | undefined {
 /** Adopted thread id of a spooled update, for its durable payload. */
 export function readTelegramAdoptedDmThreadId(update: unknown): number | undefined {
   const message = resolveTelegramUpdateMessage(update);
-  return message ? adoptedDmThreadIds.get(message) : undefined;
+  return message ? getTelegramAdoptedDmThreadId(message) : undefined;
 }
 
 /** Restore a persisted decision onto a replayed update before lane inspection. */
 export function restoreTelegramAdoptedDmThreadId(update: unknown, threadId: unknown): void {
   const message = resolveTelegramUpdateMessage(update);
   const parsed = parseStrictPositiveInteger(threadId);
-  if (message && parsed !== undefined && !adoptedDmThreadIds.has(message)) {
-    adoptedDmThreadIds.set(message, parsed);
+  if (message && parsed !== undefined && getTelegramAdoptedDmThreadId(message) === undefined) {
+    recordTelegramAdoptedDmThreadId(message, parsed);
   }
 }
 
@@ -88,7 +103,7 @@ export function adoptTelegramDmTopicMessage(
   message: TelegramDmTopicMessage,
   state: TelegramDmTopicAdoptState,
 ): number | undefined {
-  const recorded = adoptedDmThreadIds.get(message);
+  const recorded = getTelegramAdoptedDmThreadId(message);
   if (recorded !== undefined) {
     return recorded;
   }
@@ -137,7 +152,7 @@ export function adoptTelegramDmTopicMessage(
   state.pending.delete(userKey);
   state.consumed.set(`${chat.id}:${pending.createdMessageId}`, messageId);
   pruneMapToMaxSize(state.consumed, TELEGRAM_DM_TOPIC_ADOPT_MAX_ENTRIES);
-  adoptedDmThreadIds.set(message, pending.threadId);
+  recordTelegramAdoptedDmThreadId(message, pending.threadId);
   log.debug("adopted root DM message into client-created topic", {
     chatId: chat.id,
     messageId,
