@@ -7,7 +7,7 @@ import {
   projectLastRoutePatch,
   projectSessionMetaPatch,
   type PreparedSessionMetaPatch,
-} from "./metadata.js";
+} from "./metadata-projection.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";

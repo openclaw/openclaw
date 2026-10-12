@@ -33,7 +33,11 @@ it.each(["inbound", "route"] as const)(
           updatedAt: original.updatedAt + 100,
           delivery: {
             kind: "external",
-            route: { channel: "reef", target: { to: "user:existing", threadId: "old-thread" } },
+            route: {
+              channel: "reef",
+              target: { to: "user:existing" },
+              thread: { id: "old-thread" },
+            },
             context: { channel: "reef", to: "user:existing", threadId: "old-thread" },
             origin: { provider: "reef", to: "user:existing", threadId: "old-thread" },
           },
