@@ -131,6 +131,18 @@ it.each(["entry", "target"] as const)(
           writeSessionEntry(writer, scope.sessionKey, {
             sessionId: "entry-postimage",
             updatedAt: 10,
+            activitySummary: {
+              version: 1,
+              text: "Empty transcript",
+              updatedAt: 10,
+              sessionId: "entry-postimage",
+              generation: null,
+              maxSeq: null,
+              leafEntryId: null,
+              coveredMessages: 0,
+              totalMessages: 0,
+              omittedContent: false,
+            },
             skillsSnapshot: { prompt: "private saved prompt", skills: [] },
           }),
         scope,
@@ -152,15 +164,17 @@ it.each(["entry", "target"] as const)(
       }, scope);
       const sql = trackSqliteStatementExecutions(
         database.db,
-        ["participants", "windows", "metadata"],
+        ["participants", "windows", "metadata", "watermarks"],
         (query) =>
           /^select\b.*\bfrom "session_participants"/iu.test(query)
             ? "participants"
             : query.includes('from "session_windows" where "session_id" =')
               ? "windows"
-              : query.includes('as "member_ids_json"')
-                ? "metadata"
-                : null,
+              : query.startsWith("select coalesce(") && query.includes('as "max_seq"')
+                ? "watermarks"
+                : query.includes('as "member_ids_json"')
+                  ? "metadata"
+                  : null,
       );
       try {
         runOpenClawAgentWriteTransaction((writer) => {
@@ -229,6 +243,7 @@ it.each(["entry", "target"] as const)(
           );
           expect(retained.current.get(scope.sessionKey)).not.toHaveProperty("owner");
           expect(retained.projection?.get(scope.sessionKey)).toMatchObject({
+            activitySummaryWatermark: { generation: null, maxSeq: null },
             membership: [
               scope.sessionKey,
               null,
@@ -302,6 +317,21 @@ it.each(["entry", "target"] as const)(
           });
           expect(sql.counts.windows).toBe(windowsBeforePatch);
           const appendedWindow = appendedMutation.postimages?.get(scope.sessionKey)?.window;
+          const appendedWatermark = appendedMutation.postimages?.get(
+            scope.sessionKey,
+          )?.transcriptWatermark;
+          // The session header precedes the first appended message.
+          expect(appendedWatermark).toEqual({ generation: expect.any(String), maxSeq: 1 });
+          const beforePublication = { ...sql.counts };
+          const appendedPublication = prepareSessionEntryReplacementPublication(
+            { ...committed, ...appendedMutation.identity },
+            writer,
+            { postimages: appendedMutation.postimages },
+          );
+          expect(
+            appendedPublication.projection?.get(scope.sessionKey)?.activitySummaryWatermark,
+          ).toEqual(appendedWatermark);
+          expect(sql.counts).toEqual(beforePublication);
           expect(appendedWindow?.transcript_observed_at).toBe(
             appendedWindow?.transcript_updated_at,
           );

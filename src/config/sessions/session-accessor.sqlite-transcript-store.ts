@@ -552,9 +552,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     seq: number;
   }[],
   options: { legacyTextStorage?: boolean } = {},
-): void {
+): string | undefined {
   if (rows.length === 0) {
-    return;
+    return undefined;
   }
   const rewrites = rows.map((row) => {
     const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(row.event));
@@ -624,11 +624,11 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       }
       // Steering correlation changes no admitted input. Keep its running turn's fence,
       // while every other payload rewrite still invalidates admissions and cursors.
-      if (
-        !rewrites.every((row) => isSteerConfirmationRewrite(row.expectedEventJson, row.eventJson))
-      ) {
-        rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
-      }
+      const generation = rewrites.every((row) =>
+        isSteerConfirmationRewrite(row.expectedEventJson, row.eventJson),
+      )
+        ? undefined
+        : rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
       if (!projectionUnchanged) {
         if (options.legacyTextStorage) {
           // Media Doctor rebuilds after the physical storage migration; schema-22 readers
@@ -639,6 +639,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         }
       }
       touchTranscriptMutationInTransaction(database, resolved.sessionId);
+      return generation;
     },
   );
 }

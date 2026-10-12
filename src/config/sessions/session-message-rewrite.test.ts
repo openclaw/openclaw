@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   enrichAssistantTranscriptMediaForRun,
   publishAssistantTranscriptRewrite,
@@ -20,7 +23,12 @@ import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { createSessionWorkerOperationContext } from "./session-entry-patch.worker.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
+import {
+  applySessionMessageRewrite,
+  prepareSessionMessageRewrite,
+} from "./session-message-rewrite.worker.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -68,6 +76,49 @@ function fixture(agentId = "main", storePath?: string) {
     rows: () => readTranscriptEventRows(database, scope.sessionId),
   };
 }
+
+it("returns the exact committed rewrite generation without selecting it again", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const selection = {
+      scope: resolveSqliteTranscriptScope(f.scope),
+      target: { kind: "anchor" as const, anchor: f.anchor },
+    };
+    const expected = prepareSessionMessageRewrite(selection, { open: () => f.database });
+    assert(expected);
+    const sql = trackSqliteStatementExecutions(f.database.db, ["generation"], (query) =>
+      query.startsWith('select "generation" from "transcript_rewrite_watermarks"')
+        ? "generation"
+        : null,
+    );
+    let committedGeneration: string | undefined;
+    try {
+      const result = applySessionMessageRewrite(
+        { ...selection, expected, message: { role: "user", content: "rewritten" } },
+        createSessionWorkerOperationContext(
+          f.database,
+          { agentId: "main", path: f.database.path },
+          { admit() {} },
+          "Rewrite fixture",
+        ),
+        (_database, candidate) => candidate,
+      );
+      committedGeneration = result.result?.generation;
+      expect(committedGeneration).toEqual(expect.any(String));
+      expect(sql.counts.generation).toBe(0);
+    } finally {
+      sql.restore();
+    }
+    expect(
+      f.database.db
+        .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
+        .get(f.scope.sessionId)?.generation,
+    ).toBe(committedGeneration);
+    const rewritten = f.rows().find((row) => JSON.parse(row.eventJson).id === "admission");
+    assert(rewritten);
+    expect(JSON.parse(rewritten.eventJson).message.content).toBe("rewritten");
+  });
+});
 
 it.each([
   ["anchor", "main"],
