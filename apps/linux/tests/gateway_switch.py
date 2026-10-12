@@ -501,11 +501,12 @@ class OnboardingHandler(SwitchHandler):
 
 
 class GatewayOnboardingFixture(GatewaySwitchFixture):
-    def __init__(self, artifacts_dir):
+    def __init__(self, artifacts_dir, *, install_error=None):
         super().__init__(artifacts_dir)
         self.RequestHandlerClass = OnboardingHandler
         self.document_requests = []
         self.binary_sha256 = None
+        self.install_error = install_error
 
     def start(self):
         super().start()
@@ -513,6 +514,8 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         (Path.home() / ".openclaw/bin/openclaw").rename(Path.home() / "fixture-cli.py")
         (Path.home() / ".openclaw/openclaw.json").unlink()
         self.config_hash = None
+        if self.install_error:
+            Path("fixture-install-failure").write_text(self.install_error)
 
     def stage_binary(self, binary):
         # Tauri's documented Cargo resource layout is target/<profile> with
@@ -568,6 +571,33 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
             bounds = component.get_extents(Atspi.CoordType.SCREEN)
             self.chrome.command("xdotool", "mousemove", str(bounds.x + bounds.width // 2),
                                 str(bounds.y + bounds.height // 2), "click", "1")
+
+        if self.install_error:
+            def expect_install_error():
+                node = wait("Bundled runtime activation failed:", prefix=True)
+                text = Atspi.Text.get_text(node.get_text_iface(), 0, -1)
+                if self.install_error not in text:
+                    raise RuntimeError(f"Missing installation failure detail: {text!r}")
+
+            wait("Where should your assistant live?", "heading")
+            expect_install_error()
+            self.capture("fallback")
+            click("On another computer", prefix=True)
+            wait("Gateway URL", "entry")
+            click("On this computer", prefix=True)
+            click("Continue")
+            wait("Choose a release channel", "heading")
+            click("Install OpenClaw")
+            wait("OpenClaw needs attention", "heading")
+            expect_install_error()
+            attempts = Path("fixture-runtime-install-attempts").read_text().splitlines()
+            if len(attempts) != 2:
+                raise RuntimeError(f"Expected automatic and manual installation attempts: {attempts!r}")
+            self.chrome.record("automatic startup failure offers visible manual Gateway choices and retry", True)
+            self.capture("failed-retry")
+            self.passed = True
+            print("PASS: automatic startup falls back with its error and manual installation remains retryable", flush=True)
+            return
 
         wait("Custodian chat", "heading")
         if not Path("fixture-installer-called").is_file() or not Path("fixture-runtime-installed.json").is_file():
