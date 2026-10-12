@@ -113,7 +113,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           });
         }
         if (previousIdentity?.kind === "oauth") {
-          context.githubOAuthService?.retireProfile(previousIdentity.profileId);
+          await context.githubOAuthService?.retireProfileAsync(previousIdentity.profileId);
         }
         respond(
           true,
@@ -182,7 +182,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
   "tools.github.authorize.cancel": defineValidatedGatewayHandler(
     "tools.github.authorize.cancel",
     validateToolsGitHubAuthorizeCancelParams,
-    ({ params, respond, context }) => {
+    async ({ params, respond, context }) => {
       const service = context.githubOAuthService;
       if (!service) {
         respond(
@@ -192,7 +192,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, { cancelled: service.cancelAuthorization(params.requestId) });
+      respond(true, { cancelled: await service.cancelAuthorizationAsync(params.requestId) });
     },
   ),
 };

@@ -52,6 +52,10 @@ const loaders = {
   userBackground: async () =>
     (await import("./user-background.worker.js")).userBackgroundOperations,
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
+  githubSecrets: () =>
+    import("../secrets/store/secret-store-github-handoff.worker.js").then(
+      (m) => m.githubSetupOperations,
+    ),
   githubSetup: () =>
     import("../secrets/store/secret-store-github-handoff.worker.js").then(
       (m) => m.githubSetupOperations,

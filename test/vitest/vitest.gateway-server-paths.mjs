@@ -218,6 +218,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-companion-runtime.test.ts",
   "src/gateway/session-control-preflights.incognito.test.ts",
   "src/gateway/session-control.incognito.test.ts",
+  "src/gateway/session-cost-usage-lifetime.test.ts",
   "src/gateway/session-create-atomic-initialization.test.ts",
   "src/gateway/session-create-collision.test.ts",
   "src/gateway/session-create-display-name.test.ts",

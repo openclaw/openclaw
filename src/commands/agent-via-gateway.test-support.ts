@@ -4,6 +4,35 @@ import type { GatewayProtocolRequestError } from "../../packages/gateway-client/
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayLockOptions } from "../infra/gateway-lock.js";
 
+export function createSignalProcess() {
+  type SignalName = "SIGINT" | "SIGTERM";
+  const listeners = new Map<SignalName, Set<() => void>>();
+  const processLike = {
+    exitCode: undefined as NodeJS.Process["exitCode"],
+    on(signal: SignalName, handler: () => void) {
+      const current = listeners.get(signal) ?? new Set<() => void>();
+      current.add(handler);
+      listeners.set(signal, current);
+      return processLike;
+    },
+    off(signal: SignalName, handler: () => void) {
+      listeners.get(signal)?.delete(handler);
+      return processLike;
+    },
+  };
+  return {
+    processLike,
+    emit(signal: SignalName) {
+      for (const handler of listeners.get(signal) ?? []) {
+        handler();
+      }
+    },
+    listenerCount(signal: SignalName) {
+      return listeners.get(signal)?.size ?? 0;
+    },
+  };
+}
+
 export async function settleGatewayAgentRequest(params: {
   response: Pick<
     Parameters<GatewayPendingRequests["handleResponse"]>[0],

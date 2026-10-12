@@ -9,6 +9,7 @@ import type {
   SessionExactEntriesWorkerRequest,
 } from "./session-entry-read.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type SessionStoreWorkerReadScope = {
   agentId: string;
@@ -56,6 +57,11 @@ export type SessionEntryCohortReader = {
   readonly logicalAgentId: string;
   readonly storePaths: readonly string[];
   assertCurrent(): void;
+  /** Return committed data without retaining writer admission for a consumer effect. */
+  readEntry(assertCallerCurrent: () => void): Promise<{
+    entry: InternalSessionEntry;
+    source: SessionEntryCohortResult["source"];
+  }>;
   withRead<T>(
     request: Omit<SessionEntryCohortRequest, "expected">,
     assertCallerCurrent: () => void,

@@ -45,6 +45,11 @@ no new GitHub-specific SDK subpath.
 | `read`                      | `await readAsync`                  |
 | `personalStatus`            | `await personalStatusAsync`        |
 
+The Gateway context also exposes managed OAuth methods through `githubOAuthService`.
+Replace `cancelAuthorization(requestId)` with `await cancelAuthorizationAsync(requestId)`
+and `retireProfile(profileId)` with `await retireProfileAsync(profileId)`. The legacy
+methods retain synchronous results for this SDK major and warn on use.
+
 The same Gateway context exposes personal connection operations through
 `githubOAuthService.personal`. Replace
 `personal.cancelAuthorization(action, requestId)` with

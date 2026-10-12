@@ -59,6 +59,21 @@ describe("emitSubagentEndedHookOnce", () => {
     lifecycleMocks.runSubagentEnded.mockClear();
   });
 
+  it("leaves completion unmarked when no subagent_ended hook ran", async () => {
+    lifecycleMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: () => false,
+      runSubagentEnded: lifecycleMocks.runSubagentEnded,
+    });
+
+    const params = createEmitParams();
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
+
+    expect(emitted).toBe(false);
+    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(params.entry.endedHookEmittedAt).toBeUndefined();
+    expect(params.recordEmitted).not.toHaveBeenCalled();
+  });
+
   it("returns false when the global hook runner is not initialized yet", async () => {
     lifecycleMocks.getGlobalHookRunner.mockReturnValue(null);
 

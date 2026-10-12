@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
@@ -49,23 +50,29 @@ export function writeSessionCostUsagePartitionsInDatabase(
         .where("key", "=", usageCostPartitionKey(params.rollupId, date)),
     );
   }
-  for (const partition of params.partitions ?? []) {
-    const values = {
-      value_json: partition.valueJson,
-      blob: partition.blob,
-      expires_at: null,
-      updated_at: params.updatedAt,
-    };
+  for (const partitions of chunkItems(params.partitions ?? [], 100)) {
     executeSqliteQuerySync(
       db,
       kysely
         .insertInto("cache_entries")
-        .values({
-          scope: USAGE_COST_PARTITION_SCOPE,
-          key: usageCostPartitionKey(params.rollupId, partition.date),
-          ...values,
-        })
-        .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
+        .values(
+          partitions.map((partition) => ({
+            scope: USAGE_COST_PARTITION_SCOPE,
+            key: usageCostPartitionKey(params.rollupId, partition.date),
+            value_json: partition.valueJson,
+            blob: partition.blob,
+            expires_at: null,
+            updated_at: params.updatedAt,
+          })),
+        )
+        .onConflict((conflict) =>
+          conflict.columns(["scope", "key"]).doUpdateSet((eb) => ({
+            value_json: eb.ref("excluded.value_json"),
+            blob: eb.ref("excluded.blob"),
+            expires_at: eb.ref("excluded.expires_at"),
+            updated_at: eb.ref("excluded.updated_at"),
+          })),
+        ),
     );
   }
 }
@@ -77,8 +84,8 @@ export function readSessionCostUsagePartitionsInDatabase(
   endMs = Number.POSITIVE_INFINITY,
 ): UsageCostPartition[] {
   assertUsagePartitionWorker();
-  const start = Number.isFinite(startMs) ? new Date(startMs).toISOString().slice(0, 10) : "";
-  const end = Number.isFinite(endMs) ? new Date(endMs).toISOString().slice(0, 10) : "\uffff";
+  const start = Number.isFinite(startMs) ? `${new Date(startMs).toISOString().slice(0, 7)}-01` : "";
+  const end = Number.isFinite(endMs) ? `${new Date(endMs).toISOString().slice(0, 7)}-01` : "\uffff";
   return executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<CacheDatabase>(db)

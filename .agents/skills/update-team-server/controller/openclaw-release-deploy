@@ -2298,7 +2298,24 @@ recover_journal() {
 	native_update_root="$(proof journal-field "$journal_file" nativeUpdate.backupRoot 2>/dev/null || true)"
 	[[ "$native_update_root" != null ]] || native_update_root=""
 	policy_identity="$(proof policy "$config_file")"
+	current_sha=absent
+	if [[ -L "$current_link" ]]; then
+		current_sha="$(basename "$(read_pointer "$current_link")")"
+	fi
 	if [[ -n "$native_update_root" ]]; then
+		# A migrated candidate may already be serving new writes; verify before restoring its backup.
+		if [[ "$mode" == recover && "$current_sha" == "$candidate_sha" && "$candidate_sha" != "$predecessor_sha" ]] &&
+			bind_successor_generation &&
+			[[ "$suspension_pid:$suspension_generation" != "$expected_pid:$expected_generation" &&
+				"$(realpath "$proc_root/$suspension_pid/cwd")" == "$candidate_release" ]] &&
+			wait_for_live "$candidate_release" "$candidate_info" system "$suspension_pid" "$suspension_generation"; then
+			recheck_generation system "$suspension_pid" "$suspension_generation" || return 1
+			[[ "$(read_pointer "$current_link")" == "$candidate_release" ]] || return 1
+			verified_markers record "$candidate_sha" || return 1
+			proof unlink-exact "$journal_file" "$root_uid" "$session_witness_record" || return 1
+			printf 'RECOVERED phase=%s action=verified-migrated-candidate-forward session-proof=%s\n' "$phase" "$session_proof"
+			return 0
+		fi
 		predecessor_stopped=1
 		if ! predecessor_is_stopped "$expected_pid"; then bind_successor_generation || return 1; fi
 		rollback_armed=1
@@ -2307,10 +2324,6 @@ recover_journal() {
 	fi
 	if [[ -z "$reconcile_config_hash" ]]; then assert_protected_identity; fi
 	policy_identity="$(proof policy "$config_file")"
-	current_sha=absent
-	if [[ -L "$current_link" ]]; then
-		current_sha="$(basename "$(read_pointer "$current_link")")"
-	fi
 	if [[ "$(proof gateway-runtime changing "$serving_root")" == yes ]]; then
 		# File publication and daemon-reload are separate commits. Reconcile only
 		# a journal-authorized command after all earlier manager jobs have settled.

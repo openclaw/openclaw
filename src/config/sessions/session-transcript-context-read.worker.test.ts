@@ -1,6 +1,11 @@
+import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -8,6 +13,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
 import type { SessionTranscriptRawDeltaResult } from "./session-accessor.sqlite-contract.js";
@@ -22,6 +28,47 @@ import * as contextWorker from "./session-transcript-read-worker-runtime.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
+
+it("reads a prepared transcript snapshot while another writer owns the FIFO", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ label: "prepared-read-writer-fifo" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "prepared-read",
+      sessionKey: "agent:main:prepared-read",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    await manager.appendMessageAsync({ role: "user", content: "committed", timestamp: 1 });
+    const before = await readSessionTranscriptWatermarkAsync(target);
+    const outside = AsyncResource.bind(<T>(run: () => T) => run());
+    const entered = createDeferred();
+    const release = createDeferred();
+    const writer = runOpenClawAgentWriteAdmission(
+      { agentId: target.agentId, path: target.storePath },
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
+    let snapshot: ReturnType<typeof readSessionTranscriptWatermarkAsync> | undefined;
+    try {
+      await withinTest(entered.promise, signal);
+      snapshot = outside(() => readSessionTranscriptWatermarkAsync(target));
+      expect(
+        await withinTest(
+          awaitGateBeforeSettlement(snapshot, writer, "Writer released before snapshot read"),
+          signal,
+        ),
+      ).toEqual(before);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([writer, snapshot]);
+    }
+  });
+});
 
 it("keeps admitted delta reads with their writer when independent history cannot settle", async () => {
   await withOpenClawTestState({ label: "locked-admitted-delta" }, async (state) => {
@@ -165,8 +212,13 @@ it("validates context projection inside a transcript lock and append preparation
   });
 });
 
-it("keeps a fenced projection valid after a later append", async () => {
-  await withOpenClawTestState({ label: "projection-later-append" }, async (state) => {
+it.each([
+  ["projection", "append"],
+  ["projection", "remove"],
+  ["full context", "append"],
+  ["full context", "remove"],
+] as const)("validates a fenced %s after an owned %s", async (route, change) => {
+  await withOpenClawTestState({ label: `context-${change}` }, async (state) => {
     const target = {
       agentId: "main",
       sessionId: "projection-admission",
@@ -185,21 +237,41 @@ it("keeps a fenced projection valid after a later append", async () => {
     if (!anchor) {
       throw new Error("Missing current-input anchor");
     }
+    const mutate = AsyncResource.bind(async () => {
+      if (change === "remove") {
+        expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === current)).toBe(1);
+      } else {
+        await manager.appendMessageAsync({ role: "user", content: "later", timestamp: 3 });
+      }
+    });
     const projection = runWithSessionTranscriptReadFence(
       { ...anchor, role: "user", logicalTurnId: "projection-turn" },
       () =>
-        readSessionTranscriptContextProjectionAsync(target, async (source) => {
-          const snapshot = await contextWorker.readSessionTranscriptContextMessagesInWorker(
-            source.target,
-            source.admission,
-            undefined,
-            source.physicalSource?.expectedIdentity,
-          );
-          await manager.appendMessageAsync({ role: "user", content: "later", timestamp: 3 });
-          return { value: snapshot.messages, version: snapshot.version };
-        }),
+        route === "projection"
+          ? readSessionTranscriptContextProjectionAsync(target, async (source) => {
+              const snapshot = await contextWorker.readSessionTranscriptContextMessagesInWorker(
+                source.target,
+                source.admission,
+                undefined,
+                source.physicalSource?.expectedIdentity,
+              );
+              await mutate();
+              return { value: snapshot.messages, version: snapshot.version };
+            })
+          : SessionManager.readSessionContextAsync(target, async (messages) => {
+              const selected = [...messages];
+              await mutate();
+              return selected;
+            }),
     );
-    await expect(projection).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
+    if (change === "remove") {
+      await expect(projection).rejects.toMatchObject({
+        name: "SessionTranscriptReadFenceError",
+        message: "Current-turn transcript admission changed",
+      });
+    } else {
+      await expect(projection).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
+    }
   });
 });
 

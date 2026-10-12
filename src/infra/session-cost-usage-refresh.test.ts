@@ -179,10 +179,13 @@ describe("session cost usage refresh", () => {
           requestCostUsageCacheRefresh({ agentId, storePath, rebuildRows: [rebuild] }),
         );
         await vi.advanceTimersByTimeAsync(0);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        // The first completed batch yields before admitting the next one.
+        await vi.advanceTimersByTimeAsync(1);
         expect(refresh).toHaveBeenCalledTimes(2);
         expect(refresh.mock.calls[0]?.[0].rebuildRows).toEqual([rebuild]);
         expect(refresh.mock.calls[1]?.[0].sessionFiles).toEqual(pending.slice(0, 50));
-        await vi.advanceTimersByTimeAsync(50);
+        await vi.advanceTimersByTimeAsync(52);
         const accepted = refresh.mock.calls.slice(2).map(([params]) => params);
         expect(accepted.map((params) => params.sessionFiles?.length)).toEqual([50, 50, 22]);
         expect(accepted.flatMap((params) => params.sessionFiles ?? [])).toEqual([

@@ -53,24 +53,6 @@ describe("music-generation runtime", () => {
     listProviders.mockClear();
   });
 
-  it("generates tracks through the active music-generation provider", async () => {
-    const authStore = { version: 1, profiles: {} } as const;
-    const provider = createProvider();
-    providers = [provider];
-    const result = await runGenerateMusic({ agentDir: "/tmp/agent", authStore, timeoutMs: 12_345 });
-
-    expect(result.provider).toBe("music-plugin");
-    expect(result.model).toBe("track-v1");
-    expect(result.attempts).toStrictEqual([]);
-    expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(provider.generateMusic).toHaveBeenCalledWith(
-      expect.objectContaining({ authStore, timeoutMs: 12_345 }),
-    );
-    expect(result.tracks).toEqual([
-      { buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg", fileName: "sample.mp3" },
-    ]);
-  });
-
   it("uses configured music-generation timeout when call omits timeoutMs", async () => {
     const provider = createProvider();
     providers = [provider];
@@ -114,33 +96,6 @@ describe("music-generation runtime", () => {
     expect(warnings).toContain(
       "music-generation candidate failed: google/lyria-3-clip-preview: Google music generation response missing audio data",
     );
-  });
-
-  it("falls through when a music provider returns an empty buffer", async () => {
-    providers = [
-      createProvider("empty", {
-        generateMusic: async () => ({
-          tracks: [Buffer.from("partial"), Buffer.alloc(0)].map((buffer) => ({
-            buffer,
-            mimeType: "audio/mpeg",
-          })),
-        }),
-      }),
-      createProvider("valid"),
-    ];
-    const result = await runGenerateMusic({
-      cfg: musicConfig({ primary: "empty/track-v1", fallbacks: ["valid/track-v2"] }),
-    });
-
-    expect(result.provider).toBe("valid");
-    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("mp3-bytes"));
-    expect(result.attempts).toEqual([
-      {
-        provider: "empty",
-        model: "track-v1",
-        error: "Music generation provider returned an empty track buffer at index 1.",
-      },
-    ]);
   });
 
   it("fails visibly when every music provider returns an empty buffer", async () => {

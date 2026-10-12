@@ -16,6 +16,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 export type WorkspaceSandboxParams = Pick<
   EmbeddedRunAttemptParams,
   | "abortSignal"
+  | "awaitSessionDiffBaseline"
   | "agentId"
   | "config"
   | "cwd"
@@ -110,6 +111,10 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   ) =>
     runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
       assertCurrent();
+      if (sandboxRuntimeStatus?.sandboxed) {
+        await params.awaitSessionDiffBaseline?.();
+        assertCurrent();
+      }
       await fs.mkdir(resolvedWorkspace, { recursive: true });
       assertCurrent();
       const sandbox = sandboxRuntimeStatus

@@ -736,9 +736,14 @@ it.each([
       ]),
     }));
     const original = subagentRuns.get("pending-ended-hook")!;
-    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(
-      createHookRunner(createEmptyPluginRegistry()),
-    );
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "test",
+      hookName: "subagent_ended",
+      source: "test",
+      handler: async () => {},
+    });
+    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(createHookRunner(registry));
     const cleanup = createSubagentRegistryContextCleanup({
       isEndedHookOwnerCurrent: (entry) =>
         isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),

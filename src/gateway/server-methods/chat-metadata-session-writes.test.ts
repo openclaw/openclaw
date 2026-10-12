@@ -21,6 +21,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -523,6 +524,7 @@ it.each([
       setRuntimeConfigSnapshot(config);
       const owner = ensureProfileForEmail("metadata-session-owner@example.test");
       const viewer = ensureProfileForEmail("metadata-session-viewer@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const authProfileId = connectChatMetadataAccount(owner.id);
       const client = sharingPolicyClient({ user: viewer.id });
       const selected = { agentId: "main", sessionKey: "agent:main:metadata-read-marker" };
