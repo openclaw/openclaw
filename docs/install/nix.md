@@ -90,12 +90,22 @@ OpenClaw reads JSON5 config from `OPENCLAW_CONFIG_PATH` and stores mutable data 
 
 ### Service PATH discovery
 
-The launchd/systemd gateway service auto-discovers Nix-profile binaries so plugins and tools that shell out to `nix`-installed executables work without manual PATH setup:
+For a CLI-managed Linux systemd Gateway service, Nix-profile binaries are added to the service `PATH`:
 
 - When `NIX_PROFILES` is set, every entry is added to the service PATH in right-to-left precedence (matches Nix shell precedence: rightmost wins).
 - When `NIX_PROFILES` is unset, `~/.nix-profile/bin` is added as a fallback.
 
-This applies to both macOS launchd and Linux systemd service environments.
+A CLI-managed macOS launchd service uses a canonical system `PATH` instead. It
+does not add `NIX_PROFILES` or `~/.nix-profile/bin`, and it does not inherit your
+interactive shell's `PATH`. For Nix-installed CLI backends or stdio MCP servers,
+configure an absolute executable path where the integration accepts one.
+
+Services managed by nix-openclaw have their own declarative runtime environment.
+Declare tool packages through nix-openclaw so they are included in the Gateway's
+runtime `PATH`; installing a package only in your login-shell profile does not
+make it available to the service. See the
+[nix-openclaw plugin guide](https://github.com/openclaw/nix-openclaw#plugins) for
+its package configuration.
 
 ## Related
 
