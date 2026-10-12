@@ -18,6 +18,7 @@ import {
   cleanupPath,
   createEnoentError,
   createErrnoError,
+  createTrashAssertions,
   deletionJournal,
   expectRecordFields,
   expectRespondErrorContaining,
@@ -417,18 +418,9 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
 }));
 
-function expectTrashedWithinParent(pathname: string, declaredPath = pathname): void {
-  expect(mocks.movePathToTrash).toHaveBeenCalledWith(
-    pathname,
-    expect.objectContaining({
-      allowedRoots: expect.arrayContaining([path.dirname(declaredPath)]),
-    }),
-  );
-}
-
-function expectNotTrashed(pathname: string): void {
-  expect(mocks.movePathToTrash.mock.calls.map(([target]) => target)).not.toContain(pathname);
-}
+const { expectTrashedWithinParent, expectNotTrashed } = createTrashAssertions(
+  mocks.movePathToTrash,
+);
 
 vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");

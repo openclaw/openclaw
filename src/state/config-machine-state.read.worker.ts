@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
 import type { WorkerOperations } from "./worker-operation-registry.js";
 
 export const machineStateReadOperations = {

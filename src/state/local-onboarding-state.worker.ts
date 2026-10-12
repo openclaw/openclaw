@@ -1,10 +1,10 @@
+import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
 import { writeConfigMachineStateInDatabase } from "./config-machine-state-write.js";
-import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import {
   localOnboardingStateKey,
   normalizeLocalOnboardingState,
   type LocalOnboardingState,
-} from "./local-onboarding-state.js";
+} from "./local-onboarding-state-shared.js";
 import type { WorkerOperations, WorkerWriteOperationContext } from "./worker-operation-registry.js";
 
 export const localOnboardingOperations = {

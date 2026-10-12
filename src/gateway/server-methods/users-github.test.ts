@@ -1,6 +1,6 @@
 // Install synthetic OAuth and subprocess transport before RPC modules load.
 // oxfmt-ignore
-import { network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
+import { createGitHubTestClient, network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
@@ -78,24 +78,7 @@ let bob: GatewayClient;
 let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>>;
 
 function user(email: string, scopes = ["operator.read"]): GatewayClient {
-  const profile = ensureProfileForEmail(email);
-  const client: GatewayClient = {
-    connId: `connection-${profile.id}`,
-    authenticatedUserId: email,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
-  };
+  const client = createGitHubTestClient(ensureProfileForEmail(email), email, scopes);
   clients.add(client);
   return client;
 }

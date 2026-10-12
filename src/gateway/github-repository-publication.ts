@@ -5,7 +5,6 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   decodeGitHubPublicationRequester,
@@ -40,6 +39,7 @@ import {
   type GitHubPublicationSessionRequestV2,
 } from "./github-publication-coordinator-methods.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-publication-defer.kernel.js";
+import { warnGitHubPublicationDeprecation } from "./github-publication-deprecation.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
   matchesGitHubPublicationIdentityRow,
@@ -647,11 +647,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     ...methods,
     /** @deprecated Use requestForClaimV2; removed in the next Plugin SDK major. */
     requestForClaim(input: GitHubPublicationClaimRequest) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "requestForClaim",
-        replacement: "requestForClaimV2",
-      });
+      warnGitHubPublicationDeprecation("requestForClaim");
       return methods.requestForClaim(input);
     },
     requestForClaimV2(input: GitHubPublicationClaimRequestV2) {
@@ -662,11 +658,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use requestForSessionV2; removed in the next Plugin SDK major. */
     requestForSession(input: SharedRequest) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "requestForSession",
-        replacement: "requestForSessionV2",
-      });
+      warnGitHubPublicationDeprecation("requestForSession");
       return methods.requestForSession(input);
     },
     requestForSessionV2(input: GitHubPublicationSessionRequestV2) {
@@ -680,20 +672,12 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       input: SessionGitHubPublishParams,
       action: PersonalGitHubSessionAction,
     ) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "requestPersonalForSession",
-        replacement: "requestPersonalForSessionV2",
-      });
+      warnGitHubPublicationDeprecation("requestPersonalForSession");
       return methods.requestPersonalForSession(input, action);
     },
     /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
     confirmPersonal(input: SessionGitHubConfirmParams, action: PersonalGitHubSessionAction) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "confirmPersonal",
-        replacement: "confirmPersonalV2",
-      });
+      warnGitHubPublicationDeprecation("confirmPersonal");
       return methods.confirmPersonal(input, action);
     },
     requestPersonalForSessionV2(

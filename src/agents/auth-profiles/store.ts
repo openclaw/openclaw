@@ -8,7 +8,6 @@ import { isDeepStrictEqual } from "node:util";
 import { projectModelProviderConfig } from "../../config/model-provider-config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { readUserModelAuthProfile } from "../../state/user-model-accounts.js";
@@ -69,7 +68,12 @@ import {
   setRuntimeLocalProfileMetadata,
   updateRuntimeAuthProfileStoreInheritedCredentials,
 } from "./runtime-snapshot-owner.js";
-import { publishPreparedRuntimeAuthProfileStoreSnapshot } from "./runtime-snapshot-publication.js";
+import {
+  deferRuntimeSnapshotsAfterCommit,
+  publishRuntimeSnapshotsAfterCommit,
+  publishPreparedRuntimeAuthProfileStoreSnapshot,
+  type RuntimeSnapshotPublication,
+} from "./runtime-snapshot-publication.js";
 import {
   clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
@@ -195,40 +199,6 @@ function resolveRuntimeAuthProfileLoadOptions(
     return options;
   }
   return { ...options, inheritedAuthDir: mode.agentDir };
-}
-
-type RuntimeSnapshotPublication = {
-  agentDir?: string;
-  databasePath: string;
-  publish: () => boolean;
-};
-
-function publishRuntimeSnapshotsAfterCommit(publication: RuntimeSnapshotPublication): boolean {
-  // A committed write can no longer roll back, so publication failure must
-  // evict only the exact derived owner that could now be stale.
-  try {
-    return publication.publish();
-  } catch (err) {
-    clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-      publication.databasePath,
-      publication.agentDir,
-    );
-    authProfilesLog.warn("auth profile store committed but runtime snapshot publication failed", {
-      err,
-    });
-    return false;
-  }
-}
-
-function deferRuntimeSnapshotsAfterCommit(
-  database: AuthProfileDatabase,
-  publication: RuntimeSnapshotPublication,
-  publishWithoutTransaction = false,
-): void {
-  const publish = () => publishRuntimeSnapshotsAfterCommit(publication);
-  if (!deferSqlitePostCommitPublication(database.db, publish) && publishWithoutTransaction) {
-    publish();
-  }
 }
 
 function resolvePersistedLoadOptions(

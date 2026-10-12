@@ -317,3 +317,21 @@ export function expectStringNotContaining(value: unknown, text: string) {
   expect(typeof value).toBe("string");
   expect(value as string).not.toContain(text);
 }
+
+export function createTrashAssertions(
+  movePathToTrash: Mock<(pathname?: string) => Promise<string>>,
+) {
+  return {
+    expectTrashedWithinParent(pathname: string, declaredPath = pathname): void {
+      expect(movePathToTrash).toHaveBeenCalledWith(
+        pathname,
+        expect.objectContaining({
+          allowedRoots: expect.arrayContaining([path.dirname(declaredPath)]),
+        }),
+      );
+    },
+    expectNotTrashed(pathname: string): void {
+      expect(movePathToTrash.mock.calls.map(([target]) => target)).not.toContain(pathname);
+    },
+  };
+}

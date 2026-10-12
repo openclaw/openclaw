@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { authProfileRuntimeMode } from "../agents/auth-profiles/runtime-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -15,8 +16,10 @@ import {
 } from "../test-utils/web-provider-runtime.test-helpers.js";
 import { hasConfiguredWebSearchProvider, prepareWebSearchConfiguration } from "./runtime.js";
 
+// mock-isolation: Use fixed discovery policy without opening machine state for provider fixtures.
 vi.mock("../plugins/bundled-discovery-state.js", () => ({
   prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
 }));
 
 const { resolveRuntimeWebSearchProvidersMock } = vi.hoisted(() => ({
@@ -41,6 +44,7 @@ function createCustomSearchProvider(overrides: Partial<WebSearchTestProviderPara
 }
 
 beforeEach(() => {
+  noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
   clearRuntimeConfigSnapshot();
   clearActiveRuntimeWebToolsMetadata();
   resolveRuntimeWebSearchProvidersMock.mockReset();

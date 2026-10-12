@@ -8,7 +8,6 @@ import type {
 import { preparePersonalGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
-import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { GitHubPublicationSessionLifecycle } from "../state/github-publication-read.types.js";
 import {
   readGitHubPublicationSessionLifecycle,
@@ -36,6 +35,7 @@ import {
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity as SessionIdentity,
 } from "./github-publication-availability.js";
+import { warnGitHubPublicationDeprecation } from "./github-publication-deprecation.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import {
   GitHubPublicationRequesterUnavailableError,
@@ -590,11 +590,7 @@ export function createPersonalGitHubPublicationCoordinator(
       session: SessionIdentity & { archivedAt?: number | null },
       requestId: string,
     ) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "personalStatus",
-        replacement: "personalStatusAsync",
-      });
+      warnGitHubPublicationDeprecation("personalStatus");
       action.assertCurrent();
       const row = readPersonalGitHubPublication(action.owner, { requestId });
       if (!row || row.session_key !== session.sessionKey || row.agent_id !== session.agentId) {
@@ -684,20 +680,12 @@ export function createPersonalGitHubPublicationCoordinator(
       input: SessionGitHubPublishParams,
       action: PersonalGitHubSessionAction,
     ) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "requestPersonalForSession",
-        replacement: "requestPersonalForSessionV2",
-      });
+      warnGitHubPublicationDeprecation("requestPersonalForSession");
       return methods.requestPersonalForSession(input, action);
     },
     /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
     confirmPersonal(input: SessionGitHubConfirmParams, action: PersonalGitHubSessionAction) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "confirmPersonal",
-        replacement: "confirmPersonalV2",
-      });
+      warnGitHubPublicationDeprecation("confirmPersonal");
       return methods.confirmPersonal(input, action);
     },
     requestPersonalForSessionV2(

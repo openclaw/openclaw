@@ -20,7 +20,6 @@ import {
   resolveManagedGitHubProfileRoot,
 } from "../agents/github-tool-identity.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import {
@@ -40,6 +39,7 @@ import {
 } from "../state/user-github-connections.js";
 import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
+import { warnGitHubPublicationDeprecation } from "./github-publication-deprecation.js";
 
 export type PersonalGitHubAction = { owner: string; assertCurrent: () => void };
 export type PersonalGitHubActionV2 = PersonalGitHubAction & { signal: AbortSignal };
@@ -664,11 +664,7 @@ export function createPersonalGitHubOAuthLifecycle() {
     },
     /** @deprecated Use cancelAuthorizationAsync; removed in the next Plugin SDK major. */
     cancelAuthorization(action: PersonalGitHubAction, requestId: string): boolean {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "personal.cancelAuthorization",
-        replacement: "personal.cancelAuthorizationAsync",
-      });
+      warnGitHubPublicationDeprecation("personal.cancelAuthorization");
       return cancelUserGitHubAuthorizationSync(action.owner, requestId, () => guard(action));
     },
     async cancelAuthorizationAsync(
@@ -684,11 +680,7 @@ export function createPersonalGitHubOAuthLifecycle() {
     },
     /** @deprecated Use disconnectAsync; removed in the next Plugin SDK major. */
     disconnect(action: PersonalGitHubAction): void {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "personal.disconnect",
-        replacement: "personal.disconnectAsync",
-      });
+      warnGitHubPublicationDeprecation("personal.disconnect");
       disconnectUserGitHubConnectionSync(action.owner, () => guard(action));
       clearNativeGitHubTokenCache();
     },

@@ -18,10 +18,6 @@ import {
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 import {
-  clearUserProfileAuthLinkAsync,
-  setUserProfileAuthLinkAsync,
-} from "./user-model-account-operations.js";
-import {
   clearUserProfileAuthLink,
   connectUserModelAccount,
   listUserModelAccounts,
@@ -35,8 +31,7 @@ import {
 } from "./user-model-accounts.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
-import { mergeCanonicalUserProfiles } from "./user-profile-writes.js";
-import { linkEmail, setAvatar } from "./user-profile-writes.worker.js";
+import { linkEmail, mergeProfiles, setAvatar } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
@@ -151,17 +146,11 @@ describe("personal model accounts", () => {
     await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([
       expect.objectContaining({ provider: "anthropic", authProfileId }),
     ]);
-    await clearUserProfileAuthLinkAsync(
-      { profileId: alice.id, provider: "anthropic", assertCurrent() {} },
-      options,
-    );
+    clearUserProfileAuthLink({ profileId: alice.id, provider: "anthropic" }, options);
     await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
-    await setUserProfileAuthLinkAsync(
-      { profileId: alice.id, provider: "anthropic", authProfileId, assertCurrent() {} },
-      options,
-    );
+    setUserProfileAuthLink({ profileId: alice.id, provider: "anthropic", authProfileId }, options);
     await expect(listUserProfileAuthLinksAsync(bob.id, options)).resolves.toEqual([]);
-    await mergeCanonicalUserProfiles(alice.id, bob.id, options);
+    mergeProfiles(alice.id, bob.id, options);
     for (const profileId of [alice.id, bob.id]) {
       await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual([
         expect.objectContaining({ provider: "anthropic", authProfileId }),

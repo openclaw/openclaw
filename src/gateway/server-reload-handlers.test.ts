@@ -129,6 +129,7 @@ import {
   createMonitorPublicationFailure,
   createManagedRestartSequenceConfigs,
   createConfigWriteNotification,
+  createRecordedChannelHandlers,
   createCronRestartPlan,
   createDirectConfigWriteFixture,
   createDefaultGatewayReloadState,
@@ -453,18 +454,6 @@ vi.mock("./server-cron.js", async () => {
     buildGatewayCronService: hoisted.buildGatewayCronService,
   };
 });
-
-function createRecordedChannelHandlers(events: string[]) {
-  return {
-    stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
-      events.push(`stop:${channel}:${accountId}`);
-    }),
-    start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
-      events.push(`start:${channel}:${accountId}`);
-      return new Map();
-    }),
-  };
-}
 
 async function withReloadChannelManager(
   plugins: ChannelPlugin[],

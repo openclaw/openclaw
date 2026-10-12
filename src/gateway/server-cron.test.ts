@@ -49,6 +49,7 @@ import {
   registerGatewayCronMutationAuthorityTests,
   registerGatewayCronStreamMutationTests,
 } from "./server-cron.mutation-lifecycle.test-support.js";
+import { createWatchedRun, runExit } from "./server-cron.process.test-support.js";
 import { registerGatewayCronQueueTests } from "./server-cron.queue.test-support.js";
 import {
   registerGatewayCronHandoffTests,
@@ -445,35 +446,6 @@ function addScriptJob(
   overrides: CronJobOverrides = {},
 ) {
   return addCronJob(service, name, { kind: "script", script }, overrides);
-}
-
-function runExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "manual-cancel",
-    exitCode: null,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
-}
-
-function createWatchedRun(settleOnCancel = true, exitResult: Partial<RunExit> = {}) {
-  const exit = createDeferred<RunExit>();
-  return {
-    exit,
-    startedAtMs: Date.now(),
-    cancel: vi.fn(() => {
-      if (settleOnCancel) {
-        exit.resolve(runExit(exitResult));
-      }
-    }),
-    detachOutput: vi.fn(),
-    wait: vi.fn(() => exit.promise),
-  };
 }
 
 function mockCronSupervisor(...runs: ReturnType<typeof createWatchedRun>[]) {
