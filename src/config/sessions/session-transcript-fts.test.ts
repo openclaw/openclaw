@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -122,6 +123,7 @@ it("preserves exact 64-bit identities, duplicates and cold rows through deletion
 function projectionFixture() {
   const db = openNodeSqliteDatabase(":memory:");
   db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+  admitSqliteSchema(db);
   db.exec("BEGIN");
   for (const id of ["target", "sibling"]) {
     db.prepare(

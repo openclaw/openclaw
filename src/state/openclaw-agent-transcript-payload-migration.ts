@@ -124,7 +124,7 @@ export function migrateTranscriptPayloadStorageInTransaction(database: DatabaseS
         // Invalid historical UTF-8 remains native TEXT, preserving its exact stored bytes.
       }
       if (text !== undefined) {
-        const payload = prepareTranscriptPayload(database, text);
+        const payload = prepareTranscriptPayload(database, text, undefined, "UTF-8");
         navigation = payload.navigation_json;
         if (payload.event_zstd !== null) {
           if (

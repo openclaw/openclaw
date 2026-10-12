@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { findAssistantTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
@@ -24,6 +25,7 @@ describe("persisted assistant transcript matching", () => {
       navigation_valid INTEGER, PRIMARY KEY (session_id, seq)
     ) STRICT;
     CREATE TABLE session_transcript_cold_archives (session_id TEXT PRIMARY KEY) STRICT`);
+    admitSqliteSchema(db);
   });
   afterAll(() => db.close());
   beforeEach(() => db.exec("DELETE FROM transcript_events"));

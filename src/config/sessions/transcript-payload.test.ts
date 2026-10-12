@@ -2,10 +2,12 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import {
   getMessageRangeReaders,
@@ -22,6 +24,7 @@ import {
   prepareTranscriptPayload,
   prepareTranscriptPayloadForReuse,
   readTranscriptPayload,
+  readTranscriptStorageEncoding,
   transcriptEventJsonSql,
   transcriptEventModelBytesSql,
   transcriptEventModelNavigationSql,
@@ -51,6 +54,7 @@ function createTable(database: DatabaseSync): void {
     message_role TEXT, navigation_last_type TEXT, navigation_last_custom_type TEXT,
     navigation_valid INTEGER NOT NULL DEFAULT 1
   ) STRICT`);
+  admitSqliteSchema(database);
 }
 
 type PayloadFixture = Omit<TranscriptPayloadRecord, keyof TranscriptPredicateFields> &
@@ -167,53 +171,63 @@ describe("transcript payload storage boundary", () => {
     }
   });
 
-  it.each([["UTF-16le", "UTF-8"]])(
-    "recomputes a prepared %s frame for %s storage",
-    (sourceEncoding, targetEncoding) => {
-      const source = openNodeSqliteDatabase(":memory:");
-      const target = openNodeSqliteDatabase(":memory:");
+  it.each([
+    ["UTF-16le", "UTF-8"],
+    ["UTF-8", "UTF-16le"],
+  ])("recomputes a prepared %s frame for %s storage", (sourceEncoding, targetEncoding) => {
+    const source = openNodeSqliteDatabase(":memory:");
+    const target = openNodeSqliteDatabase(":memory:");
+    try {
+      source.exec(`PRAGMA encoding = '${sourceEncoding}'`);
+      target.exec(`PRAGMA encoding = '${targetEncoding}'`);
+      createTable(source);
+      createTable(target);
+      const observation = observeSqliteReadSql(
+        nodeSqlite.requireNodeSqlite().StatementSync.prototype,
+      );
       try {
-        source.exec(`PRAGMA encoding = '${sourceEncoding}'`);
-        target.exec(`PRAGMA encoding = '${targetEncoding}'`);
-        createTable(source);
-        createTable(target);
-        target.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
-        ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
-        const eventJson = `{"type":"custom","id":"first","id":"last","data":"${"fixture".repeat(1024)}"}`;
-        const prepared = prepareTranscriptPayloadForReuse(source, eventJson);
-        expect(prepared.storageEncoding).toBe(sourceEncoding);
-        const insertEvent = createTranscriptEventInserter(target, "session");
-        insertEvent({
-          seq: 1,
-          eventJson,
-          createdAt: 1,
-          preparedPayload: prepared,
-        });
-        const stored = target
-          .prepare(
-            "SELECT event_json, event_zstd, event_utf8_bytes, navigation_json FROM transcript_events",
-          )
-          .get();
-        expect(readBody(target, 1)).toBe(eventJson);
-        expect(readBody(target, 1, "row")).toBe(eventJson);
-        if (targetEncoding === "UTF-8") {
-          expect(stored?.event_json).toBeNull();
-          expect(stored?.event_zstd).toBeInstanceOf(Uint8Array);
-          expect(stored?.event_utf8_bytes).toBe(Buffer.byteLength(eventJson));
-        } else {
-          expect(stored).toEqual({
-            event_json: eventJson,
-            event_zstd: null,
-            event_utf8_bytes: null,
-            navigation_json: null,
-          });
-        }
+        expect(readTranscriptStorageEncoding(source)).toBe(sourceEncoding);
+        expect(readTranscriptStorageEncoding(target)).toBe(targetEncoding);
+        expect(observation.queries).toEqual([]);
       } finally {
-        source.close();
-        target.close();
+        observation.restore();
       }
-    },
-  );
+      target.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
+        ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
+      const eventJson = `{"type":"custom","id":"first","id":"last","data":"${"fixture".repeat(1024)}"}`;
+      const prepared = prepareTranscriptPayloadForReuse(source, eventJson);
+      expect(prepared.storageEncoding).toBe(sourceEncoding);
+      const insertEvent = createTranscriptEventInserter(target, "session");
+      insertEvent({
+        seq: 1,
+        eventJson,
+        createdAt: 1,
+        preparedPayload: prepared,
+      });
+      const stored = target
+        .prepare(
+          "SELECT event_json, event_zstd, event_utf8_bytes, navigation_json FROM transcript_events",
+        )
+        .get();
+      expect(readBody(target, 1)).toBe(eventJson);
+      expect(readBody(target, 1, "row")).toBe(eventJson);
+      if (targetEncoding === "UTF-8") {
+        expect(stored?.event_json).toBeNull();
+        expect(stored?.event_zstd).toBeInstanceOf(Uint8Array);
+        expect(stored?.event_utf8_bytes).toBe(Buffer.byteLength(eventJson));
+      } else {
+        expect(stored).toEqual({
+          event_json: eventJson,
+          event_zstd: null,
+          event_utf8_bytes: null,
+          navigation_json: null,
+        });
+      }
+    } finally {
+      source.close();
+      target.close();
+    }
+  });
 
   it("keeps malformed, giant and oversized-navigation identities usable without the codec", () => {
     const database = openNodeSqliteDatabase(":memory:");

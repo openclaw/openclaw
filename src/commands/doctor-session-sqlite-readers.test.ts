@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readOnlySqliteDbStats } from "../infra/session-sqlite-migration-readers.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 
 describe("read-only SQLite transcript statistics", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -20,6 +21,7 @@ describe("read-only SQLite transcript statistics", () => {
           session_id TEXT, seq INTEGER, event_json TEXT, event_zstd BLOB,
           event_utf8_bytes INTEGER, navigation_json TEXT
         ) STRICT`);
+        admitSqliteSchema(database);
         const compressed = prepareTranscriptPayload(database, compressedJson);
         expect(compressed.event_zstd).not.toBeNull();
         const identity = prepareTranscriptPayload(database, identityJson);

@@ -9,6 +9,7 @@ export type SqliteSchemaFacts = {
   readonly admissionId: string;
   readonly revision: number;
   readonly userVersion: number;
+  readonly textEncoding: string;
   readonly schemaVersion: number;
   readonly tables: ReadonlySet<string>;
   readonly views: ReadonlySet<string>;
@@ -33,6 +34,8 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
       typeof value.userVersion !== "number" ||
       !("schemaVersion" in value) ||
       typeof value.schemaVersion !== "number" ||
+      !("textEncoding" in value) ||
+      typeof value.textEncoding !== "string" ||
       !("tables" in value) ||
       !(value.tables instanceof Set) ||
       !("views" in value) ||
@@ -60,6 +63,7 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
       admissionId: value.admissionId,
       revision: value.revision,
       userVersion: value.userVersion,
+      textEncoding: value.textEncoding,
       schemaVersion: value.schemaVersion,
       tables: value.tables,
       views: value.views,
@@ -82,6 +86,10 @@ function captureSqliteSchemaFacts(
     const userVersion = Number(version?.user_version ?? 0);
     // Validate the captured header before catalog errors can mask its refusal.
     validateUserVersion?.(userVersion);
+    const encoding = executeWithCachedStatement(database, "PRAGMA encoding", [], (s) => s.get());
+    if (typeof encoding?.encoding !== "string") {
+      throw new Error("SQLite did not report its text encoding during schema admission");
+    }
     const objects = executeWithCachedStatement(
       database,
       "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
@@ -93,6 +101,7 @@ function captureSqliteSchemaFacts(
       admissionId: randomUUID(),
       revision,
       userVersion,
+      textEncoding: encoding.encoding,
       schemaVersion,
       tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
       views: new Set(
