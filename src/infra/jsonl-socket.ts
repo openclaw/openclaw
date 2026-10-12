@@ -9,6 +9,9 @@ type JsonlSocketRequest<T> = {
   socketPath: string;
   requestLine: string;
   timeoutMs: number;
+  // When supplied, replace the connection deadline after sending the request.
+  // null leaves response lifetime with the caller's signal and the peer.
+  responseTimeoutMs?: number | null;
   signal?: AbortSignal;
   accept: (msg: unknown) => T | null | undefined;
 };
@@ -50,7 +53,10 @@ export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Prom
       return true;
     };
 
-    const timer = setNodeTimeout(() => finish(null), timeoutMs);
+    let timer: ReturnType<typeof setNodeTimeout> | undefined = setNodeTimeout(
+      () => finish(null),
+      timeoutMs,
+    );
     const abortListener = signal ? addAbortListener(signal, () => finish(null)) : undefined;
     // Preparation may have yielded before reaching the transport. Never connect
     // or send for an invocation that has already lost its lifetime.
@@ -64,6 +70,16 @@ export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Prom
     client.on("close", () => finish(null));
     client.connect(socketPath, () => {
       if (!settled) {
+        if (params.responseTimeoutMs !== undefined) {
+          clearNodeTimeout(timer);
+          timer =
+            params.responseTimeoutMs === null
+              ? undefined
+              : setNodeTimeout(
+                  () => finish(null),
+                  resolveTimerTimeoutMs(params.responseTimeoutMs, 1),
+                );
+        }
         client.end(`${requestLine}\n`);
       }
     });

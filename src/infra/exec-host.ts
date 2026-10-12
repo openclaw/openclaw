@@ -1,5 +1,6 @@
 // Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
@@ -73,6 +74,15 @@ export async function requestExecHostViaSocket(params: {
     socketPath,
     requestLine: payload,
     timeoutMs,
+    // The native host replies after command completion. A connection deadline
+    // must not discard that receipt while an admitted command is still running.
+    // Explicit socket deadlines retain their existing total-lifetime behavior.
+    responseTimeoutMs:
+      params.timeoutMs !== undefined
+        ? undefined
+        : request.timeoutMs != null && request.timeoutMs > 0
+          ? addTimerTimeoutGraceMs(request.timeoutMs, 10_000)
+          : null,
     signal: params.signal,
     accept: (value) => {
       const msg = value as { type?: string; ok?: boolean; payload?: unknown; error?: unknown };
