@@ -143,7 +143,11 @@ export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   if (typedRetryability !== undefined) {
     return !typedRetryability;
   }
-  return isPermanentNonWriterAnnounceError(error) || hasWriterClaimReboundAnnounceError(error);
+  // Writer-claim-rebound errors are intentionally retryable (isTransientAnnounceDeliveryError
+  // returns true for them, and isPermanentNonWriterAnnounceError excludes them by design).
+  // Re-adding the rebound predicate here made the same error classify as both transient and
+  // permanent: the retry loop would burn all attempts, then the consumer would skip replay.
+  return isPermanentNonWriterAnnounceError(error);
 }
 
 export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
