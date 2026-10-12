@@ -469,6 +469,14 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-composer-redesign.e2e.test.ts", ["chat"]),
   pageWatch(
+    "ui/src/e2e/chat-composer-undo-redo.e2e.test.ts",
+    ["chat"],
+    [
+      "ui/src/pages/chat/components/chat-composer.tsx",
+      "ui/src/pages/chat/components/chat-composer-frame.ts",
+    ],
+  ),
+  pageWatch(
     "ui/src/e2e/chat-context-attachment.e2e.test.ts",
     ["chat"],
     ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session.runtime.ts"],
