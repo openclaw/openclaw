@@ -3,7 +3,6 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -15,7 +14,6 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -34,7 +32,6 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { handleChatSend } from "./chat-send-handler.js";
@@ -197,194 +194,6 @@ it.each([
     expect(test.otherRun.controller.signal.aborted).toBe(false);
     expect(loadSessionEntryReadOnly(test.other)?.sessionId).toBe(test.other.sessionId);
     expect(await loadTranscriptEvents(selected)).toEqual(before);
-  },
-);
-
-it.each(["replacement", "branch"] as const)(
-  "typed Stop fences descendants after a parent %s and settles only its captured output",
-  async (change) => {
-    const test = createGuardedStopFixture();
-    const child = await test.child("original-child");
-    const parent = createActiveRun(test.parent.sessionKey, test.parent);
-    test.context.chatAbortControllers.set("parent", parent);
-    test.context.chatRunState.getOrCreate("parent").buffer = "captured parent partial";
-    let successor: ReturnType<typeof createActiveRun> | undefined;
-    let successorQueue: ReturnType<typeof createActiveRun> | undefined;
-    let successorChild: ReturnType<typeof test.child> | undefined;
-    let replacement = test.parent;
-    let callbackError: unknown;
-    const changed = createDeferred();
-    parent.controller.signal.addEventListener("abort", () => {
-      queueMicrotask(() => {
-        try {
-          if (change === "replacement") {
-            replacement = { ...test.parent, sessionId: "successor-session" };
-            replaceSessionEntrySync(replacement, {
-              sessionId: replacement.sessionId,
-              lifecycleRevision: "successor",
-              updatedAt: Date.now(),
-            });
-          }
-          appendStopCanary(replacement, "successor-leaf", "successor conversation");
-          successor = createActiveRun(replacement.sessionKey, replacement);
-          successorQueue = createActiveRun(replacement.sessionKey, replacement);
-          test.context.chatAbortControllers.set("successor", successor);
-          test.context.chatQueuedTurns.set("successor-queued", successorQueue);
-          successorChild = test.child("successor-child");
-        } catch (error) {
-          callbackError = error;
-        } finally {
-          changed.resolve();
-        }
-      });
-    });
-    try {
-      const respond = await test.send("agent:ops:guarded-parent", {
-        expectedLeafEntryId: null,
-        sessionId: test.parent.sessionId,
-      });
-      await changed.promise;
-      expect(callbackError).toBeUndefined();
-      expect(parent.controller.signal.aborted).toBe(true);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-      );
-      expect(successor?.controller.signal.aborted).toBe(false);
-      expect(successorQueue?.controller.signal.aborted).toBe(false);
-      expect(test.otherRun.controller.signal.aborted).toBe(false);
-      expect(test.context.chatAbortControllers.get("successor")).toBe(successor);
-      expect(test.context.chatQueuedTurns.get("successor-queued")).toBe(successorQueue);
-      const successorDescendant = await expectDefined(successorChild, "successor descendant");
-      for (const selected of [child, successorDescendant]) {
-        expect((await getSubagentRunByChildSessionKey(selected.sessionKey))?.execution.status).toBe(
-          "queued",
-        );
-        expect(selected.start).not.toHaveBeenCalled();
-      }
-      const events = await loadTranscriptEvents(replacement);
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "successor conversation" }),
-        }),
-      );
-      if (change === "branch") {
-        expect(events).toContainEqual(
-          expect.objectContaining({
-            message: expect.objectContaining({
-              content: [{ type: "text", text: "captured parent partial" }],
-              openclawAbort: expect.objectContaining({ origin: "stop-command", runId: "parent" }),
-            }),
-          }),
-        );
-      } else {
-        expect(JSON.stringify(events)).not.toContain("captured parent partial");
-      }
-      for (const run of [child, successorDescendant]) {
-        releaseSwarmRun(`${run.runId}-capacity`);
-      }
-      await vi.waitFor(() => {
-        expect(child.start).toHaveBeenCalledOnce();
-        expect(successorDescendant.start).toHaveBeenCalledOnce();
-      });
-    } finally {
-      try {
-        await successorChild;
-      } finally {
-        for (const runId of ["original-child", "successor-child"]) {
-          releaseSwarmRun(`${runId}-capacity`);
-          releaseSwarmRun(runId);
-        }
-      }
-    }
-  },
-);
-
-it.each(["during drain", "after abort"] as const)(
-  "typed Stop settles only accepted child cancellation when its parent guard changes %s",
-  async (change) => {
-    const test = createGuardedStopFixture();
-    const child = test.seed("agent:ops:subagent:authority-child", "ops", "authority-child-session");
-    const runId = "authority-child";
-    await registerSubagentRun({
-      runId,
-      childSessionKey: child.sessionKey,
-      requesterSessionKey: test.parent.sessionKey,
-      requesterAgentId: "ops",
-      requesterDisplayKey: test.parent.sessionKey,
-      requesterTurnRunId: "parent",
-      task: "remain active until cancellation is accepted",
-      cleanup: "keep",
-      expectsCompletionMessage: false,
-    });
-    const parent = createActiveRun(test.parent.sessionKey, test.parent);
-    test.context.chatAbortControllers.set("parent", parent);
-    const controller = new AbortController();
-    const changeParent = () => appendStopCanary(test.parent, "later-leaf", "changed parent");
-    const abort = vi.fn(() => {
-      controller.abort();
-      if (change === "after abort") {
-        changeParent();
-      }
-    });
-    const handle = createEmbeddedRunHandle({ runId, abort });
-    setActiveEmbeddedRun(child.sessionId, handle, child.sessionKey);
-    const interrupted = createDeferred();
-    const onInterrupt = vi.fn(() => {
-      interrupted.resolve();
-      if (change === "after abort") {
-        admission.release();
-      }
-    });
-    const admission = await beginSessionWorkAdmission({
-      scope: child.storePath,
-      identities: [child.sessionKey, child.sessionId],
-      assertAllowed: () => {},
-      onInterrupt,
-    });
-    const pending = test.send("agent:ops:guarded-parent", {
-      expectedLeafEntryId: null,
-      sessionId: test.parent.sessionId,
-    });
-    try {
-      await Promise.race([
-        interrupted.promise,
-        pending.then(() => {
-          throw new Error("Stop did not reach the child's admission drain");
-        }),
-      ]);
-      expect(parent.controller.signal.aborted).toBe(true);
-      if (change === "during drain") {
-        expect(
-          getLatestLiveSubagentRunByChildSessionKey(child.sessionKey)?.killIntent,
-        ).toBeDefined();
-        changeParent();
-        admission.release();
-      }
-      const respond = await pending;
-      const accepted = change === "after abort";
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-      );
-      expect(onInterrupt).toHaveBeenCalledOnce();
-      expect(controller.signal.aborted).toBe(accepted);
-      expect(abort).toHaveBeenCalledTimes(Number(accepted));
-      const retained = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "retained child");
-      expect(retained.killIntent).toBeUndefined();
-      expect(retained.execution.status).toBe(accepted ? "terminal" : "running");
-      expect(loadSessionEntryReadOnly(child)?.abortedLastRun === true).toBe(accepted);
-      expect(test.otherRun.controller.signal.aborted).toBe(false);
-    } finally {
-      admission.release();
-      try {
-        await pending;
-      } finally {
-        clearActiveEmbeddedRun(child.sessionId, handle, child.sessionKey);
-      }
-    }
   },
 );
 

@@ -75,11 +75,17 @@ Scheduled cron runs reuse the job and receipt loaded by their queue transaction
 when claiming and activating work. Activation commits ownership and start time
 together. Isolated preparation persists skills with the pre-run metadata, and
 continuation synchronization includes its selected CLI provider in the same
-write. Transcript existence is read only when resume fields need reconciliation.
+write. The first unchanged embedded candidate reuses the successfully persisted
+pre-run model and harness plus its initialized continuation; failed preparation
+writes, CLI candidates, fallbacks, and later prompt attempts still persist before
+execution. Transcript existence is read only when resume fields need reconciliation.
 Duplicate-run exclusion, delivery settlement, and run-history retention keep
 their existing owners and semantics.
 The watchdog reuses write-invalidated scheduler rows and live local receipt
 ownership. Running contexts do not trigger queue drains; queued rows still do.
+After scheduled completion, committed job rows determine whether schedule repair
+is needed before dispatching a maintenance sweep. Manual runs retain their
+expired-slot and cadence repair.
 
 Managed outgoing media cleanup uses the same retained session reader as media
 serving. Durable session discovery and entry reads execute in the existing
@@ -3359,11 +3365,12 @@ successor. Binding renewal continues during queue waits, drains before transacti
 entry, and stays quiesced through settlement. Separate shared-state and agent receipts
 prevent a binding deletion receipt from publishing a successful session deletion.
 Unknown outcomes block reuse of that native generation and never replay the write.
-ACP finalizers become eligible only after acknowledged agent COMMIT. Initialization
-rollback and opaque released SDK mutations retain native planning and transactions:
-their synchronous authority callbacks may reread the same agent database. Their
-authority checks stay live through the native transaction; initialization is consumed
-only after COMMIT. Ordinary host-minted binding participants retain the worker route,
+ACP finalizers and initialization rollback become eligible only after acknowledged
+agent COMMIT. Initialization rollback uses the existing commit-only worker participant,
+including initializers without a stored binding. Opaque released SDK mutations retain
+native planning and transactions: their synchronous authority callbacks may reread
+the same agent database. Their authority checks stay live through the native transaction.
+Ordinary host-minted binding participants retain the worker route,
 and incognito retains its native owner.
 The existing cross-database crash window, schemas, retention, and update behavior
 are unchanged; no migration is required.

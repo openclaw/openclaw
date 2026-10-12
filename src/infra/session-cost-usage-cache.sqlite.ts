@@ -6,6 +6,7 @@ import { resolveStateDir } from "../config/state-dir.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../state/agent-database-admission-error.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
 import { retainAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
@@ -16,7 +17,10 @@ import {
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
-import type { AgentDatabaseOperations } from "../state/openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseExecutionFileIdentity,
+  AgentDatabaseOperations,
+} from "../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -67,6 +71,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
   let releaseBorrow: (() => void) | undefined;
   let prepared = false;
   let lockWriteStarted = false;
+  let lockIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   return {
     get lockWriteStarted() {
       return lockWriteStarted;
@@ -106,7 +111,20 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
       }
       const captured = structuredClone(input);
       const cleanup = type === "usageCache.releaseLock";
-      const current = cleanup ? captureOpenClawAgentDatabaseExecution(options) : execution;
+      let current = execution;
+      if (cleanup) {
+        try {
+          execution.assertCurrent();
+        } catch (error) {
+          if (!(error instanceof AgentDatabaseExecutionAdmissionClosedError) || !lockIdentity) {
+            throw error;
+          }
+          // Native-loss recovery still needs ordinary admission to the original physical file.
+          current = captureOpenClawAgentDatabaseExecution(options, {
+            expectedIdentity: lockIdentity,
+          });
+        }
+      }
       const source: AgentDatabaseRequestExecutionSource = {
         assertCurrent() {
           signal?.throwIfAborted();
@@ -135,6 +153,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
             source.assertCurrent();
             const result = await current.runExisting(source, async (worker) => {
               if (type === "usageCache.acquireLock") {
+                lockIdentity = current.fileIdentity;
                 lockWriteStarted = true;
               }
               return { value: await worker.execute({ type, input: captured }, { signal }) };
@@ -149,7 +168,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
           "background",
         );
       } finally {
-        if (cleanup) {
+        if (current !== execution) {
           await current.release();
         }
       }
