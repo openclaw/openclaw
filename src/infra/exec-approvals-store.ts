@@ -101,7 +101,7 @@ execApprovalsPublication.subscribeFacts((change) => {
     } else if (change.kind === "unknown") {
       // Invalidate an in-flight seed as well as retained execution guards.
       currentPolicies.set(identity, { pending: policy.pending });
-    } else {
+    } else if (change.kind === "committed") {
       const fact = change.receipt.facts.get("current");
       if (fact?.kind === "postimage") {
         policy.file = fact.value.file;
