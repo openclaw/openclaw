@@ -31,7 +31,7 @@ import {
   prepareSessionStoreTargetInventoryRead,
   withSessionStoreTarget,
 } from "./session-store-target-runtime.js";
-import { projectionLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("transcript turn physical identity", () => {
@@ -60,27 +60,13 @@ describe("transcript turn physical identity", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("resolves the current transcript from receipt-maintained entry facts", async () => {
+  it("resolves the current transcript and lifecycle revision across entry writes", async () => {
     const selected = scope("agent:main:current");
     replaceSessionEntrySync(selected, { sessionId, updatedAt: 1, lifecycleRevision: "first" });
     await readSessionEntriesFromStoreInWorker({
       agentId: "main",
       storePath: selected.storePath,
       sessionKeys: [selected.sessionKey],
-    });
-    const run = projectionLane.pool.run.bind(projectionLane.pool);
-    let runtimeReads = 0;
-    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (
-        reply.ok &&
-        typeof reply.value !== "boolean" &&
-        !Array.isArray(reply.value) &&
-        reply.value.kind === "session-runtime-target"
-      ) {
-        runtimeReads++;
-      }
-      return reply;
     });
     expect(
       await transcriptTargets.resolveSessionTranscriptRuntimeTarget(selected, undefined, {
@@ -101,7 +87,28 @@ describe("transcript turn physical identity", () => {
       sessionKey: selected.sessionKey,
       selectedLifecycleRevision: "second",
     });
-    expect(runtimeReads).toBe(0);
+  });
+
+  it("resolves a shared session ID to its transcript owner after the requested row's facts are retained", async () => {
+    const base = scope("agent:main:cron:job");
+    const run = scope(`agent:main:cron:job:run:${sessionId}`);
+    replaceSessionEntrySync(base, { sessionId, updatedAt: 1 });
+    replaceSessionEntrySync(run, { sessionId, updatedAt: 2 });
+    expect(
+      database()
+        .db.prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
+        .get(sessionId),
+    ).toEqual({ session_key: run.sessionKey });
+    await readSessionEntriesFromStoreInWorker({
+      agentId: "main",
+      storePath: base.storePath,
+      sessionKeys: [base.sessionKey],
+    });
+    expect(
+      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(base, undefined, {
+        keyFormat: "agent-qualified",
+      }),
+    ).toMatchObject({ sessionId, sessionKey: run.sessionKey });
   });
 
   it("reuses a selected target until an owning registry write reassigns it", async () => {

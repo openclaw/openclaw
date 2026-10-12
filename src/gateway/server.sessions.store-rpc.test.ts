@@ -890,6 +890,39 @@ test("sessions.list breaks timestamp ties by key for stable paging", async () =>
   expect(paged.payload?.sessions.map((session) => session.key)).toEqual(expectedOrder.slice(2));
 });
 
+test("chat.inject writes to the transcript owner after the requested row's facts are cached", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "8f14e45f-ceea-4e7a-9f8b-2d5c6b1a0e93";
+  const baseKey = "agent:main:cron:3f1c9a52-7d4e-4b8a-9c21-5e6f7a8b9c0d";
+  const runKey = `${baseKey}:run:${sessionId}`;
+  // An isolated cron run's row is written after its base row, so the run key owns the transcript.
+  await writeSessionStore({
+    entries: {
+      [baseKey]: { sessionId, updatedAt: Date.now() },
+      [runKey]: { sessionId, updatedAt: Date.now() },
+    },
+  });
+  await seedLinearTranscript({ contents: ["cron run"], sessionId, sessionKey: runKey, storePath });
+  const ownerRows = () => loadTranscriptRows({ sessionId, sessionKey: runKey, storePath });
+  const rowsBefore = (await ownerRows()).length;
+
+  const { ws } = await openClient();
+  // sessions.abort reads the base row through the gateway entry owner, caching its entry facts.
+  const aborted = await rpcReq(ws, "sessions.abort", { key: baseKey });
+  const injected = [
+    await rpcReq(ws, "chat.inject", { sessionKey: baseKey, message: "first" }),
+    await rpcReq(ws, "chat.inject", { sessionKey: baseKey, message: "second" }),
+  ];
+  ws.close();
+
+  expect(aborted.ok).toBe(true);
+  expect(injected.map((response) => [response.ok, response.error])).toEqual([
+    [true, undefined],
+    [true, undefined],
+  ]);
+  expect(await ownerRows()).toHaveLength(rowsBefore + 2);
+});
+
 test("archiving a session disables cron jobs bound to it", async () => {
   await createSessionStoreDir();
   const now = Date.now();
