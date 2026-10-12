@@ -475,6 +475,27 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       expect(prompt).not.toMatch(/\bsummary\b/i);
     });
 
+    it("forwards the resolved topic route into the CLI run", async () => {
+      mockCliAnnounce();
+      const destination = { channel: "topicchat", to: "room", threadId: 42, accountId: "ops" };
+      mockAnnounce(destination);
+      resolveDeliveryTargetMock.mockResolvedValue(resolvedTarget(destination));
+      await runCronIsolatedAgentTurn(makeParams(makeJob(announce)));
+      expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      // Detached exec completions inherit this route; without it #138316 delivered
+      // forum-topic cron output to the owner DM.
+      expectFields(
+        mockCall(runCliAgentMock)[0],
+        {
+          messageChannel: "topicchat",
+          agentAccountId: "ops",
+          currentChannelId: "room#42",
+          currentThreadTs: "42",
+        },
+        "CLI run params",
+      );
+    });
+
     it.each([true])(
       "keeps a successful isolated turn at status ok when post-run delivery fails (bestEffort=%s)",
       async (bestEffort) => {
