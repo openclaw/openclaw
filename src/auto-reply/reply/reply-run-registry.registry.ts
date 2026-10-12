@@ -87,13 +87,15 @@ export function resolveReplyOperationsForSession(params: ReplyOperationSessionTa
 
 export async function waitForReplyOperationOwnerSettlement(
   operation: ReplyOperation,
-  timeoutMs: number,
+  timeoutMs: number | null,
 ): Promise<boolean> {
   const settlement = operation.ownerSettlement;
   if (!settlement) {
     return true;
   }
-  return settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
+  return timeoutMs === null
+    ? settlement.then(() => true)
+    : settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
 }
 
 export function expireStaleReplyRunBySessionId(

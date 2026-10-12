@@ -150,6 +150,7 @@ function estimateResponsesContent(
 function estimateResponsesInput(
   input: readonly unknown[],
   estimate: ReplayPressureEstimator,
+  compactionOutputTokens?: number,
 ): number {
   return input.reduce<number>((tokens, entry) => {
     if (!isRecord(entry)) {
@@ -157,7 +158,11 @@ function estimateResponsesInput(
     }
     if (entry.type === "compaction" && typeof entry.encrypted_content === "string") {
       const { encrypted_content, ...metadata } = entry;
-      return tokens + estimate.text(encrypted_content) + estimate.json(metadata);
+      return (
+        tokens +
+        (compactionOutputTokens ?? estimate.text(encrypted_content)) +
+        estimate.json(metadata)
+      );
     }
     if (entry.type === "message") {
       const { content, ...metadata } = entry;
@@ -205,7 +210,7 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
     checkpoint.family === "anthropic"
       ? estimate.text(checkpoint.summary)
       : checkpoint.mode === "complete-window"
-        ? estimateResponsesInput(checkpoint.output, estimate)
+        ? estimateResponsesInput(checkpoint.output, estimate, checkpoint.outputTokens)
         : estimate.text(checkpoint.item.encrypted_content);
   const measuredBoundary =
     checkpoint.family === "responses"

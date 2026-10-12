@@ -127,8 +127,8 @@ const securityResponse=()=>{
   const source=config.sourceSha||main();
   const publisher={id:901,run_attempt:config.fault==="new-publisher-attempt"?2:1,status:"completed",conclusion:"success",
     head_sha:source,head_branch:"main",head_repository:{id:s.repoAuthority.id},repository:{id:s.repoAuthority.id,full_name:s.repo.nameWithOwner},
-    event:config.fault?.endsWith("-dispatch")?"workflow_dispatch":"workflow_run",
-    actor:config.fault==="human-dispatch"?{id:1,login:"maintainer",type:"User"}:{id:41898282,login:"github-actions[bot]",type:"Bot"},
+    event:config.fault==="automation-dispatch"?"workflow_dispatch":"workflow_run",
+    actor:{id:41898282,login:"github-actions[bot]",type:"Bot"},
     path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
   const reply=(value)=>out(args.includes("--include")?"HTTP/2.0 200 OK\n\n"+JSON.stringify(value):args.includes("--slurp")?[value]:value);
   if(endpoint.includes("/statuses?")) {
