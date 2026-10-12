@@ -25,6 +25,7 @@ import {
   createConfiguredAcpTopicBinding,
   createConfiguredBindingRoute,
 } from "./bot-native-command-dispatch.test-support.js";
+import { recordTelegramUpdateReceivedAt } from "./bot-processing-outcome.js";
 import {
   makeCallbackRetryContext,
   makePrivateTextContext,
@@ -1578,6 +1579,29 @@ describe("createTelegramBot", () => {
       expect(payload.Body).toContain("skip nightly build tonight");
     },
   );
+
+  it.each([
+    { name: "live tap", durableReceivedAtMs: undefined },
+    { name: "durable replay", durableReceivedAtMs: 1_736_381_700_000 },
+  ])("stamps generic callbacks with receipt time for $name", async ({ durableReceivedAtMs }) => {
+    // Fixture card was sent at 1_736_380_800; the tap arrives 20 minutes later.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_736_382_000_000);
+    try {
+      await createTelegramBot({ token: "tok" });
+      const ctx = makeGenericCallbackContext({ id: "cbq-generic-time-1", updateId: 780 });
+      if (durableReceivedAtMs !== undefined) {
+        recordTelegramUpdateReceivedAt(ctx.update, durableReceivedAtMs);
+      }
+      await getOnHandler("callback_query")(ctx);
+      const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+      const expectedMs = durableReceivedAtMs ?? 1_736_382_000_000;
+      expect(payload.Timestamp).toBe(expectedMs);
+      expect(payload.ProviderMessageTimestamp).toBe(expectedMs);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("preserves trailing whitespace in OC_MULTI values without routing generic messages", async () => {
     const value = "env|prod ";
