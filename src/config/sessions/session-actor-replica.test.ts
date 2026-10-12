@@ -273,7 +273,7 @@ it("shares committed facts across released handles and retires them for writes a
       const pending = replacement.beginCommand();
       const sibling = fixture.reacquire();
       try {
-        expect(sibling.read()).toBeUndefined();
+        expect(sibling.read()).toEqual(first);
         expect(pending.settle(committed(context, fixture.load("first", 1)))).toBe(true);
         expect(sibling.read()?.version).toEqual({ epoch: "first", sequence: 1 });
         replacement.close();
@@ -411,7 +411,7 @@ it("invalidates partial native publications before disclosure and count-only par
 
 it("installs complete outcomes, fences unknowns, and rejects delayed epochs", async () => {
   await withReplica((fixture) => {
-    const { replica, load, scope } = fixture;
+    const { replica, load, scope, database } = fixture;
     const initial = hydrate(fixture);
     if (initial.target.database.kind !== "file") {
       throw new Error("Replica fixture requires a durable target");
@@ -432,7 +432,21 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
 
     const accepted = command(initial, "accepted");
     const pending = replica.beginCommand();
+    expect(replica.read()).toBe(shared);
+    const rowTarget = { path: database.path, sessionKey: scope.sessionKey };
+    expect(readSessionActorRowFacts(rowTarget)).toMatchObject({
+      entry: { sessionId: "replica-session", updatedAt: 1, label: "before" },
+      hasBoard: false,
+    });
+    withSqliteDatabaseWriteScope(database.db, [scope.sessionKey], () =>
+      runSqliteImmediateTransactionSync(database.db, () => {
+        database.db
+          .prepare("UPDATE session_nodes SET updated_at = ? WHERE session_key = ?")
+          .run(2, scope.sessionKey);
+      }),
+    );
     expect(replica.read()).toBeUndefined();
+    expect(readSessionActorRowFacts(rowTarget)).toBeUndefined();
     replaceSessionEntrySync(scope, {
       sessionId: "replica-session",
       updatedAt: 1,

@@ -523,7 +523,7 @@ export function createSessionActorReplica(
       throw new Error("Session actor replica is closed");
     }
     owned.pending += 1;
-    invalidate();
+    owned.reservation += 1;
     const selected = owned.reservation;
     const expectedGeneration = generation();
     let settled = false;
@@ -555,7 +555,8 @@ export function createSessionActorReplica(
         return undefined;
       }
       if (!accepts(owned.snapshot, owned.generation, token)) {
-        invalidate();
+        discard(owned);
+        forgetUnused(owned);
         return undefined;
       }
       touch(owned);

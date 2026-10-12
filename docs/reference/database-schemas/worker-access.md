@@ -858,6 +858,9 @@ presence and the activity-summary watermark. The entry, participant display, and
 watermark remain covered by the same committed write token. Native deletions,
 count-only participant updates, cold archive changes, and unscoped fixture writes
 invalidate those facts through the existing write receipts.
+Starting another actor command retains the preceding committed snapshot until a
+write changes its token. A reader that evicts stale facts does not cancel the
+pending command's receipt; its complete postimage can still install after commit.
 
 Typed session writers publish through the existing entry and transcript owners.
 Entry replacement and patch receipts carry the committed lifecycle, permission,
