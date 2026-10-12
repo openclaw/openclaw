@@ -44,6 +44,7 @@ import {
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
 import { prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -318,6 +319,7 @@ export function createSessionActorWorker(
               before: before.hot,
               after: working.hot,
               payloads: working.transcript.payloads,
+              transcriptAuthority: readStagedSessionTranscriptAuthority(opened),
               applied,
             });
             if (

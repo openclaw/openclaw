@@ -202,8 +202,15 @@ export function publishUnchangedSessionTranscriptReceipts(
   ) {
     throw new Error("Transcript materialization changed its content authority receipt");
   }
+  publishCommittedSessionTranscriptReceipts(receipts);
+}
+
+/** The native settlement owner publishes these while it still holds the writer FIFO. */
+export function publishCommittedSessionTranscriptReceipts(
+  receipts: readonly SessionTranscriptAuthorityReceipt[] | undefined,
+): void {
   sessionChanges.emitBatch(
-    receipts.flatMap((receipt) =>
+    (receipts ?? []).flatMap((receipt) =>
       receiptChanges(receipt, undefined, receipt.source.canonicalPath ?? receipt.source.filename),
     ),
   );

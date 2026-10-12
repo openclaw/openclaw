@@ -1,5 +1,6 @@
 import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { projectSessionEntryPredicateChange } from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
 import {
   pluginStatePublication,
   pluginStateReadDependenciesAffected,
@@ -185,6 +186,24 @@ export function createSessionRowPublication(owner: {
                 : undefined,
           }
         : undefined;
+    const participantEntry =
+      !prepared && !change.factsInvalidated && facts?.kind === "participants"
+        ? projectSessionEntryPredicateChange({ entry: row.sharingEntry }, facts)
+        : undefined;
+    if (participantEntry) {
+      const next = freezeJsonSnapshot(participantEntry);
+      const retained =
+        previousFacts && previousFacts.entry === row.sharingEntry
+          ? { ...previousFacts, entry: next }
+          : undefined;
+      records.invalidateDatabaseFacts(row, retained);
+      if (row.sharingEntry === row.storedEntry) {
+        acquirePublishedEntry(row, next, retained);
+      } else {
+        owner.defer({ ...row, sharingEntry: next });
+      }
+      return;
+    }
     if (
       !prepared &&
       !change.factsInvalidated &&
@@ -348,9 +367,11 @@ export function subscribeSessionRowPublications({
     sessionChanges.subscribeFacts(invalidateMembership),
     sessionChanges.subscribeProjection(mark),
     // Participant writers publish facts before their display-only lifecycle notice.
-    onSessionLifecycleEvent((change) =>
-      mark(change.reason === "participants" ? { ...change, facts: { kind: "unchanged" } } : change),
-    ),
+    onSessionLifecycleEvent((change) => {
+      if (change.reason !== "participants") {
+        mark(change);
+      }
+    }),
     onSessionIdentityMutation(mutateGeneration),
   ];
 }

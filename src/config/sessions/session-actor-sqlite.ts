@@ -24,6 +24,7 @@ import type {
 import type { SessionActorExecutor, SessionActorExecutorGuards } from "./session-actor-executor.js";
 import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
+import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
   admission: Pick<SqliteWorkerOperationAdmission, "committed" | "settlement"> &
@@ -235,6 +236,10 @@ export function createSqliteSessionActorExecutor(
                 }
                 result = committed;
                 try {
+                  // Partial transcript publication precedes installation of the full actor replica.
+                  publishCommittedSessionTranscriptReceipts(
+                    committed.receipt.transcript.authorityReceipts,
+                  );
                   observer?.committed(committed);
                 } catch (error) {
                   result = preserveFailure(error);

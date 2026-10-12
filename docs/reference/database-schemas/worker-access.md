@@ -5326,7 +5326,11 @@ history worker, with foreground priority and row-generation checks before
 publication. Ordinary active-message appends also carry a bounded preview in the
 existing committed transcript receipt. Resident rows publish it immediately,
 without waiting for the background queue or rereading the transcript. A newer
-receipt supersedes an older pending preview read. The same 64 KiB message bound
+receipt supersedes an older pending preview read. Actor commands carry this
+publication through native settlement before installing their full replica.
+Complete participant receipts update resident participants while retaining
+unaffected transcript, Board, and runtime facts; their display-only lifecycle
+notice does not schedule another database read. The same 64 KiB message bound
 applies; an oversized newest message clears the preview. Cold rows, rewrites,
 non-display messages, and fallback-model facts retain the bounded worker reader.
 The host evaluates fallback notices using its current runtime plugin aliases;
