@@ -594,4 +594,49 @@ describe("TOOLS.md migration", () => {
     await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(agents);
     await expect(fs.readFile(fixture.toolsPath, "utf8")).resolves.toBe(tools);
   });
+
+  it("rejects malformed UTF-8 TOOLS.md before rewriting AGENTS.md", async () => {
+    const fixture = await createFixture();
+    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
+    const tools = Buffer.concat([
+      Buffer.from("### Cameras\n\n- kitchen "),
+      Buffer.from([0xff]),
+      Buffer.from(" wide\n"),
+    ]);
+    await fs.writeFile(fixture.agentsPath, agents);
+    await fs.writeFile(fixture.toolsPath, tools);
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringMatching(
+        /TOOLS\.md must be valid UTF-8[\s\S]*left untouched[\s\S]*doctor --fix/,
+      ),
+    ]);
+    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(agents);
+    await expect(fs.readFile(fixture.toolsPath)).resolves.toEqual(tools);
+  });
+
+  it("migrates valid Unicode TOOLS.md including a literal replacement character", async () => {
+    const fixture = await createFixture();
+    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
+    const tools = "### 摄像头\n\n- kitchen → 合法 � 😀\n";
+    await fs.writeFile(fixture.agentsPath, agents);
+    await fs.writeFile(fixture.toolsPath, tools);
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toContain(tools);
+    await expectMissing(fixture.toolsPath);
+  });
 });
