@@ -8,7 +8,7 @@ import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWatermark,
 } from "./session-transcript-context-version.types.js";
-import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.js";
+import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 

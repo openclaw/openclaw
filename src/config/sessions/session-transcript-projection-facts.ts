@@ -1,26 +1,5 @@
-import type { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
-import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
-
-/** Small projection metadata; transcript bodies stay with the history reader. */
-export type SessionTranscriptProjectionFacts = {
-  cold: boolean;
-  generation: string | undefined;
-  updatedAt: number | null;
-  hasUnclassified: boolean;
-  latestIndexedReset: { active_position: number; event_type: "reset"; seq: number } | null;
-  hasUnindexedPrefix: boolean;
-  latestSeq: number | null;
-  state?: SessionTranscriptProjectionState;
-};
-
-export type SessionTranscriptProjectionReceipt = {
-  path: string;
-  sessionId: string;
-  writeToken: string;
-  writeScopes: Parameters<typeof readSqliteDatabaseScopedWriteToken>[1];
-  facts: SessionTranscriptProjectionFacts;
-};
+import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.types.js";
 
 export function projectSessionTranscriptFacts(
   actor: SessionActorStoredState,

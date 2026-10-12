@@ -36,7 +36,7 @@ import {
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
-import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.js";
+import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 // mock-isolation: These owner transactions do not exercise background entry maintenance.
@@ -73,7 +73,7 @@ function fixture() {
   if (typeof identity.identity !== "string") {
     throw new Error("Projection receipt proof requires a physical database");
   }
-  const target: SessionActorTarget = {
+  const target = {
     sessionKey: scope.sessionKey,
     database: {
       kind: "file",
@@ -81,7 +81,7 @@ function fixture() {
       birthtime: identity.birthtime,
       nativeLocation: database.path,
     },
-  };
+  } satisfies SessionActorTarget;
   const writeScopes = [
     ...collectSessionEntryLookupKeys(scope.sessionKey),
     sqliteSessionIdWriteScope(scope.sessionId),

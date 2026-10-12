@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
-import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.js";
+import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 
 const projectionReceipts = new AsyncLocalStorage<SessionTranscriptProjectionReceipt | undefined>();
 
