@@ -1,20 +1,11 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { assert, expect, it } from "vitest";
+import {
+  dropRepoOwnedCustomElements,
+  jsdomCustomElementDefinitions,
+} from "../../../test/jsdom-custom-elements.ts";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
-let registryFrame: HTMLIFrameElement;
-
-beforeEach(() => {
-  // Cold module imports also need a fresh native custom-element registry.
-  registryFrame = document.createElement("iframe");
-  document.body.append(registryFrame);
-  vi.stubGlobal("customElements", registryFrame.contentWindow!.customElements);
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  registryFrame.remove();
-});
 
 it.each([
   {
@@ -77,7 +68,22 @@ it.each([
     ),
   ).toEqual(["GitHub connections", "My GitHub", "System GitHub", "For me", "For the system"]);
   await manager.setLocale("de");
-  await load();
+  const definitions = jsdomCustomElementDefinitions(customElements);
+  assert.isDefined(definitions);
+  const existingTags = new Set(definitions.map((definition) => definition.name));
+  try {
+    await load();
+  } finally {
+    dropRepoOwnedCustomElements({
+      registry: customElements,
+      definitions,
+      repoOwnedTags: new Set(
+        definitions
+          .filter(({ name }) => name.startsWith("openclaw-") && !existingTags.has(name))
+          .map(({ name }) => name),
+      ),
+    });
+  }
   expect(en.githubConnections).toBe(connections);
   expect(en.githubPublication).toBe(publication);
   expect(manager.t("githubConnections.manage")).toBe("Verbindungen verwalten");

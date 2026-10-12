@@ -918,12 +918,6 @@ async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
         `
 import gateway from ${JSON.stringify(path.join(repoRoot, "test/vitest", config))};
 import { defineConfig } from "vitest/config";
-import { BaseSequencer } from "vitest/node";
-class AlphabeticalSequencer extends BaseSequencer {
-  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
-    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
-  }
-}
 // Use the actual Gateway execution policy, with fixture-only membership and no
 // ordinary setup hooks that could close A's database before runner cleanup.
 export default defineConfig({
@@ -939,7 +933,6 @@ export default defineConfig({
     maxWorkers: gateway.test.maxWorkers,
     fileParallelism: gateway.test.fileParallelism,
     include: ["${mode}-a-producer.test.ts", "${mode}-b-observer.test.ts"],
-    sequence: { sequencer: AlphabeticalSequencer },
   },
 });
 `,
@@ -948,7 +941,18 @@ export default defineConfig({
     await fs.writeFile(
       path.join(root, "vitest.config.ts"),
       `import { defineConfig } from "vitest/config";
-export default defineConfig({ test: { projects: ["./vitest.threads.config.ts", "./vitest.provenance.config.ts"] } });
+import { BaseSequencer } from "vitest/node";
+class AlphabeticalSequencer extends BaseSequencer {
+  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
+    return [...files].sort((left, right) => left.moduleId.localeCompare(right.moduleId));
+  }
+}
+export default defineConfig({
+  test: {
+    projects: ["./vitest.threads.config.ts", "./vitest.provenance.config.ts"],
+    sequence: { sequencer: AlphabeticalSequencer },
+  },
+});
 `,
     );
     const reportPath = path.join(root, "report.json");
