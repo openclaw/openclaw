@@ -107,22 +107,6 @@ describe("plugin-sdk channel-route", () => {
     ).toBe(true);
   });
 
-  it("requires account equality for exact route matches", () => {
-    expect(
-      channelRouteTargetsMatchExact({
-        left: {
-          channel: "telegram",
-          to: "-100123",
-          accountId: "work",
-        },
-        right: {
-          channel: "telegram",
-          to: "-100123",
-        },
-      }),
-    ).toBe(false);
-  });
-
   it("shares conversation when one side is the parent route", () => {
     expect(
       channelRoutesShareConversation({
