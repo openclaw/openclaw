@@ -19,7 +19,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import { isPendingOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
-import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
@@ -347,7 +346,7 @@ describe("prepared model catalog worker boundary", () => {
     expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
     await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
 
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true, wait: true });
     const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
 
     expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
@@ -821,7 +820,6 @@ describe("prepared model catalog worker boundary", () => {
     const preparedStore = getPreparedModelRuntimeAuthStore(fixture.snapshot);
     expect(fixture.hydratedAuthStore?.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();
     expect(preparedStore?.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();
-    expect(preparedStore && getRuntimeExternalCliProfileIds(preparedStore)).toEqual([]);
 
     writeCodexAuth(codexHome, "rotated");
     const rotated = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
@@ -898,10 +896,11 @@ describe("prepared model catalog worker boundary", () => {
     fs.writeFileSync(barrier, "", "utf8");
     let settled = false;
     const entered = observeCatalogEntry(receipts, fixture);
-    const first = fixture.snapshot.loadFullModelCatalog?.().finally(() => {
+    const refreshOptions = { refresh: true, wait: true };
+    const first = fixture.snapshot.loadFullModelCatalog?.(refreshOptions).finally(() => {
       settled = true;
     });
-    const second = fixture.snapshot.loadFullModelCatalog?.();
+    const second = fixture.snapshot.loadFullModelCatalog?.(refreshOptions);
     const completion = Promise.all([first, second]);
     void completion.catch(() => {});
     try {
@@ -918,7 +917,7 @@ describe("prepared model catalog worker boundary", () => {
         }),
       );
       await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
-      const refreshedCatalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+      const refreshedCatalog = await fixture.snapshot.loadFullModelCatalog?.(refreshOptions);
       expect(refreshedCatalog?.entries).toContainEqual(
         expect.objectContaining({
           provider: PROVIDER_ID,

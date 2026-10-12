@@ -138,20 +138,11 @@ export function getPluginRegistryGatewayOwner(
   return gatewayOwners.get(getPluginRegistryResourceOwner(registry)) ?? undefined;
 }
 
-/** Retired callbacks may still need their admitting Gateway to recognize removed plugins. */
-export function getPluginInstanceGatewayOwner(owner: PluginInstanceOwner) {
-  return owner.registry
-    ? getPluginRegistryGatewayOwner(owner.registry)
-    : owner.retiredGatewayOwner?.deref();
-}
-
 /** Drop the back-reference only after physical cleanup and all admitted work have settled. */
 export function releasePluginInstanceRegistry(owner: PluginInstanceOwner): void {
   if (!owner.revoked) {
     throw new Error("Cannot release an active plugin instance registry");
   }
-  const gateway = getPluginInstanceGatewayOwner(owner);
-  owner.retiredGatewayOwner = gateway ? new WeakRef(gateway) : undefined;
   owner.registry = undefined;
 }
 

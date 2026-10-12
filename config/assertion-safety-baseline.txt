@@ -1328,7 +1328,6 @@ src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
 src/agents/harness/selection.ts	4
 src/agents/harness/support.ts	1
-src/agents/harness/tool-result-middleware.ts	1
 src/agents/identity.ts	5
 src/agents/internal-runtime-context.ts	1
 src/agents/lazy-exec-tool.ts	2

@@ -209,112 +209,74 @@ async function uploadDirectoryToRemoteCommand(
     throw new Error("Remote shell command argv is empty");
   }
   const tarEnv = sanitizeEnvVars(process.env).allowed;
-  await new Promise<void>((resolve, reject) => {
-    options.assertCurrent?.();
-    params.signal?.throwIfAborted();
-    const tar: ChildProcess = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: tarEnv,
-      signal: params.signal,
-    });
-    const remote: ChildProcess = spawn(executable, args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: command.env,
-      cwd: command.cwd,
-      signal: params.signal,
-    });
-    const children: Array<{
-      name: string;
-      process: ChildProcess;
-      stderr: Buffer[];
-      closed: boolean;
-      code: number | null;
-      signal: NodeJS.Signals | null;
-    }> = [
-      { name: "tar", process: tar },
-      { name: "remote", process: remote },
-    ].map((child) =>
-      Object.assign(child, {
-        stderr: [],
-        closed: false,
-        code: 0,
-        signal: null,
-      }),
-    );
-    let failure: Error | undefined;
-    let settled = false;
-
-    const fail = (error: unknown) => {
-      if (settled || failure) {
-        return;
-      }
-      // Abort and stream errors can precede close; cleanup must still join both children.
-      failure = toErrorObject(error, "Non-Error rejection");
-      for (const child of [tar, remote]) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Preserve the pipeline error while still terminating the peer.
-        }
-      }
-      maybeResolve();
-    };
-
-    for (const child of children) {
-      child.process.on("error", fail);
-      child.process.on("close", (code, signal) => {
-        child.closed = true;
-        child.code = code;
-        child.signal = signal;
-        maybeResolve();
-      });
-      // EMFILE/ENFILE can leave streams absent; native error and close still settle the child.
-      child.process.stderr?.on("data", (chunk) => child.stderr.push(Buffer.from(chunk)));
-      child.process.stderr?.on("error", fail);
-      child.process.stdout?.on("error", fail);
-    }
-    remote.stdout?.resume();
-    remote.stdin?.on("error", fail);
-
-    function maybeResolve() {
-      if (settled || children.some((child) => !child.closed)) {
-        return;
-      }
-      settled = true;
-      if (failure) {
-        reject(failure);
-        return;
-      }
-      // A null code means the process died from a signal (OOM kill, dropped
-      // connection, supervisor teardown) without reporting a status. An
-      // unknown outcome is not evidence of a completed transfer.
-      for (const child of children) {
-        if (child.code === null) {
-          reject(new Error(`${child.name} exited from signal ${child.signal ?? "unknown"}`));
-          return;
-        }
-        if (child.code !== 0) {
-          reject(
-            new Error(
-              Buffer.concat(child.stderr).toString("utf8").trim() ||
-                `${child.name} exited with code ${child.code}`,
-            ),
-          );
-          return;
-        }
-      }
-      resolve();
-    }
-
-    try {
-      // Readable pipe errors do not close the writable peer automatically.
-      if (tar.stdout && remote.stdin) {
-        tar.stdout.pipe(remote.stdin);
-      }
-    } catch (error) {
-      fail(error);
-    }
+  options.assertCurrent?.();
+  params.signal?.throwIfAborted();
+  const tar: ChildProcess = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: tarEnv,
+    signal: params.signal,
   });
+  const remote: ChildProcess = spawn(executable, args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: command.env,
+    cwd: command.cwd,
+    signal: params.signal,
+  });
+  let failure: Error | undefined;
+  const fail = (error: unknown) => {
+    if (failure) {
+      return;
+    }
+    // Abort and stream errors can precede close; cleanup must still join both children.
+    failure = toErrorObject(error, "Non-Error rejection");
+    for (const child of [tar, remote]) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Preserve the pipeline error while still terminating the peer.
+      }
+    }
+  };
+  const completion = (child: ChildProcess, name: string) => {
+    const stderr: Buffer[] = [];
+    child.on("error", fail);
+    // EMFILE/ENFILE can leave streams absent; native close still settles the child.
+    child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.stderr?.on("error", fail);
+    child.stdout?.on("error", fail);
+    return new Promise<Error | undefined>((resolve) => {
+      child.on("close", (code, signal) => {
+        resolve(
+          code === 0
+            ? undefined
+            : new Error(
+                code === null
+                  ? `${name} exited from signal ${signal ?? "unknown"}`
+                  : Buffer.concat(stderr).toString("utf8").trim() ||
+                      `${name} exited with code ${code}`,
+              ),
+        );
+      });
+    });
+  };
+  const pending = [completion(tar, "tar"), completion(remote, "remote")];
+  remote.stdout?.resume();
+  remote.stdin?.on("error", fail);
+
+  try {
+    // Readable pipe errors do not close the writable peer automatically.
+    if (tar.stdout && remote.stdin) {
+      tar.stdout.pipe(remote.stdin);
+    }
+  } catch (error) {
+    fail(error);
+  }
+  // Neither a pipe error nor an unknown exit status proves a completed transfer.
+  const results = await Promise.all(pending);
+  const error = failure ?? results.find((result) => result !== undefined);
+  if (error) {
+    throw error;
+  }
 }
 
 async function assertSafeUploadSymlinks(localDir: string, signal?: AbortSignal): Promise<void> {

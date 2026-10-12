@@ -33,7 +33,6 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
-import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import type {
@@ -270,10 +269,7 @@ export function createModelAuthAvailabilityResolver(
   };
   // Refresh authority follows exact profiles marked by the external-auth
   // lifecycle. Provider-wide authority could bless an unrelated stale profile.
-  const externalCliRefreshProfileIds = new Set([
-    ...external.map((profile) => profile.profileId),
-    ...getRuntimeExternalCliProfileIds(runtimeStore ?? store),
-  ]);
+  const externalCliRefreshProfileIds = new Set(external.map((profile) => profile.profileId));
   const readOnlyAuthConfig = params.cfg;
   const providerInput = (provider: string) =>
     resolveProviderConfigSecretInput(params.cfg, provider);

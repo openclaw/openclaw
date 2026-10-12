@@ -1999,7 +1999,6 @@
 ["src/agents/auth-profiles/oauth-common-mocks.test-support.ts","../../plugins/provider-runtime.runtime.js","c672c86ce5db81992be8ede0c473d0f669fe87f660dad5ab2da59ec5c0be68f8",1]
 ["src/agents/auth-profiles/oauth-common-mocks.test-support.ts","../cli-credentials.js","3d307fe21804d00febcb53ca6db0f4bcdacbc8aec9cc5df5224a51449e36ec98",1]
 ["src/agents/auth-profiles/oauth-common-mocks.test-support.ts","./doctor.js","17c03a3ff8b65c620c4f8f758386494c369ecee0adb71da27394bbb9c03ddbe0",1]
-["src/agents/auth-profiles/oauth-common-mocks.test-support.ts","./external-cli-sync.js","12ff5fe1a5cfd45092d1cc375f3db40547a836d2962d177ea0fd7f9fb61fe271",1]
 ["src/agents/auth-profiles/oauth-file-lock-passthrough.test-support.ts","../../infra/file-lock.js","4f5910072e1e5697a0bace009ebf0fb086cea49d816bcf54e79fe9ff3e5afde1",1]
 ["src/agents/auth-profiles/oauth-file-lock-passthrough.test-support.ts","../../plugin-sdk/file-lock.js","d05c4479554f9dcf67fa6cb076efba043771f47e185331e7e1834adfbb4771cd",1]
 ["src/agents/auth-profiles/oauth-manager.settlement-validation.test.ts","../../llm/oauth.js","c061af9753771a2efc273a40344d4624e41fa5a4f8caffc9c05e2897fbc0dbe1",1]
