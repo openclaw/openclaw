@@ -299,7 +299,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
   );
 }
 
-defineSolidBridge<McpAppCatalogProps>(
+export const McpAppCatalog = defineSolidBridge<McpAppCatalogProps>(
   "openclaw-mcp-app-catalog",
   (props, host) => <McpAppCatalogContent {...props} host={host} />,
   {
@@ -315,5 +315,16 @@ defineSolidBridge<McpAppCatalogProps>(
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-mcp-app-catalog": McpAppCatalogElement;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-mcp-app-catalog": HTMLAttributes<McpAppCatalogElement> &
+        Properties<McpAppCatalogElement> & {
+          surface?: McpAppCatalogProps["surface"];
+        };
+    }
   }
 }

@@ -34,7 +34,7 @@ export function registerMatrixDoctorCommands(root: Command): void {
         console.log(
           accounts.length
             ? `Matrix crypto refusal: ${accounts.length} account store(s) blocked`
-            : "No Matrix crypto refusal markers found.",
+            : "No blocked Matrix crypto stores found.",
         );
         for (const account of accounts) {
           console.log(`- ${account.account}: ${account.rootDir}`);

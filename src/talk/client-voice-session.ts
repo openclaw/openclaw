@@ -6,6 +6,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import type { SessionTranscriptWriteScope } from "../config/sessions/session-accessor.types.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -415,6 +416,33 @@ function appendVoiceTranscript(
                 });
               }
             };
+            const memory = getSessionActorStorageBinding(sessionTarget);
+            if (memory) {
+              const entry = memory.actor.snapshot(memory.authority)?.entry;
+              if (!entry?.sessionId) {
+                throw new Error(`agent session not found (${normalized.sessionKey})`);
+              }
+              const record = await writer.mutate(reservation);
+              const assertFresh = () => {
+                writer.assertCurrent();
+                const current = memory.actor.snapshot(memory.authority)?.entry;
+                if (
+                  current?.sessionId !== entry.sessionId ||
+                  current.lifecycleRevision !== entry.lifecycleRevision
+                ) {
+                  throw new Error("agent session changed before voice transcript append");
+                }
+              };
+              assertFresh();
+              await appendReserved(
+                record,
+                entry,
+                { ...sessionTarget, storePath: memory.path },
+                assertFresh,
+                false,
+              );
+              return;
+            }
             const nativeTranscript = isNativeSessionEntryRead(sessionTarget, normalized.agentId);
             const transcriptStore = resolveUnsuffixedSqliteTargetFromSessionStorePath(
               sessionTarget.storePath ||

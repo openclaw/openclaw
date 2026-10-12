@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { syncDirectory } from "@openclaw/fs-safe/durability";
@@ -9,11 +10,17 @@ import {
   type FileLockHandle,
   type FileLockOptions,
 } from "openclaw/plugin-sdk/file-lock";
-import { getFileLockProcessStartTime, isPidAlive } from "openclaw/plugin-sdk/process-runtime";
+import { getMatrixRuntime } from "../../runtime.js";
+import {
+  readMatrixIdbSnapshotOwnerGeneration,
+  sealMatrixIdbSnapshotOwnerGeneration,
+  type MatrixSnapshotStateRuntime,
+} from "../crypto-state-store.js";
 
 const MATRIX_CRYPTO_STORE_OWNER_ACTIVE_ERROR_CODE = "matrix_crypto_store_owner_active";
 const RETRY_MS = 200;
 const WAIT_TIMEOUT_MS = 120_000;
+const GUARD_BYTES = 33;
 
 class MatrixCryptoStoreOwnerActiveError extends Error {
   readonly code = MATRIX_CRYPTO_STORE_OWNER_ACTIVE_ERROR_CODE;
@@ -25,9 +32,9 @@ class MatrixCryptoStoreOwnerActiveError extends Error {
 }
 
 export type MatrixCryptoStoreOwnership = Pick<FileLockHandle, "release"> & {
-  setYieldHandler: (handler: (() => void) | undefined) => void;
   armUnsafeState: () => Promise<void>;
-  clearUnsafeState: () => Promise<void>;
+  cancelUnsafeState: () => Promise<void>;
+  sealSafeState: () => Promise<void>;
 };
 
 const LOCK_OPTIONS: FileLockOptions = {
@@ -80,69 +87,89 @@ async function syncParentDirectory(filePath: string): Promise<void> {
   }
 }
 
-/** Arm before Rust crypto can mutate state; failure to arm means no crypto work. */
-async function poisonMatrixCryptoStore(snapshotPath: string, onCreated: () => void): Promise<void> {
+/** Null is a legacy/fresh store without a guard; empty means an invalid or old refusal marker. */
+async function readOwnerGuard(snapshotPath: string): Promise<string | null> {
   const marker = poisonPath(snapshotPath);
-  const file = await fs.open(marker, "wx", 0o600);
-  onCreated();
+  let stat;
   try {
-    await file.writeFile(
-      "The previous Matrix crypto owner did not safely publish its final state. Inspect and repair before clearing this marker.\n",
-    );
+    stat = await fs.lstat(marker);
+  } catch (error) {
+    if (filesystemErrorCode(error) === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("Matrix crypto owner guard must be a regular file");
+  }
+  if (stat.size !== GUARD_BYTES) {
+    return "";
+  }
+  const file = await fs.open(marker, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const bytes = Buffer.alloc(GUARD_BYTES);
+    const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+    const value = bytes.toString("utf8");
+    return bytesRead === GUARD_BYTES && /^[a-f0-9]{32}\n$/.test(value) ? value.trimEnd() : "";
+  } finally {
+    await file.close();
+  }
+}
+
+/** Flush the guard before Rust mutates state; retain its inode across clean generations. */
+async function writeOwnerGuard(
+  snapshotPath: string,
+  generation: string,
+  create: boolean,
+  onChanged: () => void = () => {},
+): Promise<void> {
+  const marker = poisonPath(snapshotPath);
+  const flags =
+    constants.O_RDWR |
+    (constants.O_NOFOLLOW ?? 0) |
+    (create ? constants.O_CREAT | constants.O_EXCL : 0);
+  const file = await fs.open(marker, flags, 0o600);
+  try {
+    if (!(await file.stat()).isFile()) {
+      throw new Error("Matrix crypto owner guard must be a regular file");
+    }
+    onChanged();
+    await file.writeFile(`${generation}\n`, "ascii");
+    await file.truncate(GUARD_BYTES);
     await file.sync();
   } finally {
     await file.close();
   }
-  await syncParentDirectory(marker);
-}
-
-export async function clearMatrixCryptoStoreUnsafeState(snapshotPath: string): Promise<void> {
-  const marker = poisonPath(snapshotPath);
-  await fs.unlink(marker);
-  await syncParentDirectory(marker);
-}
-
-async function assertStoreNotPoisoned(snapshotPath: string): Promise<void> {
-  try {
-    await fs.access(poisonPath(snapshotPath));
-  } catch (error) {
-    if (filesystemErrorCode(error) === "ENOENT") {
-      return;
-    }
-    throw error;
+  if (create) {
+    await syncParentDirectory(marker);
   }
-  throw new Error(
-    "Matrix crypto state has an unresolved unsafe final state (discarded or failed save); refusing another owner",
+}
+
+/** The caller holds custody. Snapshot checksum and schema validation remain the restore owner's job. */
+export async function isMatrixCryptoStoreUnsafe(
+  snapshotPath: string,
+  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+): Promise<boolean> {
+  const guard = await readOwnerGuard(snapshotPath);
+  if (guard === "") {
+    return true;
+  }
+  const cleanGeneration = await readMatrixIdbSnapshotOwnerGeneration(
+    path.dirname(snapshotPath),
+    stateRuntime,
   );
+  return guard === null ? cleanGeneration !== undefined : guard !== cleanGeneration;
 }
 
-function waiterDir(snapshotPath: string): string {
-  return `${snapshotPath}.owner.waiters`;
-}
-
-async function hasMatrixCryptoStoreWaiters(snapshotPath: string): Promise<boolean> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(waiterDir(snapshotPath));
-  } catch (error) {
-    if (filesystemErrorCode(error) === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-  for (const entry of entries) {
-    const [pidText, startText] = entry.split("-");
-    const pid = Number(pidText);
-    const savedStart = startText === "unknown" ? null : Number(startText);
-    if (Number.isSafeInteger(pid) && pid > 0 && isPidAlive(pid)) {
-      const currentStart = getFileLockProcessStartTime(pid);
-      if (savedStart === null || currentStart === null || savedStart === currentStart) {
-        return true;
-      }
-    }
-    await fs.unlink(path.join(waiterDir(snapshotPath), entry)).catch(() => undefined);
-  }
-  return false;
+/** Doctor has already validated the snapshot and obtained explicit rollback consent under custody. */
+export async function sealMatrixCryptoStoreRecovery(
+  snapshotPath: string,
+  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+): Promise<void> {
+  const guard = await readOwnerGuard(snapshotPath);
+  const generation = randomUUID().replaceAll("-", "");
+  await writeOwnerGuard(snapshotPath, generation, guard === null);
+  await sealMatrixIdbSnapshotOwnerGeneration(path.dirname(snapshotPath), generation, stateRuntime);
 }
 
 async function waitRetry(signal?: AbortSignal): Promise<void> {
@@ -171,114 +198,112 @@ async function waitRetry(signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** The owner polls local waiter notices; no crypto command crosses the process boundary. */
 export async function acquireMatrixCryptoStoreOwnership(
   snapshotPath: string,
-  options: { signal?: AbortSignal; onYieldRequested?: () => void } = {},
+  options: { signal?: AbortSignal; stateRuntime?: MatrixSnapshotStateRuntime } = {},
 ): Promise<MatrixCryptoStoreOwnership> {
-  const directory = waiterDir(snapshotPath);
-  let marker: string | undefined;
+  const stateRuntime = options.stateRuntime ?? getMatrixRuntime().state;
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  try {
-    while (true) {
-      options.signal?.throwIfAborted();
-      // An active owner deliberately keeps this marker armed. Only inspect it
-      // after acquiring the lock; waiters must not mistake a live owner for a
-      // failed prior generation.
-      let lock: FileLockHandle;
-      try {
-        lock = await acquireFileLock(`${snapshotPath}.owner`, LOCK_OPTIONS);
-      } catch (error) {
-        if (!isContention(error)) {
-          throw error;
-        }
-        if (!options.onYieldRequested && Date.now() >= deadline) {
-          throw new MatrixCryptoStoreOwnerActiveError(error);
-        }
-        if (!options.onYieldRequested && !marker) {
-          await fs.mkdir(directory, { recursive: true });
-          marker = path.join(
-            directory,
-            `${process.pid}-${getFileLockProcessStartTime(process.pid) ?? "unknown"}-${randomUUID()}`,
-          );
-          await fs.writeFile(marker, "", { flag: "wx", mode: 0o600 });
-        }
-        await waitRetry(options.signal);
-        continue;
-      }
-      // Recheck while holding the lock: the previous owner may have poisoned
-      // the snapshot after our pre-acquisition check but before releasing it.
-      let mustYield: boolean;
-      try {
-        await assertStoreNotPoisoned(snapshotPath);
-        mustYield = Boolean(
-          options.onYieldRequested && (await hasMatrixCryptoStoreWaiters(snapshotPath)),
-        );
-      } catch (error) {
-        await lock.release();
+  let lock: FileLockHandle;
+  while (true) {
+    options.signal?.throwIfAborted();
+    try {
+      lock = await acquireFileLock(`${snapshotPath}.owner`, LOCK_OPTIONS);
+      break;
+    } catch (error) {
+      if (!isContention(error)) {
         throw error;
       }
-      if (mustYield) {
-        // A returning Gateway must not recapture ownership ahead of a waiter.
-        await lock.release();
-        await waitRetry(options.signal);
-        continue;
+      if (Date.now() >= deadline) {
+        throw new MatrixCryptoStoreOwnerActiveError(error);
       }
-      let timer: NodeJS.Timeout | undefined;
-      let unsafeStateArmed = false;
-      const setYieldHandler = (handler: (() => void) | undefined) => {
-        if (timer) {
-          clearInterval(timer);
-          timer = undefined;
-        }
-        if (handler) {
-          timer = setInterval(() => {
-            void hasMatrixCryptoStoreWaiters(snapshotPath).then(
-              (waiting) => {
-                if (waiting) {
-                  handler();
-                }
-              },
-              () => undefined,
-            );
-          }, RETRY_MS);
-          timer.unref?.();
-        }
-      };
-      setYieldHandler(options.onYieldRequested);
-      const ownedMarker = marker;
-      marker = undefined;
-      return {
-        setYieldHandler,
-        armUnsafeState: async () => {
-          if (!unsafeStateArmed) {
-            await poisonMatrixCryptoStore(snapshotPath, () => {
-              // Creation belongs to this owner even if subsequent durability work fails.
-              unsafeStateArmed = true;
-            });
-          }
-        },
-        clearUnsafeState: async () => {
-          if (unsafeStateArmed) {
-            await clearMatrixCryptoStoreUnsafeState(snapshotPath);
-            unsafeStateArmed = false;
-          }
-        },
-        release: async () => {
-          setYieldHandler(undefined);
-          try {
-            await lock.release();
-          } finally {
-            if (ownedMarker) {
-              await fs.unlink(ownedMarker).catch(() => undefined);
-            }
-          }
-        },
-      };
-    }
-  } finally {
-    if (marker) {
-      await fs.unlink(marker).catch(() => undefined);
+      await waitRetry(options.signal);
     }
   }
+  let previousGuard: string | null;
+  try {
+    options.signal?.throwIfAborted();
+    // Inspect only under custody: a live owner intentionally keeps its guard ahead of the seal.
+    if (await isMatrixCryptoStoreUnsafe(snapshotPath, stateRuntime)) {
+      throw new Error(
+        "Matrix crypto state has an unresolved unsafe final state (discarded, failed, or lost save); refusing another owner",
+      );
+    }
+    previousGuard = await readOwnerGuard(snapshotPath);
+  } catch (error) {
+    await lock.release();
+    throw error;
+  }
+
+  const generation = randomUUID().replaceAll("-", "");
+  let guardChanged = false;
+  let sealed = false;
+  let armPromise: Promise<void> | undefined;
+  let pending = Promise.resolve();
+  let releasePromise: Promise<void> | undefined;
+  const underCustody = (run: () => Promise<void>): Promise<void> => {
+    if (releasePromise) {
+      return Promise.reject(new Error("Matrix crypto ownership has been released"));
+    }
+    const task = pending.then(run);
+    pending = task.catch(() => {});
+    return task;
+  };
+  return {
+    armUnsafeState: () =>
+      underCustody(async () => {
+        if (sealed) {
+          throw new Error("Matrix crypto generation has already been sealed");
+        }
+        armPromise ??= writeOwnerGuard(snapshotPath, generation, previousGuard === null, () => {
+          // Cancellation must undo even a write whose durability operation failed.
+          guardChanged = true;
+        });
+        await armPromise;
+      }),
+    cancelUnsafeState: () =>
+      underCustody(async () => {
+        // Only initialization that never entered Rust may restore the previously admitted guard.
+        if (!guardChanged) {
+          return;
+        }
+        if (previousGuard === null) {
+          await fs.unlink(poisonPath(snapshotPath));
+          await syncParentDirectory(poisonPath(snapshotPath));
+        } else {
+          await writeOwnerGuard(snapshotPath, previousGuard, false);
+        }
+        guardChanged = false;
+        armPromise = undefined;
+      }),
+    sealSafeState: () =>
+      underCustody(async () => {
+        if (!guardChanged) {
+          return;
+        }
+        await armPromise;
+        try {
+          await sealMatrixIdbSnapshotOwnerGeneration(
+            path.dirname(snapshotPath),
+            generation,
+            stateRuntime,
+          );
+        } catch (error) {
+          // A lost write acknowledgment can be reconciled without surrendering custody.
+          const committed = await readMatrixIdbSnapshotOwnerGeneration(
+            path.dirname(snapshotPath),
+            stateRuntime,
+          ).catch(() => undefined);
+          if (committed !== generation) {
+            throw error;
+          }
+        }
+        guardChanged = false;
+        sealed = true;
+      }),
+    release: () => {
+      releasePromise ??= pending.then(() => lock.release());
+      return releasePromise;
+    },
+  };
 }

@@ -241,6 +241,25 @@ inline maintenance and archive persistence still share the released opaque SDK
 deletion transaction; moving those calls requires that transaction owner's cutover.
 This changes no schemas, retention, stored bytes, or update behavior.
 
+## Session target discovery
+
+Gateway combined listings, search preparation, cron owner discovery, delivery
+context recovery, and ordered runtime candidate selection await the existing
+session history/discovery worker. Target selection returns logical and physical
+store facts together; durable reads do not run SQLite on the Gateway thread.
+Combined topology and row reads share the federation policy used by the native
+maintenance entrypoint. Bound incognito rows remain with their process-held actor;
+unbound incognito stores retain their existing process-local native owner.
+
+Ordinary discovery keeps one captured roster and listing through completion.
+Later registry, path, or row changes are observed on the next owner preparation;
+there is no post-read registry retry or repeated listing-identity capture.
+Write receipts invalidate reusable target facts. Current authorization at
+search disclosure, project removal, and other real effects remains required.
+The released synchronous transcript-hit SDK and native mutation callbacks retain
+their existing kernels until those owning contracts are migrated; this is not a
+claim that all shared discovery kernels are worker-only.
+
 ## Config CLI ownership
 
 ### Non-session bookkeeping
@@ -854,6 +873,19 @@ paths do not allocate them or add worker requests. Partial entry or
 transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
+
+Closed entry patches reuse an already resident actor when the session and
+lifecycle stay unchanged. The entry writer supplies its complete row and window
+postimages; the actor keeps the untouched pending inputs and transcript facts,
+then publishes its full hot state through the same commit receipt. A rollback
+preserves the stored preimage; conservative receipt invalidation can require a
+reload. Missing residency, replacement lifecycles, and unknown writes still
+require hydration. Oversized optional actor postimages are
+shed with full-entry enrichment under the existing publication limit.
+Bounded context reads inside the actor transaction also derive logical parents
+from its active positions and identities and reuse its projection, reset, and
+prefix facts; standalone reads retain their SQL lookups. Hydration does not
+repeat a revision check inside this synchronous owner.
 
 Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
 and ordered-cohort reads reuse complete actor state or its entry-only projection;
@@ -3564,7 +3596,11 @@ Cold bootstrap retains its existing owner. Schemas, stored formats, and update
 behavior are unchanged.
 
 Memory dreaming and backfill retain the selected physical corpus file across
-filesystem discovery in the existing history reader. Their final ingestion-policy
+filesystem discovery in the existing history reader. Read scopes that explicitly
+capture a physical source recheck its retained identity after asynchronous
+preparation and before disclosure or writable admission. Deleted or replaced files
+are refused without repeating schema or integrity validation; ordinary admission
+lookups continue to reuse their retained facts. Their final ingestion-policy
 decision remains a synchronous, bounded batch of exact source metadata after the
 existing corpus and tombstone preparation. Forgotten sources and disabled policies
 require no metadata read. Raw synchronous SDK writers do not
@@ -5746,6 +5782,9 @@ Worker-owned retirement cleanup borrows its retained executor instead of acquiri
 a native read candidate. The exact cleanup scope rechecks host liveness, while
 worker grants keep the durable journal and lease checks. Ordinary cold reads keep
 the native read-candidate owner and its existing release ordering.
+Only a store owned by the deleted agent receives an exclusive cleanup executor.
+Purging that agent's entries from a surviving agent's shared store borrows the
+survivor's admitted owner without closing it or cancelling its other borrowers.
 
 OAuth peer fencing, restoration, and settlement use the existing auth reader and
 agent writer. Discovery retains each candidate's physical database identity,

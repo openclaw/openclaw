@@ -9,10 +9,12 @@ import {
 } from "openclaw/plugin-sdk/file-lock";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getMatrixRuntime } from "../../runtime.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../../test-runtime.js";
+import { writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
 import { MatrixClient } from "../sdk.js";
 import * as cryptoOwnership from "./crypto-store-ownership.js";
-import { withMatrixCryptoStoreRecoveryLock } from "./crypto-store-ownership.js";
-import { observeCryptoStoreWaiter } from "./crypto-store-ownership.test-helpers.js";
+import { observeCryptoStoreContention } from "./crypto-store-ownership.test-helpers.js";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
@@ -29,7 +31,19 @@ vi.mock("./joined-room-encryption.js", () => ({
 }));
 vi.mock("./idb-persistence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./idb-persistence.js")>()),
-  persistIdbToDisk: vi.fn(async () => undefined),
+  persistIdbToDisk: vi.fn(
+    async (params?: Parameters<typeof import("./idb-persistence.js").persistIdbToDisk>[0]) => {
+      const snapshotPath =
+        params?.snapshotPath ??
+        path.join(getMatrixRuntime().state.resolveStateDir(), "matrix", "crypto-idb-snapshot.json");
+      await writeMatrixIdbSnapshotJson({
+        storageRootDir: path.dirname(snapshotPath),
+        snapshotJson: '{"version":1,"databases":[]}',
+        databaseCount: 0,
+        stateRuntime: params?.stateRuntime,
+      });
+    },
+  ),
   restoreIdbFromDisk: vi.fn(async () => false),
 }));
 vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
@@ -56,7 +70,9 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
 describe("Matrix encrypted startup ownership", () => {
   let client: MatrixClient;
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("matrix-startup-state-"));
+    const stateDir = tempDirs.make("matrix-startup-state-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    installMatrixTestRuntime({ stateDir });
     fixture.reconcile.mockReset().mockResolvedValue(undefined);
     fixture.init.mockReset().mockResolvedValue(undefined);
     fixture.start.mockReset().mockResolvedValue(undefined);
@@ -71,60 +87,10 @@ describe("Matrix encrypted startup ownership", () => {
   });
   afterEach(async () => {
     await client.stopWithoutPersist();
+    await resetMatrixTestStores();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-  });
-
-  it("notifies a monitor registered while crypto ownership acquisition is pending", async () => {
-    const acquisitionStarted = createDeferred<void>();
-    const acquired = createDeferred<cryptoOwnership.MatrixCryptoStoreOwnership>();
-    let notifyWaiter: (() => void) | undefined;
-    const ownership: cryptoOwnership.MatrixCryptoStoreOwnership = {
-      setYieldHandler: (handler) => {
-        notifyWaiter = handler;
-      },
-      armUnsafeState: async () => {},
-      clearUnsafeState: async () => {},
-      release: async () => {},
-    };
-    vi.spyOn(cryptoOwnership, "acquireMatrixCryptoStoreOwnership").mockImplementationOnce(
-      async (_snapshotPath, options = {}) => {
-        notifyWaiter = options.onYieldRequested;
-        acquisitionStarted.resolve();
-        return await acquired.promise;
-      },
-    );
-    client = new MatrixClient("https://matrix.example.org", "test-token", {
-      encryption: true,
-      autoBootstrapCrypto: false,
-      idbSnapshotPath: path.join(tempDirs.make("matrix-pending-yield-"), "snapshot.json"),
-    });
-    const startup = client.prepareForOneOff();
-    const startupSettled = Promise.allSettled([startup]);
-    let removeMonitor: (() => void) | undefined;
-    try {
-      await Promise.race([
-        acquisitionStarted.promise,
-        startup.then(() => {
-          throw new Error("Crypto startup bypassed ownership acquisition");
-        }),
-      ]);
-      const monitor = vi.fn();
-      removeMonitor = client.addCryptoOwnershipYieldHandler(monitor);
-      acquired.resolve(ownership);
-      await startup;
-      notifyWaiter?.();
-      expect(monitor).toHaveBeenCalledTimes(1);
-      removeMonitor();
-      notifyWaiter?.();
-      expect(monitor).toHaveBeenCalledTimes(1);
-    } finally {
-      acquired.resolve(ownership);
-      await startupSettled;
-      removeMonitor?.();
-      await client.stopWithoutPersist();
-    }
   });
 
   it("holds custody when encrypted startup uses the default snapshot path", async () => {
@@ -140,7 +106,7 @@ describe("Matrix encrypted startup ownership", () => {
       await client.prepareForOneOff();
       const recover = vi.fn(async () => {});
       await expect(
-        withMatrixCryptoStoreRecoveryLock(
+        cryptoOwnership.withMatrixCryptoStoreRecoveryLock(
           path.join(stateDir, "matrix", "crypto-idb-snapshot.json"),
           recover,
         ),
@@ -285,7 +251,7 @@ describe("Matrix encrypted startup ownership", () => {
       expect(fixture.init).toHaveBeenCalledTimes(1);
       expect(await fs.stat(`${snapshotPath}.owner.poisoned`)).toBeDefined();
       await failed.stopAndPersist();
-      expect(await fs.stat(`${snapshotPath}.owner.poisoned`).catch(() => null)).toBeNull();
+      expect(await cryptoOwnership.isMatrixCryptoStoreUnsafe(snapshotPath)).toBe(false);
       await successor.prepareForOneOff();
       expect(fixture.init).toHaveBeenCalledTimes(2);
     } finally {
@@ -320,7 +286,7 @@ describe("Matrix encrypted startup ownership", () => {
       abort.abort();
       finish.resolve();
       await expect(startup).rejects.toMatchObject({ name: "AbortError" });
-      const waiter = await observeCryptoStoreWaiter(snapshotPath);
+      const waiter = observeCryptoStoreContention(snapshotPath);
       const replacementStartup = replacement.prepareForOneOff();
       try {
         await waiter.waitFor(replacementStartup);
@@ -382,13 +348,15 @@ describe("Matrix encrypted startup ownership", () => {
         ),
       ]);
       const inspect = vi.fn(async () => undefined);
-      await expect(withMatrixCryptoStoreRecoveryLock(snapshotPath, inspect)).rejects.toThrow();
+      await expect(
+        cryptoOwnership.withMatrixCryptoStoreRecoveryLock(snapshotPath, inspect),
+      ).rejects.toThrow();
       expect(inspect).not.toHaveBeenCalled();
       expect(fixture.stop).not.toHaveBeenCalled();
       finishInit.resolve();
       await expect(shutdown).rejects.toBe(quiesceError);
       await shutdownSettled;
-      await withMatrixCryptoStoreRecoveryLock(snapshotPath, async (markerPath) => {
+      await cryptoOwnership.withMatrixCryptoStoreRecoveryLock(snapshotPath, async (markerPath) => {
         expect(fixture.stop).toHaveBeenCalledTimes(1);
         expect(await fs.stat(markerPath)).toBeDefined();
       });
@@ -398,6 +366,38 @@ describe("Matrix encrypted startup ownership", () => {
       await startupSettled;
       await shutdown?.catch(() => undefined);
       await owner.stopWithoutPersist().catch(() => undefined);
+    }
+  });
+
+  it("retains custody after Rust initialization rejects without a stoppable backend", async () => {
+    const snapshotPath = path.join(tempDirs.make("matrix-rust-init-failure-"), "snapshot.json");
+    const failure = new Error("Rust initialization failed after opening its store");
+    fixture.init.mockRejectedValueOnce(failure);
+    const owner = new MatrixClient("https://matrix.example.org", "test-token", {
+      userId: "@bot:example.org",
+      deviceId: "BOT",
+      encryption: true,
+      autoBootstrapCrypto: false,
+      idbSnapshotPath: snapshotPath,
+    });
+    const inspect = vi.fn(async () => undefined);
+    try {
+      await expect(owner.prepareForOneOff()).rejects.toBe(failure);
+      await expect(owner.prepareForOneOff()).rejects.toMatchObject({ cause: failure });
+      expect(fixture.init).toHaveBeenCalledOnce();
+      await expect(owner.stopAndPersist()).rejects.toMatchObject({ cause: failure });
+      await expect(owner.stopWithoutPersist()).rejects.toMatchObject({ cause: failure });
+      await expect(
+        cryptoOwnership.withMatrixCryptoStoreRecoveryLock(snapshotPath, inspect),
+      ).rejects.toThrow();
+      expect(inspect).not.toHaveBeenCalled();
+      expect(await cryptoOwnership.isMatrixCryptoStoreUnsafe(snapshotPath)).toBe(true);
+    } finally {
+      await owner.stopWithoutPersist().catch(() => undefined);
+      // The SDK failed before exposing a backend; only process exit can release
+      // custody in production. Close this test-owned manager after proving refusal.
+      resetFileLockStateForTest();
+      await drainFileLockStateForTest();
     }
   });
 
@@ -422,12 +422,16 @@ describe("Matrix encrypted startup ownership", () => {
       await expect(owner.stopAndPersist()).rejects.toBe(stopError);
       await expect(owner.start()).rejects.toThrow("fully stopped");
       const inspect = vi.fn(async () => undefined);
-      await expect(withMatrixCryptoStoreRecoveryLock(snapshotPath, inspect)).rejects.toThrow();
+      await expect(
+        cryptoOwnership.withMatrixCryptoStoreRecoveryLock(snapshotPath, inspect),
+      ).rejects.toThrow();
       expect(inspect).not.toHaveBeenCalled();
       expect(vi.mocked(persistIdbToDisk).mock.calls.length).toBe(savesBefore);
       await expect(owner.stopWithoutPersist()).rejects.toBe(stopError);
       expect(fixture.stop).toHaveBeenCalledTimes(1);
-      await expect(withMatrixCryptoStoreRecoveryLock(snapshotPath, inspect)).rejects.toThrow();
+      await expect(
+        cryptoOwnership.withMatrixCryptoStoreRecoveryLock(snapshotPath, inspect),
+      ).rejects.toThrow();
       expect(inspect).not.toHaveBeenCalled();
       expect(await fs.stat(`${snapshotPath}.owner.poisoned`)).toBeDefined();
     } finally {
@@ -456,7 +460,7 @@ describe("Matrix encrypted startup ownership", () => {
     try {
       await owner.prepareForOneOff();
       const savedBefore = vi.mocked(persistIdbToDisk).mock.calls.length;
-      const waiter = await observeCryptoStoreWaiter(snapshotPath);
+      const waiter = observeCryptoStoreContention(snapshotPath);
       const replacementStartup = replacement.start({ abortSignal: abort.signal });
       const rejected = expect(replacementStartup).rejects.toMatchObject({ name: "AbortError" });
       try {
@@ -470,7 +474,7 @@ describe("Matrix encrypted startup ownership", () => {
       await replacement.stopAndPersist();
       expect(vi.mocked(persistIdbToDisk).mock.calls.length).toBe(savedBefore);
       await owner.stopAndPersist();
-      expect(await fs.stat(`${snapshotPath}.owner.poisoned`).catch(() => null)).toBeNull();
+      expect(await cryptoOwnership.isMatrixCryptoStoreUnsafe(snapshotPath)).toBe(false);
       const successor = new MatrixClient("https://matrix.example.org", "test-token", options);
       try {
         await successor.prepareForOneOff();

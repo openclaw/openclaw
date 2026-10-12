@@ -102,12 +102,12 @@ function parseSnapshotPayload(data: string): IdbDatabaseSnapshot[] | null {
   return parsed;
 }
 
-export function isValidMatrixIdbSnapshotJson(data: string): boolean {
-  try {
-    return parseSnapshotPayload(data) !== null;
-  } catch {
-    return false;
+export async function validateMatrixIdbSnapshotJson(data: string): Promise<void> {
+  const snapshot = parseSnapshotPayload(data);
+  if (!snapshot) {
+    throw new Error("Malformed IndexedDB snapshot payload");
   }
+  await preflightIndexedDatabases(snapshot);
 }
 
 function idbReq<T>(req: IDBRequest<T>): Promise<T> {
@@ -248,6 +248,22 @@ export function resolveDefaultIdbSnapshotPath(): string {
   return path.join(stateDir, "matrix", "crypto-idb-snapshot.json");
 }
 
+async function preflightIndexedDatabases(
+  snapshot: IdbDatabaseSnapshot[],
+  databasePrefix?: string,
+): Promise<void> {
+  const names = new Set<string>();
+  for (const { name } of snapshot) {
+    if (names.has(name) || (databasePrefix && !name.startsWith(`${databasePrefix}::`))) {
+      throw new Error("Malformed IndexedDB snapshot database names");
+    }
+    names.add(name);
+  }
+  // Use the same replay as startup without changing any live account databases.
+  // JSON shape validation cannot prove IndexedDB key, schema, or index constraints.
+  await restoreIndexedDatabases(snapshot, new IDBFactory());
+}
+
 async function readCanonicalSnapshot(
   snapshotPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
@@ -282,16 +298,7 @@ export async function restoreIdbFromDisk(
         await clearAccountIndexedDatabases(databasePrefix);
         return false;
       }
-      const names = new Set<string>();
-      for (const { name } of snapshot) {
-        if (names.has(name) || (databasePrefix && !name.startsWith(`${databasePrefix}::`))) {
-          throw new Error("Malformed IndexedDB snapshot database names");
-        }
-        names.add(name);
-      }
-      // Replay the whole candidate before replacing retained account databases:
-      // structural JSON validation cannot prove key, schema, or index constraints.
-      await restoreIndexedDatabases(snapshot, new IDBFactory());
+      await preflightIndexedDatabases(snapshot, databasePrefix);
       await clearAccountIndexedDatabases(databasePrefix);
       await restoreIndexedDatabases(snapshot, fakeIndexedDB);
       LogService.info(

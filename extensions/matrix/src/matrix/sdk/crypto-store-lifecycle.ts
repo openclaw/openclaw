@@ -1,31 +1,6 @@
 import type { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
 import type { MatrixCryptoStoreOwnership } from "./crypto-store-ownership.js";
 
-/** A shared SDK generation can have more than one monitor lease. */
-export function createMatrixCryptoYieldHandlers(
-  getOwnership: () => MatrixCryptoStoreOwnership | null,
-) {
-  const handlers = new Set<() => void>();
-  const notify = () => {
-    for (const handler of handlers) {
-      handler();
-    }
-  };
-  return {
-    currentCallback: () => (handlers.size > 0 ? notify : undefined),
-    add: (handler: () => void) => {
-      handlers.add(handler);
-      getOwnership()?.setYieldHandler(notify);
-      return () => {
-        handlers.delete(handler);
-        if (handlers.size === 0) {
-          getOwnership()?.setYieldHandler(undefined);
-        }
-      };
-    },
-  };
-}
-
 export async function closeMatrixCryptoStores(
   closeRecoveryKeys: () => Promise<void>,
   releaseOwnership: () => Promise<void>,
@@ -48,6 +23,7 @@ export async function closeMatrixCryptoStores(
 
 /** Final publication is allowed only for a generation that initialized under custody. */
 export async function persistMatrixFinalState(params: {
+  encryptionEnabled: boolean;
   cryptoInitialized: boolean;
   ownership: MatrixCryptoStoreOwnership | null;
   snapshotPath?: string;
@@ -60,21 +36,40 @@ export async function persistMatrixFinalState(params: {
     }
     await params.persistSnapshot();
   }
-  params.syncStore?.markCleanShutdown();
+  // An uninitialized encrypted diagnostic cannot certify a cursor against
+  // crypto state it never owned or exported. Preserve its loaded clean flag.
+  if (!params.encryptionEnabled || params.cryptoInitialized) {
+    params.syncStore?.markCleanShutdown();
+  }
   await params.syncStore?.flush();
   if (params.cryptoInitialized) {
-    await params.ownership?.clearUnsafeState();
+    await params.ownership?.sealSafeState();
   }
 }
 
 /** Join an in-flight crypto initialization before a generation can be retired. */
 export function createMatrixCryptoInitializationGate() {
   let pending: Promise<void> | null = null;
+  let failure: { error: unknown } | null = null;
   return {
     get pending(): Promise<void> | null {
       return pending;
     },
+    get failure(): { error: unknown } | null {
+      return failure;
+    },
+    recordFailure(error: unknown): void {
+      failure = { error };
+    },
     async run(initialize: () => Promise<void>, abortSignal?: AbortSignal): Promise<void> {
+      if (failure) {
+        throw new Error(
+          "Matrix crypto initialization failed; restart this process before retrying",
+          {
+            cause: failure.error,
+          },
+        );
+      }
       if (pending) {
         await pending;
         abortSignal?.throwIfAborted();

@@ -3,9 +3,16 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../../test-runtime.js";
 import { acquireMatrixCryptoStoreOwnership } from "./crypto-store-ownership.js";
+import { observeCryptoStoreContention } from "./crypto-store-ownership.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await resetMatrixTestStores();
+    cleanup();
+  }),
+);
 
 function waitForChildLock(child: ReturnType<typeof spawn>): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -28,20 +35,17 @@ function waitForChildLock(child: ReturnType<typeof spawn>): Promise<void> {
 }
 
 describe("Matrix crypto-store ownership across processes", () => {
-  it("hands exclusive ownership to a waiting OS process", async () => {
+  it("keeps custody in the OS owner until its explicit retirement", async () => {
     const snapshotPath = path.join(tempDirs.make("matrix-crypto-process-owner-"), "snapshot.json");
+    installMatrixTestRuntime({ stateDir: path.dirname(snapshotPath) });
     const moduleUrl = pathToFileURL(
       path.resolve("extensions/matrix/src/matrix/sdk/crypto-store-ownership.ts"),
     ).href;
     const childScript = `
       const { acquireMatrixCryptoStoreOwnership } = await import(${JSON.stringify(moduleUrl)});
-      let ownership;
-      ownership = await acquireMatrixCryptoStoreOwnership(${JSON.stringify(snapshotPath)}, {
-        onYieldRequested: () => {
-          process.stdout.write("YIELD\\n");
-          void ownership.release();
-        },
-      });
+      // This child only acquires an empty store's file lock; it never enters Rust.
+      const stateRuntime = { openKeyedStoreV2: () => ({ lookup: async () => undefined }) };
+      const ownership = await acquireMatrixCryptoStoreOwnership(${JSON.stringify(snapshotPath)}, { stateRuntime });
       process.stdout.write("LOCKED\\n");
       process.stdin.resume();
       await new Promise((resolve) => process.stdin.once("end", resolve));
@@ -58,12 +62,21 @@ describe("Matrix crypto-store ownership across processes", () => {
 
     try {
       await waitForChildLock(child);
-      const yielded = new Promise<string>((resolve) => {
-        child.stdout?.once("data", (chunk) => resolve(String(chunk).trim()));
-      });
-      const next = await acquireMatrixCryptoStoreOwnership(snapshotPath);
-      expect(await yielded).toBe("YIELD");
-      await next.release();
+      const contention = observeCryptoStoreContention(snapshotPath);
+      const caller = new AbortController();
+      const pending = acquireMatrixCryptoStoreOwnership(snapshotPath, { signal: caller.signal });
+      try {
+        await contention.waitFor(pending);
+        expect(child.exitCode).toBeNull();
+        child.stdin?.end();
+        const next = await pending;
+        await next.release();
+      } finally {
+        contention.close();
+        caller.abort();
+        const acquired = await pending.catch(() => undefined);
+        await acquired?.release();
+      }
     } finally {
       child.stdin?.end();
       if (child.exitCode === null) {

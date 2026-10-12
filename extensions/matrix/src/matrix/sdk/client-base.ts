@@ -33,7 +33,6 @@ import type { MatrixCryptoFacade } from "./crypto-facade.js";
 import {
   closeMatrixCryptoStores,
   createMatrixCryptoInitializationGate,
-  createMatrixCryptoYieldHandlers,
   createMatrixSdkStopGate,
   persistMatrixFinalState,
   runMatrixClientShutdown,
@@ -46,6 +45,7 @@ import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./idb-persistence-lock.js";
+import type { MatrixSdkIndexedDbSession } from "./indexeddb-session.js";
 import { withMatrixLiveEncryptedRoom } from "./live-room-readiness.js";
 import { LogService, noop } from "./logger.js";
 import { MatrixMessageWireDispatchGuards } from "./message-wire-dispatch.js";
@@ -138,12 +138,7 @@ export abstract class MatrixClientBase {
   private idbPersistPromise: Promise<void> | null = null;
   private idbPersistAbortController: AbortController | null = null;
   private cryptoStoreOwnership: MatrixCryptoStoreOwnership | null = null;
-  private readonly cryptoYieldHandlers = createMatrixCryptoYieldHandlers(
-    () => this.cryptoStoreOwnership,
-  );
-
-  readonly addCryptoOwnershipYieldHandler = this.cryptoYieldHandlers.add;
-
+  private sdkIndexedDbSession: MatrixSdkIndexedDbSession | null = null;
   private readonly assertClientActive = () => {
     this.requestAbortController.signal.throwIfAborted();
   };
@@ -593,10 +588,24 @@ export abstract class MatrixClientBase {
           this.decryptBridge?.stop();
           this.cryptoRequestOwner.disable();
         }
+        // SDK stop drops its machine wrapper, but native futures retain store
+        // connections. Close their transaction admission before final export.
+        await this.sdkIndexedDbSession?.retire();
         await Promise.all([this.recoveryKeyStore.close(), activePeriodicPersist]);
+        if (this.cryptoInitializationGate.failure) {
+          // The SDK installs its backend only after initialization resolves. A
+          // rejected initializer can leave an unreachable native store open.
+          throw new Error(
+            "Matrix crypto initialization failed; restart this process before recovery",
+            {
+              cause: this.cryptoInitializationGate.failure.error,
+            },
+          );
+        }
         this.generationTeardownComplete = true;
         if (publishFinalState) {
           await persistMatrixFinalState({
+            encryptionEnabled: this.encryptionEnabled,
             cryptoInitialized: this.cryptoInitialized,
             ownership: this.cryptoStoreOwnership,
             snapshotPath: this.idbSnapshotPath,
@@ -670,15 +679,18 @@ export abstract class MatrixClientBase {
 
   private async initializeCrypto(abortSignal: AbortSignal): Promise<void> {
     throwIfMatrixStartupAborted(abortSignal);
-    const { persistIdbToDisk, restoreIdbFromDisk, resolveDefaultIdbSnapshotPath } =
-      await loadMatrixCryptoRuntime();
+    const {
+      persistIdbToDisk,
+      restoreIdbFromDisk,
+      resolveDefaultIdbSnapshotPath,
+      beginMatrixSdkIndexedDbSession,
+    } = await loadMatrixCryptoRuntime();
     this.idbSnapshotPath ??= resolveDefaultIdbSnapshotPath();
     if (!this.cryptoStoreOwnership) {
       this.cryptoStoreOwnership = await acquireMatrixCryptoStoreOwnership(this.idbSnapshotPath, {
         signal: abortSignal,
-        onYieldRequested: this.cryptoYieldHandlers.currentCallback(),
+        stateRuntime: this.stateRuntime,
       });
-      this.cryptoStoreOwnership.setYieldHandler(this.cryptoYieldHandlers.currentCallback());
     }
 
     let rustCryptoInitializationStarted = false;
@@ -688,6 +700,7 @@ export abstract class MatrixClientBase {
       throwIfMatrixStartupAborted(abortSignal);
       await this.cryptoStoreOwnership?.armUnsafeState();
       throwIfMatrixStartupAborted(abortSignal);
+      this.sdkIndexedDbSession = beginMatrixSdkIndexedDbSession(this.cryptoDatabasePrefix);
 
       try {
         rustCryptoInitializationStarted = true;
@@ -727,23 +740,22 @@ export abstract class MatrixClientBase {
         }, MATRIX_IDB_PERSIST_INTERVAL_MS);
         this.idbPersistTimer.unref?.();
       } catch (err) {
+        if (!this.cryptoInitialized) {
+          this.cryptoInitializationGate.recordFailure(err);
+          throw err;
+        }
         throwIfMatrixStartupAborted(abortSignal);
         LogService.warn("MatrixClientLite", "Failed to initialize rust crypto:", err);
       }
     } catch (error) {
-      if (!this.cryptoInitialized) {
+      if (!this.cryptoInitialized && !rustCryptoInitializationStarted) {
         try {
-          if (!rustCryptoInitializationStarted) {
-            await this.cryptoStoreOwnership?.clearUnsafeState();
-          }
+          await this.cryptoStoreOwnership?.cancelUnsafeState();
         } finally {
           await this.releaseCryptoStoreOwnership();
         }
       }
       throw error;
-    }
-    if (!this.cryptoInitialized) {
-      await this.releaseCryptoStoreOwnership();
     }
   }
 }

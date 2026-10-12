@@ -71,7 +71,6 @@ const hoisted = vi.hoisted(() => {
   const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
-    addCryptoOwnershipYieldHandler: vi.fn<(_handler: () => void) => () => void>(() => () => {}),
     drainPendingDecryptions: vi.fn(async () => undefined),
   });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());

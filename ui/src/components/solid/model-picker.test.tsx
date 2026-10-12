@@ -6,7 +6,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SelectPicker } from "../select-picker.ts";
-import { DecisionModelPicker } from "./decision-model-picker.tsx";
+import { DecisionModelPicker, type DecisionModelPickerParams } from "./decision-model-picker.tsx";
 import { ModelPicker, type ModelPickerParams } from "./model-picker.tsx";
 
 describe("Solid model picker interop", () => {
@@ -89,16 +89,15 @@ describe("Solid model picker interop", () => {
 
   it("keeps inherited and explicitly disabled decision models distinct", async () => {
     const onChange = vi.fn();
-    const view = mountSolid(() => (
-      <DecisionModelPicker
-        id={"decision"}
-        models={[{ id: "quick", name: "Quick", provider: "fixture", pluginId: "fixture" }]}
-        value={null}
-        inherit={{ model: "fixture/quick" }}
-        disabled={false}
-        onChange={onChange}
-      />
-    ));
+    const [params, setParams] = createSignal<DecisionModelPickerParams>({
+      id: "decision",
+      models: [{ id: "quick", name: "Quick", provider: "fixture", pluginId: "fixture" }],
+      value: null,
+      inherit: { model: "fixture/quick" },
+      disabled: false,
+      onChange,
+    });
+    const view = mountSolid(() => <DecisionModelPicker {...params()} />);
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     expect(picker.querySelector(".picker-select__trigger")?.textContent).toContain(
@@ -110,5 +109,16 @@ describe("Solid model picker interop", () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
     await choosePickerValue(picker, "fixture/quick");
     expect(onChange).toHaveBeenLastCalledWith("fixture/quick");
+    setParams((current) => ({
+      ...current,
+      models: [{ id: "new", name: "New decision model", provider: "fixture", pluginId: "fixture" }],
+      value: "fixture/new",
+      disabled: true,
+    }));
+    flush();
+    await updatePickers(view.container);
+    expect(view.container.querySelector("openclaw-select-picker")).toBe(picker);
+    expect(picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled).toBe(true);
+    expect(picker.textContent).toContain("New decision model");
   });
 });

@@ -24,7 +24,7 @@ import {
   type MatrixSnapshotStateRuntime,
 } from "../crypto-state-store.js";
 import { acquireMatrixCryptoStoreOwnership } from "./crypto-store-ownership.js";
-import { observeCryptoStoreWaiter } from "./crypto-store-ownership.test-helpers.js";
+import { observeCryptoStoreContention } from "./crypto-store-ownership.test-helpers.js";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import {
   clearAllIndexedDbState,
@@ -67,16 +67,16 @@ describe("Matrix IndexedDB persistence", () => {
   it("holds exclusive crypto-store ownership until release", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     const first = await acquireMatrixCryptoStoreOwnership(snapshotPath);
-    const waiter = await observeCryptoStoreWaiter(snapshotPath);
+    const contention = observeCryptoStoreContention(snapshotPath);
     const waiting = acquireMatrixCryptoStoreOwnership(snapshotPath);
     try {
-      await waiter.waitFor(waiting);
-      await first.release();
-      const replacement = await waiting;
-      await replacement.release();
+      await contention.waitFor(waiting);
     } finally {
-      waiter.close();
+      contention.close();
+      await first.release();
     }
+    const replacement = await waiting;
+    await replacement.release();
   });
 
   it("refuses a successor after a failed final state publication", async () => {
@@ -89,19 +89,19 @@ describe("Matrix IndexedDB persistence", () => {
     );
   });
 
-  it("refuses a waiting successor when the departing owner poisons before unlock", async () => {
+  it("refuses a successor after the departing owner poisons before unlock", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath);
-    const waiter = await observeCryptoStoreWaiter(snapshotPath);
+    const contention = observeCryptoStoreContention(snapshotPath);
     const successor = acquireMatrixCryptoStoreOwnership(snapshotPath);
     try {
-      await waiter.waitFor(successor);
+      await contention.waitFor(successor);
       await owner.armUnsafeState();
-      await owner.release();
-      await expect(successor).rejects.toThrow("unresolved unsafe final state");
     } finally {
-      waiter.close();
+      contention.close();
+      await owner.release();
     }
+    await expect(successor).rejects.toThrow("unresolved unsafe final state");
   });
 
   it("persists and restores database contents for the selected prefix", async () => {

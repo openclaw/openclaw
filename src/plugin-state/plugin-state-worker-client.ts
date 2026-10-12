@@ -84,9 +84,6 @@ function prepareCommandOrder(
     case "pluginState.count":
     case "pluginState.observe":
       return { ready: capturePluginStateMutationSettlement(coordinationKey, [command.input]) };
-    case "pluginState.sweep":
-      // Expiry changes no live row; each receipt already carries its earliest TTL deadline.
-      return undefined;
     case "pluginState.appendJournal":
       return beginPluginStateMutation(coordinationKey, [
         { pluginId: command.input.pluginId, namespace: command.input.cursorNamespace },
@@ -345,9 +342,7 @@ export function executePluginStateOperationInWorker(
   );
 }
 
-function createOperation<
-  Key extends Exclude<keyof PluginStateWorkerOperations, "pluginState.sweep">,
->(
+function createOperation<Key extends keyof PluginStateWorkerOperations>(
   type: Key,
   missing?: () => PluginStateWorkerRequests[Key]["output"],
   isObservation?: ObservationCheck<Key>,
@@ -446,12 +441,6 @@ export function clearRuntimeHealthInWorker(
     undefined,
     { assertCurrent, existingOnly: { missing: () => undefined } },
   );
-}
-
-export function sweepExpiredPluginStateEntriesInWorker(
-  params: HostAdmission = {},
-): Promise<number> {
-  return execute(params, { type: "pluginState.sweep", input: undefined });
 }
 
 export const countPluginStateInWorker = createOperation("pluginState.count", () => 0);

@@ -2,15 +2,24 @@ import "fake-indexeddb/auto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MatrixClient as MatrixJsClient } from "matrix-js-sdk/lib/matrix.js";
-import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import {
+  drainFileLockStateForTest,
+  resetFileLockStateForTest,
+} from "openclaw/plugin-sdk/file-lock";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
-import { writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
+import {
+  openMatrixIdbSnapshotStoreOptions,
+  writeMatrixIdbSnapshotJson,
+} from "../crypto-state-store.js";
 import { MatrixClient } from "../sdk.js";
+import { withMatrixCryptoStoreRecoveryLock } from "./crypto-store-ownership.js";
+import { observeCryptoStoreContention } from "./crypto-store-ownership.test-helpers.js";
 import { persistIdbToDisk } from "./idb-persistence.js";
 import {
   clearAllIndexedDbState,
@@ -73,6 +82,105 @@ describe("Matrix client custody at the real SQLite snapshot boundary", () => {
     expect(sdk.init).not.toHaveBeenCalled();
   });
 
+  it("retains physical custody when SDK IndexedDB connections cannot retire", async () => {
+    const databasePrefix = `${prefix}-failed-retirement`;
+    const name = `${databasePrefix}::matrix-sdk-crypto`;
+    const snapshotPath = path.join(tempDirs.make("matrix-failed-retirement-"), "snapshot.json");
+    await seedDatabase({ name, storeName: "sessions", records: [] });
+    let connection: IDBDatabase | undefined;
+    sdk.init.mockImplementationOnce(async () => {
+      connection = await new Promise((resolve, reject) => {
+        const request = indexedDB.open(name);
+        request.addEventListener("success", () => resolve(request.result));
+        request.addEventListener("error", () =>
+          reject(toErrorObject(request.error, "IndexedDB request failed")),
+        );
+      });
+    });
+    const client = new MatrixClient("https://matrix.example.org", "test-token", {
+      userId: "@bot:example.org",
+      deviceId: "BOT",
+      encryption: true,
+      autoBootstrapCrypto: false,
+      cryptoDatabasePrefix: databasePrefix,
+      idbSnapshotPath: snapshotPath,
+    });
+    clients.push(client);
+    await client.prepareForOneOff();
+    if (!connection) {
+      throw new Error("SDK fixture did not open its crypto store");
+    }
+    const close = connection.close.bind(connection);
+    const failure = vi.spyOn(connection, "close").mockImplementation(() => {
+      throw new Error("simulated SDK connection close failure");
+    });
+    try {
+      await expect(client.stopAndPersist()).rejects.toThrow(
+        "simulated SDK connection close failure",
+      );
+      await expect(
+        withMatrixCryptoStoreRecoveryLock(snapshotPath, async () => {}),
+      ).rejects.toThrow();
+    } finally {
+      failure.mockRestore();
+      close();
+      await clearAllIndexedDbState({ databasePrefix });
+      await drainFileLockStateForTest();
+    }
+  });
+
+  it.each(["lost final seal", "missing guard", "malformed guard"])(
+    "refuses %s before the next Rust initialization after a clean stop",
+    async (fault) => {
+      const storageRootDir = tempDirs.make("matrix-sealed-custody-");
+      const snapshotPath = path.join(storageRootDir, "snapshot.json");
+      const guardPath = `${snapshotPath}.owner.poisoned`;
+      await seedDatabase({
+        name: databaseName,
+        storeName: "sessions",
+        records: [{ key: "durable", value: { session: "saved" } }],
+      });
+      await persistIdbToDisk({ snapshotPath, databasePrefix: prefix });
+      const makeClient = () => {
+        const client = new MatrixClient("https://matrix.example.org", "test-token", {
+          userId: "@bot:example.org",
+          deviceId: "BOT",
+          encryption: true,
+          autoBootstrapCrypto: false,
+          cryptoDatabasePrefix: prefix,
+          idbSnapshotPath: snapshotPath,
+        });
+        clients.push(client);
+        return client;
+      };
+      const owner = makeClient();
+      await owner.prepareForOneOff();
+      await owner.stopAndPersist();
+      if (fault === "lost final seal") {
+        const store = getMatrixRuntime().state.openKeyedStoreV2<Record<string, unknown>>(
+          openMatrixIdbSnapshotStoreOptions(storageRootDir),
+        );
+        const meta = await store.lookup("current:meta");
+        if (!meta) {
+          throw new Error("Clean stop did not publish snapshot metadata");
+        }
+        // A valid WAL prefix can retain the full snapshot commit and lose only
+        // the later seal commit. Keep every snapshot byte and digest unchanged.
+        const unsealed = { ...meta };
+        delete unsealed.cleanOwnerGeneration;
+        await store.register("current:meta", unsealed);
+      } else if (fault === "missing guard") {
+        await fs.rm(guardPath, { force: true });
+      } else {
+        await fs.writeFile(guardPath, "torn");
+      }
+      await expect(makeClient().prepareForOneOff()).rejects.toThrow(
+        "unresolved unsafe final state",
+      );
+      expect(sdk.init).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("blocks a concurrent client before SQLite snapshot I/O, then restores after handoff", async () => {
     const snapshotPath = path.join(tempDirs.make("matrix-real-custody-"), "snapshot.json");
     await seedDatabase({
@@ -120,43 +228,22 @@ describe("Matrix client custody at the real SQLite snapshot boundary", () => {
     const beforeContender = snapshotOpens;
     const contender = makeClient();
     const abort = new AbortController();
-    const waiterDir = `${snapshotPath}.owner.waiters`;
-    await fs.mkdir(waiterDir, { recursive: true });
-    const watchAbort = new AbortController();
-    const waiterObserved = (async () => {
-      for await (const event of fs.watch(waiterDir, { signal: watchAbort.signal })) {
-        if ((await fs.readdir(waiterDir)).length > 0) {
-          expect(event.eventType).toBeDefined();
-          return;
-        }
-      }
-      throw new Error("Waiter watcher ended before the contender registered");
-    })();
+    const contention = observeCryptoStoreContention(snapshotPath);
     const waiting = contender.start({ abortSignal: abort.signal });
-    const waitingRejection = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+    const rejection = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
     try {
-      await Promise.race([
-        waiterObserved,
-        waiting.then(
-          () => {
-            throw new Error("Contender started before registering a waiter");
-          },
-          (error: unknown) => {
-            throw error;
-          },
-        ),
-      ]);
+      await contention.waitFor(waiting);
     } finally {
-      watchAbort.abort();
+      contention.close();
     }
     expect(snapshotOpens).toBe(beforeContender);
     expect(sdk.init).toHaveBeenCalledTimes(1);
     abort.abort();
-    await waitingRejection;
+    await rejection;
     await contender.stopWithoutPersist();
-    expect(snapshotOpens).toBe(beforeContender);
 
     await owner.stopAndPersist();
+    expect(await fs.readFile(`${snapshotPath}.owner.poisoned`, "utf8")).toMatch(/^[a-f0-9]{32}\n$/);
     const successor = makeClient();
     await successor.prepareForOneOff();
     expect(snapshotOpens).toBeGreaterThan(beforeContender);
@@ -172,7 +259,7 @@ describe("Matrix client custody at the real SQLite snapshot boundary", () => {
     const beforeRefused = snapshotOpens;
     const refused = makeClient();
     await expect(refused.prepareForOneOff()).rejects.toThrow("unresolved unsafe final state");
-    expect(snapshotOpens).toBe(beforeRefused);
+    expect(snapshotOpens).toBeGreaterThan(beforeRefused);
     expect(sdk.init).toHaveBeenCalledTimes(3);
   });
 });

@@ -95,24 +95,6 @@ function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput
 const DEFAULT_MEDIA_MAX_MB = 20;
 
 export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promise<void> {
-  while (!opts.abortSignal?.aborted) {
-    const handoff = new AbortController();
-    const sessionSignal = opts.abortSignal
-      ? AbortSignal.any([opts.abortSignal, handoff.signal])
-      : handoff.signal;
-    await runMatrixMonitorSession({ ...opts, abortSignal: sessionSignal }, () =>
-      handoff.abort(new Error("Yielding Matrix crypto state to a local command")),
-    );
-    if (!handoff.signal.aborted) {
-      return;
-    }
-  }
-}
-
-async function runMatrixMonitorSession(
-  opts: MonitorMatrixOpts,
-  requestHandoff: () => void,
-): Promise<void> {
   // Fast-cancel callers should not pay the full Matrix startup/import cost.
   if (opts.abortSignal?.aborted) {
     return;
@@ -222,7 +204,6 @@ async function runMatrixMonitorSession(
   let cleanupPromise: Promise<void> | null = null;
   let client: MatrixClient | null = null;
   let clientLease: SharedMatrixClientLease | null = null;
-  let disposeCryptoYieldHandler = () => {};
   let monitorLifecycleSignal = opts.abortSignal;
   let threadBindingManager: { accountId: string; stop: () => Promise<void> } | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
@@ -238,7 +219,6 @@ async function runMatrixMonitorSession(
       return cleanupPromise;
     }
     cleanedUp = true;
-    disposeCryptoYieldHandler();
     cleanupPromise = (async () => {
       try {
         await clientLease?.release({
@@ -334,7 +314,6 @@ async function runMatrixMonitorSession(
       role: "monitor",
     });
     client = clientLease.client;
-    disposeCryptoYieldHandler = client.addCryptoOwnershipYieldHandler(requestHandoff);
     monitorLifecycleSignal = opts.abortSignal
       ? AbortSignal.any([opts.abortSignal, clientLease.abortSignal])
       : clientLease.abortSignal;

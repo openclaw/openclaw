@@ -11,10 +11,6 @@ import {
   extractErrorCode,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -94,8 +90,7 @@ export function createSlackThreadTsResolver(params: { client: SlackWebClient }) 
     if (!entry) {
       return undefined;
     }
-    const normalizedNow = asDateTimestampMs(now);
-    if (normalizedNow === undefined || entry.expiresAt <= normalizedNow) {
+    if (entry.expiresAt <= now) {
       cache.delete(key);
       return undefined;
     }
@@ -105,15 +100,8 @@ export function createSlackThreadTsResolver(params: { client: SlackWebClient }) 
   };
 
   const setCached = (key: string, threadTs: string | null, now: number) => {
-    const expiresAt = resolveExpiresAtMsFromDurationMs(DEFAULT_THREAD_TS_CACHE_TTL_MS, {
-      nowMs: now,
-    });
-    if (expiresAt === undefined) {
-      cache.delete(key);
-      return;
-    }
     cache.delete(key);
-    cache.set(key, { threadTs, expiresAt });
+    cache.set(key, { threadTs, expiresAt: now + DEFAULT_THREAD_TS_CACHE_TTL_MS });
     pruneMapToMaxSize(cache, DEFAULT_THREAD_TS_CACHE_MAX);
   };
 

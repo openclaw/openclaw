@@ -14,6 +14,7 @@ export {
   resolveDefaultIdbSnapshotPath,
 } from "./idb-persistence.js";
 export { MatrixVerificationManager } from "./verification-manager.js";
+export { beginMatrixSdkIndexedDbSession } from "./indexeddb-session.js";
 export type { MatrixVerificationSummary } from "./verification-manager.js";
 export {
   isMatrixDeviceOwnerVerified,

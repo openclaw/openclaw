@@ -8,8 +8,8 @@ import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import type { CronJobRunResult } from "./timer-execution-timeout.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { applyJobResult, applyOutcomeToAuthoritativeJob } from "./timer-outcomes.js";
-import { authorCronRunCompletion } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
 const STARTED_AT = ENDED_AT - 1_000;
@@ -53,7 +53,7 @@ function maintain(job: CronJob) {
 describe("cron dynamic cadence", () => {
   it.each(["recurring retry", "pacing"])(
     "auto-disables a job when %s cannot produce a Date-valid next run",
-    (scenario) => {
+    async (scenario) => {
       const endedAt = MAX_DATE_TIMESTAMP_MS - 1_000;
       const state = makeState();
       const deferredNotifications: DeferredCronNotifications = [];
@@ -92,7 +92,7 @@ describe("cron dynamic cadence", () => {
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
       expect(deferredNotifications).toHaveLength(1);
-      runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+      await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
       expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
       expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
     },

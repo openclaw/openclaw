@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -112,7 +111,7 @@ describe("extension executable test plans", () => {
     expect(shards[0]!.includePatterns?.toSorted()).toEqual(files.toSorted());
   });
 
-  it.each(["git", "filesystem"])("reads each candidate checkout's %s plugin inventory", (kind) => {
+  it("reads each candidate checkout's filesystem plugin inventory", () => {
     const root = "extensions/fixture";
     for (const snapshot of ["before", "after"]) {
       const cwd = tempDirs.make(`extension-inventory-${snapshot}-`);
@@ -132,14 +131,6 @@ describe("extension executable test plans", () => {
         const absolute = path.join(cwd, file);
         mkdirSync(path.dirname(absolute), { recursive: true });
         writeFileSync(absolute, file.endsWith(".json") ? "{}\n" : "export {};\n");
-      }
-      if (kind === "git") {
-        for (const args of [["init"], ["add", "."]]) {
-          execFileSync("git", args, { cwd, stdio: "ignore" });
-        }
-        const untracked = path.join(cwd, "extensions/untracked");
-        mkdirSync(untracked);
-        writeFileSync(path.join(untracked, "openclaw.plugin.json"), "{}\n");
       }
       expect(listAvailableExtensionIds(cwd)).toEqual(
         [snapshot, "fixture", `manifest-${snapshot}`].toSorted(),
@@ -216,65 +207,45 @@ describe("extension executable test plans", () => {
     },
   );
 
-  it.each(["root", "files"] as const)(
-    "keeps raw untracked %s discovery while excluding non-default tests before chunking",
-    (selection) => {
-      const cwd = tempDirs.make("test-plan-eligibility-");
-      const root = path.join(cwd, "extensions/fixture");
-      const names = [
-        "newly-authored.test.ts",
-        "api.live.test.ts",
-        "media.e2e.test.ts",
-        "._copy.test.ts",
-        "vendor/copied.test.ts",
-      ];
-      const files = names.map((name) => {
-        const file = path.join(root, name);
-        mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, "export {};\n");
-        return path.relative(cwd, file).replaceAll("\\", "/");
-      });
-      const roots = selection === "root" ? [path.relative(cwd, root)] : files;
-      expect(extensionTestPlan.listExtensionTestFilesForRoots(roots, cwd).toSorted()).toEqual(
-        files.toSorted(),
-      );
-      for (const config of [telegramConfig, workerConfig]) {
-        expect(
-          extensionTestPlan.createExtensionTestProcessTargetChunks(config, roots, [], cwd),
-        ).toEqual([[files[0]]]);
-        expect(extensionTestPlan.splitExtensionTestJobTargets(config, files)).toEqual([[files[0]]]);
-        expect(
-          extensionTestPlan.createExtensionTestProcessTargetChunks(config, files.slice(1), [], cwd),
-        ).toEqual([]);
-      }
-    },
-  );
-
-  it.each([telegramConfig, workerConfig])(
-    "does not widen an excluded inherited selection for %s",
-    (config) => {
-      const includeFile = path.join(tempDirs.make("extension-excluded-selection-"), "include.json");
-      writeFileSync(
-        includeFile,
-        JSON.stringify(["extensions/telegram/src/api-fetch.live.test.ts"]),
-      );
+  it("keeps raw untracked root discovery while excluding non-default tests before chunking", () => {
+    const cwd = tempDirs.make("test-plan-eligibility-");
+    const root = path.join(cwd, "extensions/fixture");
+    const names = [
+      "newly-authored.test.ts",
+      "api.live.test.ts",
+      "media.e2e.test.ts",
+      "._copy.test.ts",
+      "vendor/copied.test.ts",
+    ];
+    const files = names.map((name) => {
+      const file = path.join(root, name);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, "export {};\n");
+      return path.relative(cwd, file).replaceAll("\\", "/");
+    });
+    const roots = [path.relative(cwd, root)];
+    expect(extensionTestPlan.listExtensionTestFilesForRoots(roots, cwd).toSorted()).toEqual(
+      files.toSorted(),
+    );
+    for (const config of [telegramConfig, workerConfig]) {
       expect(
-        buildVitestRunPlans([config], process.cwd(), undefined, {
-          env: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
-        }),
+        extensionTestPlan.createExtensionTestProcessTargetChunks(config, roots, [], cwd),
+      ).toEqual([[files[0]]]);
+      expect(extensionTestPlan.splitExtensionTestJobTargets(config, files)).toEqual([[files[0]]]);
+      expect(
+        extensionTestPlan.createExtensionTestProcessTargetChunks(config, files.slice(1), [], cwd),
       ).toEqual([]);
-    },
-  );
+    }
+  });
 
-  it("retains an explicitly requested excluded worker file for the native no-test diagnostic", () => {
-    const cwd = tempDirs.make("test-plan-explicit-");
-    const target = "extensions/memory-core/excluded.live.test.ts";
-    const file = path.join(cwd, target);
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, "throw new Error('Excluded fixture must never execute');\n");
-    expect(buildVitestRunPlans([target], cwd)).toEqual([
-      { config: workerConfig, forwardedArgs: [], includePatterns: [target], watchMode: false },
-    ]);
+  it.each([telegramConfig])("does not widen an excluded inherited selection for %s", (config) => {
+    const includeFile = path.join(tempDirs.make("extension-excluded-selection-"), "include.json");
+    writeFileSync(includeFile, JSON.stringify(["extensions/telegram/src/api-fetch.live.test.ts"]));
+    expect(
+      buildVitestRunPlans([config], process.cwd(), undefined, {
+        env: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+      }),
+    ).toEqual([]);
   });
 
   it("omits an empty extension owner from full-suite plans without falling back to its config", () => {

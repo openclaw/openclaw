@@ -24,7 +24,7 @@ const questionPanelElement = {
   loadModule: QuestionPanel.preload,
 };
 
-defineSolidBridge<CardProps>(
+export const ChatQuestionCard = defineSolidBridge<CardProps>(
   "openclaw-chat-question-card",
   (props, host) => {
     host.style.display = "contents";
@@ -77,3 +77,13 @@ defineSolidBridge<CardProps>(
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-question-card": HTMLAttributes<ChatQuestionCard> & {
+        "prop:props"?: ChatQuestionCard["props"];
+      };
+    }
+  }
+}

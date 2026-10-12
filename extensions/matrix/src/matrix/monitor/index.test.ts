@@ -102,7 +102,6 @@ describe("monitorMatrixProvider", () => {
       .mockImplementation(hoisted.acquireSharedMatrixClientImpl);
     hoisted.releaseSharedClientInstance.mockReset().mockImplementation(hoisted.finalReleaseImpl);
     hoisted.registerMonitorRetirement.mockClear();
-    hoisted.client.addCryptoOwnershipYieldHandler.mockClear();
     hoisted.resolveSharedMatrixClient
       .mockReset()
       .mockImplementation(hoisted.resolveSharedMatrixClientImpl);
@@ -463,25 +462,6 @@ describe("monitorMatrixProvider", () => {
     await expect(monitorPromise).resolves.toBeUndefined();
   });
 
-  it("retires and recreates the monitor when a local crypto waiter asks for ownership", async () => {
-    const abortController = new AbortController();
-    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
-    await waitForCallOrderEntry("start-client");
-    const requestHandoff = hoisted.client.addCryptoOwnershipYieldHandler.mock.calls[0]?.[0];
-    expect(requestHandoff).toBeTypeOf("function");
-    requestHandoff?.();
-    for (let attempt = 0; attempt < 50; attempt++) {
-      if (hoisted.callOrder.filter((entry) => entry === "start-client").length === 2) {
-        break;
-      }
-      await setImmediate();
-    }
-    expect(hoisted.callOrder.filter((entry) => entry === "start-client")).toHaveLength(2);
-    abortController.abort();
-    await expect(monitorPromise).resolves.toBeUndefined();
-    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledTimes(2);
-  });
-
   it("terminates a fully started monitor when forced retirement aborts its lease", async () => {
     const monitorPromise = monitorMatrixProvider();
     await flushUntil(
@@ -501,7 +481,6 @@ describe("monitorMatrixProvider", () => {
     const maintenanceParams = mockCallArg(hoisted.runMatrixStartupMaintenance) as {
       abortSignal?: AbortSignal;
     };
-    // The monitor now combines lease retirement with local crypto handoff cancellation.
     expect(backfillParams.abortSignal?.aborted).toBe(false);
     expect(runtimeContextParams.abortSignal).toBe(startSignal);
     expect(maintenanceParams.abortSignal).toBe(startSignal);

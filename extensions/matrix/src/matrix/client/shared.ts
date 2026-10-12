@@ -10,6 +10,7 @@ import { getMatrixMonitorTaskSignal } from "../monitor/task-runner.js";
 import type { MatrixClient } from "../sdk.js";
 import { awaitMatrixStartupWithAbort, throwIfMatrixStartupAborted } from "../startup-abort.js";
 import { resolveMatrixAuth } from "./config.js";
+import type { PreparedMatrixClientStorage } from "./create-client.js";
 import type { MatrixAuth } from "./types.js";
 
 const loadMatrixCreateClientDeps = createLazyRuntimeModule(() => import("./create-client.js"));
@@ -47,6 +48,7 @@ type SharedMatrixClientLeaseState = {
 type SharedMatrixClientState = {
   client: MatrixClient;
   key: string;
+  storageOwnerKey: string | null;
   started: boolean;
   startPromise: Promise<void> | null;
   phase: SharedMatrixClientPhase;
@@ -76,10 +78,21 @@ const sharedClientRegistry = resolveGlobalSingleton(
   () => ({
     states: new Map<string, SharedMatrixClientState>(),
     promises: new Map<string, Promise<SharedMatrixClientState>>(),
+    storageOwners: new Map<string, Promise<SharedMatrixClientState>>(),
   }),
 );
 const sharedClientStates = sharedClientRegistry.states;
 const sharedClientPromises = sharedClientRegistry.promises;
+const sharedStorageOwners = sharedClientRegistry.storageOwners;
+
+class MatrixTransportGenerationBusyError extends Error {
+  readonly code = "MATRIX_ACCOUNT_RESTARTING";
+  readonly retryable = true;
+
+  constructor() {
+    super("Matrix account transport is changing; retry after the account restart finishes.");
+  }
+}
 
 function buildSharedClientKey(auth: MatrixAuth): string {
   // Serialize the tuple as a whole: Matrix URLs and credentials may contain `|`,
@@ -99,15 +112,17 @@ async function createSharedMatrixClient(params: {
   auth: MatrixAuth;
   timeoutMs?: number;
   lifecycle?: MatrixRuntimeLifecycle;
+  preparedStorage: PreparedMatrixClientStorage;
 }): Promise<SharedMatrixClientState> {
   const { createMatrixClient } = await loadMatrixCreateClientDeps();
-  const client = await createMatrixClient({
-    ...params.auth,
-    localTimeoutMs: params.timeoutMs,
-  });
+  const client = await createMatrixClient(
+    { ...params.auth, localTimeoutMs: params.timeoutMs },
+    params.preparedStorage,
+  );
   return {
     client,
     key: buildSharedClientKey(params.auth),
+    storageOwnerKey: params.preparedStorage.storagePaths?.idbSnapshotPath ?? null,
     started: false,
     startPromise: null,
     phase: "open",
@@ -124,6 +139,9 @@ async function createSharedMatrixClient(params: {
 function deleteSharedClientState(state: SharedMatrixClientState): void {
   if (sharedClientStates.get(state.key) === state) {
     sharedClientStates.delete(state.key);
+    if (state.storageOwnerKey) {
+      sharedStorageOwners.delete(state.storageOwnerKey);
+    }
   }
   const detachLifecycle = state.detachLifecycle;
   state.detachLifecycle = undefined;
@@ -217,12 +235,35 @@ async function resolveOpenSharedMatrixClientState(
       continue;
     }
 
+    const { prepareMatrixClientStorage } = await loadMatrixCreateClientDeps();
+    const preparedStorage = await prepareMatrixClientStorage(auth);
+    throwIfMatrixStartupAborted(params.abortSignal);
+    // Preparation may choose an existing token-rotation alias. Admit that exact
+    // store before creation writes metadata, opens sync state, or initializes crypto.
+    if (sharedClientStates.has(key) || sharedClientPromises.has(key)) {
+      continue;
+    }
+    const storageOwnerKey = preparedStorage.storagePaths?.idbSnapshotPath ?? null;
+    const ownerPromise = storageOwnerKey ? sharedStorageOwners.get(storageOwnerKey) : undefined;
+    if (ownerPromise) {
+      const owner = await awaitMatrixStartupWithAbort(ownerPromise, params.abortSignal);
+      if (owner.retirementPromise) {
+        await awaitMatrixStartupWithAbort(owner.retirementPromise, params.abortSignal);
+        continue;
+      }
+      throw new MatrixTransportGenerationBusyError();
+    }
+
     const creationPromise = createSharedMatrixClient({
       auth,
       timeoutMs: params.timeoutMs,
       lifecycle,
+      preparedStorage,
     });
     sharedClientPromises.set(key, creationPromise);
+    if (storageOwnerKey) {
+      sharedStorageOwners.set(storageOwnerKey, creationPromise);
+    }
     try {
       const created = await creationPromise;
       sharedClientStates.set(key, created);
@@ -236,6 +277,13 @@ async function resolveOpenSharedMatrixClientState(
     } finally {
       if (sharedClientPromises.get(key) === creationPromise) {
         sharedClientPromises.delete(key);
+      }
+      if (
+        storageOwnerKey &&
+        !sharedClientStates.has(key) &&
+        sharedStorageOwners.get(storageOwnerKey) === creationPromise
+      ) {
+        sharedStorageOwners.delete(storageOwnerKey);
       }
     }
   }

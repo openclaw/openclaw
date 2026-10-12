@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
-import "fake-indexeddb/auto";
 import fs from "node:fs";
+import "fake-indexeddb/auto";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
 import { SqliteBackedMatrixSyncStore } from "./client/file-sync-store.js";
+import { prepareMockMatrixClientStorage } from "./client/shared.test-support.js";
 import {
   registerCryptoShutdownTests,
   registerCryptoStartupAbortTest,
@@ -62,8 +63,10 @@ const READ_CALLERS = [
   { caller: "host-authorized", assertReadAuthority: () => undefined },
 ] as const;
 
+// mock-isolation: Shared SDK action fixtures exclude client disk initialization.
 vi.mock("./client/create-client.js", () => ({
   createMatrixClient: createSharedMatrixClientMock,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
 }));
 
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
@@ -1012,22 +1015,15 @@ describe("MatrixClient request hardening", () => {
       content: {},
     }));
     matrixJsClient.decryptEventIfNeeded = vi.fn(async (event: FakeMatrixEvent) => {
-      event.emit(
-        "decrypted",
-        new FakeMatrixEvent({
-          roomId: "!room:example.org",
-          eventId: "$poll",
-          sender: "@alice:example.org",
-          type: "m.poll.start",
-          ts: 1,
-          content: {
-            "m.poll.start": {
-              question: { "m.text": "Lunch?" },
-              answers: [{ id: "a1", "m.text": "Pizza" }],
-            },
+      event.markDecrypted({
+        type: "m.poll.start",
+        content: {
+          "m.poll.start": {
+            question: { "m.text": "Lunch?" },
+            answers: [{ id: "a1", "m.text": "Pizza" }],
           },
-        }),
-      );
+        },
+      });
     });
 
     const event = await client.getEvent("!room:example.org", "$poll");

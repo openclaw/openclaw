@@ -603,6 +603,7 @@ export async function withSessionStoreReaderInWorker<T>(
             reader.assertCurrent();
             continuation?.assertCurrent();
             route.assertCurrent();
+            // Discovery can yield before writable admission; retain its selected physical source.
             if (sourceIdentity?.key.startsWith("file:")) {
               assertExistingDatabaseIdentity(
                 database.path,
@@ -637,11 +638,6 @@ export async function withSessionStoreReaderInWorker<T>(
       const assertPreparedCurrent = () => {
         preparedSource.assertCurrent();
         assertSessionStoreReadCandidate(preparedSource.path, candidates);
-        assertExistingDatabaseIdentity(
-          preparedSource.path,
-          `file:${preparedSource.databaseIdentity}`,
-          preparedSource.databaseBirthtime,
-        );
       };
       assertPreparedCurrent();
       result = await readDatabase(

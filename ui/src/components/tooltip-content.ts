@@ -16,26 +16,29 @@ function isElementNode(node: Node): node is Element {
   return node.nodeType === Node.ELEMENT_NODE;
 }
 
-function collectTooltipText(element: Element, checkOpacity: boolean): string {
+function collectTooltipText(element: Element, checkOpacity: boolean, root = true): string {
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   if (
     element.hasAttribute("hidden") ||
     (!checkOpacity && element.getAttribute("aria-hidden") === "true") ||
+    (checkOpacity && !root && style?.opacity === "0") ||
     style?.display === "none" ||
     style?.contentVisibility === "hidden"
   ) {
     return "";
   }
+  // Opacity counts only below the trigger. A fading trigger or ancestor (a menu
+  // entering) hides the text and the trigger together, so the hint still repeats it.
   const rendersOwnText =
     style?.visibility !== "hidden" &&
     style?.visibility !== "collapse" &&
     (style?.display === "contents" ||
       typeof element.checkVisibility !== "function" ||
-      element.checkVisibility({ checkOpacity, checkVisibilityCSS: true }));
+      element.checkVisibility({ checkVisibilityCSS: true }));
   return [...element.childNodes]
     .map((node) => {
       if (isElementNode(node)) {
-        return collectTooltipText(node, checkOpacity);
+        return collectTooltipText(node, checkOpacity, false);
       }
       return node.nodeType === Node.TEXT_NODE && rendersOwnText ? (node.textContent ?? "") : "";
     })

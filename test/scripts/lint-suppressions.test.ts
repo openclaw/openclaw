@@ -273,6 +273,8 @@ describe("production lint suppressions", () => {
         // Synchronous acquisition failures reject with the acquiring owner's original value.
         "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
+        // JSON string scanning must detect and reject unescaped control characters.
+        "src/state/json-predicate-fields.ts|no-control-regex|1",
         // Native statement methods are captured before proxy forwarding restores their receiver.
         "src/state/openclaw-agent-canonical-validation-receipt.test-support.ts|typescript/unbound-method|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.

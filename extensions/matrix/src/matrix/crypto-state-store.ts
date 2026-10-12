@@ -33,6 +33,7 @@ type MatrixIdbSnapshotMeta = {
   digest: string;
   databaseCount: number;
   persistedAt: string;
+  cleanOwnerGeneration?: string;
 };
 
 type MatrixIdbSnapshotChunk = {
@@ -149,6 +150,39 @@ export async function readMatrixIdbSnapshotJson(
     throw new MatrixIdbSnapshotInvalidError("checksum mismatch");
   }
   return snapshotJson;
+}
+
+export async function readMatrixIdbSnapshotOwnerGeneration(
+  storageRootDir: string,
+  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+): Promise<string | undefined> {
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+  const meta = await store.lookup(idbMetaKey());
+  if (meta === undefined) {
+    return undefined;
+  }
+  if (!isIdbSnapshotMeta(meta)) {
+    throw new MatrixIdbSnapshotInvalidError("metadata is malformed");
+  }
+  return meta.cleanOwnerGeneration;
+}
+
+/** Publish last, after the final snapshot and clean sync cursor have settled. */
+export async function sealMatrixIdbSnapshotOwnerGeneration(
+  storageRootDir: string,
+  generation: string,
+  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+): Promise<void> {
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+  const meta = await store.lookup(idbMetaKey());
+  if (!isIdbSnapshotMeta(meta)) {
+    throw new MatrixIdbSnapshotInvalidError("final metadata is missing or malformed");
+  }
+  await store.register(idbMetaKey(), { ...meta, cleanOwnerGeneration: generation });
 }
 
 async function hasMatrixIdbSnapshotState(storageRootDir: string): Promise<boolean> {
@@ -328,6 +362,9 @@ function isIdbSnapshotMeta(value: unknown): value is MatrixIdbSnapshotMeta {
       undefined &&
     typeof value.digest === "string" &&
     asSafeIntegerInRange(value.databaseCount, { min: 0 }) !== undefined &&
-    typeof value.persistedAt === "string"
+    typeof value.persistedAt === "string" &&
+    (value.cleanOwnerGeneration === undefined ||
+      (typeof value.cleanOwnerGeneration === "string" &&
+        /^[a-f0-9]{32}$/.test(value.cleanOwnerGeneration)))
   );
 }

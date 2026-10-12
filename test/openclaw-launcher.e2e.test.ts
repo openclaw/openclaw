@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveOpenClawCompileCacheDirectory } from "../node-compile-cache.mjs";
 import { parseNodeReleaseVersion } from "../node-version.mjs";
 import {
   inspectManagedProcessGroup,
@@ -1519,14 +1520,27 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     },
   );
 
-  it.each(["denied writes", "denied workers", "unrestricted"] as const)(
+  it.each(["denied writes", "denied workers", "denied replacement", "unrestricted"] as const)(
     "keeps packaged cache maintenance within Node permissions: %s",
     async (mode) => {
       const fixtureRoot = await makeLauncherFixture(fixtures);
       const cache = path.join(fixtureRoot, "cache");
       const retired = path.join(cache, "openclaw", "old", "build-retired");
+      const expiredEntry = path.join(retired, "sentinel");
       await fs.mkdir(retired, { recursive: true });
-      await fs.writeFile(path.join(retired, "sentinel"), "preserve restricted cache");
+      await fs.writeFile(expiredEntry, "preserve restricted cache");
+      const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      const directory = resolveOpenClawCompileCacheDirectory({
+        installRoot: fixtureRoot,
+        env: { NODE_COMPILE_CACHE: cache },
+      });
+      if (!directory) {
+        throw new Error("Fixture compile-cache directory must be available");
+      }
+      // Seed the namespace before aging its maintenance timestamp.
+      await fs.mkdir(directory, { recursive: true });
+      await fs.utimes(expiredEntry, expired, expired);
+      await fs.utimes(path.join(cache, "openclaw"), expired, expired);
       const preload = path.join(fixtureRoot, "observe-maintenance.mjs");
       await fs.writeFile(
         preload,
@@ -1537,8 +1551,16 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           "const OriginalWorker = threads.Worker;",
           "threads.Worker = class extends OriginalWorker {",
           "  constructor(url, options) {",
-          "    if (options?.workerData?.openclawCompileCacheDirectory) globalThis.maintenanceStarts++;",
+          "    const maintenance = Boolean(options?.workerData?.openclawCompileCacheDirectory);",
+          "    if (maintenance) globalThis.maintenanceStarts++;",
           "    super(url, options);",
+          "    if (maintenance) {",
+          "      const { port1, port2 } = new threads.MessageChannel();",
+          '      port1.on("message", () => {});',
+          "      globalThis.maintenanceCompleted = new Promise((resolve) => {",
+          '        this.once("exit", () => { port1.close(); port2.close(); resolve(); });',
+          "      });",
+          "    }",
           "  }",
           "};",
           "syncBuiltinESMExports();",
@@ -1547,13 +1569,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       await fs.writeFile(
         path.join(fixtureRoot, "dist", "entry.js"),
         [
-          'import { MessageChannel } from "node:worker_threads";',
-          'import { maintainOpenClawCompileCache, resolveOpenClawCompileCacheDirectory } from "../node-compile-cache.mjs";',
-          "const { port1, port2 } = new MessageChannel();",
-          'port1.on("message", () => {});',
-          `const directory = resolveOpenClawCompileCacheDirectory({ installRoot: ${JSON.stringify(fixtureRoot)} });`,
-          "await maintainOpenClawCompileCache(directory);",
-          "port1.close(); port2.close();",
+          "await globalThis.maintenanceCompleted;",
           "process.stdout.write(JSON.stringify({ maintenanceStarts: globalThis.maintenanceStarts }));",
         ].join("\n"),
       );
@@ -1579,8 +1595,9 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           cwd: fixtureRoot,
           env: launcherEnv({
             NODE_OPTIONS: undefined,
-            NODE_COMPILE_CACHE: cache,
-            OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+            NODE_COMPILE_CACHE: mode === "denied replacement" ? cache : directory,
+            OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED:
+              mode === "denied replacement" ? undefined : "1",
           }),
           encoding: "utf8",
           timeout: 5000,
@@ -1590,7 +1607,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       expect(result.status, result.stderr).toBe(0);
       if (mode === "unrestricted") {
         expect(JSON.parse(result.stdout).maintenanceStarts).toBeGreaterThan(0);
-        await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(expiredEntry)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         expect(JSON.parse(result.stdout).maintenanceStarts).toBe(0);
         expect(await fs.readFile(path.join(retired, "sentinel"), "utf8")).toBe(
@@ -1656,8 +1673,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       const host = path.join(fixtureRoot, "host.mjs");
       await fs.writeFile(host, "");
       const cache = path.join(fixtureRoot, "cache");
-      const retired = path.join(cache, "openclaw", "old", "build-retired");
-      await fs.mkdir(retired, { recursive: true });
+      const directory = resolveOpenClawCompileCacheDirectory({
+        installRoot: fixtureRoot,
+        env: { NODE_COMPILE_CACHE: cache },
+      });
+      expect(directory).toBeDefined();
       const preloads = ["--import", pathToFileURL(preload).href, "--import", "openclaw/cli-entry"];
       const result = spawnSync(
         testNodeExecPath,
@@ -1666,7 +1686,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           cwd: fixtureRoot,
           env: launcherEnv({
             NODE_OPTIONS: source === "NODE_OPTIONS" ? preloads.join(" ") : undefined,
-            NODE_COMPILE_CACHE: cache,
+            NODE_COMPILE_CACHE: directory,
             OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
           }),
           encoding: "utf8",
@@ -1680,7 +1700,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         "maintenance:true",
         "entry:true",
       ]);
-      await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 

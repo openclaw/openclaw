@@ -5,8 +5,6 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
-import { clearCommandLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
-import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
@@ -25,7 +23,7 @@ import type { CronJob } from "../types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-manual-ack-durability-" });
 
-it("records the exact acknowledged manual run after SIGKILL before command-lane dispatch", async () => {
+it("records the exact acknowledged manual request after SIGKILL before worker activation", async () => {
   const { storePath } = await makeStorePath();
   const now = Date.now();
   const job: CronJob = {
@@ -41,10 +39,14 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
     payload: { kind: "command", argv: ["unused"] },
     state: { nextRunAtMs: now + 3_600_000 },
   };
-  await saveCronStore(storePath, { version: 1, jobs: [job] });
+  const blockers = Array.from({ length: 8 }, (_, index) => ({
+    ...job,
+    id: `manual-crash-blocker-${index}`,
+    name: `manual-crash-blocker-${index}`,
+  }));
+  await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
   const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
   const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
-  const queueUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.commandQueue);
   const stateDir = resolveOpenClawStateDirForDatabasePath(openOpenClawStateDatabase().path);
   await closeOpenClawStateDatabaseAsync();
   const node = resolveTestNodeExecPath();
@@ -59,7 +61,9 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
           import { writeSync } from "node:fs";
           import { CronService } from ${JSON.stringify(serviceUrl.href)};
           import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
-          import { setCommandLaneConcurrency } from ${JSON.stringify(queueUrl.href)};
+          let started = 0;
+          let reportStarted;
+          const blockersStarted = new Promise((resolve) => { reportStarted = resolve; });
           const cron = new CronService({
             scheduler: createTestGatewayScheduler(),
             storePath: ${JSON.stringify(storePath)},
@@ -68,11 +72,19 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
             log: { info() {}, warn() {}, error() {}, debug() {} },
             enqueueSystemEvent() {}, requestHeartbeat() {},
             runIsolatedAgentJob: async () => { throw new Error("unexpected execution"); },
-            runCommandJob: async () => { throw new Error("unexpected execution"); },
+            runCommandJob: async ({ job }) => {
+              if (!job.id.startsWith("manual-crash-blocker-")) throw new Error("unexpected execution");
+              if (++started === 8) reportStarted();
+              await new Promise(() => {});
+              return { status: "ok" };
+            },
           });
           await cron.start();
           if (${killAfterAck}) {
-            setCommandLaneConcurrency("cron", 0);
+            for (const id of ${JSON.stringify(blockers.map((entry) => entry.id))}) {
+              void cron.run(id, "force");
+            }
+            await blockersStarted;
             const ack = await cron.enqueueRun(${JSON.stringify(job.id)}, "force");
             writeSync(1, JSON.stringify(ack) + "\\n");
             process.kill(process.pid, "SIGKILL");
@@ -100,20 +112,18 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
     )
     .get(ack.runId, job.id);
   expect(receipt).toEqual({
-    status: "interrupted",
-    error_text: "cron: queued run interrupted because owner is unavailable",
+    status: "skipped",
+    error_text: "cron: queued request lost its launch context",
   });
-  const persisted = (await loadCronStore(storePath)).jobs[0];
+  const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
   expect(persisted?.state.nextRunAtMs).toBe(job.state.nextRunAtMs);
   expect(persisted?.state.queuedAtMs).toBeUndefined();
   expect(persisted?.state.runningAtMs).toBeUndefined();
 }, 45_000);
 
-it.each(["cleared", "write-failed"] as const)(
+it.each(["removed", "write-failed"] as const)(
   "preserves accounting on manual admission failure: %s",
   async (failure) => {
-    resetCommandQueueStateForTest();
-    setCommandLaneConcurrency("cron", 0);
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const job = createDueIsolatedJob({
@@ -121,8 +131,18 @@ it.each(["cleared", "write-failed"] as const)(
       nowMs: now,
       nextRunAtMs: now + 60_000,
     });
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const blockers =
+      failure === "removed"
+        ? Array.from({ length: 8 }, (_, index) => ({
+            ...job,
+            id: `manual-remove-blocker-${index}`,
+          }))
+        : [];
+    await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
     const finished = createDeferredCore();
+    const blockersStarted = createDeferredCore();
+    const releaseBlockers = createDeferredCore();
+    let blockerCount = 0;
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
       scheduler: createTestGatewayScheduler(),
@@ -131,9 +151,18 @@ it.each(["cleared", "write-failed"] as const)(
       log: createNoopLogger(),
       enqueueSystemEvent() {},
       requestHeartbeat() {},
-      runIsolatedAgentJob,
+      runIsolatedAgentJob: async (params) => {
+        if (blockers.some((entry) => entry.id === params.job.id)) {
+          if (++blockerCount === blockers.length) {
+            blockersStarted.resolve();
+          }
+          await releaseBlockers.promise;
+          return { status: "ok" };
+        }
+        return runIsolatedAgentJob();
+      },
       onEvent: (event) => {
-        if (event.action === "finished") {
+        if (event.jobId === job.id && event.action === "finished") {
           finished.resolve();
         }
       },
@@ -150,7 +179,11 @@ it.each(["cleared", "write-failed"] as const)(
           AND NEW.job_id = '${job.id}'
         BEGIN SELECT RAISE(ABORT, 'manual receipt unavailable'); END;`);
     }
+    const active = blockers.map((entry) => cron.run(entry.id, "force"));
     try {
+      if (blockers.length > 0) {
+        await blockersStarted.promise;
+      }
       const pending = completion.run(() => cron.enqueueRun(job.id, "force"));
       if (failure === "write-failed") {
         await expect(pending).rejects.toThrow("manual receipt unavailable");
@@ -162,7 +195,9 @@ it.each(["cleared", "write-failed"] as const)(
           throw new Error("Expected manual run acknowledgement");
         }
         expect(completion.isCommitted()).toBe(true);
-        expect(clearCommandLane("cron")).toBe(1);
+        await cron.remove(job.id);
+        releaseBlockers.resolve();
+        await Promise.all(active);
         await finished.promise;
         expect(
           database
@@ -170,18 +205,24 @@ it.each(["cleared", "write-failed"] as const)(
             .get(ack.runId),
         ).toEqual({
           status: "skipped",
-          error_text: "cron reservation released before completion",
+          error_text: "cron: queued job was removed",
         });
       }
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-      const persisted = (await loadCronStore(storePath)).jobs[0];
-      expect(persisted?.state.nextRunAtMs).toBe(job.state.nextRunAtMs);
-      expect(persisted?.state.queuedAtMs).toBeUndefined();
+      const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
+      if (failure === "removed") {
+        expect(persisted).toBeUndefined();
+      } else {
+        expect(persisted?.state.nextRunAtMs).toBe(job.state.nextRunAtMs);
+        expect(persisted?.state.queuedAtMs).toBeUndefined();
+      }
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_manual_receipt");
+      releaseBlockers.resolve();
+      await Promise.allSettled(active);
       cron.stop();
-      resetCommandQueueStateForTest();
+      await cron.waitForIdle();
     }
   },
 );
