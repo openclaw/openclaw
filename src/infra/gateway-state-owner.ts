@@ -10,7 +10,7 @@ import {
 } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -21,9 +21,9 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
+  describeGatewayLockHolder,
   type LockPayload,
   parseGatewayLockPayload,
-  readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import {
   ensureOwnerDirectory,
@@ -33,6 +33,7 @@ import {
 import { startGatewayStateOwnerHeartbeat } from "./gateway-state-owner-heartbeat.js";
 import {
   assertPersistedStateDatabaseAccessAllowed,
+  defaultPayload,
   isGatewayStateOwnerDefinitelyStale,
   StateDatabaseAdmissionPendingError,
 } from "./gateway-state-owner-record.js";
@@ -49,7 +50,6 @@ export type StateDatabaseSchemaLease = {
 
 export type GatewayStateProjection = {
   readonly lockPath: string;
-  readonly verifiedAt: number | undefined;
   verifyStillHeld(): boolean;
   retain(): GatewayStateProjection;
   release(): void;
@@ -60,25 +60,13 @@ export function createGatewayStateProjection(
   lock: ReturnType<typeof acquireFileLockSync>,
 ): GatewayStateProjection {
   let references = 1;
-  let verifiedAt: number | undefined;
-  const verify = () => {
-    verifiedAt = undefined;
-    if (!lock.verifyStillHeld()) {
-      return false;
-    }
-    verifiedAt = performance.now();
-    return true;
-  };
   const reference = (): GatewayStateProjection => {
     let released = false;
     return {
       lockPath: lock.lockPath,
-      get verifiedAt() {
-        return released ? undefined : verifiedAt;
-      },
-      verifyStillHeld: () => !released && verify(),
+      verifyStillHeld: () => !released && lock.verifyStillHeld(),
       retain() {
-        if (released || !verify()) {
+        if (released || !lock.verifyStillHeld()) {
           throw new Error("Gateway state projection is no longer current");
         }
         references += 1;
@@ -112,7 +100,6 @@ type ProcessOwner = {
   projectionDirectories: StateOwnerDirectoryIdentity[];
   // Retained leases keep custody after this stops new admission.
   accepting: boolean;
-  verifiedAt?: number;
 };
 
 function hasPhysicalOwnership(owner: ProcessOwner): boolean {
@@ -128,7 +115,6 @@ function hasPhysicalOwnership(owner: ProcessOwner): boolean {
 }
 
 function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined): boolean {
-  owner.verifiedAt = undefined;
   owner.lost.signal.throwIfAborted();
   owner.heartbeat?.inspect();
   owner.lost.signal.throwIfAborted();
@@ -151,7 +137,6 @@ function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined):
     owner.heartbeat.worker.postMessage([projection.lockPath, raw], []);
     owner.heartbeat.paths.add(projection.lockPath);
   }
-  owner.verifiedAt = performance.now();
   return true;
 }
 
@@ -162,20 +147,15 @@ function loseOwner(owner: ProcessOwner, error: Error) {
     return;
   }
   owner.accepting = false;
-  owner.verifiedAt = undefined;
   readOwnerPaths.clear();
   owner.heartbeat?.stop();
   log.error(error.message);
   owner.lost.abort(error);
 }
 
-// Only explicit reads reuse proof for one second; overdue dispatch verifies
-// synchronously, so event-loop stalls cannot extend the read ownership window.
-const READ_OWNERSHIP_MAX_AGE_MS = 1000;
-
 const readOwnerPaths = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayStateReadOwnerPaths"),
-  () => new Map<string, { pathname: string; owner: ProcessOwner; expiresAt: number }>(),
+  () => new Map<string, ProcessOwner>(),
 );
 
 const owners = resolveGlobalSingleton(
@@ -210,9 +190,10 @@ export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
       constructor(
         public readonly databasePath: string,
         public override readonly cause?: unknown,
+        holderDetail?: string,
       ) {
         super(
-          `OpenClaw state database is busy at ${databasePath}. Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory. A running Gateway can hold this ownership until it stops; stop it through its service manager or original terminal before retrying.`,
+          `OpenClaw state database is busy at ${databasePath}. ${holderDetail ? `${holderDetail} ` : ""}Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory. A running Gateway can hold this ownership until it stops; stop it through its service manager or original terminal before retrying.`,
         );
         this.name = "GatewayStateOwnerContentionError";
       }
@@ -277,21 +258,6 @@ export function resolveGatewayStateOwnerPath(databasePath: string): string {
   );
 }
 
-function defaultPayload(databasePath: string): LockPayload {
-  const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
-  const startTime = getFileLockProcessStartTime(process.pid);
-  return {
-    pid: process.pid,
-    ownerId: randomUUID(),
-    createdAt: new Date().toISOString(),
-    stateDir,
-    configPath: path.join(stateDir, "openclaw.json"),
-    role: "sqlite-maintenance",
-    processNamespace: readGatewayLockProcessNamespace(),
-    ...(startTime === null ? {} : { startTime }),
-  };
-}
-
 function acquireOwnerFile(
   databasePath: string,
   pathname: string,
@@ -301,6 +267,7 @@ function acquireOwnerFile(
 ) {
   const deadline = performance.now() + busyTimeoutMs;
   ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
+  const observed: { holder: LockPayload | null } = { holder: null };
   const stale = ({ payload: value }: { payload: unknown }) =>
     isGatewayStateOwnerDefinitelyStale(value, pathname);
   if (busyTimeoutMs > 0) {
@@ -322,37 +289,34 @@ function acquireOwnerFile(
       }
     }
   }
-  for (let retriedMissingParent = false; ;) {
-    try {
-      return acquireFileLockSync(pathname, {
-        lockPath: pathname,
-        retry:
-          busyTimeoutMs > 0
-            ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
-            : { retries: 0 },
-        timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
-        staleMs: Infinity,
-        staleRecovery: "remove-if-unchanged",
-        reentrantOwner: payload.ownerId,
-        payload: () => payload,
-        parsePayload: parseGatewayLockPayload,
-        shouldReclaim: stale,
-        shouldRemoveStaleLock: stale,
-      });
-    } catch (error) {
-      const code = extractErrorCode(error);
-      if (code === "ENOENT" && !retriedMissingParent) {
-        // A finished reset may remove an empty parent before exclusive create.
-        // No lock or protected operation exists yet; keep the original wait budget.
-        retriedMissingParent = true;
-        ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
-        continue;
-      }
-      if (code === "file_lock_timeout" || code === "file_lock_stale") {
-        throw new GatewayStateOwnerContentionError(databasePath, error);
-      }
-      throw error;
+  try {
+    return acquireFileLockSync(pathname, {
+      lockPath: pathname,
+      retry:
+        busyTimeoutMs > 0
+          ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
+          : { retries: 0 },
+      timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
+      staleMs: Infinity,
+      staleRecovery: "remove-if-unchanged",
+      reentrantOwner: payload.ownerId,
+      payload: () => payload,
+      parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
+      shouldReclaim: stale,
+      shouldRemoveStaleLock: stale,
+    });
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "file_lock_timeout" || code === "file_lock_stale") {
+      const { holder } = observed;
+      const holderDetail = describeGatewayLockHolder(
+        holder ?? {},
+        pathname,
+        holder && isPidAlive(holder.pid) ? "live" : "unknown",
+      );
+      throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
     }
+    throw error;
   }
 }
 
@@ -429,8 +393,13 @@ export function acquireGatewayStateOwner(params: {
   getProjection?: () => GatewayStateProjection | undefined;
 }): StateDatabaseSchemaLease {
   const pathname = resolveGatewayStateOwnerPath(params.databasePath);
-  if (owners.has(pathname)) {
-    throw new GatewayStateOwnerContentionError(params.databasePath);
+  const held = owners.get(pathname);
+  if (held) {
+    throw new GatewayStateOwnerContentionError(
+      params.databasePath,
+      undefined,
+      describeGatewayLockHolder(held.payload, pathname, "live"),
+    );
   }
   const payload = params.payload
     ? { ...params.payload, ownerId: params.payload.ownerId ?? randomUUID() }
@@ -646,30 +615,15 @@ export function captureGatewayStateOwner(databasePath: string) {
   };
 }
 
-function hasRecentVerification(verifiedAt: number | undefined, now: number): boolean {
-  return verifiedAt !== undefined && now - verifiedAt < READ_OWNERSHIP_MAX_AGE_MS;
-}
-
-/** Only explicit reads reuse recent physical verification; mutations always check freshly. */
+/** Reads reuse process-owned admission; mutations still verify the physical lock. */
 export function assertStateDatabaseReadAllowed(databasePath: string): void {
   if (owners.size === 0) {
     assertStateDatabaseAccessAllowed(databasePath);
     return;
   }
   const key = path.resolve(databasePath);
-  const now = performance.now();
   const cached = readOwnerPaths.get(key);
-  cached?.owner.heartbeat?.inspect();
-  const projection = cached?.owner.getProjection?.();
-  if (
-    cached &&
-    now < cached.expiresAt &&
-    owners.get(cached.pathname) === cached.owner &&
-    cached.owner.accepting &&
-    hasRecentVerification(cached.owner.verifiedAt, now) &&
-    (!cached.owner.getProjection ||
-      (projection && hasRecentVerification(projection.verifiedAt, now)))
-  ) {
+  if (cached?.accepting) {
     return;
   }
   readOwnerPaths.delete(key);
@@ -694,7 +648,7 @@ export function assertStateDatabaseReadAllowed(databasePath: string): void {
       `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`,
     );
   }
-  readOwnerPaths.set(key, { pathname, owner, expiresAt: now + READ_OWNERSHIP_MAX_AGE_MS });
+  readOwnerPaths.set(key, owner);
 }
 
 /** Ordinary SQLite access observes maintenance; it never borrows schema authority. */

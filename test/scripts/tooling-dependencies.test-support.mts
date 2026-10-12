@@ -18,7 +18,12 @@ export function createToolingDependencyFixture(root: string, staleAncestor = fal
       }
     }
   }
-  for (const name of ["tsx-cli-shim.mjs", "tooling-dependencies.mjs", "local-check-runtime.mts"]) {
+  for (const name of [
+    "tsx-cli-shim.mjs",
+    "tooling-dependencies.mjs",
+    "local-check-runtime.mts",
+    "managed-cleanup-handoff.mts",
+  ]) {
     copyFileSync(resolve("scripts/lib", name), join(lib, name));
   }
   for (const name of ["tsx.mjs", "crabbox-wrapper.mjs"]) {
@@ -30,17 +35,24 @@ export function createToolingDependencyFixture(root: string, staleAncestor = fal
       devDependencies: { tsx: "1.0.0", "fixture-pkg": "1.0.0", "private-pkg": "1.0.0" },
     }),
   );
-  function writePackage(name: string, source: string, version = "1.0.0", owner = tooling) {
+  function writePackage(
+    name: string,
+    source: string,
+    version = "1.0.0",
+    owner = tooling,
+    subpaths: Record<string, string> = {},
+  ) {
     const directory = join(owner, "node_modules", name);
     mkdirSync(directory, { recursive: true });
+    const exports: Record<string, string> =
+      name === "tsx" ? { "./esm": "./index.mjs" } : { ".": "./index.mjs" };
+    for (const [subpath, subpathSource] of Object.entries(subpaths)) {
+      exports[subpath] = `${subpath}.mjs`;
+      writeFileSync(join(directory, `${subpath}.mjs`), subpathSource);
+    }
     writeFileSync(
       join(directory, "package.json"),
-      JSON.stringify({
-        name,
-        version,
-        type: "module",
-        exports: name === "tsx" ? { "./esm": "./index.mjs" } : "./index.mjs",
-      }),
+      JSON.stringify({ name, version, type: "module", exports }),
     );
     writeFileSync(join(directory, "index.mjs"), source);
     return directory;

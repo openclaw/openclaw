@@ -69,6 +69,10 @@ describe("subagent completion blocked Gateway E2E", () => {
 
         await writeSessionStore({
           entries: {
+            [subagent.requesterSessionKey]: {
+              sessionId: "requester-blocked-gateway-e2e",
+              updatedAt: now,
+            },
             [subagent.childSessionKey]: {
               sessionId: "session-blocked-gateway-e2e",
               updatedAt: now,

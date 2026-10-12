@@ -11,11 +11,11 @@ import {
   readSessionTranscriptVisibleMessageDeltaCore,
   readSessionTranscriptWatermark,
   readTranscriptRawDelta,
-  replaceTranscriptEventsSync,
   SessionTranscriptProjectionUnavailableError,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.transcript-target.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
@@ -217,6 +217,7 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
   }
 
   expect(manager.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);
+  await closeOpenClawAgentDatabasesAsync(dir);
   closeOpenClawAgentDatabasesForTest(dir);
   const reopened = SessionManager.open(scope, dir);
   expect(reopened.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);

@@ -4,7 +4,6 @@ import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
   retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import {
@@ -27,7 +26,7 @@ it("releases prompt payloads while completed attempts' review callbacks remain r
   const createRetainedReview = (release: boolean) => {
     const owner = createEmbeddedAttemptSessionResources(undefined, new AbortController().signal);
     const lease = retainEmbeddedSessionPromptState(`retained-review-${sequence++}`);
-    lease.state.prunedImageMessages = new PromptPayload(["projected-image"]);
+    lease.state.removedRuntimeContextKeys = new PromptPayload(["runtime-context"]);
     owner.resources.promptStateLease = lease;
     if (release) {
       owner.releaseReview();
@@ -62,7 +61,6 @@ it.each([false, true])(
       trajectoryRecorder: null,
       trajectoryEndRecorded: false,
       buildAbortSettlePromise: () => null,
-      sessionAgentId: "main",
       state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
       transcriptLifecycle: {
         beginCleanup: async () => {},
@@ -78,10 +76,14 @@ it.each([false, true])(
     const outcome = cleanup.catch((error: unknown) => error);
     try {
       await entered.promise;
-      expect(getEmbeddedSessionPromptState(sessionId)).toBe(lease.state);
+      {
+        using duringCleanup = retainEmbeddedSessionPromptState(sessionId);
+        expect(duringCleanup.state).toBe(lease.state);
+      }
       finish.resolve();
       expect(await outcome).toEqual(fails ? new Error("cleanup failed") : undefined);
-      expect(getEmbeddedSessionPromptState(sessionId)).not.toBe(lease.state);
+      using afterCleanup = retainEmbeddedSessionPromptState(sessionId);
+      expect(afterCleanup.state).not.toBe(lease.state);
     } finally {
       finish.resolve();
       await outcome;

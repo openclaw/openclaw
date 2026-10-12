@@ -19,11 +19,14 @@ const yielded = (overrides: Partial<RunOverrides> = {}) =>
 const collector = (overrides: Partial<RunOverrides> = {}) =>
   yielded({ collect: true, expectsCompletionMessage: false, ...overrides });
 
+const completionCurrent = { isHostCurrent: () => true, prepare: async () => true };
+
 const settle = async (entry: SubagentRunRecord) => {
   const complete = vi.fn(async () => undefined);
   const settled = await settleUnreachableYieldedSubagentRun({
     runId: entry.runId,
     entry,
+    readScope: { completionCurrent },
     complete,
   });
   return { settled, complete };
@@ -38,6 +41,7 @@ describe("settleUnreachableYieldedSubagentRun", () => {
       expect.objectContaining({
         runId: "parked-run",
         expectedEntry: entry,
+        recoveryCurrent: completionCurrent,
         endedAt: PAUSED_AT,
         settleYielded: true,
         outcome: {

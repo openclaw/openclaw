@@ -1,15 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
 import { readSharedGitHubPublicationRequestInDatabase } from "./github-publication-shared-read.kernel.js";
-import {
-  deferGitHubPublicationRequests,
-  digestGitHubPublicationRequest,
-} from "./github-publication-store.js";
+import { deferGitHubPublicationRequests } from "./github-publication-store.js";
 import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
@@ -63,7 +62,20 @@ describe("publication SQLite materialization", () => {
     }
   });
 
-  it("defers rich receipts with compact notifications while retaining rollback and input order", () => {
+  it("observes no current publication after worktree GC retires the session checkout", async () => {
+    insertSharedWorktreeReceipt("latest");
+    await updateRegistryWorktree(process.env, "worktree-1", { removedAt: 2 });
+    expect(
+      readSharedGitHubPublicationRequestInDatabase(
+        openOpenClawStateDatabase().db,
+        session,
+        {},
+        githubPublicationTestMocks().loadSession(session.sessionKey).entry,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("defers rich receipts with authority postimages while retaining rollback and input order", () => {
     const first = insertSharedWorktreeReceipt("first");
     const second = insertSharedWorktreeReceipt("second", {
       session: { ...session, sessionKey: session.sessionKey + ":other" },
@@ -132,7 +144,8 @@ describe("publication SQLite materialization", () => {
         expect(db.isTransaction).toBe(false);
         expect(counter.rowCounts.defer).toBeGreaterThan(0);
         expect(counter.rowCounts.defer).toBeLessThanOrEqual(3);
-        expect(counter.textBytes.defer).toBeLessThan(512);
+        const authorityPostimageTextBudget = 2048;
+        expect(counter.textBytes.defer).toBeLessThan(authorityPostimageTextBudget);
       } finally {
         counter.restore();
         clock.mockRestore();

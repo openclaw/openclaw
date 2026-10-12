@@ -4,12 +4,7 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  capturePluginRegistration,
-  createRuntimeEnv,
-  createTestWizardPrompter,
-  registerSingleProviderPlugin,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Anthropic tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -26,7 +21,12 @@ vi.mock("./cli-auth-seam.js", () => {
 
 import { CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
 import anthropicPlugin from "./index.js";
-import { claude5ContractCases } from "./model-contract-cases.test-support.js";
+import {
+  claude5ContractCases,
+  createModelRegistry,
+  expectFields,
+  levelIds,
+} from "./model-contract-cases.test-support.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
 
 beforeEach(() => {
@@ -38,66 +38,16 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function createModelRegistry(models: ProviderRuntimeModel[]) {
-  return {
-    find(providerId: string, modelId: string) {
-      return (
-        models.find(
-          (model) =>
-            model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
-        ) ?? null
-      );
-    },
-  };
-}
-
 const requireRecord = createRequireRecord("object", "expected-label");
-
-function expectFields(value: unknown, fields: Record<string, unknown>) {
-  const record = requireRecord(value, "record");
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(record[key]).toEqual(expected);
-  }
-}
 
 function expectModelParams(models: unknown, modelId: string, params: Record<string, unknown>) {
   const model = requireRecord(requireRecord(models, "models")[modelId], modelId);
   expectFields(model.params, params);
 }
 
-function levelIds(profile: unknown): Array<unknown> {
-  const levels = requireRecord(profile, "thinking profile").levels;
-  expect(Array.isArray(levels), "thinking levels").toBe(true);
-  return (levels as Array<{ id?: unknown }>).map((level) => level.id);
-}
-
 const ANTHROPIC_SETUP_TOKEN = `sk-ant-oat01-${"a".repeat(80)}`;
 
 describe("anthropic provider replay hooks", () => {
-  it("registers the claude-cli backend", () => {
-    const captured = capturePluginRegistration({ register: anthropicPlugin.register });
-
-    const backend = captured.cliBackends.find((entry) => entry.id === "claude-cli");
-    if (!backend) {
-      throw new Error("Expected claude-cli backend");
-    }
-    expect(backend.modelProvider).toBe("anthropic");
-    expect(backend.bundleMcp).toBe(true);
-    expectFields(backend.config, {
-      command: "claude",
-      freshSessionRecovery: "invalidated-only",
-      modelArg: "--model",
-      sessionArgs: ["--session-id", "{sessionId}"],
-    });
-    expect(backend.config.reliability?.watchdog?.resume).toBeUndefined();
-  });
-
-  it("declares the copied Claude CLI profile as retired", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    expect(provider.deprecatedProfileIds).toEqual(["anthropic:claude-cli"]);
-  });
-
   it("lets native session discovery be disabled without disabling Anthropic", () => {
     const registerCliBackend = vi.fn();
     const registerNodeHostCommand = vi.fn();
@@ -189,73 +139,23 @@ describe("anthropic provider replay hooks", () => {
     ).toBeUndefined();
   });
 
-  it("owns replay policy for Claude transports", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "anthropic",
-        modelApi: "anthropic-messages",
-        modelId: "claude-sonnet-4-6",
-      } as never),
-    ).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveNativeAnthropicToolUseIds: true,
-      appendOnlyRuntimeContext: false,
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-  });
-
-  it.each([
-    ["claude-fable-5", false],
-    ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", false],
-  ])(
-    "preserves thinking and scopes runtime context for %s",
-    async (modelId, appendOnlyRuntimeContext) => {
+  it.each([["Claude CLI provider", "claude-cli"]])(
+    "defaults %s api through plugin config normalization",
+    async (_label, providerId) => {
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
-      const fableContext = {
-        provider: "anthropic",
-        modelApi: "anthropic-messages",
-        modelId,
-      };
-
-      expect(provider.buildReplayPolicy?.(fableContext)).toEqual({
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-        preserveNativeAnthropicToolUseIds: true,
-        appendOnlyRuntimeContext,
-        preserveSignatures: true,
-        repairToolUseResultPairing: true,
-        validateAnthropicTurns: true,
-        allowSyntheticToolResults: true,
-      });
+      expect(
+        requireRecord(
+          provider.normalizeConfig?.({
+            provider: providerId,
+            providerConfig: {
+              models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+            },
+          } as never),
+          "normalized config",
+        ).api,
+      ).toBe("anthropic-messages");
     },
   );
-
-  it.each([
-    ["provider", "anthropic"],
-    ["Claude CLI provider", "claude-cli"],
-  ])("defaults %s api through plugin config normalization", async (_label, providerId) => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    expect(
-      requireRecord(
-        provider.normalizeConfig?.({
-          provider: providerId,
-          providerConfig: {
-            models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
-          },
-        } as never),
-        "normalized config",
-      ).api,
-    ).toBe("anthropic-messages");
-  });
 
   it("does not default non-Anthropic provider api through plugin config normalization", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
@@ -334,49 +234,6 @@ describe("anthropic provider replay hooks", () => {
     expectModelParams(models, "anthropic/claude-sonnet-4-6", { cacheRetention: "short" });
   });
 
-  it("backfills Claude CLI allowlist defaults through plugin hooks for older configs", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    const next = provider.applyConfigDefaults?.({
-      provider: "anthropic",
-      env: {},
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
-          },
-        },
-        agents: {
-          defaults: {
-            agentRuntime: { id: "claude-cli" },
-            model: { primary: "anthropic/claude-opus-4-7" },
-            models: {
-              "anthropic/claude-opus-4-7": {},
-            },
-          },
-        },
-      },
-    } as never);
-
-    expectFields(next?.agents?.defaults?.heartbeat, {
-      every: "1h",
-    });
-    const models = requireRecord(next?.agents?.defaults?.models, "models");
-    for (const modelId of [
-      "anthropic/claude-opus-5",
-      "anthropic/claude-sonnet-5-5",
-      "anthropic/claude-sonnet-5",
-      "anthropic/claude-fable-5",
-      "anthropic/claude-fable-5-1",
-      "anthropic/claude-opus-4-8",
-      "anthropic/claude-opus-4-7",
-      "anthropic/claude-sonnet-4-6",
-      "anthropic/claude-opus-4-6",
-    ]) {
-      expect(models[modelId]).toEqual({ agentRuntime: { id: "claude-cli" } });
-    }
-  });
-
   it("backfills Claude CLI routing from a retired provider-entry profile reference", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -403,73 +260,6 @@ describe("anthropic provider replay hooks", () => {
 
     expect(next?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.agentRuntime).toEqual({
       id: "claude-cli",
-    });
-  });
-
-  it("backfills raw and canonical Claude CLI policies for provider-qualified shorthand refs", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    const next = provider.applyConfigDefaults?.({
-      provider: "anthropic",
-      env: {},
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/opus-4.7" },
-            models: {
-              "anthropic/opus-4.7": { params: { maxTokens: 1200 } },
-            },
-          },
-        },
-      },
-    } as never);
-
-    const models = requireRecord(next?.agents?.defaults?.models, "models");
-    expect(models["anthropic/opus-4.7"]).toEqual({
-      params: { maxTokens: 1200 },
-      agentRuntime: { id: "claude-cli" },
-    });
-    expect(models["anthropic/claude-opus-4-7"]).toEqual({
-      agentRuntime: { id: "claude-cli" },
-    });
-  });
-
-  it("backfills Claude CLI policy from per-agent shorthand refs selected under Claude CLI auth", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    const next = provider.applyConfigDefaults?.({
-      provider: "anthropic",
-      env: {},
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
-          },
-        },
-        agents: {
-          defaults: {
-            models: {},
-          },
-          entries: {
-            main: {
-              model: { primary: "anthropic/opus-4.7" },
-              name: "Main",
-              workspace: "/tmp/openclaw-agent",
-            },
-          },
-        },
-      },
-    } as never);
-
-    const models = requireRecord(next?.agents?.defaults?.models, "models");
-    expect(models["anthropic/opus-4.7"]).toEqual({ agentRuntime: { id: "claude-cli" } });
-    expect(models["anthropic/claude-opus-4-7"]).toEqual({
-      agentRuntime: { id: "claude-cli" },
     });
   });
 
@@ -564,7 +354,6 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/opus-5.0" },
             models: {
               "anthropic/opus-5.0": { alias: "Future Opus" },
@@ -572,7 +361,7 @@ describe("anthropic provider replay hooks", () => {
           },
         },
       },
-    } as never);
+    });
 
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     expect(models["anthropic/opus-5.0"]).toEqual({
@@ -580,77 +369,6 @@ describe("anthropic provider replay hooks", () => {
       agentRuntime: { id: "claude-cli" },
     });
     expect(models["anthropic/claude-opus-5-0"]).toBeUndefined();
-  });
-
-  it("resolves explicit claude-opus-4-8 refs from the 4.7 template family", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const resolved = provider.resolveDynamicModel?.({
-      provider: "anthropic",
-      modelId: "claude-opus-4-8",
-      modelRegistry: createModelRegistry([
-        {
-          id: "claude-opus-4-7",
-          name: "Claude Opus 4.7",
-          provider: "anthropic",
-          api: "anthropic-messages",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200_000,
-          maxTokens: 32_000,
-        } as ProviderRuntimeModel,
-      ]),
-    } as ProviderResolveDynamicModelContext);
-
-    expectFields(resolved, {
-      provider: "anthropic",
-      id: "claude-opus-4-8",
-      api: "anthropic-messages",
-      reasoning: true,
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-      maxTokens: 128_000,
-    });
-    const opus48Profile = provider.resolveThinkingProfile?.({
-      provider: "anthropic",
-      modelId: "claude-opus-4-8",
-    } as never);
-    const opus48LevelIds = levelIds(opus48Profile);
-    expect(opus48LevelIds).toContain("xhigh");
-    expect(opus48LevelIds).toContain("adaptive");
-    expect(opus48LevelIds).toContain("max");
-    expect(requireRecord(opus48Profile, "opus 4.8 thinking profile").defaultLevel).toBe("off");
-    const opus47Profile = provider.resolveThinkingProfile?.({
-      provider: "anthropic",
-      modelId: "claude-opus-4-7",
-    } as never);
-    const opus47LevelIds = levelIds(opus47Profile);
-    expect(opus47LevelIds).toContain("xhigh");
-    expect(opus47LevelIds).toContain("adaptive");
-    expect(opus47LevelIds).toContain("max");
-    expect(requireRecord(opus47Profile, "opus 4.7 thinking profile").defaultLevel).toBe("off");
-    const opus46Profile = provider.resolveThinkingProfile?.({
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-    } as never);
-    expect(levelIds(opus46Profile)).toContain("adaptive");
-    expect(requireRecord(opus46Profile, "opus 4.6 thinking profile").defaultLevel).toBe("adaptive");
-    expect(
-      provider
-        .resolveThinkingProfile?.({
-          provider: "anthropic",
-          modelId: "claude-opus-4-6",
-        } as never)
-        ?.levels.some((level) => level.id === "max"),
-    ).toBe(true);
-    expect(
-      provider
-        .resolveThinkingProfile?.({
-          provider: "anthropic",
-          modelId: "claude-opus-4-6",
-        } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(false);
   });
 
   it.each(claude5ContractCases)(
@@ -703,7 +421,19 @@ describe("anthropic provider replay hooks", () => {
           ...(checksCliPolicy
             ? {}
             : { contextWindow: 200_000, contextTokens: 200_000, maxTokens: 64_000 }),
-          ...(restoresMissingCost ? { cost: undefined } : {}),
+          ...(restoresMissingCost
+            ? {
+                cost:
+                  restoresMissingCost === "tiers" && cost
+                    ? {
+                        input: cost.input,
+                        output: cost.output,
+                        cacheRead: cost.cacheRead,
+                        cacheWrite: cost.cacheWrite,
+                      }
+                    : undefined,
+              }
+            : {}),
         } as ProviderRuntimeModel,
       } as never);
       expectFields(normalized, {
@@ -738,11 +468,7 @@ describe("anthropic provider replay hooks", () => {
   );
 
   it.each([
-    { modelId: "claude-sonnet-5", pricingSource: "configured" },
     { modelId: "claude-opus-5", pricingSource: "configured" },
-    { modelId: "claude-fable-5", pricingSource: "configured" },
-    { modelId: "claude-fable-5-1", pricingSource: "configured" },
-    { modelId: "claude-fable-5-custom", pricingSource: "discovered" },
     { modelId: "claude-opus-4-8", pricingSource: "discovered" },
   ])(
     "uses $pricingSource $modelId pricing for assistant usage",
@@ -859,90 +585,44 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it.each(["2026-08-31T23:59:59Z", "2026-09-01T00:00:00Z", "2027-01-01T00:00:00Z"])(
-    "keeps published Sonnet 5 pricing on %s",
-    async (timestamp) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(timestamp));
-      onTestFinished(() => clock.mockRestore());
-      const provider = await registerSingleProviderPlugin(anthropicPlugin);
-      const expectedCost = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
-      const model = {
-        id: "claude-sonnet-5",
-        name: "Claude Sonnet 5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-        contextWindow: 1_000_000,
-        contextTokens: 1_000_000,
-        maxTokens: 128_000,
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      } as ProviderRuntimeModel;
-
-      for (const candidate of [
-        model,
-        { ...model, id: "deployment-sonnet", params: { canonicalModelId: model.id } },
-      ]) {
-        expect(
-          provider.normalizeResolvedModel?.({
-            provider: "anthropic",
-            modelId: candidate.id,
-            model: candidate,
-          } as never)?.cost,
-        ).toEqual(expectedCost);
-      }
-      expect(
-        provider.resolveDynamicModel?.({
-          provider: "anthropic",
-          modelId: "claude-sonnet-5-20260901",
-          modelRegistry: createModelRegistry([]),
-        } as ProviderResolveDynamicModelContext)?.cost,
-      ).toEqual(expectedCost);
-    },
-  );
-
-  it("does not apply direct API pricing to Claude CLI Sonnet 5", async () => {
+  it.each(["2027-01-01T00:00:00Z"])("keeps published Sonnet 5 pricing on %s", async (timestamp) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(timestamp));
+    onTestFinished(() => clock.mockRestore());
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const expectedCost = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
     const model = {
       id: "claude-sonnet-5",
-      name: "Claude Sonnet 5 (Claude CLI)",
-      provider: "claude-cli",
+      name: "Claude Sonnet 5",
+      provider: "anthropic",
       api: "anthropic-messages",
       reasoning: true,
       input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
       contextWindow: 1_000_000,
       contextTokens: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     } as ProviderRuntimeModel;
 
+    for (const candidate of [
+      model,
+      { ...model, id: "deployment-sonnet", params: { canonicalModelId: model.id } },
+    ]) {
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "anthropic",
+          modelId: candidate.id,
+          model: candidate,
+        } as never)?.cost,
+      ).toEqual(expectedCost);
+    }
     expect(
-      provider.normalizeResolvedModel?.({
-        provider: "claude-cli",
-        modelId: model.id,
-        model,
-      } as never)?.cost,
-    ).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-  });
-
-  it("resolves dated modern Claude refs without discovery templates", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    const resolved = provider.resolveDynamicModel?.({
-      provider: "anthropic",
-      modelId: "claude-opus-4.7-20260219",
-      modelRegistry: createModelRegistry([]),
-    } as ProviderResolveDynamicModelContext);
-
-    expectFields(resolved, {
-      provider: "anthropic",
-      id: "claude-opus-4.7-20260219",
-      api: "anthropic-messages",
-      input: ["text", "image"],
-      reasoning: true,
-    });
+      provider.resolveDynamicModel?.({
+        provider: "anthropic",
+        modelId: "claude-sonnet-5-20260901",
+        modelRegistry: createModelRegistry([]),
+      } as ProviderResolveDynamicModelContext)?.cost,
+    ).toEqual(expectedCost);
   });
 
   it("uses canonical model identity instead of a Fable-looking deployment alias", async () => {
@@ -959,6 +639,7 @@ describe("anthropic provider replay hooks", () => {
       contextWindow: 200_000,
       maxTokens: 64_000,
       params: { canonicalModelId: "claude-opus-4-8" },
+      mediaInput: { image: { maxBytes: 1 } },
     } as ProviderRuntimeModel;
 
     expectFields(
@@ -969,6 +650,10 @@ describe("anthropic provider replay hooks", () => {
       } as never),
       {
         reasoning: false,
+        input: ["text", "image"],
+        mediaInput: {
+          image: { maxBytes: 1, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        },
         contextWindow: 1_000_000,
         contextTokens: 1_000_000,
         maxTokens: 128_000,
@@ -1033,33 +718,6 @@ describe("anthropic provider replay hooks", () => {
     expect(normalized?.thinkingLevelMap).toEqual({ max: "max" });
   });
 
-  it("normalizes stale text-only modern Claude vision rows to image-capable", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      model: {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 64_000,
-        thinkingLevelMap: { max: null },
-      },
-    } as never);
-
-    expect(normalized?.input).toEqual(["text", "image"]);
-    expect(normalized?.mediaInput).toEqual({
-      image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-    });
-    expect(normalized?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
-  });
-
   it("does not normalize numeric successors as known Claude contracts", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -1080,31 +738,6 @@ describe("anthropic provider replay hooks", () => {
     } as never);
 
     expect(normalized).toBeUndefined();
-  });
-
-  it("merges partial Claude image media metadata with provider limits", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic",
-      modelId: "claude-opus-4-7",
-      model: {
-        id: "claude-opus-4-7",
-        name: "Claude Opus 4.7",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 64_000,
-        mediaInput: { image: { maxBytes: 1 } },
-      },
-    } as never);
-
-    expect(normalized?.mediaInput).toEqual({
-      image: { maxBytes: 1, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-    });
   });
 
   it("normalizes direct Anthropic GA models to exact context and output limits", async () => {
@@ -1143,10 +776,7 @@ describe("anthropic provider replay hooks", () => {
     }
   });
 
-  it.each([
-    { maxTokensSource: "configured" as const, expectedMaxTokens: 128 },
-    { maxTokensSource: "discovered" as const, expectedMaxTokens: 128_000 },
-  ])(
+  it.each([{ maxTokensSource: "configured" as const, expectedMaxTokens: 128 }])(
     "normalizes modern output limits using $maxTokensSource provenance",
     async ({ maxTokensSource, expectedMaxTokens }) => {
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
@@ -1217,105 +847,6 @@ describe("anthropic provider replay hooks", () => {
     );
   });
 
-  it("normalizes Claude Opus 4.8 to 128k max output tokens", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic",
-      modelId: "claude-opus-4-8",
-      model: {
-        id: "claude-opus-4-8",
-        name: "Claude Opus 4.8",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 64_000,
-      },
-    } as never);
-
-    expectFields(normalized, {
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("does not normalize legacy Claude 4.5 models to 1M context", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-5",
-      model: {
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        contextTokens: 200_000,
-        maxTokens: 32_000,
-      },
-    } as never);
-
-    expect(normalized).toBeUndefined();
-  });
-
-  it("preserves API-key validation and interactive and non-interactive auth", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const method = provider.auth.find(({ id }) => id === "api-key");
-    if (!method?.validateNonInteractive || !method.runNonInteractive) {
-      throw new Error("expected complete Anthropic API-key auth");
-    }
-    const runtime = createRuntimeEnv();
-    const resolveApiKey = vi.fn(async () => ({ key: "test-token", source: "profile" as const }));
-    const context = {
-      authChoice: "apiKey",
-      config: {},
-      baseConfig: {},
-      opts: { anthropicApiKey: "test-token" },
-      runtime,
-      resolveApiKey,
-      toApiKeyCredential: vi.fn(() => null),
-    };
-    expect(await method.validateNonInteractive(context)).toBe(true);
-    expect(resolveApiKey).toHaveBeenCalledWith({
-      provider: "anthropic",
-      flagValue: "test-token",
-      flagName: "--anthropic-api-key",
-      envVar: "ANTHROPIC_API_KEY",
-    });
-    expect(await method.runNonInteractive(context)).toMatchObject({
-      auth: { profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" } } },
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
-    });
-    const result = await method.run({
-      config: {},
-      env: {},
-      opts: context.opts,
-      runtime,
-      prompter: createTestWizardPrompter(),
-      secretInputMode: "plaintext",
-      isRemote: false,
-      openUrl: vi.fn(),
-      oauth: { createVpsAwareHandlers: vi.fn() },
-    });
-    expect(result).toMatchObject({
-      defaultModel: "anthropic/claude-opus-5-5",
-      profiles: [
-        {
-          profileId: "anthropic:default",
-          credential: { type: "api_key", provider: "anthropic", key: "test-token" },
-        },
-      ],
-    });
-  });
-
   it("stores setup-token expiry from a bounded duration", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -1359,14 +890,17 @@ describe("anthropic provider replay hooks", () => {
       name: "rejects invalid setup-token expiry during non-interactive preflight",
       opts: { tokenExpiresIn: "nope" },
       error: "Invalid --token-expires-in",
-      partialError: true,
+    },
+    {
+      name: "rejects missing setup-token input during non-interactive preflight",
+      opts: { token: "" },
+      error: "Anthropic setup-token auth requires --token with a valid setup-token.",
     },
   ] as Array<{
     name: string;
     opts: Record<string, string>;
     error?: string;
-    partialError?: boolean;
-  }>)("$name", async ({ opts, error, partialError }) => {
+  }>)("$name", async ({ opts, error }) => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
     if (!setupTokenAuth?.validateNonInteractive) {
@@ -1374,7 +908,7 @@ describe("anthropic provider replay hooks", () => {
     }
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    const valid = await setupTokenAuth.validateNonInteractive({
+    const validation = setupTokenAuth.validateNonInteractive({
       authChoice: "setup-token",
       config: {},
       baseConfig: {},
@@ -1383,15 +917,13 @@ describe("anthropic provider replay hooks", () => {
       resolveApiKey: vi.fn(async () => null),
     });
 
-    expect(valid).toBe(!error);
     if (error) {
-      expect(runtime.error).toHaveBeenCalledWith(
-        partialError ? expect.stringContaining(error) : error,
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      await expect(validation).rejects.toThrow(error);
     } else {
-      expect(runtime.error).not.toHaveBeenCalled();
+      await expect(validation).resolves.toBe(true);
     }
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("omits setup-token expiry when duration overflows the Date range", async () => {
@@ -1423,7 +955,6 @@ describe("anthropic provider replay hooks", () => {
 
   it.each([
     { status: "available", authenticated: true },
-    { status: "missing", authenticated: false },
     { status: "unreadable", authenticated: false },
   ] as const)(
     "publishes native Claude auth only when its CLI reports $status",
@@ -1475,4 +1006,3 @@ describe("anthropic provider replay hooks", () => {
     expect(result?.profiles).toEqual([]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

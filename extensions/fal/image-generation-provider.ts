@@ -141,10 +141,7 @@ type FalImageModelSchema = {
   supportsCount: boolean;
   supportsOutputFormat: boolean;
 };
-function parseFalImageGenerationResponse(payload: unknown): {
-  images: Record<string, unknown>[];
-  prompt?: string;
-} {
+function parseFalImageGenerationResponse(payload: unknown) {
   if (!isRecord(payload)) {
     throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
   }

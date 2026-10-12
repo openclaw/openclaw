@@ -87,12 +87,6 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
   };
 }
 
-type ClickClackAgentProgressPublisher = {
-  start(): void;
-  onItemEvent(payload: ClickClackItemEventPayload): false;
-  finalize(): Promise<void>;
-};
-
 type QueuedProgressFrame = {
   lineId?: string;
   payload: Record<string, unknown>;
@@ -107,7 +101,7 @@ export function createClickClackAgentProgressPublisher(params: {
   turnId: string;
   agentLabel?: string;
   onError?: (error: unknown) => void;
-}): ClickClackAgentProgressPublisher {
+}) {
   let sequence = 0;
   const queue: QueuedProgressFrame[] = [];
   const queuedLines = new Map<string, QueuedProgressFrame>();
@@ -235,7 +229,7 @@ export function createClickClackAgentProgressPublisher(params: {
         },
       });
     },
-    onItemEvent(payload) {
+    onItemEvent(payload: ClickClackItemEventPayload): false {
       if (!started || cleared) {
         return false;
       }

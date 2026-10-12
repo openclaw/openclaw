@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { isLegacyOAuthRef } from "../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
 import {
@@ -85,22 +87,12 @@ function listExistingAgentDirsFromState(
   );
 }
 
-/** Keep auth import and repair on the same physical owners. */
-export function listAuthProfileRepairCandidates(
+function listAuthProfileStoreCandidates(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   onUnavailable?: (pathname: string) => void,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
-  const isRetained = createRetainedAgentDatabaseMatcher(
-    env,
-    () =>
-      listAgentIds(cfg).map((agentId) => ({ agentId, path: resolveAgentDir(cfg, agentId, env) })),
-    {
-      kind: "agent-directory",
-      readDatabasePaths: () => resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }),
-    },
-  );
   const addCandidate = (agentDir: string | undefined): void => {
     // Retain the selected home's expanded directory for later SQLite writes too.
     const resolvedAgentDir = agentDir ? resolveUserPath(agentDir, env) : undefined;
@@ -128,7 +120,27 @@ export function listAuthProfileRepairCandidates(
   for (const agentDir of listExistingAgentDirsFromState(env, onUnavailable)) {
     addCandidate(agentDir);
   }
-  return [...candidates.values()].filter(({ authPath }) => !isRetained(path.dirname(authPath)));
+  return [...candidates.values()];
+}
+
+/** Keep auth import and repair on the same physical owners. */
+export function listAuthProfileRepairCandidates(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  onUnavailable?: (pathname: string) => void,
+): AuthProfileRepairCandidate[] {
+  const isRetained = createRetainedAgentDatabaseMatcher(
+    env,
+    () =>
+      listAgentIds(cfg).map((agentId) => ({ agentId, path: resolveAgentDir(cfg, agentId, env) })),
+    {
+      kind: "agent-directory",
+      readDatabasePaths: () => resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }),
+    },
+  );
+  return listAuthProfileStoreCandidates(cfg, env, onUnavailable).filter(
+    ({ authPath }) => !isRetained(path.dirname(authPath)),
+  );
 }
 
 export function resolveLegacyAuthProfilesPath(agentDir?: string): string {
@@ -143,20 +155,24 @@ export function resolveLegacyFlatAuthPath(agentDir?: string): string {
   return path.join(resolveLegacyAuthAgentDir(agentDir), "auth.json");
 }
 
-export function listLegacyOAuthSidecarPaths(
+/**
+ * Lists retired OAuth sidecars that a legacy auth-profiles.json still references.
+ *
+ * The 2026.9.7 Doctor imports only referenced sidecars and deliberately keeps unreferenced
+ * ones, so those stay in place without blocking: no supported step can clear them, and
+ * every later auth import repeats this check against the directories it sees then. The scan
+ * reads no database, so it also runs before schema preparation and counts retained agents.
+ */
+export function listReferencedLegacyOAuthSidecarPaths(
   env: NodeJS.ProcessEnv,
   cfg?: OpenClawConfig,
   stateDir?: string,
 ): string[] {
-  const directory = path.join(
-    resolveOAuthDir(cfg ? createConfigRuntimeEnv(cfg, env) : env, stateDir),
-    "auth-profiles",
-  );
+  const runtimeEnv = cfg ? createConfigRuntimeEnv(cfg, env) : env;
+  const directory = path.join(resolveOAuthDir(runtimeEnv, stateDir), "auth-profiles");
+  let names: string[];
   try {
-    return fs
-      .readdirSync(directory)
-      .filter((name) => /^[a-f0-9]{32}\.json$/.test(name))
-      .map((name) => path.join(directory, name));
+    names = fs.readdirSync(directory).filter((name) => /^[a-f0-9]{32}\.json$/.test(name));
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       try {
@@ -170,14 +186,49 @@ export function listLegacyOAuthSidecarPaths(
     }
     throw createRetiredStateInspectionError(directory, error);
   }
+  if (names.length === 0) {
+    return [];
+  }
+  const referencedIds = new Set<string>();
+  // The importer selects stores from the caller's env; config env may select others.
+  const authPaths = new Set(
+    [env, runtimeEnv].flatMap((selectionEnv) =>
+      listAuthProfileStoreCandidates(
+        cfg ?? {},
+        stateDir ? { ...selectionEnv, OPENCLAW_STATE_DIR: stateDir } : selectionEnv,
+      ).map(({ authPath }) => authPath),
+    ),
+  );
+  for (const authPath of authPaths) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(authPath, "utf8"));
+    } catch (error) {
+      // 2026.9.7 skips missing and malformed stores too; an unreadable one may hold a reference.
+      if (hasErrnoCode(error, "ENOENT") || error instanceof SyntaxError) {
+        continue;
+      }
+      throw createRetiredStateInspectionError(authPath, error);
+    }
+    const profiles = isRecord(raw) && isRecord(raw.profiles) ? Object.values(raw.profiles) : [];
+    for (const profile of profiles) {
+      if (isRecord(profile) && isLegacyOAuthRef(profile.oauthRef)) {
+        referencedIds.add(profile.oauthRef.id);
+      }
+    }
+  }
+  return names
+    .filter((name) => referencedIds.has(name.slice(0, -".json".length)))
+    .map((name) => path.join(directory, name));
 }
 
 export function assertNoRetiredOAuthSidecarsBeforeConfigRecovery(params: {
   env: NodeJS.ProcessEnv;
   configPath?: string;
+  stateDir?: string;
 }): void {
   const context = createConfigIoContext({
-    ...params,
+    configPath: params.configPath,
     env: cloneEnvWithPlatformSemantics(params.env),
     observe: false,
     shellEnvFallback: "defer",
@@ -187,7 +238,11 @@ export function assertNoRetiredOAuthSidecarsBeforeConfigRecovery(params: {
     inspectConfigJsonRootSuffixWithContext(context, raw, (candidate) => {
       assertNoRetiredStateFiles(
         "OAuth credential sidecars",
-        listLegacyOAuthSidecarPaths(context.deps.env, coerceConfig(candidate)),
+        listReferencedLegacyOAuthSidecarPaths(
+          context.deps.env,
+          coerceConfig(candidate),
+          params.stateDir,
+        ),
       );
     });
   }

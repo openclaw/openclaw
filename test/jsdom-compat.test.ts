@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTsxImport } from "../scripts/lib/tsx-cli-shim.mjs";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 // Exercise the environment installed by the native preload, including in VM tests.
@@ -18,6 +19,7 @@ describe("jsdom native API boundary", () => {
     const result = spawnSync(
       process.execPath,
       [
+        ...(process.versions.bun ? [] : ["--import", resolveTsxImport(process.cwd())]),
         "--import",
         pathToFileURL(path.resolve("test/vitest/vitest.jsdom-preload.mts")).href,
         "--input-type=module",

@@ -16,7 +16,7 @@ import { CodexTurnProjection } from "./event-projector-result.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import type { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import {
-  extractRawAssistantText,
+  extractRawResponseItemText,
   readCodexErrorNotificationMessage,
   readItem,
 } from "./event-projector-values.js";
@@ -51,7 +51,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       !this.aborted &&
       !this.options.runAbortSignal?.aborted &&
       this.completedTurn?.status === "completed" &&
-      !this.terminalFailure.promptError
+      !this.promptError
       ? this.nativeToolLifecycleProjector.pendingCommands()
       : new Map();
   }
@@ -59,7 +59,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
   /** Native completion owns the answer independently of unfinished host projection. */
   recoverCompletedAnswer(): boolean {
     const completed = this.settlement.completedAnswer;
-    if (!completed || this.aborted || this.terminalFailure.promptError) {
+    if (!completed || this.aborted || this.promptError) {
       return false;
     }
     // Retire accepted writes before the enriched final enters the same mirror owner.
@@ -67,7 +67,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     this.projectionController.abort();
     this.transcriptCheckpoint.abandon();
     this.completedTurn = completed.turn;
-    this.assistantProjection.recordSnapshotItem(completed.answer);
+    this.assistantProjection.recordItemCompleted(completed.answer);
     this.assistantProjection.finalizeAnswerCandidate(completed.turn);
     return true;
   }
@@ -86,7 +86,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
   }
 
   buildSteeringTranscriptPrefix(): AgentMessage[] {
-    const snapshot = buildCodexSteeringMessagesSnapshot({
+    return buildCodexSteeringMessagesSnapshot({
       runParams: this.params,
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
@@ -94,15 +94,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       assistantProjection: this.assistantProjection,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
     });
-    this.pendingSteeringAssistantBoundaryItemId = snapshot.assistantBoundaryItemId;
-    return snapshot.messages;
   }
 
-  markSteeringTranscriptPersisted(): void {
-    const itemId = this.pendingSteeringAssistantBoundaryItemId;
-    if (itemId) {
-      this.assistantProjection.markAssistantBoundaryPersisted(itemId);
-      this.pendingSteeringAssistantBoundaryItemId = undefined;
+  markSteeringTranscriptMessagePersisted(mirrorIdentity: string): void {
+    const prefix = `${this.turnId}:assistant:`;
+    if (mirrorIdentity.startsWith(prefix)) {
+      this.assistantProjection.markSteeringMessagePersisted(mirrorIdentity.slice(prefix.length));
     }
   }
 
@@ -257,7 +254,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         const compactionFailure = codexErrorInfo === "other" && this.isCompacting();
         this.settledTurnFailureFinalizationAllowed =
           codexErrorInfo === "serverOverloaded" || compactionFailure;
-        this.terminalFailure.record({
+        this.recordTerminalFailure({
           message: readCodexErrorNotificationMessage(params),
           codexErrorInfo,
           misalignment: isJsonObject(params.error) ? params.error.misalignment : undefined,
@@ -352,8 +349,8 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   markTimedOut(): void {
     this.aborted = true;
-    this.terminalFailure.promptError = "codex app-server attempt timed out";
-    this.terminalFailure.promptErrorSource = "prompt";
+    this.promptError = "codex app-server attempt timed out";
+    this.promptErrorSource = "prompt";
   }
 
   markAborted(): void {
@@ -490,21 +487,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     if (!this.asyncDeliveryProjection.allows(item, true)) {
       return;
     }
-    const asyncMessage = this.assistantProjection.recordItemCompleted(
-      item,
-      itemId,
-      this.activeItemIds,
-    );
-    if (asyncMessage) {
-      await this.asyncDeliveryProjection.deliver(asyncMessage);
-    }
-    if (this.projectionClosed) {
-      return;
-    }
-    await this.reasoningProjection.recordItem(item);
-    await this.settlement.project("media_projection", () =>
-      this.generatedMediaProjection.recordNative(item),
-    );
+    await this.recordCompletedItemContent(item, { itemId });
     if (this.projectionClosed) {
       return;
     }
@@ -576,7 +559,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     this.eventProjection.endSafetyBuffering();
     const compactionFailure =
       turn.status === "failed" &&
-      (this.terminalFailure.promptErrorSource === "compaction" ||
+      (this.promptErrorSource === "compaction" ||
         (turn.error?.codexErrorInfo === "other" && this.isCompacting()));
     this.settledTurnFailureFinalizationAllowed =
       turn.status === "failed" &&
@@ -587,7 +570,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     if (turn.status === "failed") {
       const codexErrorInfo = turn.error?.codexErrorInfo as JsonValue | null | undefined;
       this.eventProjection.handleCyberPolicyError(codexErrorInfo, this.params.modelId);
-      this.terminalFailure.record({
+      this.recordTerminalFailure({
         message: turn.error?.message,
         codexErrorInfo,
         misalignment: turn.error?.misalignment,
@@ -618,17 +601,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         continue;
       }
       this.diagnostics.warnUnknownItemStatus(item);
-      const asyncMessage = this.assistantProjection.recordSnapshotItem(item);
-      if (asyncMessage) {
-        await this.asyncDeliveryProjection.deliver(asyncMessage);
-      }
-      if (this.projectionClosed) {
-        return;
-      }
-      await this.reasoningProjection.recordItem(item);
-      await this.settlement.project("media_projection", () =>
-        this.generatedMediaProjection.recordNative(item),
-      );
+      await this.recordCompletedItemContent(item);
       if (this.projectionClosed) {
         return;
       }
@@ -667,12 +640,32 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     await this.reasoningProjection.maybeEndReasoning();
   }
 
+  private async recordCompletedItemContent(
+    item: CodexThreadItem | undefined,
+    notification?: { itemId: string | undefined },
+  ): Promise<void> {
+    const asyncMessage = this.assistantProjection.recordItemCompleted(
+      item,
+      notification && { ...notification, activeItemIds: this.activeItemIds },
+    );
+    if (asyncMessage) {
+      await this.asyncDeliveryProjection.deliver(asyncMessage);
+    }
+    if (this.projectionClosed) {
+      return;
+    }
+    await this.reasoningProjection.recordItem(item);
+    await this.settlement.project("media_projection", () =>
+      this.generatedMediaProjection.recordNative(item),
+    );
+  }
+
   private async handleRawResponseItemCompleted(params: JsonObject): Promise<void> {
     const item = isJsonObject(params.item) ? params.item : undefined;
     if (!item) {
       return;
     }
-    if (item.role === "assistant" && extractRawAssistantText(item)) {
+    if (item.role === "assistant" && extractRawResponseItemText(item)) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
     this.toolSearchEvidenceProjection?.recordRawResponseItem(item);

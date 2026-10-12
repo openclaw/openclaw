@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createSqliteTrajectoryRuntimeSink } from "./runtime-store-writer.js";
 import {
   loadSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEventRowsSync,
 } from "./runtime-store.sqlite.js";
+import { createTrajectoryEvent } from "./runtime-store.test-support.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 
 // Real native writes and admission run unchanged; only delivery of their evidence changes.
@@ -74,13 +81,173 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   };
 });
 
+const retention = vi.hoisted(() => ({
+  beforeRead: undefined as (() => Promise<void>) | undefined,
+  accepted: undefined as Promise<void> | undefined,
+  reads: 0,
+}));
+vi.mock("../config/sessions/session-transcript-worker-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../config/sessions/session-transcript-worker-runtime.js")
+    >();
+  return {
+    ...actual,
+    retainSessionHistoryWorkerDatabase: (
+      ...args: Parameters<typeof actual.retainSessionHistoryWorkerDatabase>
+    ) => {
+      const retained = actual.retainSessionHistoryWorkerDatabase(...args);
+      return {
+        ...retained,
+        owner: {
+          ...retained.owner,
+          readTrajectoryRetention: async (
+            ...readArgs: Parameters<typeof retained.owner.readTrajectoryRetention>
+          ) => {
+            retention.reads += 1;
+            await retention.beforeRead?.();
+            return retained.owner.readTrajectoryRetention(...readArgs);
+          },
+        },
+      };
+    },
+  };
+});
+vi.mock("./runtime-retention.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-retention.js")>();
+  return {
+    ...actual,
+    scheduleSqliteTrajectoryRuntimeRetention: (
+      ...args: Parameters<typeof actual.scheduleSqliteTrajectoryRuntimeRetention>
+    ) => {
+      const pending = actual.scheduleSqliteTrajectoryRuntimeRetention(...args);
+      retention.accepted = pending;
+      return pending;
+    },
+  };
+});
+
 afterEach(() => {
+  retention.beforeRead = undefined;
+  retention.accepted = undefined;
+  retention.reads = 0;
   delivery.beforeAppend = undefined;
   delivery.afterResult = undefined;
   delivery.settlement = undefined;
   delivery.hideCommit = false;
   vi.restoreAllMocks();
 });
+
+it("persists identical serialized events separately with accurate queued bytes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "trajectory-duplicates",
+      sessionKey: "agent:main:trajectory-duplicates",
+      storePath: state.statePath("agents", "main", "agent.sqlite"),
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const sink = await createSqliteTrajectoryRuntimeSink({
+      env: state.env,
+      sessionId: target.sessionId,
+      sessionTarget: target,
+      maxRuntimeFileBytes: 1024 * 1024,
+    });
+    assert(sink);
+    const event = createTrajectoryEvent({ type: "repeated", sessionId: target.sessionId });
+    const line = JSON.stringify(event);
+    sink.write(event, line);
+    sink.write({ ...event }, line);
+    expect(sink.describeFlushState()).toBe(
+      `pendingRows=2 queuedBytes=${2 * (Buffer.byteLength(line, "utf8") + 1)} activeOperation=sqlite-append`,
+    );
+    await sink.flush();
+    expect(sink.describeFlushState()).toBeUndefined();
+    expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([event, event]);
+  });
+});
+
+it.each([
+  { name: "worker session patches", replaceExternally: false, expectedReads: 1 },
+  {
+    name: "worker patches and a foreign session replacement",
+    replaceExternally: true,
+    expectedReads: 2,
+  },
+])(
+  "settles retention during concurrent appends and $name",
+  async ({ replaceExternally, expectedReads }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "trajectory-during-retention",
+        sessionKey: "agent:main:trajectory-during-retention",
+        storePath: state.statePath("agents", "main", "agent.sqlite"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      await replaceSessionEntry(
+        { ...target, sessionKey: "agent:main:old-trajectory" },
+        { sessionId: "old-trajectory", updatedAt: 1 },
+      );
+      const database = openOpenClawAgentDatabase({
+        agentId: target.agentId,
+        path: target.storePath,
+      });
+      database.db
+        .prepare(`INSERT INTO trajectory_runtime_events
+      (session_id, seq, run_id, event_json, created_at) VALUES (?, 0, 'old-run', ?, 1)`)
+        .run("old-trajectory", JSON.stringify({ type: "old" }));
+      const recorder = await createTrajectoryRuntimeRecorder({
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+      });
+      assert(recorder);
+      const started = createDeferredCore();
+      const release = createDeferredCore();
+      retention.beforeRead = async () => {
+        started.resolve();
+        await release.promise;
+        await patchSessionEntryCore(target, () => ({ label: `metadata-${retention.reads}` }), {
+          workerGuard: {},
+        });
+      };
+      try {
+        recorder.recordEvent("first");
+        await recorder.flush();
+        await started.promise;
+        assert(retention.accepted);
+        recorder.recordEvent("while-retention-reads");
+        await recorder.flush();
+        expect(retention.reads).toBe(1);
+        expect(
+          (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type),
+        ).toEqual(["first", "while-retention-reads"]);
+        if (replaceExternally) {
+          // Commit outside the retained worker connection to require a fresh sweep.
+          replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 2 });
+        }
+      } finally {
+        release.resolve();
+        await retention.accepted;
+      }
+      expect(retention.reads).toBe(expectedReads);
+      expect(
+        await loadSqliteTrajectoryRuntimeEvents({ ...target, sessionId: "old-trajectory" }),
+      ).toEqual([]);
+      const completedReads = retention.reads;
+      recorder.recordEvent("same-window");
+      await recorder.flush();
+      await retention.accepted;
+      expect(retention.reads).toBe(completedReads);
+      expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
+        "first",
+        "while-retention-reads",
+        "same-window",
+      ]);
+    });
+  },
+);
 
 it.each(["committed", "unknown"] as const)(
   "settles the captured trajectory prefix before another flush after a lost result (%s)",
@@ -93,7 +260,7 @@ it.each(["committed", "unknown"] as const)(
         storePath: state.statePath("agents", "main", "agent.sqlite"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const recorder = createTrajectoryRuntimeRecorder({
+      const recorder = await createTrajectoryRuntimeRecorder({
         sessionId: target.sessionId,
         sessionKey: target.sessionKey,
         sessionTarget: target,
@@ -163,7 +330,7 @@ it("bounds 2,000 queued events while a background append awaits settlement", asy
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const maxRuntimeFileBytes = 64 * 1024;
-    const recorder = createTrajectoryRuntimeRecorder({
+    const recorder = await createTrajectoryRuntimeRecorder({
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
@@ -220,7 +387,7 @@ it.each(["committed", "unknown"] as const)(
         storePath: state.statePath("agents", "main", "agent.sqlite"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const recorder = createTrajectoryRuntimeRecorder({
+      const recorder = await createTrajectoryRuntimeRecorder({
         sessionId: target.sessionId,
         sessionKey: target.sessionKey,
         sessionTarget: target,
@@ -274,7 +441,7 @@ it.each([3_000, 6_000])(
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       let allowCommit = true;
-      const recorder = createTrajectoryRuntimeRecorder({
+      const recorder = await createTrajectoryRuntimeRecorder({
         sessionId: target.sessionId,
         sessionKey: target.sessionKey,
         sessionTarget: target,
@@ -319,7 +486,7 @@ it("keeps later queue evictions after a captured append settles", async () => {
       storePath: state.statePath("agents", "main", "agent.sqlite"),
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const recorder = createTrajectoryRuntimeRecorder({
+    const recorder = await createTrajectoryRuntimeRecorder({
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
@@ -361,7 +528,7 @@ it.each(["committed", "refused"] as const)(
         storePath: state.statePath("agents", "main", "agent.sqlite"),
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const recorder = createTrajectoryRuntimeRecorder({
+      const recorder = await createTrajectoryRuntimeRecorder({
         sessionId: target.sessionId,
         sessionKey: target.sessionKey,
         sessionTarget: target,

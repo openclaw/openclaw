@@ -6,6 +6,7 @@ import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import {
   BrokerNativeResourceCloseError,
+  spawnBrokerStartupNowMs,
   type BrokerResourceAttachment,
   type BrokerResourceRequest,
   type BrokerResourceResponse,
@@ -114,7 +115,7 @@ export function attachBrokerNativeResource(
           !connected &&
           !ready &&
           attachment.startupDeadline !== undefined &&
-          Date.now() < attachment.startupDeadline
+          spawnBrokerStartupNowMs() < attachment.startupDeadline
         ) {
           // The same spawn owner's startup deadline bounds a not-yet-listening endpoint.
           retryTimer = setTimeout(start, 10);
@@ -139,7 +140,7 @@ export function attachBrokerNativeResource(
               lose(new Error("Spawn broker readiness deadline exceeded"));
             }
           },
-          Math.max(0, attachment.startupDeadline - Date.now()),
+          Math.max(0, attachment.startupDeadline - spawnBrokerStartupNowMs()),
         );
   start();
   const assertAvailable = () => {

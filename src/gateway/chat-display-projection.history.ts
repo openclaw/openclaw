@@ -33,14 +33,10 @@ import {
   isCronRunMessage,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
-
-export type SubagentCoordinationDisplayResolver = {
-  assertCurrent?: () => void;
-  isSubagentSession: (sessionKey: string) => boolean;
-  isSubagentRunMessage: (runId: string, messageSeq: number | undefined) => boolean;
-};
 
 export function isSubagentCoordinationHistoryInput(
   message: Record<string, unknown>,
@@ -280,6 +276,19 @@ function readChatHistoryRecordTimestampMs(message: unknown): number | undefined 
   return asFiniteNumber(meta?.recordTimestampMs) ?? asFiniteNumber(readRecord(message)?.timestamp);
 }
 
+export function isPreSessionStartAssistantMessage(
+  message: unknown,
+  sessionStartedAt: number | undefined,
+): boolean {
+  const timestamp = readChatHistoryRecordTimestampMs(message);
+  return (
+    sessionStartedAt !== undefined &&
+    readRecord(message)?.role === "assistant" &&
+    timestamp !== undefined &&
+    timestamp < sessionStartedAt
+  );
+}
+
 export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number | undefined) {
   let precedingAnnounce = false;
   return (messages: unknown[]): unknown[] => {
@@ -291,11 +300,7 @@ export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number
     for (const current of messages) {
       if (precedingAnnounce) {
         precedingAnnounce = false;
-        const ts =
-          readRecord(current)?.role === "assistant"
-            ? readChatHistoryRecordTimestampMs(current)
-            : undefined;
-        if (typeof ts === "number" && ts < sessionStartedAt) {
+        if (isPreSessionStartAssistantMessage(current, sessionStartedAt)) {
           changed = true;
           continue;
         }
@@ -346,6 +351,14 @@ function shouldHideProjectedHistoryMessage(
   }
   if (!roleContent) {
     return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "exec"
+  ) {
+    return true;
   }
   if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
     return true;
@@ -476,6 +489,7 @@ export function filterVisibleProjectedHistoryMessages(
   let pendingTurnBoundary = turnBoundaryPending;
   let changed = false;
   const visible: Array<Record<string, unknown>> = [];
+  const assistantSources = new Map<string, Record<string, unknown>>();
   for (let i = 0; i < messages.length; i++) {
     const current = messages[i];
     if (!current) {
@@ -503,7 +517,10 @@ export function filterVisibleProjectedHistoryMessages(
       pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
       continue;
     }
-    if (isDuplicateAssistantDelivery(current, messages[i - 1])) {
+    const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
+    const source =
+      typeof mirrorSourceId === "string" ? assistantSources.get(mirrorSourceId) : messages[i - 1];
+    if (isDuplicateAssistantDelivery(current, source)) {
       changed = true;
       continue;
     }
@@ -513,6 +530,10 @@ export function filterVisibleProjectedHistoryMessages(
       changed = true;
     } else {
       visible.push(current);
+    }
+    const sourceId = readRecord(current["__openclaw"])?.id;
+    if (currentRoleContent?.role === "assistant" && typeof sourceId === "string") {
+      assistantSources.set(sourceId, current);
     }
   }
   return {
@@ -598,8 +619,7 @@ export function projectForwardedMessages(
     }
     return names.get(jobId);
   };
-  let changed = false;
-  const projected = messages.map((message) => {
+  return mapChatDisplayMessages(messages, (message) => {
     if (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message)) {
       return message;
     }
@@ -609,14 +629,12 @@ export function projectForwardedMessages(
       if (previous?.label === senderSession?.label) {
         return message;
       }
-      changed = true;
       return {
         ...message,
         senderSession,
         senderLabel: `Forwarded from ${senderSession?.label ?? senderSession?.agentId}`,
       };
     }
-    changed = true;
     const cronRun = isCronRunMessage(message);
     const prefix = normalizeInputProvenance(message.provenance)?.sourcePromptPrefix;
     const strip = cronRun
@@ -643,5 +661,4 @@ export function projectForwardedMessages(
     }
     return next;
   });
-  return changed ? projected : messages;
 }

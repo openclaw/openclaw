@@ -1,11 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { performance } from "node:perf_hooks";
-import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { getChildLogger } from "../../logging/logger.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import type {
   ReclamationDatabaseOptions,
@@ -14,7 +11,6 @@ import type {
   SessionMaintenanceMetadataResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
-import { logSqliteReclamationWorkerOutcome } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import type { SqliteReclamationClaim } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 
@@ -37,16 +33,6 @@ export function runSessionMaintenanceMetadataInWorker(params: {
     throw new Error("Session maintenance requires its captured file database");
   }
   const preparationId = randomUUID();
-  const startedAt = performance.now();
-  let workerThreadId: number | undefined;
-  const observeCompletion = (outcome: "resolved" | "rejected", failure?: unknown) =>
-    logSqliteReclamationWorkerOutcome({
-      startedAt,
-      kind: plan.kind,
-      workerThreadId,
-      outcome,
-      failure,
-    });
   return runSessionEntryWorkerMutation<SessionMaintenanceMetadataResult>(
     plan.databaseOptions,
     identity,
@@ -64,7 +50,6 @@ export function runSessionMaintenanceMetadataInWorker(params: {
             }
           : plan;
       const result = await worker.execute({ type: "session.maintenance.metadata", input });
-      workerThreadId = result.workerThreadId;
       if (params.diagnostics) {
         params.diagnostics.workerThreadId = result.workerThreadId;
       }
@@ -86,24 +71,6 @@ export function runSessionMaintenanceMetadataInWorker(params: {
           return;
         }
         params.onWorkerResult?.(result, identity);
-        if (result.kind === "maintenance-statistics" && database) {
-          try {
-            params.assertCurrent();
-            runWithSqliteBusyTimeout(database.db, 0, () => {
-              // sqlite-allow-raw -- Reload committed planner metadata without scanning tables.
-              database.db.exec("ANALYZE sqlite_schema;");
-            });
-          } catch (error) {
-            try {
-              getChildLogger({ subsystem: "session-sqlite" }).warn(
-                "Committed SQLite session statistics could not refresh parent planner metadata",
-                { agentId: database.agentId, error, path: database.path },
-              );
-            } catch {
-              // Diagnostic transport failure cannot undo the committed result.
-            }
-          }
-        }
       },
     },
     {
@@ -145,7 +112,6 @@ export function runSessionMaintenanceMetadataInWorker(params: {
                         input: {
                           id: preparationId,
                           input: plan.input,
-                          ageOwner: plan.ageOwner,
                           ageChanges: plan.ageChanges,
                         },
                       },
@@ -174,15 +140,6 @@ export function runSessionMaintenanceMetadataInWorker(params: {
               };
             }
           : undefined,
-    },
-  ).then(
-    (result) => {
-      observeCompletion("resolved");
-      return result;
-    },
-    (error: unknown) => {
-      observeCompletion("rejected", error);
-      throw error;
     },
   );
 }

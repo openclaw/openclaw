@@ -171,7 +171,6 @@ describe("worker turn launcher terminal results", () => {
         resolveProvider: () => undefined,
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
-        executeInference: vi.fn(),
         inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
@@ -351,8 +350,8 @@ describe("worker turn launcher terminal results", () => {
           agents: {
             defaults: {
               models: {
-                "openai/gpt-test": { agentRuntime: { id: "openclaw" } },
-                "openai/gpt-test-next": { agentRuntime: { id: "openclaw" } },
+                "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
               },
             },
           },
@@ -377,9 +376,9 @@ describe("worker turn launcher terminal results", () => {
             selection: {
               cfg: config,
               provider: "openai",
-              model: "gpt-test",
+              model: "gpt-5.6-luna",
               manifestPlugins: [],
-              fallbacksOverride: ["openai/gpt-test-next"],
+              fallbacksOverride: ["openai/gpt-5.6-sol"],
             },
             identity: { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
             harness: {
@@ -427,7 +426,7 @@ describe("worker turn launcher terminal results", () => {
           expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
           expect(environments.destroy).not.toHaveBeenCalled();
           if (providerFailure) {
-            expect(launchedModels).toEqual(["gpt-test", "gpt-test-next"]);
+            expect(launchedModels).toEqual(["gpt-5.6-luna", "gpt-5.6-sol"]);
             expect(runCandidate).toHaveBeenCalledTimes(2);
             expect(observed).toMatchObject({ message: "Unexpected second worker execution" });
             await expect(fs.stat(effectFile)).rejects.toMatchObject({ code: "ENOENT" });
@@ -435,7 +434,7 @@ describe("worker turn launcher terminal results", () => {
           }
           expect
             .soft(launchedModels, "cleanup must not replay the committed worker effect")
-            .toEqual(["gpt-test"]);
+            .toEqual(["gpt-5.6-luna"]);
           expect.soft(await fs.readFile(effectFile, "utf8")).toBe("effect\n");
           expect.soft(runCandidate).toHaveBeenCalledOnce();
           expect.soft(observed).toBe(candidateFailures[0]);
@@ -518,7 +517,7 @@ describe("worker turn launcher terminal results", () => {
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements,
       loadSessionRuntime: async () => ({
-        managedWorktrees: { findLiveByOwner: () => undefined },
+        managedWorktrees: { findLiveByOwner: async () => undefined },
         resolveGatewaySessionStoreTargetWithStore: () => ({
           storePath: sessionTarget.storePath,
           canonicalKey: SESSION_KEY,
@@ -631,7 +630,7 @@ describe("worker turn launcher terminal results", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("lends durable reconcile Move retry admission to production result recovery while interrupting its admitted turn", async () => {
+  it("recovers a durable Move result while interrupting its admitted turn", async () => {
     await seedActivePlacement();
     await gitInit(root);
     const source = placements.get(SESSION_ID);
@@ -729,7 +728,7 @@ describe("worker turn launcher terminal results", () => {
         launchRequest.onDispatchReady?.();
         // A prior Move can fail its admission drain before terminal ACK. Its exact retry
         // joins the durable intent, while the admitted worker retains its original claim.
-        placements.beginPlacementMove(request);
+        await placements.beginPlacementMove(request);
         const completed = await openSessionManager();
         const leafId = await completed.appendMessageAsync(completedWorkerMessage());
         return acknowledgeCompletedWorkerTurn(launchRequest.turnClaim, leafId);
@@ -790,11 +789,6 @@ describe("worker turn launcher terminal results", () => {
     const moving = dispatch.move(request).catch((error: unknown) => error);
     try {
       await barrierEntered.promise;
-      failTransfer.resolve();
-      await targetedAdmission.promise;
-      expect(admission.isActive()).toBe(true);
-      expect(recoveryEntered).not.toHaveBeenCalled();
-      expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
       startBarrier.resolve();
       await Promise.race([
         interrupted.promise,
@@ -803,7 +797,8 @@ describe("worker turn launcher terminal results", () => {
         }),
       ]);
       expect(turnAbort.signal.aborted).toBe(true);
-      // Independent admission settles after targeted recovery could enter this session.
+      failTransfer.resolve();
+      await targetedAdmission.promise;
       await dispatch.forceDestroyEnvironment("unrelated");
       expect(recoveryEntered).toHaveBeenCalledOnce();
       expect(recoveryEntered).toHaveBeenCalledWith("results-only");

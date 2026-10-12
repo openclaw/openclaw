@@ -1,7 +1,5 @@
-import {
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-} from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
+import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { buildToolLifecycleErrorResult, prepareToolResult } from "./embedded-agent-tool-results.js";
@@ -28,11 +26,9 @@ type EmbeddedToolLifecycleParams<T> = {
   onTerminal?: (terminal: ToolTerminal) => void | Promise<void>;
 };
 
-type EmbeddedToolLifecycleRunner = <T>(toolParams: EmbeddedToolLifecycleParams<T>) => Promise<T>;
-
 export function createEmbeddedToolLifecycleRunner(
   ctx: EmbeddedAgentSubscribeContext,
-): EmbeddedToolLifecycleRunner {
+): <T>(toolParams: EmbeddedToolLifecycleParams<T>) => Promise<T> {
   return async <T>(toolParams: EmbeddedToolLifecycleParams<T>): Promise<T> => {
     ctx.flushAssistantStream();
     const startEvent = {
@@ -48,59 +44,49 @@ export function createEmbeddedToolLifecycleRunner(
     recordEmbeddedToolTrajectoryEvent(ctx, startEvent, undefined);
     await handleToolExecutionStart(ctx, startEvent);
     let executionStarted = false;
-    const onImplementationStart = () => {
-      executionStarted = true;
+    const finishToolLifecycle = async (
+      isError: boolean,
+      result: unknown,
+    ): Promise<ToolTerminal> => {
+      const wasExecuted = executionStarted;
+      ctx.flushAssistantStream();
+      const endEvent: Extract<AgentEvent, { type: "tool_execution_end" }> = {
+        type: "tool_execution_end",
+        toolName: toolParams.toolName,
+        toolCallId: toolParams.toolCallId,
+        isError,
+        executionStarted: wasExecuted,
+        result,
+        hideFromChannelProgress: toolParams.hideFromChannelProgress,
+      };
+      const readSanitizedResult = prepareToolResult(result);
+      recordEmbeddedToolTrajectoryEvent(ctx, endEvent, readSanitizedResult);
+      const terminal = await handleToolExecutionEnd(ctx, endEvent, readSanitizedResult);
+      return {
+        result,
+        readSanitizedResult,
+        isError: terminal.isError,
+        executedArguments: terminal.executedArguments ?? toolParams.args,
+        effectReceipt: terminal.effectReceipt,
+      };
     };
     let completedResult: T;
     try {
-      completedResult = await toolParams.execute(onImplementationStart);
+      completedResult = await toolParams.execute(() => {
+        executionStarted = true;
+      });
     } catch (error) {
       const trustedNoStart = consumeTrustedToolNoStartError(error);
       const result = buildToolLifecycleErrorResult(error);
       if (trustedNoStart) {
         markToolExecutionNotStarted(result);
       }
-      const terminal = await finishToolLifecycle(ctx, toolParams, {
-        executionStarted,
-        isError: true,
-        result,
-      });
+      const terminal = await finishToolLifecycle(true, result);
       await toolParams.onTerminal?.(terminal);
       throw error;
     }
-    const terminal = await finishToolLifecycle(ctx, toolParams, {
-      executionStarted,
-      isError: false,
-      result: completedResult,
-    });
+    const terminal = await finishToolLifecycle(false, completedResult);
     await toolParams.onTerminal?.(terminal);
     return completedResult;
-  };
-}
-
-async function finishToolLifecycle(
-  ctx: EmbeddedAgentSubscribeContext,
-  toolParams: EmbeddedToolLifecycleParams<unknown>,
-  outcome: { executionStarted: boolean; isError: boolean; result: unknown },
-): Promise<ToolTerminal> {
-  ctx.flushAssistantStream();
-  const endEvent: Extract<AgentEvent, { type: "tool_execution_end" }> = {
-    type: "tool_execution_end",
-    toolName: toolParams.toolName,
-    toolCallId: toolParams.toolCallId,
-    isError: outcome.isError,
-    executionStarted: outcome.executionStarted,
-    result: outcome.result,
-    hideFromChannelProgress: toolParams.hideFromChannelProgress,
-  };
-  const readSanitizedResult = prepareToolResult(outcome.result);
-  recordEmbeddedToolTrajectoryEvent(ctx, endEvent, readSanitizedResult);
-  const terminal = await handleToolExecutionEnd(ctx, endEvent, readSanitizedResult);
-  return {
-    result: outcome.result,
-    readSanitizedResult,
-    isError: terminal.isError,
-    executedArguments: terminal.executedArguments ?? toolParams.args,
-    effectReceipt: terminal.effectReceipt,
   };
 }

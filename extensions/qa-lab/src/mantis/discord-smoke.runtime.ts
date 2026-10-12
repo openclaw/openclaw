@@ -137,24 +137,6 @@ function resolveRequiredSnowflake(
   return resolved;
 }
 
-function assertMantisDiscordChannelInGuild(params: {
-  channel: DiscordChannel;
-  guildChannels: readonly DiscordChannel[];
-  guildId: string;
-  channelId: string;
-}) {
-  if (!params.guildChannels.some((channel) => channel.id === params.channelId)) {
-    throw new Error(
-      `OPENCLAW_QA_DISCORD_CHANNEL_ID ${params.channelId} is not in guild ${params.guildId}.`,
-    );
-  }
-  if (params.channel.guild_id && params.channel.guild_id !== params.guildId) {
-    throw new Error(
-      `OPENCLAW_QA_DISCORD_CHANNEL_ID ${params.channelId} belongs to guild ${params.channel.guild_id}, not ${params.guildId}.`,
-    );
-  }
-}
-
 function defaultMantisDiscordSmokeOutputDir(repoRoot: string, startedAt: Date) {
   const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `discord-smoke-${stamp}`);
@@ -310,18 +292,6 @@ function buildPublishedMantisDiscordSmokeSummary(
   };
 }
 
-async function writeMantisDiscordSmokeArtifacts(
-  summary: MantisDiscordSmokeSummary,
-  sensitiveValues: ReadonlySet<string>,
-) {
-  await fs.mkdir(summary.outputDir, { recursive: true });
-  const publishedSummary = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
-  const report = renderMantisDiscordSmokeReport(publishedSummary);
-  const summaryJson = `${JSON.stringify(publishedSummary, null, 2)}\n`;
-  await fs.writeFile(summary.reportPath, report, "utf8");
-  await fs.writeFile(summary.summaryPath, summaryJson, "utf8");
-}
-
 export async function runMantisDiscordSmoke(
   opts: MantisDiscordSmokeOptions = {},
 ): Promise<MantisDiscordSmokeResult> {
@@ -363,26 +333,19 @@ export async function runMantisDiscordSmoke(
     const guildId = resolveRequiredSnowflake(opts.guildId, env, DEFAULT_GUILD_ID_ENV);
     const channelId = resolveRequiredSnowflake(opts.channelId, env, DEFAULT_CHANNEL_ID_ENV);
     addSensitiveValues(sensitiveValues, guildId, channelId);
-    const bot = await callDiscordApi<DiscordUser>({
-      apiCalls,
-      label: "current-user",
-      path: "/users/@me",
-      token,
-    });
+    const call = <T>(
+      label: string,
+      apiPath: string,
+      options?: { body?: unknown; method?: string },
+    ) => callDiscordApi<T>({ apiCalls, label, path: apiPath, token, ...options });
+    const bot = await call<DiscordUser>("current-user", "/users/@me");
     addSensitiveValues(sensitiveValues, bot.id, bot.username);
-    const guild = await callDiscordApi<DiscordGuild>({
-      apiCalls,
-      label: "guild",
-      path: `/guilds/${guildId}`,
-      token,
-    });
+    const guild = await call<DiscordGuild>("guild", `/guilds/${guildId}`);
     addSensitiveValues(sensitiveValues, guild.id, guild.name);
-    const guildChannels = await callDiscordApi<DiscordChannel[]>({
-      apiCalls,
-      label: "guild-channels",
-      path: `/guilds/${guildId}/channels`,
-      token,
-    });
+    const guildChannels = await call<DiscordChannel[]>(
+      "guild-channels",
+      `/guilds/${guildId}/channels`,
+    );
     for (const guildChannel of guildChannels) {
       addSensitiveValues(
         sensitiveValues,
@@ -391,19 +354,16 @@ export async function runMantisDiscordSmoke(
         guildChannel.name,
       );
     }
-    const channel = await callDiscordApi<DiscordChannel>({
-      apiCalls,
-      label: "channel",
-      path: `/channels/${channelId}`,
-      token,
-    });
+    const channel = await call<DiscordChannel>("channel", `/channels/${channelId}`);
     addSensitiveValues(sensitiveValues, channel.id, channel.guild_id, channel.name);
-    assertMantisDiscordChannelInGuild({
-      channel,
-      guildChannels,
-      guildId,
-      channelId,
-    });
+    if (!guildChannels.some((entry) => entry.id === channelId)) {
+      throw new Error(`OPENCLAW_QA_DISCORD_CHANNEL_ID ${channelId} is not in guild ${guildId}.`);
+    }
+    if (channel.guild_id && channel.guild_id !== guildId) {
+      throw new Error(
+        `OPENCLAW_QA_DISCORD_CHANNEL_ID ${channelId} belongs to guild ${channel.guild_id}, not ${guildId}.`,
+      );
+    }
     summary.bot = { id: bot.id, username: bot.username };
     summary.guild = { id: guild.id, name: guild.name };
     summary.channel = { id: channel.id, name: channel.name, type: channel.type };
@@ -411,25 +371,23 @@ export async function runMantisDiscordSmoke(
     if (opts.skipPost) {
       summary.message = { id: "", posted: false, reactionAdded: false };
     } else {
-      const message = await callDiscordApi<DiscordMessage>({
-        apiCalls,
-        body: {
-          content:
-            trimToValue(opts.message) ?? `Mantis Discord smoke: OK (${startedAt.toISOString()})`,
+      const message = await call<DiscordMessage>(
+        "post-message",
+        `/channels/${channelId}/messages`,
+        {
+          body: {
+            content:
+              trimToValue(opts.message) ?? `Mantis Discord smoke: OK (${startedAt.toISOString()})`,
+          },
+          method: "POST",
         },
-        label: "post-message",
-        method: "POST",
-        path: `/channels/${channelId}/messages`,
-        token,
-      });
+      );
       addSensitiveValues(sensitiveValues, message.id);
-      await callDiscordApi<void>({
-        apiCalls,
-        label: "add-reaction",
-        method: "PUT",
-        path: `/channels/${channelId}/messages/${message.id}/reactions/%F0%9F%91%80/@me`,
-        token,
-      });
+      await call<void>(
+        "add-reaction",
+        `/channels/${channelId}/messages/${message.id}/reactions/%F0%9F%91%80/@me`,
+        { method: "PUT" },
+      );
       summary.message = { id: message.id, posted: true, reactionAdded: true };
     }
 
@@ -452,7 +410,10 @@ export async function runMantisDiscordSmoke(
     );
   } finally {
     summary.finishedAt = new Date().toISOString();
-    await writeMantisDiscordSmokeArtifacts(summary, sensitiveValues);
+    await fs.mkdir(outputDir, { recursive: true });
+    const published = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
+    await fs.writeFile(reportPath, renderMantisDiscordSmokeReport(published), "utf8");
+    await fs.writeFile(summaryPath, `${JSON.stringify(published, null, 2)}\n`, "utf8");
   }
 
   return {

@@ -215,11 +215,11 @@ export async function finalizeNodeAdoptedSession(params: {
     new CatalogParamsError("Codex OpenClaw session changed before it could be bound. Retry.");
   let finalized: CatalogSessionEntry | null;
   try {
-    finalized = await params.api.runtime.agent.session.patchSessionEntry({
+    finalized = await params.api.runtime.agent.session.prepareSessionEntryPatch({
       sessionKey: params.adopted.key,
       readConsistency: "latest",
       preserveActivity: true,
-      update: (entry) => {
+      prepare: (entry) => {
         const current = readNodeSessionMarker(entry);
         if (
           entry.sessionId?.trim() !== params.adopted.sessionId ||

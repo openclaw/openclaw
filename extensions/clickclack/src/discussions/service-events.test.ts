@@ -2,6 +2,7 @@ import type {
   OpenClawPluginGatewayEvents,
   OpenClawPluginSessionsChangedEvent,
 } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { ClickClackDiscussionBinding } from "./binding-store.js";
@@ -98,14 +99,15 @@ describe("ClickClack discussion session events", () => {
       category: "Projects",
     });
     const sessionKey = "agent:main:event-concurrent-reset";
+    const updateEntered = createDeferred<void>();
+    const releaseUpdate = createDeferred<void>();
+    let reconcile: Promise<void> | undefined;
     try {
       await harness.service.open(sessionKey);
       harness.updateChannel.mockClear();
-      let releaseUpdate: (() => void) | undefined;
       harness.updateChannel.mockImplementationOnce(async (_channelId, patch) => {
-        await new Promise<void>((resolve) => {
-          releaseUpdate = resolve;
-        });
+        updateEntered.resolve();
+        await releaseUpdate.promise;
         return discussionChannel({
           name: patch.name ?? "renamed",
           kind: "public",
@@ -123,13 +125,13 @@ describe("ClickClack discussion session events", () => {
         category: "Projects",
       });
 
-      const reconcile = harness.service.reconcile(sessionKey);
-      await vi.waitFor(() => expect(harness.updateChannel).toHaveBeenCalledOnce());
+      reconcile = harness.service.reconcile(sessionKey);
+      await updateEntered.promise;
 
       harness.setSessionEntry({
         sessionId: "session-replacement",
-        label: "Renamed",
-        category: "Projects",
+        label: "Replacement label",
+        category: "Replacement section",
       });
       expect(
         await resolveClickClackDiscussionRoute({
@@ -140,18 +142,35 @@ describe("ClickClack discussion session events", () => {
           channelId: "chn_discussion",
         }),
       ).toMatchObject({ state: "active" });
-      expect(harness.store.lookup(sessionKey)).toMatchObject({
+      const replacementBinding = harness.store.lookup(sessionKey);
+      expect(replacementBinding).toMatchObject({
         sessionId: "session-replacement",
+        label: "Original",
+        displayTitle: "Original",
+        section: "Projects",
       });
 
-      releaseUpdate?.();
+      releaseUpdate.resolve();
       await reconcile;
 
+      expect(harness.store.lookup(sessionKey)).toEqual(replacementBinding);
+      await harness.service.reconcile(sessionKey);
       expect(harness.store.lookup(sessionKey)).toMatchObject({
         sessionId: "session-replacement",
-        label: "Renamed",
+        label: "Replacement label",
+        displayTitle: "Replacement label",
+        section: "Replacement section",
       });
+      expect(harness.updateChannel).toHaveBeenLastCalledWith(
+        "chn_discussion",
+        expect.objectContaining({
+          display_title: "Replacement label",
+          sidebar_section: "Replacement section",
+        }),
+      );
     } finally {
+      releaseUpdate.resolve();
+      await Promise.allSettled(reconcile ? [reconcile] : []);
       await harness.service.cleanup();
     }
   });

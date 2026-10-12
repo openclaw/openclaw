@@ -1,4 +1,41 @@
 import type { HeapSpaceInfo } from "node:v8";
+import type { WorkerRequestKind } from "./worker-request-kind.js";
+
+export type DiagnosticRuntimeMeasurementFields =
+  | {
+      type: "gateway.http.cancelled";
+      source: "client" | "shutdown";
+    }
+  | {
+      type: "gateway.event_loop.sample";
+      intervalMs: number;
+      delayMaxMs: number;
+    }
+  | {
+      type: "diagnostic.gc";
+      durationMs: number;
+    };
+
+export type DiagnosticWorkerRequestFields = {
+  type: "worker.request";
+  kind: WorkerRequestKind;
+  requestClass: string;
+  phase: "queued" | "started" | "completed";
+  queueDepth: number;
+  queueWaitMs?: number;
+  durationMs?: number;
+};
+
+export type DiagnosticAsyncQueueDroppedFields = {
+  type: "diagnostic.async_queue.dropped";
+  droppedEvents: number;
+  droppedTrustedEvents?: number;
+  droppedUntrustedEvents?: number;
+  droppedPriorityEvents?: number;
+  queueLength: number;
+  maxQueueLength: number;
+  drainBatchSize: number;
+};
 
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
@@ -27,6 +64,8 @@ export type DiagnosticMemoryUsage = {
     script: string;
     heapUsed: number;
     heapTotal: number;
+    /** Actual V8 isolate limit; unavailable on runtimes without V8. */
+    heapSizeLimitBytes?: number;
     threadId?: number;
     external?: number;
     /** Missing for native-only samplers; zero is a measured value. Included in external. */
@@ -39,6 +78,26 @@ export type DiagnosticMemoryUsage = {
     started: number;
     retired: { reason: string; count: number }[];
   }[];
+};
+
+export const DIAGNOSTIC_MEMORY_PRESSURE_METRICS = [
+  "thresholdBytes",
+  "limitBytes",
+  "usedBytes",
+  "workerThreadId",
+  "rssGrowthBytes",
+  "windowMs",
+] as const;
+
+export type DiagnosticMemoryPressureMetrics = Partial<
+  Record<(typeof DIAGNOSTIC_MEMORY_PRESSURE_METRICS)[number], number>
+>;
+
+export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
+  type: "diagnostic.memory.pressure";
+  level: "warning" | "critical";
+  reason: "rss_threshold" | "heap_threshold" | "worker_heap_threshold" | "rss_growth";
+  memory: DiagnosticMemoryUsage;
 };
 
 export type DiagnosticChildProcessSpawnFields = {

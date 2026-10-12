@@ -10,16 +10,10 @@ import {
 } from "./config-form.node.shared.ts";
 
 export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch } = params;
+  const { schema, value, path, disabled, onPatch } = params;
   const field = resolveConfigFieldPresentation(params);
   const fallback = jsonValue(value !== undefined ? value : schema.default);
-  const sensitiveState = getSensitiveRenderState({
-    path,
-    value,
-    hints,
-    revealSensitive: params.revealSensitive ?? false,
-    isSensitivePathRevealed: params.isSensitivePathRevealed,
-  });
+  const sensitiveState = getSensitiveRenderState(params);
   const control = renderJsonTextareaControl({
     schema,
     path,

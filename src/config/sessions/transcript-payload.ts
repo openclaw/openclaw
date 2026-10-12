@@ -279,34 +279,39 @@ function registerDecoder(database: DatabaseSync): void {
   database.function(
     DECODE_FUNCTION,
     { deterministic: true, directOnly: true },
-    (bytes, rawBytes) => {
-      if (
-        !(bytes instanceof Uint8Array) ||
-        bytes.byteLength === 0 ||
-        bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
-        typeof rawBytes !== "number" ||
-        !Number.isSafeInteger(rawBytes) ||
-        rawBytes < 1 ||
-        rawBytes > MAX_COMPRESSED_EVENT_BYTES
-      ) {
-        throw new Error("Invalid compressed transcript payload bounds");
-      }
-      const codec = resolveZstdCodec();
-      if (!codec) {
-        throw new Error(
-          "Cannot decode compressed transcript payload: this runtime lacks zstd support",
-        );
-      }
-      const decoded = codec.decompress(bytes, rawBytes);
-      if (decoded.byteLength !== rawBytes) {
-        throw new Error(
-          "Compressed transcript payload length does not match its recorded UTF-8 size",
-        );
-      }
-      return utf8Decoder.decode(decoded);
-    },
+    decodeCompressedTranscriptPayload,
   );
   registeredDecoders.add(database);
+}
+
+function decodeCompressedTranscriptPayload(bytes: unknown, rawBytes: unknown): string {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.byteLength === 0 ||
+    bytes.byteLength > MAX_COMPRESSED_EVENT_BYTES ||
+    typeof rawBytes !== "number" ||
+    !Number.isSafeInteger(rawBytes) ||
+    rawBytes < 1 ||
+    rawBytes > MAX_COMPRESSED_EVENT_BYTES
+  ) {
+    throw new Error("Invalid compressed transcript payload bounds");
+  }
+  const codec = resolveZstdCodec();
+  if (!codec) {
+    throw new Error("Cannot decode compressed transcript payload: this runtime lacks zstd support");
+  }
+  const decoded = codec.decompress(bytes, rawBytes);
+  if (decoded.byteLength !== rawBytes) {
+    throw new Error("Compressed transcript payload length does not match its recorded UTF-8 size");
+  }
+  return utf8Decoder.decode(decoded);
+}
+
+/** Decode selected rows without copying expanded payloads back through SQLite. */
+export function readTranscriptPayload(
+  row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes">,
+): string {
+  return row.event_json ?? decodeCompressedTranscriptPayload(row.event_zstd, row.event_utf8_bytes);
 }
 
 /** Only selected bodies decode; identity TEXT remains inside SQLite for native repairs. */
@@ -344,6 +349,14 @@ export function transcriptEventNavigationSql(
   return storedProjectionSql("navigation", identity, alias);
 }
 
+export function transcriptEventRunIdSql(
+  alias: TranscriptPayloadAlias = "transcript_events",
+): RawBuilder<string | null> {
+  return /* kysely-allow-raw: Read run provenance from the canonical bounded navigation projection. */ sql<
+    string | null
+  >`json_extract(${transcriptEventNavigationSql(alias)}, '$.message.__openclaw.runId')`;
+}
+
 function storedProjectionSql(
   field: "navigation" | "reset" | "model",
   fallback: Expression<string>,
@@ -369,12 +382,13 @@ export function transcriptEventResetNavigationSql(
 
 export function transcriptEventModelNavigationSql(
   alias: TranscriptPayloadAlias = "transcript_events",
+  entryType?: Expression<unknown>,
 ): RawBuilder<string> {
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("model", projectModelContextNavigationSql(identity), alias);
+  return storedProjectionSql("model", projectModelContextNavigationSql(identity, entryType), alias);
 }
 
 /** Model admission retains projected byte costs, which can be much smaller than canonical JSON. */

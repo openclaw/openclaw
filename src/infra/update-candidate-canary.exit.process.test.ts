@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { renderSteps } from "./update-candidate-canary.test-support.js";
+import { canaryOutcomeStep, renderSteps } from "./update-candidate-canary.test-support.js";
 import * as rehearsals from "./update-candidate-rehearsal.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -26,7 +26,6 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 it.each([
   "doctor",
   "doctor-signal",
-  "lint",
   "policy",
   "missing",
   "failed",
@@ -55,6 +54,7 @@ const mode = ${JSON.stringify(mode)};
 const args = process.argv.slice(2);
 if (args.includes("--fix")) {
   if (mode === "doctor-signal") {
+    console.log("Doctor complete.");
     writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH, JSON.stringify({
       status: "error", failureFacts: [{check: "plugins", code: "doctor-failed", message: "Plugin repair deferred"}],
     }));
@@ -142,6 +142,7 @@ if (args.includes("--fix")) {
       expect(crash).toMatchObject({ exitCode: null, termination: "signal", signal: "SIGTERM" });
       expect(crash.failureFacts?.[0]).toMatchObject({ check: "doctor", code: "signal" });
       expect(crash.detail).toContain("Checking data migrations");
+      expect(crash.detail).toContain("Doctor complete.");
       expect(crash.stderrTail).toContain("FATAL ERROR: synthetic native failure");
       expect(crash.stderrTail).toContain("0: node::sqlite::DatabaseSync::Exec");
       expect(crash.stderrTail).toContain("last native frame");
@@ -152,6 +153,7 @@ if (args.includes("--fix")) {
       expect(JSON.stringify(saved)).not.toContain("synthetic-secret");
       const report = renderUpdateRunReport(saved);
       expect(report.markdown).toContain("SIGTERM");
+      expect(report.markdown).toContain("Doctor complete.");
       expect(report.markdown).toContain("Checking data migrations");
       expect(report.markdown).toContain("FATAL ERROR: synthetic native failure");
       expect(report.lines.join("\n")).toContain("last native frame");
@@ -222,7 +224,10 @@ if (args.includes("--fix")) {
           expect.objectContaining({ checkId: "core/doctor/security", severity: "warning" }),
         );
       }
-      expect(result.steps.at(-1)).toMatchObject({ name: "candidate-gateway-startup", exitCode: 0 });
+      expect(canaryOutcomeStep(result.steps)).toMatchObject({
+        name: "candidate-gateway-startup",
+        exitCode: 0,
+      });
     }
   },
   15_000,

@@ -21,7 +21,6 @@ export const commandsHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: (rawAgentId) => (typeof rawAgentId === "string" ? rawAgentId.trim() : undefined),
       });
       if (!resolved) {
         return;

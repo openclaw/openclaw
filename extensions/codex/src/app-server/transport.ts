@@ -1,7 +1,3 @@
-/**
- * Shared transport lifecycle helpers for stdio and WebSocket Codex app-server
- * connections.
- */
 import { finished } from "node:stream/promises";
 import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
 import { waitForCodexAppServerProcessRegistrationCleanup } from "./transport-process-registration.js";
@@ -24,7 +20,6 @@ export function hasCodexAppServerNaturalExit(child: CodexAppServerTransport): bo
   return CODEX_APP_SERVER_TRANSPORT_CLOSES.get(child)?.naturalExit === true;
 }
 
-/** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
   startupFailure?: { error?: Error; complete(): void };
   maxFrameBytes?: number;

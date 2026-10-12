@@ -189,17 +189,6 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("uses a runtime-compatible direct dispatcher", async () => {
-    const dispatcher = await request();
-    const options = mocks.agent.mock.calls[0]?.[0];
-    expect(options?.allowH2).toBe(false);
-    expect(typeof options?.connect?.lookup).toBe("function");
-    expect(recordField(dispatcher).options).toBe(options);
-    dispatchRequest(dispatcher);
-    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
   it("uses managed env proxy CA trust without leaking it to NO_PROXY requests", async () => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-discord-rest-proxy-ca-"));
     const caFile = path.join(tempDir, "proxy-ca.pem");

@@ -10,7 +10,7 @@ export function isMatrixDeviceVerifiedInCurrentClient(
   status: MatrixDeviceVerificationStatusLike | null | undefined,
 ): boolean {
   return (
-    status?.isVerified?.() === true ||
+    status?.isVerified() === true ||
     status?.localVerified === true ||
     isMatrixDeviceOwnerVerified(status)
   );

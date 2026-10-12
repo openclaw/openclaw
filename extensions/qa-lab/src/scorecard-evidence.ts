@@ -43,16 +43,6 @@ function coverageIdsForRole(
   );
 }
 
-function statusForCategory(params: { coverageIdCount: number; fulfilledCoverageIdCount: number }) {
-  if (params.fulfilledCoverageIdCount === 0) {
-    return "missing" as const;
-  }
-  if (params.fulfilledCoverageIdCount === params.coverageIdCount) {
-    return "fulfilled" as const;
-  }
-  return "partial" as const;
-}
-
 function featureCounts(
   features: readonly { coverageIds: readonly string[] }[],
   primaryCoverageIds: ReadonlySet<string>,
@@ -104,37 +94,41 @@ function buildQaProfileScorecardEvidence(params: {
     }
   }
   const secondaryCoverageIds = coverageIdsForRole(entries, "secondary");
-  const categoryReports = params.categories.map((category) => {
-    const coverageIds = normalizeSortedUniqueTrimmedStringList(category.coverageIds);
-    const fulfilledCoverageIdCount = coverageIds.filter((coverageId) =>
-      primaryCoverageIds.has(coverageId),
-    ).length;
-    const secondaryOnlyCoverageIdCount = coverageIds.filter(
-      (coverageId) => !primaryCoverageIds.has(coverageId) && secondaryCoverageIds.has(coverageId),
-    ).length;
-    const missingCoverageIds = coverageIds.filter(
-      (coverageId) => !primaryCoverageIds.has(coverageId),
-    );
-    const counts = fulfillmentCounts(coverageIds.length, fulfilledCoverageIdCount);
-    return {
-      id: category.id,
-      surfaceId: category.taxonomySurfaceId,
-      name: category.taxonomyCategoryName,
-      status: statusForCategory({
-        coverageIdCount: coverageIds.length,
-        fulfilledCoverageIdCount,
-      }),
-      features: featureCounts(category.features, primaryCoverageIds),
-      coverageIds: {
-        total: counts.total,
-        fulfilled: counts.fulfilled,
-        secondaryOnly: secondaryOnlyCoverageIdCount,
-        missing: counts.missing,
-        fulfillmentPercent: counts.fulfillmentPercent,
-      },
-      missingCoverageIds,
-    };
-  });
+  const categoryReports = params.categories.map(
+    (category): QaEvidenceScorecardJson["categoryReports"][number] => {
+      const coverageIds = normalizeSortedUniqueTrimmedStringList(category.coverageIds);
+      const fulfilledCoverageIdCount = coverageIds.filter((coverageId) =>
+        primaryCoverageIds.has(coverageId),
+      ).length;
+      const secondaryOnlyCoverageIdCount = coverageIds.filter(
+        (coverageId) => !primaryCoverageIds.has(coverageId) && secondaryCoverageIds.has(coverageId),
+      ).length;
+      const missingCoverageIds = coverageIds.filter(
+        (coverageId) => !primaryCoverageIds.has(coverageId),
+      );
+      const counts = fulfillmentCounts(coverageIds.length, fulfilledCoverageIdCount);
+      return {
+        id: category.id,
+        surfaceId: category.taxonomySurfaceId,
+        name: category.taxonomyCategoryName,
+        status:
+          fulfilledCoverageIdCount === 0
+            ? "missing"
+            : fulfilledCoverageIdCount === coverageIds.length
+              ? "fulfilled"
+              : "partial",
+        features: featureCounts(category.features, primaryCoverageIds),
+        coverageIds: {
+          total: counts.total,
+          fulfilled: counts.fulfilled,
+          secondaryOnly: secondaryOnlyCoverageIdCount,
+          missing: counts.missing,
+          fulfillmentPercent: counts.fulfillmentPercent,
+        },
+        missingCoverageIds,
+      };
+    },
+  );
   const profileCoverageIds = normalizeSortedUniqueTrimmedStringList(
     params.categories.flatMap((category) => category.coverageIds),
   );

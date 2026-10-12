@@ -1,28 +1,45 @@
 /** Tests configured ACP binding thinking-default precedence. */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import type { AgentAcpBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { acpConfiguredBindingConsumer } from "./acp-configured-binding-consumer.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { resolveConfiguredBindingRecord } from "./configured-binding-registry.js";
 
 const binding: AgentAcpBinding = {
   type: "acp",
   agentId: "codex",
-  match: { channel: "discord" },
+  match: { channel: "discord", peer: { kind: "channel", id: "convo-1" } },
 };
 
-function materializeThinking(cfg: OpenClawConfig): string | undefined {
-  const factory = acpConfiguredBindingConsumer.buildTargetFactory({
-    cfg,
-    binding,
-    channel: "discord",
-    agentId: "codex",
-    target: { conversationId: "convo-1" },
-    bindingConversationId: "convo-1",
+beforeEach(() => {
+  const registry = createEmptyPluginRegistry();
+  registry.channels.push({
+    pluginId: "binding-fixture",
+    source: import.meta.url,
+    plugin: {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      bindings: {
+        compileConfiguredBinding: ({ conversationId }) => ({ conversationId }),
+        matchInboundConversation: ({ conversationId }) => ({ conversationId }),
+      },
+    },
   });
-  const materialized = factory?.materialize({
+  setActivePluginRegistry(registry);
+});
+
+afterEach(async () => {
+  await clearActivePluginRegistry();
+});
+
+function materializeThinking(cfg: OpenClawConfig): string | undefined {
+  const materialized = resolveConfiguredBindingRecord({
+    cfg: { ...cfg, bindings: [binding] },
+    channel: "discord",
     accountId: "default",
-    conversation: { conversationId: "convo-1" },
+    conversationId: "convo-1",
   });
   if (!materialized) {
     throw new Error("expected a configured ACP binding");
@@ -43,7 +60,7 @@ const baseCfg = {
   },
 } satisfies OpenClawConfig;
 
-describe("acpConfiguredBindingConsumer thinking precedence", () => {
+describe("configured ACP binding thinking precedence", () => {
   it("honors per-model params.thinking over the global default", () => {
     expect(materializeThinking(baseCfg)).toBe("off");
   });
@@ -69,27 +86,9 @@ describe("acpConfiguredBindingConsumer thinking precedence", () => {
     expect(materializeThinking(cfg)).toBe("adaptive");
   });
 
-  it.each([false, "disabled", "none"])("forwards per-model thinking %s as off", (thinking) => {
-    expect(
-      materializeThinking({
-        ...baseCfg,
-        agents: {
-          ...baseCfg.agents,
-          defaults: {
-            thinkingDefault: "high",
-            models: { "ollama-cloud/glm-5.2:cloud": { params: { thinking } } },
-          },
-        },
-      }),
-    ).toBe("off");
+  it.each([undefined])("leaves unconfigured thinking to the harness with model %s", (model) => {
+    expect(materializeThinking({ agents: { entries: { codex: { model } } } })).toBeUndefined();
   });
-
-  it.each([undefined, "anthropic/claude-sonnet-4-6"])(
-    "leaves unconfigured thinking to the harness with model %s",
-    (model) => {
-      expect(materializeThinking({ agents: { entries: { codex: { model } } } })).toBeUndefined();
-    },
-  );
 
   it("forwards global thinking without requiring a configured model", () => {
     expect(

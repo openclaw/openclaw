@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { readTuiSessionUserMessage } from "../tui-session-events.js";
 import { ChatLog } from "./chat-log.js";
+import { MarkdownMessageComponent } from "./markdown-message.js";
 
 describe("ChatLog run state", () => {
   it("keeps revised snapshots scoped to their own concurrent assistant run", () => {
@@ -116,10 +117,11 @@ describe("ChatLog run state", () => {
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(rendered).toContain("Persisted prompt.");
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "UserMessageComponent",
-      "AssistantMessageComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["user", "assistant"]);
     expect(chatLog.countPendingUsers()).toBe(0);
   });
 
@@ -152,9 +154,11 @@ describe("ChatLog run state", () => {
       runId: "history-run",
     });
 
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "UserMessageComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["user"]);
     expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Loaded from history.");
   });
 
@@ -162,7 +166,7 @@ describe("ChatLog run state", () => {
     const chatLog = new ChatLog(40);
 
     chatLog.addPendingUser("local", "queued hello");
-    chatLog.startAssistant("hi there", "r-accepted");
+    chatLog.updateAssistant("hi there", "r-accepted");
 
     expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
 

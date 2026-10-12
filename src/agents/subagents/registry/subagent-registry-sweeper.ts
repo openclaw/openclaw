@@ -7,6 +7,7 @@ import {
   runWithGatewayDetachedWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
   blockSubagentCompletionDelivery,
@@ -30,6 +31,7 @@ import {
   warnSuspendedDeliveryPressure,
 } from "./subagent-registry-suspended-delivery.js";
 import {
+  createSubagentSweepReadScope,
   deleteSweptSession,
   mutateCleanup,
   freezeSessionIdentity,
@@ -97,7 +99,7 @@ export function createSubagentRegistrySweeper(params: {
   ) => Iterable<[string, SubagentRunRecord]>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const { runs, resumedRuns } = params;
+  const { runs } = params;
   let intervalStarted = false;
   let scheduled: { timer: NodeJS.Timeout; at: number } | undefined;
   let sweepInProgress = false;
@@ -114,11 +116,10 @@ export function createSubagentRegistrySweeper(params: {
   }
 
   function start() {
-    if (intervalStarted) {
-      return;
+    if (!intervalStarted) {
+      intervalStarted = true;
+      schedule({ delayMs: 60_000 });
     }
-    intervalStarted = true;
-    schedule({ delayMs: 60_000 });
   }
 
   function stop() {
@@ -136,21 +137,23 @@ export function createSubagentRegistrySweeper(params: {
       return;
     }
     clearTimeout(scheduled?.timer);
-    const timer = setTimeout(() => {
-      scheduled = undefined;
-      void trackWork(runTick);
-    }, delayMs);
+    const timer = runInDetachedAsyncContext(() =>
+      setTimeout(() => {
+        scheduled = undefined;
+        void trackWork(runTick);
+      }, delayMs),
+    );
     timer.unref?.();
     scheduled = { timer, at: nextAt };
   }
 
-  async function runTick() {
+  async function runTick(recoveryOnly = false) {
     if (sweepInProgress) {
       rerunRequested = true;
       return;
     }
     try {
-      await runWithGatewayDetachedWorkAdmission(sweepOnce, "subagents:sweeper");
+      await runWithGatewayDetachedWorkAdmission(() => sweepOnce(recoveryOnly), "subagents:sweeper");
     } catch (error) {
       if (isGatewayRestartDrainError(error)) {
         return params.warn("subagent run sweep skipped: gateway is draining for restart");
@@ -187,40 +190,45 @@ export function createSubagentRegistrySweeper(params: {
     );
   }
 
-  async function sweepOnce() {
+  async function sweepOnce(recoveryOnly = false) {
     if (sweepInProgress) {
       return;
     }
     sweepInProgress = true;
     try {
       const now = Date.now();
+      const readScope = createSubagentSweepReadScope(runs, params.getGatewayRecoveryRuntime);
       recovery.prune();
+      if (recoveryOnly) {
+        const restoredRuns = [...runs];
+        for (const [runId, entry] of restoredRuns) {
+          await recovery.recover(runId, entry);
+        }
+        return;
+      }
       const collectorArchiveCandidates = new Map<
         string,
         { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
       >();
-      const phase = ([runId, entry]: [string, SubagentRunRecord]) =>
-        entry.requesterSettleWake
+      const phases: Array<Array<[string, SubagentRunRecord]>> = Array.from({ length: 7 }, () => []);
+      for (const item of runs) {
+        const [runId, entry] = item;
+        const phase = entry.requesterSettleWake
           ? 0
           : isSuspendedPendingFinalDelivery(entry)
             ? 1
             : entry.terminalOwner === "interrupted-recovery"
               ? 2
               : !getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number"
-                ? 3
+                ? isStaleUnendedSubagentRun(entry, now)
+                  ? 3
+                  : 4
                 : entry.killReconciliation
-                  ? 4
-                  : 5;
-      const runEntries = [...runs.entries()].toSorted((left, right) => {
-        const phaseDelta = phase(left) - phase(right);
-        return (
-          phaseDelta ||
-          (phase(left) === 3
-            ? Number(isStaleUnendedSubagentRun(right[1], now)) -
-              Number(isStaleUnendedSubagentRun(left[1], now))
-            : 0)
-        );
-      });
+                  ? 5
+                  : 6;
+        phases[phase]!.push(item);
+      }
+      const runEntries = phases.flat();
       // Completion stays fresh across awaits, but deletion must retain the earlier
       // CAS identity. Bind it to the exact run so replacements wait for another pass.
       const cleanupIdentities = new Map<object, FrozenSessionIdentity | undefined>();
@@ -239,14 +247,27 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         // Suppressed session cleanup still requires the captured member for artifact cleanup.
-        cleanupIdentities.set(
-          getSubagentRunRuntimeKey(entry),
-          shouldSuppressSubagentRecoverySessionEffects(entry)
-            ? undefined
-            : freezeSessionIdentity(entry.childSessionKey),
-        );
+        if (shouldSuppressSubagentRecoverySessionEffects(entry)) {
+          if (runs.get(entry.runId) === entry) {
+            cleanupIdentities.set(getSubagentRunRuntimeKey(entry), undefined);
+          }
+          continue;
+        }
+        try {
+          readScope.assertRunCurrent(entry);
+          const identity = await freezeSessionIdentity(entry, () =>
+            readScope.assertRunCurrent(entry),
+          );
+          readScope.assertRunCurrent(entry);
+          cleanupIdentities.set(getSubagentRunRuntimeKey(entry), identity);
+        } catch (error) {
+          if (error !== readScope.retiredRead) {
+            throw error;
+          }
+        }
       }
       for (const [runId, snapshot] of runEntries) {
+        readScope.assertCurrent();
         const selected = runs.get(runId);
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {
           continue;
@@ -284,6 +305,7 @@ export function createSubagentRegistrySweeper(params: {
           await settleUnreachableYieldedSubagentRun({
             runId,
             entry,
+            readScope,
             complete: params.completeSubagentRunWithRecovery,
           })
         ) {
@@ -305,58 +327,34 @@ export function createSubagentRegistrySweeper(params: {
             now - (entry.delivery?.suspendedAt ?? now) >= SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS;
           if (expired) {
             await discardSuspendedPendingFinalDelivery({
+              ...params,
               runId,
               entry,
               now,
-              reason: "expired",
-              resumedRuns,
-              clearPendingLifecycleError: params.clearPendingLifecycleError,
-              clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,
-              discardTerminalDelivery: params.discardTerminalDelivery,
-              completeCleanupBookkeeping: params.completeCleanupBookkeeping,
-              isCurrent: () => params.isCleanupOwnerCurrent(runId, entry),
-              sessionEffectsHostCurrent: params.sessionEffectsHostCurrent,
-              shouldSuppressSessionEffects: params.shouldSuppressSessionEffects,
-              shouldEmitEndedHookForRun: params.shouldEmitEndedHookForRun,
-              emitSubagentEndedHookForRun: params.emitSubagentEndedHookForRun,
-              warn: params.warn,
+              isCurrent: () => params.isCleanupOwnerCurrent(entry),
             });
           }
           continue;
         }
         if (entry.killIntent) {
           await reconcileDurableSubagentKillIntent({
+            ...params,
             runId,
             entry,
-            runs,
-            getRunsForChildSession: params.getRunsForChildSession,
             loadKillRuntime: () => killRuntimeLoader.load(),
-            completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
-            retireSupersededRun: params.retireSupersededRun,
-            warn: params.warn,
           });
           continue;
         }
         if (entry.killReconciliation) {
           await reconcileProvisionalSubagentKill({
+            ...params,
             runId,
             entry,
             now,
-            runs,
-            completeSubagentRunWithRecovery: params.completeSubagentRunWithRecovery,
-            retireSupersededRun: params.retireSupersededRun,
-            startSubagentAnnounceCleanupFlow: params.startSubagentAnnounceCleanupFlow,
-            getRunsForChildSession: params.getRunsForChildSession,
-            warn: params.warn,
           });
           continue;
         }
-        if (
-          (entry.execution.restartRecovery !== undefined ||
-            entry.terminalOwner === "interrupted-recovery" ||
-            (!getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number")) &&
-          (await recovery.recover(runId, entry))
-        ) {
+        if (await recovery.recover(runId, entry)) {
           continue;
         }
         if (typeof entry.execution.endedAt !== "number") {
@@ -368,6 +366,7 @@ export function createSubagentRegistrySweeper(params: {
               runId,
               entry,
               now,
+              readScope,
               complete: params.completeSubagentRunWithRecovery,
             });
             continue;
@@ -431,7 +430,6 @@ export function createSubagentRegistrySweeper(params: {
                 }
                 draft.collectorLaunchCleanupPending = false;
                 draft.cleanupCompletedAt = now;
-                return draft;
               },
             );
             if (!updated) {
@@ -488,21 +486,18 @@ export function createSubagentRegistrySweeper(params: {
             continue;
           }
           const sessionIdentity = cleanupIdentities.get(getSubagentRunRuntimeKey(entry));
-          if (!sessionIdentity) {
-            sessionOwnershipChanged = true;
-          } else {
-            try {
-              sessionOwnershipChanged =
-                (await deleteSweptSession(entry, sessionIdentity, runs, params.callGateway)) ===
+          try {
+            sessionOwnershipChanged =
+              !sessionIdentity ||
+              (await deleteSweptSession(entry, sessionIdentity, runs, params.callGateway)) ===
                 "changed";
-            } catch (error) {
-              params.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
-                runId,
-                childSessionKey: entry.childSessionKey,
-                error,
-              });
-              continue;
-            }
+          } catch (error) {
+            params.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
+              runId,
+              childSessionKey: entry.childSessionKey,
+              error,
+            });
+            continue;
           }
         }
         const deleted = await mutateCleanup(
@@ -545,6 +540,13 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         for (const [candidateRunId, candidate] of groupEntries) {
+          const warnCleanup = (message: string, failure?: { error: unknown }) =>
+            params.warn(message, {
+              runId: candidateRunId,
+              childSessionKey: candidate.childSessionKey,
+              groupId,
+              ...failure,
+            });
           let current = runs.get(candidateRunId);
           if (!isCleanupCurrent(current, candidate) || !isCollectorArchiveReady(current, now)) {
             continue collectorGroups;
@@ -563,7 +565,6 @@ export function createSubagentRegistrySweeper(params: {
                   (row) => isCollectorArchiveReady(row, now),
                   (draft) => {
                     draft.execution.suppressSessionEffects = true;
-                    return draft;
                   },
                 );
                 if (!updated) {
@@ -572,10 +573,7 @@ export function createSubagentRegistrySweeper(params: {
                 current = updated;
               }
             } catch (error) {
-              params.warn("sessions.delete failed during collector group sweep; keeping group", {
-                runId: candidateRunId,
-                childSessionKey: candidate.childSessionKey,
-                groupId,
+              warnCleanup("sessions.delete failed during collector group sweep; keeping group", {
                 error,
               });
               continue collectorGroups;
@@ -585,11 +583,7 @@ export function createSubagentRegistrySweeper(params: {
             continue collectorGroups;
           }
           if (!(await safeRemoveAttachmentsDir(current))) {
-            params.warn("attachment cleanup failed during collector group sweep; keeping group", {
-              runId: candidateRunId,
-              childSessionKey: candidate.childSessionKey,
-              groupId,
-            });
+            warnCleanup("attachment cleanup failed during collector group sweep; keeping group");
             continue collectorGroups;
           }
           if (
@@ -606,21 +600,15 @@ export function createSubagentRegistrySweeper(params: {
                   (row) => isCollectorArchiveReady(row, now),
                   (draft) => {
                     draft.contextEngineCleanupCompletedAt = Date.now();
-                    return draft;
                   },
                 ))
               ) {
                 continue collectorGroups;
               }
             } catch (error) {
-              params.warn(
+              warnCleanup(
                 "context-engine cleanup failed during collector group sweep; keeping group",
-                {
-                  runId: candidateRunId,
-                  childSessionKey: candidate.childSessionKey,
-                  groupId,
-                  error,
-                },
+                { error },
               );
               continue collectorGroups;
             }
@@ -678,6 +666,7 @@ export function createSubagentRegistrySweeper(params: {
     schedule,
     sweepOnce: () => trackWork(sweepOnce),
     runTick: () => trackWork(runTick),
+    recoverInterruptedRuns: () => trackWork(() => runTick(true)),
     async reset() {
       stop();
       lastWarnedSuspendedCount = undefined;

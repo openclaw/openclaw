@@ -62,9 +62,11 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   // Facts belong to this invocation; raw activation and effective configs can differ.
   const configs = sameConfig ? [params.config] : [params.config, activationSourceConfig];
   const pluginConfigs = sameConfig ? [pluginsConfig] : [pluginsConfig, activationSourcePlugins];
-  const scope = new Set(pluginConfigs.flatMap((plugins) => plugins.allow));
+  const scope = new Set(
+    pluginConfigs.flatMap((plugins) => plugins.allow.map(lookup.normalizePluginId)),
+  );
   for (const plugins of pluginConfigs) {
-    addPluginConfigEntryIds(scope, plugins);
+    addPluginConfigEntryIds(scope, plugins, lookup.normalizePluginId);
   }
 
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
@@ -103,7 +105,6 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     configs,
     env: params.env,
     ambientEnvTriggers: params.ambientEnvTriggers,
-    includePersistedAuthState: false,
   });
   if (!lookup.hasDirectChannelOwners(configuredChannelIds)) {
     return undefined;
@@ -121,25 +122,21 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   }
   lookup.addDirectProviderOwners(scope, configuredProviderIds);
 
-  const decisionProviderIds = configs.flatMap(getConfiguredDecisionProviderIds);
-  if (!lookup.hasProviderContributionOwners(decisionProviderIds)) {
-    return undefined;
+  for (const resolveProviderIds of [
+    () => configs.flatMap(getConfiguredDecisionProviderIds),
+    () =>
+      normalizeWorkerProviderIds([
+        ...configs.flatMap(collectConfiguredWorkerProviderIds),
+        ...(params.workerProviderIds ?? []),
+      ]),
+    () => configs.flatMap(collectConfiguredStorageProviderIds),
+  ]) {
+    const contributionProviderIds = resolveProviderIds();
+    if (!lookup.hasProviderContributionOwners(contributionProviderIds)) {
+      return undefined;
+    }
+    lookup.addProviderContributionOwners(scope, contributionProviderIds);
   }
-  lookup.addProviderContributionOwners(scope, decisionProviderIds);
-
-  const workerProviderIds = normalizeWorkerProviderIds([
-    ...configs.flatMap(collectConfiguredWorkerProviderIds),
-    ...(params.workerProviderIds ?? []),
-  ]);
-  if (!lookup.hasProviderContributionOwners(workerProviderIds)) {
-    return undefined;
-  }
-  lookup.addProviderContributionOwners(scope, workerProviderIds);
-  const storageProviderIds = configs.flatMap(collectConfiguredStorageProviderIds);
-  if (!lookup.hasProviderContributionOwners(storageProviderIds)) {
-    return undefined;
-  }
-  lookup.addProviderContributionOwners(scope, storageProviderIds);
 
   const configuredShorthandModelIds = sortUniquePluginIds(
     validationRefs.flatMap((refs) =>
@@ -166,12 +163,12 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
 
   const deniedPluginIds = new Set(pluginConfigs.flatMap((plugins) => plugins.deny));
   for (const pluginId of deniedPluginIds) {
-    scope.delete(pluginId);
+    scope.delete(lookup.normalizePluginId(pluginId));
   }
   for (const plugins of pluginConfigs) {
     for (const [pluginId, entry] of Object.entries(plugins.entries)) {
       if (entry?.enabled === false) {
-        scope.delete(pluginId);
+        scope.delete(lookup.normalizePluginId(pluginId));
       }
     }
   }

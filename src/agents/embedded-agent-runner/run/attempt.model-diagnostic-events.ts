@@ -21,10 +21,9 @@ function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | 
   }
   try {
     const asyncIterator = (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator];
-    if (typeof asyncIterator !== "function") {
-      return undefined;
-    }
-    return () => asyncIterator.call(value) as AsyncIterator<unknown>;
+    return typeof asyncIterator === "function"
+      ? () => asyncIterator.call(value) as AsyncIterator<unknown>
+      : undefined;
   } catch {
     return undefined;
   }
@@ -41,6 +40,11 @@ async function safeReturnIterator(
     Promise.resolve(returnResult).catch(() => undefined),
     MODEL_CALL_STREAM_RETURN_TIMEOUT_MS,
   );
+}
+
+function throwModelCallError(lifecycle: ModelCallLifecycle, error: unknown): never {
+  lifecycle.emitError(error);
+  throw error;
 }
 
 function observeModelCallIterator<T>(
@@ -94,8 +98,7 @@ function observeModelCallIterator<T>(
           break;
         }
         const chunk = next.value;
-        lifecycle.observer.observeResponseChunk(lifecycle.startedAt, chunk);
-        lifecycle.observer.maybeEmitStreamProgress(lifecycle.eventBase);
+        lifecycle.observeChunk(chunk);
         yield chunk;
       }
       // EOF can precede result decorators' settlement. Retain that work through
@@ -107,8 +110,7 @@ function observeModelCallIterator<T>(
       }
     } catch (err) {
       iteratorSettled = true;
-      lifecycle.emitError(err);
-      throw err;
+      throwModelCallError(lifecycle, err);
     } finally {
       if (!iteratorSettled) {
         // A consumer can stop reading before the provider emits done/error — e.g.
@@ -140,18 +142,20 @@ function createSharedResultObserver(
         .then(() => resultFn.call(stream))
         .then(
           (resolved) => {
-            lifecycle.observer.observeFinalResult(
-              lifecycle.eventBase,
-              lifecycle.startedAt,
-              resolved,
-            );
-            lifecycle.emitCompleted();
-            return resolved;
+            try {
+              lifecycle.observer.observeFinalResult(
+                lifecycle.eventBase,
+                lifecycle.startedAt,
+                resolved,
+              );
+              lifecycle.emitCompleted();
+              return resolved;
+            } catch (error) {
+              lifecycle.emitError(error);
+              throw error;
+            }
           },
-          (err: unknown) => {
-            lifecycle.emitError(err);
-            throw err;
-          },
+          (err: unknown) => throwModelCallError(lifecycle, err),
         );
       // Drain-only consumers never await this promise; retain rejection for callers.
       void cached.catch(() => undefined);
@@ -166,8 +170,14 @@ function observeModelCallStream(
   lifecycle: ModelCallLifecycle,
 ): AsyncIterable<unknown> {
   const observedResult = createSharedResultObserver(stream, lifecycle);
-  const observedIterator = () =>
-    observeModelCallIterator(createIterator(), lifecycle, observedResult);
+  const observedIterator = () => {
+    try {
+      return observeModelCallIterator(createIterator(), lifecycle, observedResult);
+    } catch (error) {
+      lifecycle.emitError(error);
+      throw error;
+    }
+  };
   let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
@@ -196,12 +206,17 @@ function observeModelCallStream(
 }
 
 function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle): unknown {
-  const createIterator = asyncIteratorFactory(result);
-  if (createIterator) {
-    return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
+  try {
+    const createIterator = asyncIteratorFactory(result);
+    if (createIterator) {
+      return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
+    }
+    lifecycle.emitCompleted();
+    return result;
+  } catch (error) {
+    lifecycle.emitError(error);
+    throw error;
   }
-  lifecycle.emitCompleted();
-  return result;
 }
 
 export function wrapStreamFnWithDiagnosticModelCallEvents(
@@ -233,16 +248,12 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       if (isPromiseLike(result)) {
         return result.then(
           (resolved) => observeModelCallResult(resolved, lifecycle),
-          (err: unknown) => {
-            lifecycle.emitError(err);
-            throw err;
-          },
+          (err: unknown) => throwModelCallError(lifecycle, err),
         );
       }
       return observeModelCallResult(result, lifecycle);
     } catch (err) {
-      lifecycle.emitError(err);
-      throw err;
+      return throwModelCallError(lifecycle, err);
     }
   }) as StreamFn;
 }

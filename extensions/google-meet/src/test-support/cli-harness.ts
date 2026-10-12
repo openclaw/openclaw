@@ -1,9 +1,14 @@
 // Shared Google Meet CLI test harness.
 import { Command } from "commander";
-import { expect, vi } from "vitest";
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
+import { afterEach, expect, vi } from "vitest";
 import { registerGoogleMeetCli } from "../cli.js";
 import { resolveGoogleMeetConfig } from "../config.js";
 import type { GoogleMeetRuntime } from "../runtime.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const fetchGuardMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(
@@ -220,23 +225,24 @@ export function setupCli(params: {
   config?: Parameters<typeof resolveGoogleMeetConfig>[0];
   runtime?: Partial<GoogleMeetRuntime>;
   ensureRuntime?: () => Promise<GoogleMeetRuntime>;
-  callGatewayFromCli?: Parameters<typeof registerGoogleMeetCli>[0]["callGatewayFromCli"];
+  callGatewayFromCli?: typeof gatewayRuntime.callGatewayFromCli;
 }) {
+  vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
+    params.callGatewayFromCli ??
+      (async () => {
+        throw Object.assign(new Error("gateway transport failed"), {
+          name: "GatewayTransportError",
+          kind: "closed",
+          connectionDetails: { url: "ws://127.0.0.1:18789" },
+        });
+      }),
+  );
   const program = new Command();
   registerGoogleMeetCli({
     program,
     config: resolveGoogleMeetConfig(params.config ?? {}),
     ensureRuntime:
       params.ensureRuntime ?? (async () => (params.runtime ?? {}) as unknown as GoogleMeetRuntime),
-    callGatewayFromCli:
-      params.callGatewayFromCli ??
-      (vi.fn(async () => {
-        throw Object.assign(new Error("gateway transport failed"), {
-          name: "GatewayTransportError",
-          kind: "closed",
-          connectionDetails: { url: "ws://127.0.0.1:18789" },
-        });
-      }) as NonNullable<Parameters<typeof registerGoogleMeetCli>[0]["callGatewayFromCli"]>),
   });
   return program;
 }

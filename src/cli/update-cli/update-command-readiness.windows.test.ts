@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as startupTiming from "../../commands/gateway-startup-timing.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { STARTUP_MIGRATION_LEASE_TTL_MS } from "../../infra/startup-migration-checkpoint.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -13,6 +15,8 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
+
+const resolveGatewayStartupTiming = startupTiming.resolveGatewayStartupTiming;
 
 const native = vi.hoisted(() => ({
   runtime: vi.fn<GatewayService["readRuntime"]>(),
@@ -85,6 +89,10 @@ const unreachable = {
 };
 
 beforeEach(() => {
+  // Exercise Windows budgets on every host without changing SQLite's host paths.
+  vi.spyOn(startupTiming, "resolveGatewayStartupTiming").mockImplementation((_, update) =>
+    resolveGatewayStartupTiming("win32", update),
+  );
   vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(startedAt);
   native.runtime.mockReset().mockResolvedValue(serviceRuntime);
@@ -162,13 +170,20 @@ async function awaitProbe<T>(entered: Promise<T>, verification: Promise<boolean>
 
 describe("managed Windows update after the startup canary", () => {
   it.each([
-    { json: false, observedStartupMs: 300_000, timeoutMs: undefined, budgetMs: 3_000_000 },
-    { json: true, observedStartupMs: 300_000, timeoutMs: undefined, budgetMs: 3_000_000 },
-    { json: false, observedStartupMs: 600_000, timeoutMs: undefined, budgetMs: 3_600_000 },
-    { json: false, observedStartupMs: 600_000, timeoutMs: 7_200_000, budgetMs: 7_200_000 },
+    { json: false, observedStartupMs: 300_000, timeoutMs: undefined },
+    { json: true, observedStartupMs: 300_000, timeoutMs: undefined },
+    { json: false, observedStartupMs: 600_000, timeoutMs: undefined },
+    { json: false, observedStartupMs: 900_000, timeoutMs: undefined },
+    { json: false, observedStartupMs: 600_000, timeoutMs: 7_200_000 },
   ])(
-    "records and refreshes the $budgetMs ms readiness budget (json=$json)",
-    async ({ json, observedStartupMs, timeoutMs, budgetMs }) => {
+    "records and refreshes the canonical readiness budget (json=$json, startup=$observedStartupMs, timeout=$timeoutMs)",
+    async ({ json, observedStartupMs, timeoutMs }) => {
+      const { deadlineMs: budgetMs, derivation } = resolveGatewayStartupTiming("win32", {
+        observedStartupMs,
+        timeoutMs,
+        migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+        previousGateway: true,
+      });
       const f = fixture();
       const probe = holdRuntimeProbe();
       const abort = new AbortController();
@@ -186,9 +201,7 @@ describe("managed Windows update after the startup canary", () => {
         expect(f.wait()).toMatchObject({ status: "in_progress", startedAtMs: startedAt });
         expect(f.wait()?.detail).toMatch(/previous.Gateway readiness verification/i);
         expect(f.wait()?.detail).toContain(`Budget ${budgetMs}ms`);
-        expect(f.wait()?.detail).toContain(
-          timeoutMs === undefined ? "min(3600000ms" : "explicit --timeout",
-        );
+        expect(f.wait()?.detail).toContain(derivation);
         if (timeoutMs === undefined) {
           expect(f.wait()?.detail).toMatch(
             new RegExp(`${observedStartupMs}.*10|10.*${observedStartupMs}`),
@@ -260,7 +273,11 @@ describe("managed Windows update after the startup canary", () => {
       const waiting = f.wait()!;
       expect(waiting.status).toBe("in_progress");
       expect(waiting.detail).toContain("HTTP healthz=200; readyz=503");
-      expect(waiting.detail).toContain("270000");
+      const { deadlineMs } = resolveGatewayStartupTiming("win32", {
+        migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+        previousGateway: true,
+      });
+      expect(waiting.detail).toContain(`Remaining ${deadlineMs - 30_000}ms`);
       expect(renderUpdateRunReport(f.read()).markdown).toContain("HTTP healthz=200; readyz=503");
     } finally {
       abort.abort(new Error("fixture completed"));

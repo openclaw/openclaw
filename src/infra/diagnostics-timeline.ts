@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 
 const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
 const MAX_PENDING_TIMELINE_BYTES = 64 * 1024;
@@ -51,14 +52,10 @@ type DiagnosticsTimelineEvent = {
   signal?: string | null;
 };
 
-type DiagnosticsTimelineSpanOptions = {
-  phase?: string;
-  parentSpanId?: string;
-  attributes?: DiagnosticsTimelineAttributes;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  omitErrorMessage?: boolean;
-};
+type DiagnosticsTimelineSpanOptions = DiagnosticsTimelineOptions &
+  Pick<DiagnosticsTimelineEvent, "phase" | "parentSpanId" | "attributes"> & {
+    omitErrorMessage?: boolean;
+  };
 
 type DiagnosticsTimelineOptions = {
   config?: OpenClawConfig;
@@ -66,13 +63,10 @@ type DiagnosticsTimelineOptions = {
 };
 
 /** Active timeline span carried through async-local scope for nested diagnostics. */
-type ActiveDiagnosticsTimelineSpan = {
-  name: string;
-  phase?: string;
-  spanId: string;
-  parentSpanId?: string;
-  attributes?: DiagnosticsTimelineAttributes;
-};
+type ActiveDiagnosticsTimelineSpan = Pick<
+  DiagnosticsTimelineEvent,
+  "name" | "phase" | "parentSpanId" | "attributes"
+> & { spanId: string };
 
 type StartedDiagnosticsTimelineSpan = ActiveDiagnosticsTimelineSpan & {
   config?: OpenClawConfig;
@@ -297,17 +291,7 @@ function startDiagnosticsTimelineSpan(
     ...(options.attributes ? { attributes: options.attributes } : {}),
     ...(options.omitErrorMessage ? { omitErrorMessage: true } : {}),
   };
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
-      attributes: span.attributes,
-    },
-    { config: span.config, env: span.env },
-  );
+  emitDiagnosticsTimelineEvent({ type: "span.start", ...span }, span);
   return span;
 }
 
@@ -331,12 +315,8 @@ function emitFinishedDiagnosticsTimelineSpan(
   emitDiagnosticsTimelineEvent(
     {
       type: failure ? "span.error" : "span.end",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
+      ...span,
       durationMs: performance.now() - span.startedAt,
-      attributes: span.attributes,
       ...(failure
         ? {
             errorName: failure.error instanceof Error ? failure.error.name : typeof failure.error,
@@ -349,7 +329,7 @@ function emitFinishedDiagnosticsTimelineSpan(
           }
         : {}),
     },
-    { config: span.config, env: span.env },
+    span,
   );
 }
 
@@ -361,10 +341,10 @@ export async function measureDiagnosticsTimelineSpan<T>(
 ): Promise<T> {
   const span = startDiagnosticsTimelineSpan(name, options);
   if (!span) {
-    return await run();
+    return await runWithMainThreadTask(name, run);
   }
   try {
-    const result = await runInDiagnosticsTimelineSpan(span, () => run());
+    const result = await runInDiagnosticsTimelineSpan(span, () => runWithMainThreadTask(name, run));
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
@@ -381,10 +361,10 @@ export function measureDiagnosticsTimelineSpanSync<T>(
 ): T {
   const span = startDiagnosticsTimelineSpan(name, options);
   if (!span) {
-    return run();
+    return runWithMainThreadTask(name, run);
   }
   try {
-    const result = runInDiagnosticsTimelineSpan(span, run);
+    const result = runInDiagnosticsTimelineSpan(span, () => runWithMainThreadTask(name, run));
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {

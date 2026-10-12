@@ -42,18 +42,11 @@ function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentS
   const metadata = asOptionalRecord(
     asOptionalRecord(params.userTurnTranscriptRecorder?.message)?.["__openclaw"],
   );
-  const recorded = [
-    normalizeOptionalString(metadata?.["senderId"]),
-    normalizeOptionalString(metadata?.["senderName"]),
-    normalizeOptionalString(metadata?.["senderUsername"]),
-  ] as const;
+  const fields = ["senderId", "senderName", "senderUsername"] as const;
+  const recorded = fields.map((key) => normalizeOptionalString(metadata?.[key]));
   const [id, name, username] = recorded.some(Boolean)
     ? recorded
-    : [
-        normalizeOptionalString(params.senderId),
-        normalizeOptionalString(params.senderName),
-        normalizeOptionalString(params.senderUsername),
-      ];
+    : fields.map((key) => normalizeOptionalString(params[key]));
   if (!id && !name && !username) {
     return undefined;
   }
@@ -253,8 +246,7 @@ export function buildTurnCollaborationMode(
         modelId: model,
         supportedReasoningEfforts: readCodexSupportedReasoningEfforts(params.model?.compat),
       }),
-      developer_instructions:
-        params.trigger === "cron" ? buildCronCollaborationInstructions() : null,
+      developer_instructions: params.trigger === "cron" ? CRON_COLLABORATION_INSTRUCTIONS : null,
     },
   };
 }
@@ -273,16 +265,14 @@ export function buildCodexParentLocalInstructions(
     options.memoryInstructions,
   );
   if (params.trigger === "cron") {
-    return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
+    return joinPresentSections(CRON_COLLABORATION_INSTRUCTIONS, contextInstructions);
   }
   return contextInstructions || null;
 }
 
-function buildCronCollaborationInstructions(): string {
-  return [
-    "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
-    "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
-    "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
-    "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
-  ].join("\n\n");
-}
+const CRON_COLLABORATION_INSTRUCTIONS = [
+  "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
+  "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
+  "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
+  "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
+].join("\n\n");

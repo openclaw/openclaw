@@ -1,6 +1,3 @@
-/**
- * Formats user-facing auth labels for resolved provider/model credentials.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
@@ -21,7 +18,6 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
 
-/** Resolve the display label that describes how a provider is authenticated. */
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;

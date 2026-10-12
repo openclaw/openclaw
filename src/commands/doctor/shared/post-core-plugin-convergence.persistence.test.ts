@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../../../cli/update-cli/update-command-executor.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server-retained-plugin-cleanup.js";
+import { cleanupGatewayRetiredPluginArtifacts } from "../../../gateway/server-retained-plugin-cleanup.js";
 import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../../infra/update-run-ledger.js";
 import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-record-commit.js";
@@ -231,7 +231,12 @@ describe("post-core plugin persistence cancellation", () => {
         expect(result.installRecords).toEqual(records);
       });
       const log = { info: vi.fn(), warn: vi.fn() };
-      await cleanupRetainedPluginInstallGenerations({ log, startupInstallPaths: [] });
+      await cleanupGatewayRetiredPluginArtifacts({
+        log,
+        startupInstallPaths: [],
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
       expect(controller.signal.aborted).toBe(true);
       for (const record of Object.values(records)) {
         expect(fs.readFileSync(path.join(record.installPath, "dist", "index.js"), "utf8")).toBe(

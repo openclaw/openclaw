@@ -10,15 +10,24 @@ import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.
 import { loadUsageCacheOperations } from "../../state/openclaw-agent-execution-operations.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { createWorkerOperationRegistry } from "../../state/worker-operation-registry.js";
-import { sqliteSessionFileMarkerMatchesTarget } from "./legacy-sqlite-marker.js";
+import {
+  parseSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesTarget,
+} from "./legacy-sqlite-marker.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
-import type {
-  IncognitoComputeOperations,
-  IncognitoComputeTarget,
-  IncognitoUsageCacheOperations,
+import {
+  isIncognitoStoreComputeCommand,
+  type IncognitoComputeInstance,
+  type IncognitoStoreComputeOperations,
+  type IncognitoComputeOperations,
+  type IncognitoComputeTarget,
+  type IncognitoUsageCacheOperations,
 } from "./session-incognito-compute-contract.js";
-import type { TranscriptProjectionPublicationOperations } from "./session-transcript-projection-publication.worker.js";
+import { maintainSessionTranscriptIndexStatus } from "./session-transcript-index-status.worker.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import type { TranscriptProjectionRebuildOperations } from "./session-transcript-projection-publication.worker.js";
 import { deletePreparedSessionTranscriptProjectionChunkInTransaction } from "./session-transcript-projection-rebuild.js";
 import {
   createMemoryTranscriptProjectionSource,
@@ -94,6 +103,93 @@ export function createIncognitoComputeWorker(
       throw new Error("Incognito usage cache row belongs to another transcript");
     }
   };
+  const inventory = (includeAllWindows = false): IncognitoComputeInstance[] =>
+    listTranscriptInstancesFromDatabase({
+      database,
+      currentEntries: { get: (key) => readExactSessionEntryRow(database, key, "list")?.entry },
+      options: { includeAllWindows },
+    }).map(({ sessionKey, sessionId, updatedAtMs }) => {
+      const current = readExactSessionEntryRow(database, sessionKey, "list")?.entry;
+      return {
+        sessionKey,
+        sessionId,
+        lifecycleRevision: current?.lifecycleRevision,
+        historical: current?.sessionId !== sessionId,
+        updatedAtMs,
+      };
+    });
+  const executeStore = (command: SqliteWorkerCommand<IncognitoStoreComputeOperations>) => {
+    const instances = inventory(true);
+    keys = [...new Set(instances.map((entry) => entry.sessionKey))];
+    const assertStoreCacheKey = (key: string) => {
+      const marker = parseSqliteSessionFileMarker(key);
+      if (
+        !marker ||
+        !sqliteSessionFileMarkerMatchesTarget(key, {
+          agentId: database.agentId,
+          storePath: database.path,
+          sessionId: marker.sessionId,
+        })
+      ) {
+        throw new Error("Incognito usage cache row belongs to another transcript");
+      }
+    };
+    switch (command.type) {
+      case "session.compute.store.status":
+        return sessionTranscriptIndexNeedsReconcile(database.db, command.input.sessionId);
+      case "session.compute.store.inventory":
+        return inventory();
+      case "session.compute.store.preflight":
+      case "session.compute.store.sweep":
+        return context.writeTransaction(
+          "sessions.transcript-index.preflight",
+          "Incognito store projection",
+          () => {
+            const status = maintainSessionTranscriptIndexStatus(database.db);
+            const pending = new Set(status.sessionIds);
+            admit("commit", keys);
+            return command.type === "session.compute.store.sweep"
+              ? status
+              : {
+                  ...status,
+                  targets: instances.filter((entry) => pending.has(entry.sessionId)),
+                };
+          },
+        );
+      case "session.compute.store.refreshLock":
+        return readSessionCostUsageRefreshLockInDatabase(database.db);
+      case "session.compute.store.cache":
+        command.input.request.filePaths.forEach(assertStoreCacheKey);
+        return readSessionCostUsageRollupByteRowsInDatabase(
+          database.db,
+          command.input.request.filePaths,
+        );
+      case "session.compute.store.cacheBody": {
+        assertStoreCacheKey(command.input.request.key);
+        const row = readSessionCostUsageRollupBodyInDatabase(database.db, command.input.request);
+        return row ? { blob: row.blob ? Uint8Array.from(row.blob) : null } : undefined;
+      }
+      case "session.compute.store.writeRollup":
+        assertStoreCacheKey(command.input.request.rollupId);
+        return cache.execute(
+          { type: "usageCache.writeRollup", input: command.input.request },
+          context,
+        );
+      case "session.compute.store.prune":
+        command.input.request.forEach((row) => assertStoreCacheKey(row.key));
+        return cache.execute({ type: "usageCache.prune", input: command.input.request }, context);
+      case "session.compute.store.acquireLock":
+        return cache.execute(
+          { type: "usageCache.acquireLock", input: command.input.request },
+          context,
+        );
+      case "session.compute.store.releaseLock":
+        return cache.execute(
+          { type: "usageCache.releaseLock", input: command.input.request },
+          context,
+        );
+    }
+  };
   return {
     async prepare(command: Command) {
       if (command.type.startsWith("session.compute.projection.") && !projection) {
@@ -104,15 +200,24 @@ export function createIncognitoComputeWorker(
           database: database.db,
           admit: (stage) => admit(stage, keys),
         });
-      } else if (command.type.startsWith("session.compute.usage.")) {
-        await cache.prepare(command.type.replace("session.compute.usage.", "usageCache."));
+      } else if (
+        command.type.startsWith("session.compute.usage.") ||
+        isIncognitoStoreComputeCommand(command)
+      ) {
+        await cache.prepare(
+          command.type.replace(/^session\.compute\.(usage|store)\./, "usageCache."),
+        );
       }
     },
     execute(command: Command) {
+      if (isIncognitoStoreComputeCommand(command)) {
+        const value = executeStore(command);
+        return { value, keys };
+      }
       const input = command.input;
       keys = [input.sessionKey];
       const executeProjection = (
-        inner: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
+        inner: SqliteWorkerCommand<TranscriptProjectionRebuildOperations>,
       ) => {
         if (!projection) {
           throw new Error("Incognito projection domain was not prepared");
@@ -158,14 +263,19 @@ export function createIncognitoComputeWorker(
         }
         const entry = readExactSessionEntryRow(database, input.sessionKey)?.entry;
         if (
-          !entry ||
-          entry.sessionId !== input.sessionId ||
-          entry.lifecycleRevision !== input.lifecycleRevision
+          entry?.lifecycleRevision !== input.lifecycleRevision ||
+          (input.historical
+            ? !inventory(true).some(
+                (row) => row.sessionKey === input.sessionKey && row.sessionId === input.sessionId,
+              )
+            : !entry || entry.sessionId !== input.sessionId)
         ) {
           throw new Error("Incognito compute session generation is no longer current");
         }
         const value = withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
+            case "session.compute.status":
+              return sessionTranscriptIndexNeedsReconcile(database.db, input.sessionId);
             case "session.compute.source.open": {
               if (sources.has(command.input.sourceId)) {
                 throw new Error("Incognito compute source is already open");

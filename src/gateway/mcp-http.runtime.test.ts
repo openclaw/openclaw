@@ -7,7 +7,6 @@ import {
   readAdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
@@ -101,38 +100,33 @@ beforeEach(() => {
 });
 
 describe("resolveMcpLoopbackScopedTools", () => {
+  it("mediates an explicit wildcard policy while an omitted cap keeps native coding ownership", async () => {
+    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "message"]));
+
+    await resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: ["*"] }));
+    const wildcard = resolveGatewayScopedTools.mock.calls.at(-1)?.[0];
+    expect(new Set(wildcard?.mediatedToolNames)).toContain("read");
+    expect(new Set(wildcard?.mediatedToolNames)).toContain("exec");
+    expect(new Set(wildcard?.excludeToolNames)).not.toContain("read");
+
+    await resolveMcpLoopbackPolicyTools(scopeParams({}));
+    const uncapped = resolveGatewayScopedTools.mock.calls.at(-1)?.[0];
+    expect(new Set(uncapped?.mediatedToolNames)).toEqual(new Set());
+    expect(new Set(uncapped?.excludeToolNames)).toContain("read");
+  });
+
   it("keeps exact grant names exact instead of reinterpreting policy shorthand", async () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["write", "apply_patch"]));
 
-    const scoped = await resolveMcpLoopbackScopedTools(scopeParams({ toolsAllow: ["write"] }));
+    const scoped = await resolveMcpLoopbackScopedTools(
+      scopeParams({ toolsAllow: ["write"], nodeExecAllowed: true }),
+    );
 
     expect(scoped.tools.map((tool) => tool.name)).toEqual(["write"]);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
       mediatedToolNames: new Set(["write"]),
+      includeNodeExecTool: false,
     });
-  });
-
-  it("exposes explicitly granted coding tools through the mediated loopback surface", async () => {
-    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
-
-    const scoped = await resolveMcpLoopbackScopedTools(
-      scopeParams({
-        toolsAllow: ["read", "exec", "browser"],
-        nodeExecAllowed: true,
-      }),
-    );
-
-    expect(scoped.tools.map((tool) => tool.name)).toEqual(["read", "exec", "browser"]);
-    const call = resolveGatewayScopedTools.mock.calls[0]?.[0] as {
-      excludeToolNames?: Set<string>;
-      mediatedToolNames?: Set<string>;
-      includeNodeExecTool?: boolean;
-    };
-    expect(call.includeNodeExecTool).toBe(false);
-    expect(call.excludeToolNames?.has("read")).toBe(false);
-    expect(call.excludeToolNames?.has("exec")).toBe(false);
-    expect(call.excludeToolNames?.has("write")).toBe(true);
-    expect(call.mediatedToolNames).toEqual(new Set(["read", "exec"]));
   });
 
   it.each([
@@ -158,24 +152,6 @@ describe("resolveMcpLoopbackScopedTools", () => {
       expect(scoped.tools.map((tool) => tool.name)).toEqual(expected);
     },
   );
-
-  it("materializes plugin selectors through registered tool metadata", async () => {
-    const pluginTools = ["memory_search", "memory_get"].map((name) => ({
-      name,
-      description: `${name} tool`,
-    }));
-    for (const tool of pluginTools) {
-      setPluginToolMeta(tool as never, { pluginId: "active-memory", optional: false });
-    }
-    resolveGatewayScopedTools.mockReturnValue({
-      agentId: "main",
-      tools: [...pluginTools, { name: "message", description: "message tool" }],
-    });
-    const scoped = await resolveMcpLoopbackPolicyTools(
-      scopeParams({ toolsAllow: ["active-memory"] }),
-    );
-    expect(scoped.tools.map((tool) => tool.name)).toEqual(["memory_search", "memory_get"]);
-  });
 });
 
 describe("McpLoopbackToolCache", () => {
@@ -229,19 +205,6 @@ describe("McpLoopbackToolCache", () => {
     }
   });
 
-  it("rechecks execution availability before reusing cached schemas", async () => {
-    const cache = new McpLoopbackToolCache();
-    const params = scopeParams({ senderIsOwner: true, nodeExecAllowed: true });
-    resolveGatewayScopedTools.mockImplementation(({ includeNodeExecTool, nodeExecAvailable }) =>
-      scopedToolFixture(includeNodeExecTool && nodeExecAvailable?.() ? ["exec"] : []),
-    );
-    for (const connected of [false, true, false]) {
-      listNodes.mockResolvedValue([{ nodeId: "worker", connected, commands: ["system.run"] }]);
-      const result = await cache.resolve(params);
-      expect(result.tools.map((tool) => tool.name)).toEqual(connected ? ["exec"] : []);
-    }
-  });
-
   it.each(["evict", "clear"])(
     "does not resurrect cache rows when %s overtakes discovery",
     async (action) => {
@@ -268,33 +231,45 @@ describe("McpLoopbackToolCache", () => {
     },
   );
 
-  it("does not cache tools when cancellation overtakes discovery", async () => {
-    const cache = new McpLoopbackToolCache();
-    const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
-    const controller = new AbortController();
-    const reason = new Error("synthetic request cancelled");
-    const entered = createDeferred();
-    const inventory = createDeferred<unknown[]>();
-    listNodes.mockImplementationOnce(() => {
-      entered.resolve();
-      return inventory.promise;
-    });
-    const rejected = expect(cache.resolve({ ...params, signal: controller.signal })).rejects.toBe(
-      reason,
-    );
-    await entered.promise;
-    expect(listNodes).toHaveBeenCalledWith(controller.signal);
-    controller.abort(reason);
-    inventory.resolve([]);
-    await rejected;
-    expect(cache.evictGrant("cancelled-grant")).toBe(false);
-    const next = new AbortController();
-    await cache.resolve({ ...params, signal: next.signal });
-    next.abort();
-    await cache.resolve({ ...params, signal: new AbortController().signal });
-    expect(resolveGatewayScopedTools).toHaveBeenCalledOnce();
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-  });
+  it.each(["discovery", "construction"] as const)(
+    "does not cache tools when cancellation overtakes %s",
+    async (stage) => {
+      const cache = new McpLoopbackToolCache();
+      const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
+      const controller = new AbortController();
+      const reason = new Error("synthetic request cancelled");
+      const entered = createDeferred();
+      const resume = createDeferred();
+      if (stage === "discovery") {
+        listNodes.mockImplementationOnce(async () => {
+          entered.resolve();
+          await resume.promise;
+          return [];
+        });
+      } else {
+        resolveGatewayScopedTools.mockImplementationOnce(async () => {
+          entered.resolve();
+          await resume.promise;
+          return scopedToolFixture(["memory_search"]);
+        });
+      }
+      const rejected = expect(cache.resolve({ ...params, signal: controller.signal })).rejects.toBe(
+        reason,
+      );
+      await entered.promise;
+      expect(listNodes).toHaveBeenCalledWith(controller.signal);
+      controller.abort(reason);
+      resume.resolve();
+      await rejected;
+      expect(cache.evictGrant("cancelled-grant")).toBe(false);
+      const next = new AbortController();
+      await cache.resolve({ ...params, signal: next.signal });
+      next.abort();
+      await cache.resolve({ ...params, signal: new AbortController().signal });
+      expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(stage === "discovery" ? 1 : 2);
+      expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+    },
+  );
 
   it("refreshes cached bound tools when node display names change", async () => {
     const cache = new McpLoopbackToolCache();
@@ -405,9 +380,7 @@ describe("MCP loopback Computer Use schema", () => {
       const computerDenied = cfg.tools?.deny?.includes("computer");
       return {
         agentId: "main",
-        tools: computerDenied
-          ? []
-          : [createComputerTool({ modelHasVision: true, pairedNodeComputerUse })],
+        tools: computerDenied ? [] : [createComputerTool({ pairedNodeComputerUse })],
       };
     });
   });

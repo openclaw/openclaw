@@ -18,7 +18,6 @@ import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
 
-type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type GoogleAuthRuntime = typeof import("google-auth-library");
 type GoogleAuthTransport = InstanceType<GoogleAuthRuntime["gaxios"]["Gaxios"]>;
 type GoogleAuthTransportOptions = NonNullable<
@@ -26,10 +25,7 @@ type GoogleAuthTransportOptions = NonNullable<
 >;
 type GoogleAuthTransportInit = GoogleAuthTransportOptions & { dispatcher?: unknown };
 type ProxyRule = NonNullable<GoogleAuthTransportOptions["noProxy"]>[number];
-type TlsOptions = {
-  cert?: ConnectionOptions["cert"];
-  key?: ConnectionOptions["key"];
-};
+type TlsOptions = Pick<ConnectionOptions, "cert" | "key">;
 type ProxyAgentLike = {
   connectOpts?: TlsOptions;
   proxy: URL;
@@ -187,7 +183,7 @@ function readRequiredTrimmedString(record: Record<string, unknown>, fieldName: s
   return value;
 }
 
-function assertExactUrlField(
+function assertExactField(
   record: Record<string, unknown>,
   fieldName: string,
   expectedUrl: string,
@@ -203,22 +199,6 @@ function assertExactUrlField(
   }
 }
 
-function assertUrlPrefixField(
-  record: Record<string, unknown>,
-  fieldName: string,
-  expectedPrefix: string,
-): void {
-  const value = readOptionalTrimmedString(record, fieldName);
-  if (!value) {
-    return;
-  }
-  if (!value.startsWith(expectedPrefix)) {
-    throw new Error(
-      `Google Chat service account field "${fieldName}" must start with ${expectedPrefix}, got ${value}`,
-    );
-  }
-}
-
 function validateGoogleChatServiceAccountCredentials(
   credentials: Record<string, unknown>,
 ): GoogleChatServiceAccountCredentials {
@@ -230,17 +210,16 @@ function validateGoogleChatServiceAccountCredentials(
   const clientEmail = readRequiredTrimmedString(credentials, "client_email");
   const privateKey = readRequiredTrimmedString(credentials, "private_key");
 
-  const universeDomain = readOptionalTrimmedString(credentials, "universe_domain");
-  if (universeDomain && universeDomain !== GOOGLE_AUTH_UNIVERSE_DOMAIN) {
+  assertExactField(credentials, "universe_domain", GOOGLE_AUTH_UNIVERSE_DOMAIN);
+  assertExactField(credentials, "auth_uri", GOOGLE_AUTH_URI);
+  assertExactField(credentials, "auth_provider_x509_cert_url", GOOGLE_AUTH_PROVIDER_CERTS_URL);
+  assertExactField(credentials, "token_uri", GOOGLE_AUTH_TOKEN_URI);
+  const certUrl = readOptionalTrimmedString(credentials, "client_x509_cert_url");
+  if (certUrl && !certUrl.startsWith(GOOGLE_CLIENT_CERTS_URL_PREFIX)) {
     throw new Error(
-      `Google Chat service account field "universe_domain" must be ${GOOGLE_AUTH_UNIVERSE_DOMAIN}, got ${universeDomain}`,
+      `Google Chat service account field "client_x509_cert_url" must start with ${GOOGLE_CLIENT_CERTS_URL_PREFIX}, got ${certUrl}`,
     );
   }
-
-  assertExactUrlField(credentials, "auth_uri", GOOGLE_AUTH_URI);
-  assertExactUrlField(credentials, "auth_provider_x509_cert_url", GOOGLE_AUTH_PROVIDER_CERTS_URL);
-  assertExactUrlField(credentials, "token_uri", GOOGLE_AUTH_TOKEN_URI);
-  assertUrlPrefixField(credentials, "client_x509_cert_url", GOOGLE_CLIENT_CERTS_URL_PREFIX);
 
   return {
     ...credentials,
@@ -341,25 +320,16 @@ function resolveGoogleAuthDispatcherPolicy(
       : normalizeOptionalString(googleAuthInit.proxy)) ??
     (hasProxyAgentShape(agent) ? agent.proxy.toString() : undefined);
 
-  if (!proxyBypassed && explicitProxy) {
-    return {
-      dispatcherPolicy: {
-        allowPrivateProxy: true,
-        mode: "explicit-proxy",
-        ...(hasTlsOptions(tlsOptions) ? { proxyTls: { ...tlsOptions } } : {}),
-        proxyUrl: explicitProxy,
-      },
-      init: nextInit,
-    };
-  }
-
-  const envProxyUrl = proxyBypassed
+  const proxyUrl = proxyBypassed
     ? undefined
-    : resolveGoogleAuthEnvProxyUrl(requestUrl.protocol === "http:" ? "http" : "https");
-  if (envProxyUrl) {
+    : (explicitProxy ??
+      resolveGoogleAuthEnvProxyUrl(requestUrl.protocol === "http:" ? "http" : "https"));
+  if (proxyUrl) {
     return {
       dispatcherPolicy: {
-        mode: "env-proxy",
+        ...(explicitProxy
+          ? { allowPrivateProxy: true, mode: "explicit-proxy", proxyUrl }
+          : { mode: "env-proxy" }),
         ...(hasTlsOptions(tlsOptions) ? { proxyTls: { ...tlsOptions } } : {}),
       },
       init: nextInit,
@@ -379,34 +349,32 @@ function resolveGoogleAuthDispatcherPolicy(
   return { init: nextInit };
 }
 
-function createGoogleAuthFetch(): FetchLike {
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = input instanceof Request ? input.url : String(input);
-    const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
-    const { response, release } = await fetchWithSsrFGuard({
-      auditContext: "googlechat.auth.google-auth",
-      dispatcherPolicy: guardedOptions.dispatcherPolicy,
-      init: guardedOptions.init,
-      policy: GOOGLE_AUTH_POLICY,
-      signal: guardedOptions.init?.signal ?? undefined,
-      timeoutMs: GOOGLE_AUTH_FETCH_TIMEOUT_MS,
-      url,
+async function googleAuthFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = input instanceof Request ? input.url : String(input);
+  const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
+  const { response, release } = await fetchWithSsrFGuard({
+    auditContext: "googlechat.auth.google-auth",
+    dispatcherPolicy: guardedOptions.dispatcherPolicy,
+    init: guardedOptions.init,
+    policy: GOOGLE_AUTH_POLICY,
+    signal: guardedOptions.init?.signal ?? undefined,
+    timeoutMs: GOOGLE_AUTH_FETCH_TIMEOUT_MS,
+    url,
+  });
+  try {
+    const body = await readGoogleAuthResponseBytes(response);
+    const bufferedBody = Uint8Array.from(body);
+    return new Response(bufferedBody.buffer, {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
     });
-    try {
-      const body = await readGoogleAuthResponseBytes(response);
-      const bufferedBody = Uint8Array.from(body);
-      return new Response(bufferedBody.buffer, {
-        headers: response.headers,
-        status: response.status,
-        statusText: response.statusText,
-      });
-    } finally {
-      // The reader releases its lock before cancellation. Capture tees can
-      // retain cancellation until dispatcher release, so do not await it.
-      void response.body?.cancel().catch(() => undefined);
-      await release();
-    }
-  };
+  } finally {
+    // The reader releases its lock before cancellation. Capture tees can
+    // retain cancellation until dispatcher release, so do not await it.
+    void response.body?.cancel().catch(() => undefined);
+    await release();
+  }
 }
 
 async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Array> {
@@ -440,7 +408,7 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
 
 export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
   const { gaxios } = await loadGoogleAuthRuntime();
-  const transport = new gaxios.Gaxios({ fetchImplementation: createGoogleAuthFetch() });
+  const transport = new gaxios.Gaxios({ fetchImplementation: googleAuthFetch });
   transport.interceptors.request.add({
     resolved: async (config) => normalizeGoogleAuthHeaders(config),
   });

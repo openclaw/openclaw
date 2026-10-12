@@ -37,7 +37,7 @@ export async function scanStatus(
           checkingTailscale: "Checking Tailscale…",
           checkingForUpdates: "Checking for updates…",
           resolvingAgents: "Resolving agents…",
-          probingGateway: "Probing gateway…",
+          probingGateway: "Checking gateway…",
           queryingChannelStatus: "Querying channel status…",
           summarizingChannels: "Summarizing channels…",
         },

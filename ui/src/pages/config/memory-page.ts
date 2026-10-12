@@ -32,7 +32,7 @@ import {
   resolveDreamingConfigPathSupport,
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
-import "../agents/memory/memory-panel.ts";
+import "../agents/memory/memory-panel.tsx";
 import "./memory-memories.ts";
 import { dreamingConfigPath, resolveDreamingTimezoneDefault } from "./memory-defaults.ts";
 import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
@@ -107,7 +107,6 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   private overviewRequest: {
     connection: CatalogConnection;
     agentId: string;
-    probeEmbeddings: boolean;
   } | null = null;
   private supportPluginId: string | null = null;
   private supportProbe: { pluginId: string } | null = null;
@@ -345,7 +344,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       return;
     }
     const probeEmbeddings = options.probeEmbeddings === true;
-    const request = { connection, agentId, probeEmbeddings };
+    const request = { connection, agentId };
     this.overviewRequest = request;
     this.probingEmbeddings = probeEmbeddings;
     if (!probeEmbeddings) {
@@ -540,11 +539,6 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
   }
 
-  private dreamingPluginId(): string {
-    return resolveConfiguredDreaming(currentConfigObject(this.context.runtimeConfig.state))
-      .pluginId;
-  }
-
   private syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     const pluginId = resolveConfiguredDreaming(currentConfigObject(runtimeConfig.state)).pluginId;
     if (pluginId !== this.supportPluginId) {
@@ -575,7 +569,8 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     if (this.mutationDisabled) {
       return;
     }
-    const writePath = dreamingConfigPath(this.dreamingPluginId(), path);
+    const config = currentConfigObject(this.context.runtimeConfig.state);
+    const writePath = dreamingConfigPath(resolveConfiguredDreaming(config).pluginId, path);
     if (value === undefined) {
       this.context.runtimeConfig.removeFormValue(writePath);
       return;

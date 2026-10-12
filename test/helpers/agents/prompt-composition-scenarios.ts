@@ -9,11 +9,11 @@ import {
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
-import { buildEmbeddedSystemPrompt } from "../../../src/agents/embedded-agent-runner/system-prompt.js";
+import { buildConfiguredAgentSystemPrompt } from "../../../src/agents/system-prompt-config.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
 import {
-  buildDirectChatContext,
+  buildSourceConversationContext,
   buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
@@ -69,8 +69,6 @@ function buildCommonSystemParams(workspaceDir: string) {
       defaultModel: "anthropic/claude-sonnet-4-6",
       shell: "zsh",
     },
-    userTimezone: "America/Los_Angeles",
-    userDate: "2026-03-16",
     toolNames,
   };
 }
@@ -84,15 +82,11 @@ function buildSystemPrompt(params: {
   bootstrapTruncationNotice?: string;
   silentReplyPromptMode?: "generic" | "none";
 }) {
-  const { runtimeInfo, userTimezone, userDate, toolNames } = buildCommonSystemParams(
-    params.workspaceDir,
-  );
+  const { runtimeInfo, toolNames } = buildCommonSystemParams(params.workspaceDir);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: params.extraSystemPrompt,
     runtimeInfo,
-    userTimezone,
-    userDate,
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
@@ -147,7 +141,7 @@ function buildAutoReplySystemPrompt(params: {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx, {}),
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
-      ? buildDirectChatContext({
+      ? buildSourceConversationContext({
           sessionCtx: params.sessionCtx,
         })
       : "",
@@ -182,7 +176,7 @@ function buildToolRichSystemPrompt(params: {
   skillsPrompt: string;
   contextFiles: Array<{ path: string; content: string }>;
 }) {
-  const { runtimeInfo, userTimezone, userDate } = buildCommonSystemParams(params.workspaceDir);
+  const { runtimeInfo } = buildCommonSystemParams(params.workspaceDir);
   const tools = [
     "bash",
     "read",
@@ -196,14 +190,12 @@ function buildToolRichSystemPrompt(params: {
     "x_search",
     "web_fetch",
   ].map((name) => Object.assign({}, createStubTool(name), { description: `${name} tool` }));
-  return buildEmbeddedSystemPrompt({
+  return buildConfiguredAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     reasoningTagHint: false,
     runtimeInfo,
     tools,
     modelAliasLines: [],
-    userTimezone,
-    userDate,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: { level: "extensive", channel: "Telegram" },

@@ -78,6 +78,12 @@ function renderRailRow({
   `;
 }
 
+function renderRailList<Row>(rows: readonly Row[], renderRow: (row: Row) => TemplateResult) {
+  return rows.length === 0
+    ? nothing
+    : html`<div class="chat-workspace-rail__list" role="list">${rows.map(renderRow)}</div>`;
+}
+
 export function renderSessionWorkspaceRail(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): TemplateResult | typeof nothing {
@@ -160,35 +166,29 @@ export function renderSessionWorkspaceRail(
     </span>
   `;
   const renderFileRows = (rows: typeof files) =>
-    rows.length === 0
-      ? nothing
-      : html`
-          <div class="chat-workspace-rail__list" role="list">
-            ${rows.map((file) => {
-              const onOpen = () => sessionWorkspace.onOpenFile(file.path, "session");
-              return renderRailRow({
-                icon: icons.fileText,
-                name: fileLabels.get(file.path || file.name) ?? file.name,
-                tooltip: file.path || file.name,
-                meta: formatWorkspaceFileSize(file.size),
-                onOpen,
-                active: isSessionWorkspaceFileSelected(
-                  sessionWorkspace.activeId,
-                  sessionWorkspace.sessionKey,
-                  sessionWorkspace.list?.root,
-                  file.path,
-                  file.workspacePath,
-                ),
-                badge: file.missing
-                  ? html`<span class="chat-workspace-rail__file-badge"
-                      >${t("chat.workspaceFiles.missing")}</span
-                    >`
-                  : nothing,
-                actions: renderActions(onOpen, file.path),
-              });
-            })}
-          </div>
-        `;
+    renderRailList(rows, (file) => {
+      const onOpen = () => sessionWorkspace.onOpenFile(file.path, "session");
+      return renderRailRow({
+        icon: icons.fileText,
+        name: fileLabels.get(file.path || file.name) ?? file.name,
+        tooltip: file.path || file.name,
+        meta: formatWorkspaceFileSize(file.size),
+        onOpen,
+        active: isSessionWorkspaceFileSelected(
+          sessionWorkspace.activeId,
+          sessionWorkspace.sessionKey,
+          sessionWorkspace.list?.root,
+          file.path,
+          file.workspacePath,
+        ),
+        badge: file.missing
+          ? html`<span class="chat-workspace-rail__file-badge"
+              >${t("chat.workspaceFiles.missing")}</span
+            >`
+          : nothing,
+        actions: renderActions(onOpen, file.path),
+      });
+    });
   // A listing may omit an unavailable folder; navigation still belongs to the current intent.
   const unavailableFolder =
     !browser &&
@@ -261,25 +261,19 @@ export function renderSessionWorkspaceRail(
     ${browser?.truncated ? html`<div class="chat-workspace-rail__state">${t("chat.workspaceFiles.truncated")}</div>` : nothing}
   `;
   const renderArtifactRows = () =>
-    matchingArtifacts.length === 0
-      ? nothing
-      : html`
-          <div class="chat-workspace-rail__list" role="list">
-            ${matchingArtifacts.map((artifact) => {
-              const onOpen = () => sessionWorkspace.onOpenArtifact(artifact.id);
-              return renderRailRow({
-                icon: artifact.mimeType?.startsWith("image/") ? icons.image : icons.paperclip,
-                name: artifact.title,
-                meta: [artifact.mimeType, formatWorkspaceFileSize(artifact.sizeBytes)]
-                  .filter(Boolean)
-                  .join(" / "),
-                onOpen,
-                active: `artifact:${artifact.id}` === sessionWorkspace.activeId,
-                actions: renderActions(onOpen),
-              });
-            })}
-          </div>
-        `;
+    renderRailList(matchingArtifacts, (artifact) => {
+      const onOpen = () => sessionWorkspace.onOpenArtifact(artifact.id);
+      return renderRailRow({
+        icon: artifact.mimeType?.startsWith("image/") ? icons.image : icons.paperclip,
+        name: artifact.title,
+        meta: [artifact.mimeType, formatWorkspaceFileSize(artifact.sizeBytes)]
+          .filter(Boolean)
+          .join(" / "),
+        onOpen,
+        active: `artifact:${artifact.id}` === sessionWorkspace.activeId,
+        actions: renderActions(onOpen),
+      });
+    });
   // Search and chip filters force groups open. Keying the disclosures on that
   // mode remounts them when it flips, so a group the user closed reopens, while
   // ordinary re-renders keep native toggles intact.
@@ -307,6 +301,35 @@ export function renderSessionWorkspaceRail(
       </details>`,
     );
   };
+  const groups = [
+    renderGroup(
+      "changed",
+      t("chat.workspaceFiles.changed"),
+      changed.length,
+      true,
+      renderFileRows(changed),
+    ),
+    renderGroup("read", t("chat.workspaceFiles.read"), read.length, false, renderFileRows(read)),
+    renderGroup(
+      "artifacts",
+      t("chat.workspaceFiles.artifacts"),
+      matchingArtifacts.length,
+      false,
+      renderArtifactRows(),
+    ),
+    renderGroup(
+      null,
+      t("chat.workspaceFiles.browser"),
+      entries.length,
+      true,
+      browser || unavailableFolder ? renderBrowserRows() : nothing,
+    ),
+  ];
+  const emptySearch =
+    search &&
+    sessionWorkspace.list !== null &&
+    !sessionWorkspace.loading &&
+    groups.every((group) => group === nothing);
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
       ${
@@ -361,10 +384,8 @@ export function renderSessionWorkspaceRail(
             ? renderPanelLoadingSkeleton("files", t("chat.workspaceFiles.loading"))
             : html`
                 <div class="chat-workspace-rail__scroll">
-                  ${renderGroup("changed", t("chat.workspaceFiles.changed"), changed.length, true, renderFileRows(changed))}
-                  ${renderGroup("read", t("chat.workspaceFiles.read"), read.length, false, renderFileRows(read))}
-                  ${renderGroup("artifacts", t("chat.workspaceFiles.artifacts"), matchingArtifacts.length, false, renderArtifactRows())}
-                  ${renderGroup(null, t("chat.workspaceFiles.browser"), entries.length, true, browser || unavailableFolder ? renderBrowserRows() : nothing)}
+                  ${groups}
+                  ${emptySearch ? html`<div class="chat-workspace-rail__state" role="status">${t("chat.workspaceFiles.noSearchResults")}</div>` : nothing}
                 </div>
               `
       }

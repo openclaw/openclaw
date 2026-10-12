@@ -1,9 +1,11 @@
 import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+import type { ProviderCatalogOutcome } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileStore,
 } from "./auth-profile.js";
+import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
@@ -17,7 +19,10 @@ import { probeCodexNativeAuth } from "./native-auth.js";
 import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
-import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
+import {
+  captureSharedCodexAppServerCatalogLifetime,
+  retireSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
 
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
 const INPUT_TYPES: ReadonlySet<string> = new Set(["text", "image", "audio", "video", "document"]);
@@ -88,9 +93,9 @@ export function createCodexAppServerModelCatalog(runtime: string) {
     async load(
       params: AgentHarnessModelCatalogParams,
       pluginConfig: unknown,
-    ): Promise<ModelCatalogEntry[]> {
+    ): Promise<{ entries: ModelCatalogEntry[]; outcomes?: ProviderCatalogOutcome[] }> {
       if (disposed) {
-        return [];
+        return { entries: [] };
       }
       let observations = scopes.get(params.config);
       if (!observations) {
@@ -104,7 +109,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const configured = readCodexPluginConfig(pluginConfig);
       const discovery = configured.discovery;
       if (discovery?.enabled === false) {
-        return [];
+        return { entries: [] };
       }
       const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       const ownsLocalProcess =
@@ -122,12 +127,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       // SIWC's public provider owns the account model list. Native Codex sees only a
       // placeholder API key here, so its bundled catalog cannot describe that account.
       if (isCodexResponsesOAuthCredential(authProfileStore?.profiles[authProfileId ?? ""])) {
-        return [];
+        return { entries: [] };
       }
       const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
-        return [];
+        return { entries: [] };
       }
       const { start } = options;
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
@@ -140,35 +145,43 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
         },
         async (request, client) => {
-          const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
-          const listed = await listAllCodexAppServerModels({
-            request,
-            limit: 100,
-            includeHidden: true,
-          });
-          const models = listed.models.filter(
-            (model) =>
-              !model.hidden ||
-              params.configuredModelRefs?.some(
-                (ref) => ref.provider === "openai" && ref.model === model.id,
-              ),
-          );
-          const account = await request<CodexGetAccountResponse>({
-            method: "account/read",
-            requestParams: { refreshToken: false },
-          });
-          const observedType = account.account?.type;
-          const accountType = account.requiresOpenaiAuth
-            ? observedType === "apiKey" || observedType === "chatgpt"
-              ? observedType
-              : undefined
-            : undefined;
-          return { models, isCurrent, accountType } as const;
+          try {
+            const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+            const listed = await listAllCodexAppServerModels({
+              request,
+              limit: 100,
+              includeHidden: true,
+            });
+            const models = listed.models.filter(
+              (model) =>
+                !model.hidden ||
+                params.configuredModelRefs?.some(
+                  (ref) => ref.provider === "openai" && ref.model === model.id,
+                ),
+            );
+            const account = await request<CodexGetAccountResponse>({
+              method: "account/read",
+              requestParams: { refreshToken: false },
+            });
+            const observedType = account.account?.type;
+            const accountType = account.requiresOpenaiAuth
+              ? observedType === "apiKey" || observedType === "chatgpt"
+                ? observedType
+                : undefined
+              : undefined;
+            return { models, isCurrent, accountType } as const;
+          } catch (error) {
+            // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
+            if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
+              retireSharedCodexAppServerClientIfCurrent(client);
+            }
+            throw error;
+          }
         },
       );
       // Publish only after the bounded operation settles; a late timed-out callback cannot publish.
       if (disposed || observations.get(key) !== observation || !result.isCurrent()) {
-        return [];
+        return { entries: [] };
       }
       observation.models = new Set(result.models.map((model) => model.id));
       observation.accountType =
@@ -187,7 +200,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
               (native?.mode === "oauth" || native?.mode === "token")
             ? native.mode
             : undefined;
-      return codexAppServerModelsToCatalogEntries(result.models, runtime);
+      return {
+        entries: codexAppServerModelsToCatalogEntries(result.models, runtime),
+        outcomes: [
+          { provider: "openai", status: observation.accountType ? "ready" : "unavailable" },
+        ],
+      };
     },
   };
 }

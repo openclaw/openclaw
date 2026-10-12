@@ -18,9 +18,16 @@ request; a newer request can cancel and replace that pending request. Hash
 collisions can leave other slots unused; this is a ceiling, not a promise of
 32 busy machines.
 
-Admission expires ten minutes after the workflow was created. A request that
-waits longer fails before checkout or hydration when its runner starts; it can
-still incur runner startup cost. This does not remove the queued job immediately.
+Admission expires 60 minutes after the workflow was created. This bounded queue
+allowance lets waiting clients survive saturation beyond the former ten-minute
+cutoff without admitting arbitrarily old abandoned requests. It is an operating
+bound, not a measured queue percentile or proof that the client is still waiting:
+the delegated warmup contract exposes no requester heartbeat to these workflows,
+and SSH activity is only available after runner assignment. A request that waits
+60 minutes or longer fails before checkout or hydration when its runner starts;
+it can still incur runner startup cost. Abandoned requests younger than the bound
+can still hydrate, so caller cleanup remains required. This does not remove the
+queued job immediately or reset the clock when a runner is assigned.
 Once the request passes that check, checkout and hydration do not recheck queue
 age. They remain bounded by the job timeout and idle limit.
 Stop an abandoned lease by its exact ID instead of leaving a warmup pending.
@@ -32,6 +39,18 @@ task-owned run remains pending, use `gh run cancel <run-id> --repo openclaw/open
 and confirm its terminal state. If the lease-to-run match is unavailable, report
 the unresolved cleanup instead of canceling a guessed run.
 Do not retry in a loop when the pool is full.
+
+If the admission job cannot read its GitHub Actions run, it denies admission and
+reports the HTTP status, a fixed error classification, and validated GitHub request
+ID and rate-limit/retry headers when available. Error bodies are limited to 8 KiB
+within the existing 15-second request deadline; raw response messages and bodies
+are never logged. A bare `403` is reported as `forbidden`, not assumed to be a
+permission or rate-limit failure. Use the request ID to investigate the original
+GitHub response; a later successful request does not explain an earlier rejection.
+Honor `retry-after` (seconds) before a later request. When
+`x-ratelimit-remaining=0`, wait until `x-ratelimit-reset` (UTC epoch seconds).
+Admission does not retry or change token permissions, and caller cleanup remains
+required for a failed request.
 
 Idle requests are capped at 15 minutes. The existing Testbox monitor continues
 to protect active SSH commands. Stop retained leases when their task finishes;
@@ -87,7 +106,7 @@ These controls cover dispatches using the updated workflows in this repository.
 The OpenClaw wrapper selects the workflow from `main` for Testbox `run` and
 `warmup`, overriding configured refs and rejecting explicit historical refs.
 Its source capsule still reconstructs the checkout being tested. Old wrappers,
-direct historical-ref dispatches, other repositories, alternate workflows, and Windows probe
+direct historical-ref dispatches, other repositories, alternate workflows, and Windows check
 workflows are outside the shared pool. Organization-wide concurrency, per-token
 admission, SKU restrictions, and a hard spending stop require provider controls.
 
@@ -186,7 +205,7 @@ reconciliation, and producer work.
 Npm preflight retains `blacksmith-32vcpu-ubuntu-2404`. Main CI previously used
 the same class for test types, core type stripes, and runtime-topology checks
 to compensate for smaller delivered machines.
-In the [2026-09-01 capacity probe](https://github.com/openclaw/openclaw/actions/runs/33538827388),
+In the [2026-09-01 capacity check](https://github.com/openclaw/openclaw/actions/runs/33538827388),
 that label was the first measured class meeting the eight-CPU/24-GiB threshold
 used by OpenClaw's parallel-check policy:
 
@@ -201,7 +220,7 @@ used by OpenClaw's parallel-check policy:
 OS CPU count, affinity, Node, and CPU-time measurements agreed. Guest cgroup
 quotas were unlimited. The provider-side reason for the mismatch is unresolved;
 the table records observed capacity, not Blacksmith's advertised specifications
-or a guaranteed allocation. The probe measured capacity, not whole-release
+or a guaranteed allocation. The check measured capacity, not whole-release
 speedup or billing equivalence.
 
 Compact Node jobs retain the planner's 32-class request for two-child bins and
@@ -226,13 +245,13 @@ by the same planner and executor. Hosted routing still uses the workflow's trust
 and retry rules. This adds no jobs or runner registrations.
 
 Native compact rows that would request the 4-class now request the 8-class after
-packing. Both delivered two CPUs and 7.66 GiB in the capacity probe, while the
+packing. Both delivered two CPUs and 7.66 GiB in the capacity check, while the
 five-run September 21 sample showed a 125-second median assignment wait on the
 4-class. Logical packing classes, child processes, worker limits, and hosted
 fallbacks stay unchanged. This avoids that queue at a higher per-minute rate;
 the combined packing and hosted-check changes must establish the net cost saving.
 
-Current-target `build-artifacts` uses the existing 16-class. A [controlled Testbox proof](https://github.com/openclaw/openclaw/actions/runs/34669346942) at `3ccc3710bd6` completed all eight job compute steps in 229.3 seconds (252.8 seconds including payload setup) on four CPUs and 15.42 GiB RAM, with a 12.59 GiB cgroup peak and no recorded OOM events. The proof retained the complete parallel verifier wave and passed final source, worker-generation cleanup, and memory-event checks. The existing SDK memory gate keeps declarations serial below the capacity needed for both compiler heaps. Frozen targets and missing target classifications now request the same 16-class; hosted fallbacks, job counts, concurrency, and deadlines are unchanged. The recorded measurements establish compute fit for that tested current target, not historical targets or a guaranteed full Actions duration.
+Current-target `build-artifacts` uses the existing 16-class. A [controlled Testbox proof](https://github.com/openclaw/openclaw/actions/runs/34669346942) at `3ccc3710bd6` completed all eight job compute steps in 229.3 seconds (252.8 seconds including payload setup) on four CPUs and 15.42 GiB RAM, with a 12.59 GiB cgroup peak and no recorded OOM events. The proof retained the complete parallel verifier wave and passed final source, worker-generation cleanup, and memory-event checks. SDK declaration generation now uses one compiler program, with the existing child heap budget and native headroom. Frozen targets and missing target classifications now request the same 16-class; hosted fallbacks, job counts, concurrency, and deadlines are unchanged. The recorded measurements establish compute fit for that tested current target, not historical targets or a guaranteed full Actions duration.
 
 Existing recommendation-based promotions from the 8-class remain for `checks-node-compact-large-5` and `checks-node-compact-large-9`. Extension bundles follow the planner's runner metadata: the former bundle-16/bundle-25 overrides would attach old recommendations to different work after compaction. The former 32-to-16 overrides for `checks-node-compact-small-3`, `checks-node-compact-small-4`, and `checks-node-compact-small-10` are removed so these rows retain their planner-owned parallel or tooling capacity. Numbered bins can contain different work across profiles and revisions; the retained compact recommendations use a 24-hour window and still need ownership-based replacement when those bins change. A later recommendation identified CPU saturation for `build-artifacts` on the 16-class. Current complete-job duration and memory headroom still need measurement; the earlier controlled proof retains its original source scope.
 
@@ -391,7 +410,7 @@ Automatic canonical hybrid first attempts inspect recent hosted assignment befor
 
 Dependencies, core type stripes, and runtime topology can use optional hosted capacity within the eligible PR workload's slack. Extension package boundaries retain Blacksmith because hosted cold-archive runs exceeded 22 minutes; their compiled receipts and dependency links are not yet portable across checkout roots. Admission retains the previous boundary-row reservation so this change does not expand other offloads. Main additionally admits lint and central types. In the September 22 five-run sample, the largest independent hosted check took 664 seconds; artifact builds reached 898 seconds and therefore retain Blacksmith. These observations replace the earlier projections made against a thirty-minute main objective. The current qualification target is a complete run within fifteen minutes, including preflight, assignment, setup, and the gate; routing estimates alone do not establish it. Automatic preflight retains Blacksmith. The admission guard now rejects waits at sixty seconds to match that target; API and job deadlines remain unchanged.
 
-This is an admission decision for future jobs. A hosted stall beginning after the snapshot can still delay admitted work, and existing hosted jobs remain exposed. The probe itself can add up to ten seconds to preflight. It never changes repository variables, migrates an already queued job, or retries failed work.
+This is an admission decision for future jobs. A hosted stall beginning after the snapshot can still delay admitted work, and existing hosted jobs remain exposed. The check itself can add up to ten seconds to preflight. It never changes repository variables, migrates an already queued job, or retries failed work.
 
 Hybrid is the normal degraded-capacity mode. If Blacksmith is down: rerun the failed or stuck heavy job; it lands on hosted automatically. During a full Blacksmith outage, record whether `OPENCLAW_CI_RUNNER_BACKEND` is set and its current value, then enable the `github` circuit breaker:
 
@@ -404,6 +423,8 @@ The `github` override also routes Full Release Validation orchestration, npm qua
 Hosted `ci.yml` paths use the same setup exercised by manual dispatches and fork pull requests. Fork PRs use the logical `github` check profile even when repository variables are unavailable, so broad core lint and test-type workloads retain hosted stripes instead of falling back to oversized all-in-one jobs that need trusted caches. Fork first attempts use Blacksmith Node labels when the backend variable is unavailable, so `node_runner_backend` uses the Blacksmith default and they get its measured timings and capacity promotion; fork retries plan Node shards with `github`. Failed-job-only fork retries keep their first-attempt matrix on hosted runners, where the shard executor clamps overlapping children to one. Frozen targets opt into this event-aware profile through `hosted-runner-profile-contract-v1`; targets without the marker retain their historical workload shape. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Blacksmith Node and plateau lanes restore the exact workspace dependency archive from the trusted warmer. Eligibility uses the actual runner environment, so hosted lanes and retries stay on the ordinary store cache. The exact key includes the resolved Node patch, OS, architecture, and semantic dependency inputs; a different runner image safely misses and follows the existing store-install path. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the trusted warmer alone publishes each backend-local protected seed. The warmer's selected runner route determines whether that publication reaches Blacksmith's cache or GitHub's cache. Core oxlint keeps five deterministic hosted stripes with one lint thread per process. The large agents, Gateway, infrastructure, and UI targets run in separate processes within their assigned stripe so native semantic caches are released before neighboring targets run. This isolation applies to explicit core-stripe invocations. Automatic full lint, including the published Git updater preflight, retains its original five aggregated core Programs even when CI environment variables are inherited. Ordinary non-frozen hybrid push/PR runs group stripes 1+2 and 3+4+5 sequentially across two jobs. Eligible first attempts and admitted qualification dispatches use the Blacksmith 16-class for both packed rows; hosted assignment placed them on the measured critical path. The first row took 621 seconds on the 8-class, including 568 seconds of lint; the second later exceeded its 15-minute job limit while running stripes 3, 4, and 5. Both retain four actual CPUs and the existing memory policy for larger bounded checks. Other admitted unpaired stripes use the 8-class. The aggregate gate uses the 4-class under the same backend and attempt admission, independently of the target checkout. The available GitHub override, retries, ordinary manual dispatches, and noncanonical repositories retain hosted routing. A failing stripe stops its row. The `github` profile, frozen targets, manual dispatches, and release gates retain five jobs; GitHub plugin stripes keep their existing owners. Plugin lint ownership is described below; script lint and optional UI and format checks stay in the existing `check-lint` row. Extension type-aware lint discovers `extensions/tsconfig.json` for plugin tests and helpers, retaining imported dependencies and shared ambient declarations without adding unrelated core/UI/package source roots. Plugin production files keep their existing package-boundary projects. Eligible core-source and test changes in pull requests reuse the local changed-check selector. On current targets with stripe support on `github` or `hybrid`, each of the five `check-test-types-core-*` rows validates the complete core graph boundary, then compiles the changed tests' consuming graphs that belong to its canonical stripe. Stripe membership is assigned before narrowing, so empty intersections stay empty and the union preserves every selected consumer. Ambiguous compiler ownership or a removed test selects every canonical core test graph across those same five stripes. The additional-boundary lane transfers its core graph check to these required type rows, and `check-test-types` owns only the extensions/root/scripts tail. Full runs use the same five stripes without consumer narrowing. Frozen targets retain two paired rows for stripes 1+2 and 3+4, with stripe 5 in the central row. Targets without stripe support and the all-Blacksmith profile keep the full central path. Each core type row preserves at most two concurrent compiler children and one builder per child. Core checks retain the standalone resource policy; the remaining type commands retain their existing environment. A failed boundary or compiler stops its row before another command starts.
 
 The `agents-sessions` graph owns root `src/agents/session-*.test.ts(x)` tests and the complete `src/agents/sessions/`, `src/agents/session-maintenance/`, `src/agents/main-session-recovery/`, `src/agents/subagents/`, and `src/config/sessions/` test subtrees, keeping session runtime, recovery, subagent, and storage tests together. The `agents-tools` graph also owns shell/tool tests, nested sandbox tests, managed-worktree tests, and the complete security and secrets test subtrees. The `agents-other` graph owns the remaining nested agents test subtrees and every root-level model catalog, selection, fallback, and auth test (`src/agents/model-*.test.ts(x)`), plus a few listed root-level prepared-runtime and workspace tests; `agents-root` keeps the remaining root-level agents tests. The `config-cli` graph owns configuration, hook, and CLI tests except the separately owned session, daemon, cron, program, and update subtrees. The `cli-update` graph owns `src/cli/update-cli/` and root `src/cli/update*.test.ts(x)` tests; `commands` owns `src/cli/program/`. Root-level Gateway session tests belong to `gateway-root`; `gateway-server` owns root-level `server*.test.ts(x)` tests and the complete `src/gateway/server/` test subtree. The `gateway-methods` graph owns `src/gateway/server-methods/`; `gateway-other` owns `src/gateway/worker-environments/`, the node-side `src/node-host/` and `src/worker/` test subtrees, and the remaining nested Gateway tests. The `infra` graph owns infrastructure and media tests; `state-logging` owns audit, state, logging, and shared tests plus the root-level `src/infra/sqlite-*` and `src/infra/state-migrations*` tests. The `plugin-sdk` graph owns the complete `src/plugin-sdk/` and `src/channels/` test subtrees; `messaging` owns auto-reply and outbound infrastructure tests. The `services-cron` graph owns cron CLI (the nested `src/cli/cron-cli/` tests and root `src/cli/cron*.test.ts(x)` tests) and cron tests; `services` owns daemon CLI, daemon, process, system-agent, skills, and infrastructure update tests. New graph splits are appended to the canonical registry so existing stripe assignments stay stable. The core-test boundary guard requires every test root exactly once across the canonical graphs and reports graphs above 720 roots; the root budget fails local checks and is a warning in GitHub Actions. The inventory regression test warns at the same limit so a rebalance gets scheduled. The graphs keep their existing stripe assignments and compiler concurrency; moved tests follow their new graph's stripe. Changed-test selection still checks every consuming graph.
+
+The `ui-e2e-chat` graph owns root-level `ui/src/e2e/chat*.test.ts(x)` tests. The `ui-e2e` graph retains the other UI E2E tests and `ui/src/test-helpers/control-ui-e2e*.test.ts(x)` harness tests. Both retain the UI bootstrap and Solid JSX compiler settings. The new graph is appended to the canonical registry, preserving existing stripe assignments and the five CI type-check rows.
 
 Android admits all four rows together on canonical Blacksmith push and PR first attempts, including fork PRs. Hosted routes, retries, manual dispatches, and schedules retain two. Android Play and ThirdParty rows run their unit tests. In the normal four-row tier, Wear also owns third-party app lint, while the Kotlin-lint row owns Play app and Wear-shared lint. Every row keeps separate, sequential Gradle processes and shares one UTC build timestamp through the existing `openclawBuildTimestamp` property when it has multiple native invocations, avoiding `BuildConfig` regeneration solely because a later command starts. Phone test classes on Blacksmith run in at most four isolated JVMs, bounded by available processors, with the existing 1 GiB heap per JVM. Each JVM receives its share of the available processors so its GC and internal pools do not multiply the runner CPU budget. Classes remain sequential within each JVM; hosted tests keep one JVM. Full manual and historical compatibility task inventories are unchanged.
 
@@ -449,7 +470,7 @@ Delete the variable only if it was previously unset; deletion selects the defaul
 gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
 ```
 
-`ci.yml` does not probe Blacksmith or mutate this variable. Hybrid fallback is per job and activates only when a coordinator reruns the workflow or selected failed jobs.
+`ci.yml` does not check Blacksmith or mutate this variable. Hybrid fallback is per job and activates only when a coordinator reruns the workflow or selected failed jobs.
 
 ## Related
 

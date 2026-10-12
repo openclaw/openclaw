@@ -48,14 +48,6 @@ const MIRROR_BODY_BUDGET_BYTES = BEAM_MAX_BODY_BYTES - 2_048;
 const MIRROR_WARN_INTERVAL_MS = 5 * 60_000;
 const MIRROR_UPLOAD_TIMEOUT_MS = 15_000;
 
-type BeamMirrorConfig = {
-  endpoint: string;
-  token?: unknown;
-  catalogs: string[];
-  pollSeconds: number;
-  activeWindowMinutes: number;
-};
-
 function isLoopbackHostname(hostname: string): boolean {
   const bare = hostname.replace(/^\[|\]$/g, "");
   return bare === "localhost" || bare === "127.0.0.1" || bare === "::1";
@@ -70,9 +62,7 @@ const MIRROR_KEYS = new Set([
 ]);
 
 /** Returns the mirror config, undefined when mirroring is not configured, or an error string. */
-export function parseBeamMirrorConfig(
-  config: ReturnType<PluginRuntime["config"]["current"]>,
-): BeamMirrorConfig | undefined | string {
+export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]["current"]>) {
   const mirror = config.plugins?.entries?.beam?.config?.mirror;
   if (mirror === undefined) {
     return undefined;
@@ -129,10 +119,7 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
  * payloads collapse into compact counts. Redact credentials before clipping so
  * the character boundary cannot hide the suffix needed to recognize a secret.
  */
-export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]): {
-  items: BeamTranscriptItem[];
-  truncated: boolean;
-} {
+export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
   const out: BeamTranscriptItem[] = [];
   const dropped = new Map<string, number>();
   let truncated = items.some((item) => item.truncated);
@@ -218,10 +205,6 @@ type TrackedMirrorSession = {
   expiresAt: number;
 };
 
-type BeamMirrorRunner = {
-  tick: () => Promise<void>;
-};
-
 export function createBeamMirrorRunner(params: {
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
@@ -230,7 +213,7 @@ export function createBeamMirrorRunner(params: {
   now?: () => number;
   listCatalogs?: () => ActiveSessionCatalog[];
   signal: AbortSignal;
-}): BeamMirrorRunner {
+}) {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now;
   const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;

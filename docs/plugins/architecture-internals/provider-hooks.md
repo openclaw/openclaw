@@ -131,13 +131,10 @@ Normalization dispatch is hook-specific:
 - `normalizeTransport` tries the matched provider first. Only if that does not
   change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
   does it try other transport hooks, stopping at the first change.
-- `normalizeConfig` uses the owning bundled provider's lightweight policy surface
-  first. If that surface has no `normalizeConfig` hook, OpenClaw may call the
-  matched runtime owner, provided runtime loading is allowed and, when a config
-  is supplied, that owner has explicit plugin activation. It never scans other
-  providers' hooks or falls through after the owning hook returns no change.
-  Config assembly passes `allowRuntimePluginLoad: false`, so it uses bundled
-  policy without loading provider runtime.
+- Config assembly calls `normalizeConfig` and `resolveConfigApiKey` through the
+  owning bundled provider's lightweight policy surface. It never loads provider
+  runtime, scans other providers' hooks, or falls through after the owning hook
+  returns no change.
 
 Google-family config cleanup is implemented by the Google plugin's own
 `normalizeConfig` hook, shared with its lightweight policy surface. It is not a

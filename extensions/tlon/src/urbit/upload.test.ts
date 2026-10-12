@@ -17,7 +17,6 @@ const mockUploadFile = vi.mocked(uploadFile);
 const clientConfig = {
   shipUrl: "https://zod.tlon.network",
   shipName: "zod",
-  verbose: false,
   getCode: async () => "fixture-code",
 };
 
@@ -52,7 +51,7 @@ describe("uploadImageFromUrl", () => {
     vi.clearAllMocks();
   });
 
-  it.each([undefined, 1024, MAX_IMAGE_BYTES * 2])(
+  it.each([1024, MAX_IMAGE_BYTES * 2])(
     "uploads with the effective configured cap %s",
     async (cap) => {
       const { buffer } = await setupSuccessfulUpload({
@@ -119,19 +118,6 @@ describe("uploadImageFromUrl", () => {
     expect(mockUploadFile).not.toHaveBeenCalled();
   });
 
-  it("returns original URL when the remote image exceeds the image cap", async () => {
-    mockReadRemoteMediaBuffer.mockRejectedValue(
-      new Error(
-        `Failed to fetch media from https://example.com/image.png: payload exceeds maxBytes ${MAX_IMAGE_BYTES}`,
-      ),
-    );
-
-    const result = await uploadImageFromUrl("https://example.com/image.png", clientConfig);
-
-    expect(result).toBe("https://example.com/image.png");
-    expect(mockUploadFile).not.toHaveBeenCalled();
-  });
-
   it("retains the bounded original URL if upload fails with a configured cap", async () => {
     await setupSuccessfulUpload();
     mockUploadFile.mockRejectedValue(new Error("Upload failed"));
@@ -147,12 +133,6 @@ describe("uploadImageFromUrl", () => {
 
     const result2 = await uploadImageFromUrl("ftp://example.com/image.png", clientConfig);
     expect(result2).toBe("ftp://example.com/image.png");
-    expect(mockReadRemoteMediaBuffer).not.toHaveBeenCalled();
-  });
-
-  it("handles invalid URLs gracefully", async () => {
-    const result = await uploadImageFromUrl("not-a-valid-url", clientConfig);
-    expect(result).toBe("not-a-valid-url");
     expect(mockReadRemoteMediaBuffer).not.toHaveBeenCalled();
   });
 

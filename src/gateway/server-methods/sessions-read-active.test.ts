@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -35,6 +36,7 @@ import {
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as rowInputs from "../session-utils-row.js";
 import {
@@ -75,6 +77,7 @@ it("selects current work before pagination and represents an isolated cron run o
     const childKey = "agent:main:subagent:child";
     const cronKey = "agent:main:cron:daily";
     const runKey = `${cronKey}:run:cron-session`;
+    const recent = Date.now() - 1_000;
     for (const [agentId, sessionKey, sessionId, updatedAt] of [
       ["main", "agent:main:local", "local-session", 40],
       ["work", "agent:work:remote", "remote-session", 30],
@@ -89,11 +92,10 @@ it("selects current work before pagination and represents an isolated cron run o
       const scope = { agentId, sessionKey };
       const entry = await upsertSessionEntryCore(scope, {
         sessionId,
-        updatedAt,
-        status: "running",
+        updatedAt: recent + updatedAt,
         visibility: "shared",
       });
-      await replaceSessionEntry(scope, { ...entry!, updatedAt });
+      await replaceSessionEntry(scope, { ...entry!, updatedAt: recent + updatedAt });
     }
     context.chatAbortControllers.set("local-run", {
       sessionKey: "agent:main:local",
@@ -247,9 +249,9 @@ it.each(["global", "unknown"] as const)(
   },
 );
 
-it.each(["global", "unknown"] as const)(
+it.for(["global", "unknown"] as const)(
   "keeps active %s owners and their physical transcript, board, and sharing rows distinct",
-  async (sentinel) => {
+  async (sentinel, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const now = Date.now();
       const agents = ["main", "ops", "research", "private"] as const;
@@ -342,6 +344,13 @@ it.each(["global", "unknown"] as const)(
       await new SqliteBoardStore({
         resolveSession: () => ({ agentId: "ops", path: storePathFor("ops"), sessionKey: sentinel }),
       }).applyOps({ sessionKey: sentinel }, [{ kind: "tab_create", tabId: "main", title: "Ops" }]);
+      const backfilled = observeSessionRowBackfill(
+        ["ops", "research"].map((agentId) =>
+          JSON.stringify([agentId, storePathFor(agentId), sentinel]),
+        ),
+        undefined,
+        (row) => JSON.stringify([row.agentId, row.storeTarget.storePath, row.key]),
+      );
       const normal = await listSessions({
         client,
         context,
@@ -363,16 +372,15 @@ it.each(["global", "unknown"] as const)(
         archived: "all" as const,
         limit: 10,
       };
-      await vi.waitFor(() => {
-        for (const agentId of ["ops", "research"]) {
-          expect(
-            getSessionRowProjection(context)?.snapshot(
-              { agentId, key: sentinel, storePath: storePathFor(agentId) },
-              { includeLastMessage: true },
-            ).row?.lastMessagePreview,
-          ).toBe(`${agentId} progress`);
-        }
-      });
+      await withinTest(backfilled, signal);
+      for (const agentId of ["ops", "research"]) {
+        expect(
+          getSessionRowProjection(context)?.snapshot(
+            { agentId, key: sentinel, storePath: storePathFor(agentId) },
+            { includeLastMessage: true },
+          ).row?.lastMessagePreview,
+        ).toBe(`${agentId} progress`);
+      }
       const active = await listSessions({ client, context, request });
       expect(active).toMatchObject({ count: 3, totalCount: 3, nextOffset: null });
       expect(active.sessions).toMatchObject([
@@ -585,7 +593,7 @@ it.each([false, true])(
       const result = await listSessions({
         client: identifiedClient("viewer@example.com"),
         context,
-        request: { agentId: "main", limit: 100 },
+        request: { agentId: "main", activeOnly: true, limit: 100 },
       });
       expect(readiness).toHaveBeenCalled();
       const row = result.sessions.find((session) => session.key === sessionKey);
@@ -598,7 +606,7 @@ it.each([false, true])(
 
 it.each(
   (["configured", "inherited"] as const).flatMap((selection) =>
-    (["done", "running"] as const).map((storedStatus) => ({ selection, storedStatus })),
+    (["done", undefined] as const).map((storedStatus) => ({ selection, storedStatus })),
   ),
 )(
   "reconciles a completed fallback during projection ($selection selection, $storedStatus status)",

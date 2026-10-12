@@ -31,7 +31,6 @@ const FAMILY_SPECS = {
     captureAttempts: false,
   },
 };
-const EXPECTED_FAMILIES = Object.keys(FAMILY_SPECS).toSorted();
 // Model only whole OpenClaw Fastlane invocations. Fastlane's internal launch
 // retries remain workflow-log evidence.
 const ATTEMPT_MODEL = Object.freeze({
@@ -565,14 +564,6 @@ function readProvenance(provenance, prefix = "") {
 export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expectedProvenance }) {
   const expected = readProvenance(expectedProvenance, "expected ");
   const manifests = loadExpectedManifests(inputDirectory, expected.targetSha);
-  const families = manifests
-    .map(({ manifest }) => manifest.family)
-    .toSorted((left, right) => left.localeCompare(right));
-  if (families.join("\n") !== EXPECTED_FAMILIES.join("\n")) {
-    fail(
-      `screenshot family union mismatch; expected ${EXPECTED_FAMILIES.join(", ")}, found ${families.join(", ") || "none"}`,
-    );
-  }
   const canonicalEntries = [];
   const shardAttempts = new Map();
   for (const { containerName, manifestPath, manifest } of manifests) {

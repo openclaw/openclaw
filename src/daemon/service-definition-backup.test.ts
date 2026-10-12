@@ -253,7 +253,7 @@ describe("service definition backup receipts", () => {
   );
 
   it.each([
-    { platform: "win32", index: 1 },
+    { platform: "win32", index: 0 },
     { platform: "darwin", index: 0 },
     { platform: "linux", index: 0 },
   ] as const)(

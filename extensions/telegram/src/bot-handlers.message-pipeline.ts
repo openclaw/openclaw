@@ -1,5 +1,5 @@
 import type { Message } from "grammy/types";
-import { firstDefined } from "openclaw/plugin-sdk/allow-from";
+import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
@@ -7,7 +7,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
-import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import {
   createTelegramMessageContextRuntime,
   createTelegramMessageSessionRuntime,
@@ -160,10 +160,6 @@ export function createTelegramMessagePipeline({
   ) => {
     await commitTelegramMessageDispatchReplay({ guard: replayGuard, claims, ...options });
   };
-  const buildFailedProcessingResult = (error: unknown): TelegramMessageProcessingResult => ({
-    kind: "failed-retryable",
-    error,
-  });
   const settleSpooledReplayParticipants = (
     participants: readonly TelegramSpooledReplayDeferredParticipant[],
     result: TelegramMessageProcessingResult,
@@ -176,12 +172,15 @@ export function createTelegramMessagePipeline({
     participants: readonly TelegramSpooledReplayDeferredParticipant[],
   ) => {
     const holds: TelegramSpooledReplaySettlementHold[] = [];
+    const releaseHolds: TelegramSpooledReplaySettlementHold["release"] = (mode) => {
+      for (const hold of holds) {
+        hold.release(mode);
+      }
+    };
     for (const participant of new Set(participants)) {
       const hold = participant.beginSettlementHold();
       if (!hold) {
-        for (const acquired of holds) {
-          acquired.release("replay-pending");
-        }
+        releaseHolds("replay-pending");
         const reason = participant.abortSignal.reason;
         throw reason instanceof Error
           ? reason
@@ -191,18 +190,8 @@ export function createTelegramMessagePipeline({
       }
       holds.push(hold);
     }
-    return (mode: Parameters<TelegramSpooledReplaySettlementHold["release"]>[0]) => {
-      for (const hold of holds) {
-        hold.release(mode);
-      }
-    };
+    return releaseHolds;
   };
-  const createSpooledReplayParticipantForBufferedWork = (key: string) =>
-    createTelegramSpooledReplayDeferredParticipant(key) ?? undefined;
-  const spooledReplayOptions = (
-    participants: readonly TelegramSpooledReplayDeferredParticipant[],
-  ): Pick<TelegramMessageContextOptions, "spooledReplay"> =>
-    participants.length > 0 ? { spooledReplay: true } : {};
   const claimMessageDispatchDedupe = async (
     msg: Message,
     botUserId: number,
@@ -224,7 +213,7 @@ export function createTelegramMessagePipeline({
     ctx: TelegramContext,
     chain: TelegramCachedMessageNode[],
     shouldHydrateMedia: (
-      sender: Pick<TelegramReplyChainEntry, "senderId" | "senderUsername">,
+      sender: Pick<TelegramReplyChainEntry, "senderId">,
       index: number,
     ) => Promise<boolean>,
     durableMediaReplay: boolean,
@@ -331,6 +320,7 @@ export function createTelegramMessagePipeline({
     dispatchDedupeClaims?: ChannelReplayClaimHandle[];
     spooledReplayParticipants?: readonly TelegramSpooledReplayDeferredParticipant[];
     spooledReplayAbortSignal?: AbortSignal;
+    onTurnDeferred?: () => void;
   }): Promise<TelegramMessageProcessingResult> => {
     let dispatchDedupeCommitted = false;
     let spooledReplayFinalResult: TelegramMessageProcessingResult | undefined;
@@ -448,7 +438,7 @@ export function createTelegramMessagePipeline({
         accountId,
       });
       const shouldHydrateReplyMedia = async (
-        node: Pick<TelegramReplyChainEntry, "senderId" | "senderUsername">,
+        node: Pick<TelegramReplyChainEntry, "senderId">,
         index: number,
       ): Promise<boolean> => {
         if (!isGroupConversation) {
@@ -462,11 +452,7 @@ export function createTelegramMessagePipeline({
         });
         const effectiveAllow = normalizeAllowFrom(expandedAllowFrom);
         const senderAllowed = effectiveAllow.hasEntries
-          ? isSenderAllowed({
-              allow: effectiveAllow,
-              senderId: node.senderId,
-              senderUsername: node.senderUsername,
-            })
+          ? isSenderIdAllowed(effectiveAllow, node.senderId, true)
           : true;
         return evaluateSupplementalContextVisibility({
           mode: contextVisibilityMode,
@@ -534,13 +520,12 @@ export function createTelegramMessagePipeline({
             await commitDispatchDedupeClaims(params.dispatchDedupeClaims ?? []);
             dispatchDedupeCommitted = true;
           },
+          onTurnDeferred: params.onTurnDeferred,
           spooledReplayAbortSignal: params.spooledReplayAbortSignal,
           spooledReplayParticipant: processingParticipant,
           finalizeSpooledReplayResult,
-          completeSpooledReplayAfterIrrevocableAdoption: async () => {
-            const completed = { kind: "completed" } satisfies TelegramMessageProcessingResult;
-            return await finalizeSpooledReplayResult(completed);
-          },
+          completeSpooledReplayAfterIrrevocableAdoption: async () =>
+            await finalizeSpooledReplayResult({ kind: "completed" }),
         },
         options: params.options,
         replyMedia,
@@ -558,7 +543,7 @@ export function createTelegramMessagePipeline({
       return result;
     } catch (err) {
       if (spooledReplay) {
-        return await finalizeSpooledReplayResult(buildFailedProcessingResult(err));
+        return await finalizeSpooledReplayResult({ kind: "failed-retryable", error: err });
       }
       if (!dispatchDedupeCommitted) {
         releaseDispatchDedupeClaims(params.dispatchDedupeClaims ?? [], err);
@@ -571,10 +556,7 @@ export function createTelegramMessagePipeline({
     resolveMediaRuntime,
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
-    buildFailedProcessingResult,
     settleSpooledReplayParticipants,
-    createSpooledReplayParticipantForBufferedWork,
-    spooledReplayOptions,
     claimMessageDispatchDedupe,
     resolveTelegramSessionState,
     resolvePromptContextAmbientWatermark,

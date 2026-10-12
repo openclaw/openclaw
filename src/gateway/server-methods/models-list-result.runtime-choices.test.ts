@@ -1,21 +1,20 @@
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { ModelChoiceSchema } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createGatewayAgentModelCatalogProjector,
-  prepareModelsListResult,
-} from "./models-list-result.js";
+import { prepareModelsListResult } from "./models-list-result.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("models.list configured runtime choices", () => {
-  it.each([false, true])(
+  it.each([false, true, "revoked"] as const)(
     "indexes configured rows once while projecting several logical models (auth rejects: %s)",
     async (rejectAuth) => {
       await withOpenClawTestState(
@@ -24,6 +23,12 @@ describe("models.list configured runtime choices", () => {
           const provider = "projection-fixture";
           const authFailure = new Error("Configured auth read rejected");
           let rejectAuthReads = false;
+          const readAuth = vi.fn(() => {
+            if (rejectAuthReads) {
+              throw authFailure;
+            }
+            return undefined;
+          });
           const configuredRowVisits = new Map<ModelDefinitionConfig, number>();
           const models = Array.from({ length: 17 }, (_, index): ModelDefinitionConfig => ({
             id: `model-${index}`,
@@ -64,16 +69,13 @@ describe("models.list configured runtime choices", () => {
                   baseUrl: "https://models.example.test/v1",
                   models: configuredModels,
                   get apiKey() {
-                    if (rejectAuthReads) {
-                      throw authFailure;
-                    }
-                    return undefined;
+                    return readAuth();
                   },
                 },
               },
             },
           };
-          const projector = createGatewayAgentModelCatalogProjector({
+          const projector = createModelCatalogDecisions({
             cfg,
             agentId: "main",
             snapshot: { entries, routeVariants: entries },
@@ -87,6 +89,39 @@ describe("models.list configured runtime choices", () => {
           });
           // Auth scope preparation visits configured models before projection begins.
           const visitsAfterConstruction = new Map(configuredRowVisits);
+          if (rejectAuth === "revoked") {
+            const entered = createDeferred();
+            const release = createDeferred();
+            const revoked = new Error("Session changed before private auth evaluation");
+            let current = true;
+            readAuth.mockClear();
+            const preparation = projector.projectCatalog({
+              withCurrent: async <T>(consume: () => T): Promise<Awaited<T>> => {
+                entered.resolve();
+                await release.promise;
+                if (!current) {
+                  throw revoked;
+                }
+                return await consume();
+              },
+            });
+            void preparation.catch(() => {});
+            try {
+              await awaitGateBeforeSettlement(
+                entered.promise,
+                preparation,
+                "Catalog bypassed authority",
+              );
+              current = false;
+              release.resolve();
+              await expect(preparation).rejects.toBe(revoked);
+              expect(readAuth).not.toHaveBeenCalled();
+            } finally {
+              release.resolve();
+              await preparation.catch(() => {});
+            }
+            return;
+          }
           rejectAuthReads = rejectAuth;
           if (rejectAuth) {
             await expect(projector.projectCatalog()).rejects.toBe(authFailure);
@@ -178,7 +213,7 @@ describe("models.list configured runtime choices", () => {
               runAttempt: vi.fn(),
             },
           });
-          const projector = createGatewayAgentModelCatalogProjector({
+          const projector = createModelCatalogDecisions({
             cfg,
             agentId: "main",
             snapshot,
@@ -265,6 +300,12 @@ describe("models.list configured runtime choices", () => {
     },
     {
       provider: "openai",
+      runtime: "agentsapi",
+      runtimeOverride: undefined,
+      initialReadiness: "ready",
+    },
+    {
+      provider: "openai",
       runtime: "codex",
       runtimeOverride: undefined,
       initialReadiness: "missing",
@@ -276,8 +317,9 @@ describe("models.list configured runtime choices", () => {
       initialReadiness: "throws",
     },
     {
+      // A registered harness still cannot serve a provider it is incompatible with.
       provider: "picker-fixture",
-      runtime: "picker-native",
+      runtime: "codex",
       runtimeOverride: undefined,
       initialReadiness: "ready",
     },
@@ -341,6 +383,14 @@ describe("models.list configured runtime choices", () => {
           const harness: AgentHarnessV2 = {
             id: runtime,
             label: "Native fixture",
+            ...(runtime === "agentsapi"
+              ? {
+                  workspaceEnvironment: {
+                    kind: "provider-hosted" as const,
+                    label: "Hosted fixture",
+                  },
+                }
+              : {}),
             authBootstrap: "harness",
             supports: () => ({ supported: true }),
             runAttempt: vi.fn(),
@@ -354,7 +404,7 @@ describe("models.list configured runtime choices", () => {
           };
           const pluginRegistry = createEmptyPluginRegistry();
           pluginRegistry.agentHarnesses.push({ pluginId: runtime, source: "test", harness });
-          const projector = createGatewayAgentModelCatalogProjector({
+          const projector = createModelCatalogDecisions({
             cfg,
             agentId: "main",
             snapshot,
@@ -392,6 +442,13 @@ describe("models.list configured runtime choices", () => {
             "missing-runtime",
           ]);
           const nativeChoice = rows[0]?.runtimeChoices?.[0];
+          if (runtime === "agentsapi") {
+            expect(nativeChoice?.agentRuntime).toMatchObject({
+              workspaceEnvironment: { kind: "provider-hosted", label: "Hosted fixture" },
+              cloudPlacementSupported: false,
+              devicePlacementSupported: false,
+            });
+          }
           if (selectable && initialReadiness === "ready") {
             expect(nativeChoice).toMatchObject({
               agentRuntime: { id: runtime },
@@ -431,6 +488,12 @@ describe("models.list configured runtime choices", () => {
             expect(revokedChoice).not.toHaveProperty("unavailableReason");
           } else {
             expect(revokedChoice?.unavailableReason).toBe("unsupported-runtime");
+          }
+          readiness = "ready";
+          const recoveredChoice = prepared.read().models[0]?.runtimeChoices?.[0];
+          expect(recoveredChoice?.available).toBe(selectable);
+          if (selectable) {
+            expect(recoveredChoice).toMatchObject({ contextWindow: 128_000, reasoning: true });
           }
           expect(loadModelCatalog).not.toHaveBeenCalled();
           expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();

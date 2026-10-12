@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { execa } from "execa";
+import { withNodeRuntimePath } from "../../node-runtime-env.mjs";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
@@ -420,7 +421,12 @@ export function spawnCommandWithInvocation<
           remoteOptions,
         )
       : execa(invocation.command, invocation.args, commandOptions);
-  recordChildProcessSpawn(invocation.command, child.nodeChildProcess);
+  // nice execs Git in the same child; retain its family and operation attribution.
+  const diagnosticCommand =
+    argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git"
+      ? "git"
+      : invocation.command;
+  recordChildProcessSpawn(diagnosticCommand, child.nodeChildProcess);
   if (scope) {
     retainCommandProcess(scope, child, reservation);
   }
@@ -450,7 +456,16 @@ export function resolveCommandEnv(params: {
     cmd === "npm.exe" ||
     ((cmd === "node" || cmd === "node.exe") && (params.argv[1] ?? "").includes("npm-cli.js"));
 
-  const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  const runtime = params.argv[0] ?? "";
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  const explicitPackageManager =
+    paths.isAbsolute(runtime) &&
+    /^(?:node|node\.exe)$/iu.test(paths.basename(runtime)) &&
+    /^(?:npm-cli\.js|npx-cli\.js|pnpm\.(?:cjs|js))$/iu.test(paths.basename(params.argv[1] ?? ""));
+  const mergedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  const resolvedEnv = explicitPackageManager
+    ? withNodeRuntimePath(mergedEnv, runtime, platform)
+    : mergedEnv;
   if (shouldSuppressNpmFund) {
     resolvedEnv.NPM_CONFIG_FUND ??= "false";
     resolvedEnv.npm_config_fund ??= "false";

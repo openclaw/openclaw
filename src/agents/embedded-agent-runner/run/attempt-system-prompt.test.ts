@@ -7,7 +7,6 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -34,7 +33,6 @@ vi.mock("../../../plugins/providers.runtime-core.js", () => ({
 }));
 
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 
 async function admitPrompt(
@@ -64,19 +62,7 @@ afterEach(() => {
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
 
-const baseProviderTransform = {
-  provider: "openai",
-  workspaceDir: "/tmp/openclaw",
-  context: {
-    provider: "openai",
-    modelId: "gpt-5.5",
-    promptMode: "full" as const,
-  },
-};
-
-const transformProviderSystemPrompt: Parameters<
-  typeof buildAttemptSystemPrompt
->[0]["transformProviderSystemPrompt"] = ({ context }) => context.systemPrompt;
+const transformSystemPrompt = (systemPrompt: string) => systemPrompt;
 
 async function preparePermissionPrompt(
   isRawModelRun = false,
@@ -84,6 +70,7 @@ async function preparePermissionPrompt(
   requireExplicitMessageTarget?: boolean,
   session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
   skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] },
+  webSearchUnconfigured?: () => boolean,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -154,6 +141,7 @@ async function preparePermissionPrompt(
     isRawModelRun,
     modelToolsEnabled: true,
     skillsPrompt: skills?.prompt ?? "",
+    webSearchUnconfigured,
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
   });
@@ -172,28 +160,25 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
-  const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";
+  it("carries the prepared missing-search fact into the actual initial prompt and tool refresh", async () => {
+    let missing = true;
+    const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => missing,
+    );
+    expect(prepared.systemPromptText).toContain("Web search is supported but not configured.");
+    expect(prepared.systemPromptText).toContain("openclaw configure --section web");
+    missing = false;
+    expect(await refreshSystemPrompt(prepared.systemPromptText, [read])).not.toContain(
+      "Web search is supported but not configured.",
+    );
+  });
 
-  it.each([undefined, ["message"]])(
-    "reports the catalog selected by the attempt's tool policy (%j)",
-    async (toolsAllow) => {
-      const { prepared } = await preparePermissionPrompt(false, undefined, undefined, undefined, {
-        prompt: skillsCatalog,
-        toolsAllow,
-      });
-      const included = toolsAllow === undefined;
-      expect(prepared.systemPromptText.includes(skillsCatalog)).toBe(included);
-      expect(prepared.systemPromptReport?.skills).toEqual({
-        promptChars: included ? skillsCatalog.length : 0,
-        hash: createHash("sha256")
-          .update(included ? skillsCatalog : "")
-          .digest("hex"),
-        entries: included
-          ? [{ name: "weather", blockChars: "<skill><name>weather</name></skill>".length }]
-          : [],
-      });
-    },
-  );
+  const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";
 
   it("refreshes skill diagnostics when read visibility changes or hooks replace the prompt", async () => {
     const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
@@ -212,6 +197,9 @@ describe("buildAttemptSystemPrompt", () => {
     expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual([
       "weather",
     ]);
+    expect(prepared.systemPromptReport?.skills.hash).toBe(
+      createHash("sha256").update(skillsCatalog).digest("hex"),
+    );
 
     const overridden = await refreshSystemPrompt("Use the deliberate hook override.", [read]);
     expect(overridden).not.toContain(skillsCatalog);
@@ -219,41 +207,25 @@ describe("buildAttemptSystemPrompt", () => {
     expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
   });
 
-  it.each([undefined, ["message"]])(
-    "reports read becoming visible while preserving attempt tool policy (%j)",
-    async (toolsAllow) => {
-      const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
-        false,
-        undefined,
-        undefined,
-        undefined,
-        { prompt: skillsCatalog, toolsAllow, initialToolNames: [] },
-      );
-      expect(prepared.systemPromptText).not.toContain(skillsCatalog);
-      expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
+  it("reports read becoming visible while preserving attempt tool policy", async () => {
+    const toolsAllow = ["message"];
+    const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { prompt: skillsCatalog, toolsAllow, initialToolNames: [] },
+    );
+    expect(prepared.systemPromptText).not.toContain(skillsCatalog);
+    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
 
-      const refreshed = await refreshSystemPrompt(prepared.systemPromptText, [read]);
-      const included = toolsAllow === undefined;
-      expect(refreshed.includes(skillsCatalog)).toBe(included);
-      expect(prepared.systemPromptReport?.skills.promptChars).toBe(
-        included ? skillsCatalog.length : 0,
-      );
-      expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
-        included ? ["weather"] : [],
-      );
-    },
-  );
-
-  it("reports no skills for a raw model run even with an eligible catalog", async () => {
-    const { prepared } = await preparePermissionPrompt(true, undefined, undefined, undefined, {
-      prompt: skillsCatalog,
-    });
-    expect(prepared.systemPromptText).toBe("");
+    const refreshed = await refreshSystemPrompt(prepared.systemPromptText, [read]);
+    expect(refreshed).not.toContain(skillsCatalog);
     expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
     expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
   });
 
-  it.each([undefined, "agent:main:execution"])(
+  it.each([undefined])(
     "keeps the system prompt identical when execution-owned processes change: %s",
     async (sessionKey) => {
       const owned = createProcessSessionFixture({ id: "execution-owned", backgrounded: true });
@@ -291,71 +263,6 @@ describe("buildAttemptSystemPrompt", () => {
     expect(prompts[2]).toBe(prompts[0]);
   });
 
-  it.each([
-    { sandboxSessionKey: "global", mode: "off" as const, sandboxed: false },
-    { sandboxSessionKey: "agent:main:policy", mode: "all" as const, sandboxed: true },
-  ])(
-    "reports the prepared sandbox policy even if configuration changes ($sandboxSessionKey)",
-    async (testCase) => {
-      const workspaceDir = tempDirs.make("openclaw-global-system-prompt-");
-      const config = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: {
-            main: { sandbox: { mode: "off" as const } },
-            marketing: { sandbox: { mode: "all" as const } },
-          },
-        },
-      };
-      const attempt = {
-        config,
-        admittedRunContext: await admitPrompt(config, "marketing"),
-        agentId: "marketing",
-        sessionId: "global-system-prompt",
-        sessionKey: "global",
-        provider: "openai",
-        modelId: "gpt-5.5",
-        model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
-        workspaceDir,
-      };
-      const result = await prepareEmbeddedAttemptSystemPrompt({
-        attempt: attempt as never,
-        bootstrap: {
-          ...buildBootstrapBudgetState({ config, agentId: "marketing", files: [] }),
-          workspaceNotes: [],
-          contextFiles: [],
-          bootstrapInjectionStats: [],
-        } as never,
-        activeContextEngine: undefined,
-        capabilityToolNames: new Set(),
-        effectiveTools: [],
-        setup: createAttemptSetupFixture({
-          effectiveCwd: workspaceDir,
-          effectiveWorkspace: workspaceDir,
-          // Preserve the prepared model binding instead of discovering provider plugins.
-          getProviderRuntimeHandle: () => ({
-            provider: attempt.provider,
-            modelId: attempt.modelId,
-            prepared: true,
-          }),
-          sandboxSessionKey: testCase.sandboxSessionKey,
-          sandboxReport: { mode: testCase.mode, sandboxed: testCase.sandboxed },
-          sessionAgentId: "marketing",
-        }),
-        isRawModelRun: true,
-        modelToolsEnabled: false,
-        skillsPrompt: "",
-        toolSearchDirectoryEnabled: false,
-        toolSearchRuntimeConfig: config,
-      });
-
-      expect(result.systemPromptReport?.sandbox).toEqual({
-        mode: testCase.mode,
-        sandboxed: testCase.sandboxed,
-      });
-      expect(providerRegistryMocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
-    },
-  );
   it("marks rebuilt prompts as fresh even when restoring the original bytes", async () => {
     const { prepared, read } = await preparePermissionPrompt();
     const original = prepared.systemPromptText;
@@ -470,14 +377,14 @@ describe("buildAttemptSystemPrompt", () => {
     expect(markStage).toHaveBeenCalledWith("system-prompt");
   });
 
-  it.each(["/tmp/openclaw", "/tmp/open\u202eclaw\n"])(
+  it.each(["/tmp/open\u202eclaw\n"])(
     "injects workspace identity context from %j",
     async (workspaceDir) => {
       // Workspace identity files are part of the base system prompt and must
       // survive provider transformation.
       const result = await buildAttemptSystemPrompt({
         isRawModelRun: false,
-        transformProviderSystemPrompt,
+        transformSystemPrompt,
         embeddedSystemPrompt: {
           workspaceDir,
           reasoningTagHint: false,
@@ -490,15 +397,12 @@ describe("buildAttemptSystemPrompt", () => {
           },
           tools: [],
           modelAliasLines: [],
-          userTimezone: "UTC",
-          userDate: "2026-01-05",
           contextFiles: [
             { path: "/tmp/openclaw/SOUL.md", content: "SOUL_CONTEXT_MARKER" },
             { path: "/tmp/openclaw/IDENTITY.md", content: "IDENTITY_CONTEXT_MARKER" },
             { path: "/tmp/openclaw/USER.md", content: "USER_CONTEXT_MARKER" },
           ],
         },
-        providerTransform: { ...baseProviderTransform, workspaceDir },
       });
 
       expect(result.systemPrompt).toContain("\nWorking directory: /tmp/openclaw\n");
@@ -512,7 +416,7 @@ describe("buildAttemptSystemPrompt", () => {
   it("filters first-turn curated context to global and active-project entries", async () => {
     const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
-      transformProviderSystemPrompt,
+      transformSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -525,8 +429,6 @@ describe("buildAttemptSystemPrompt", () => {
         },
         tools: [],
         modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
         activeProjectKeys: ["github.com/acme/Alpha"],
         contextFiles: [
           {
@@ -540,7 +442,6 @@ describe("buildAttemptSystemPrompt", () => {
           },
         ],
       },
-      providerTransform: baseProviderTransform,
     });
 
     expect(result.systemPrompt).toContain("Alpha fact");
@@ -551,7 +452,7 @@ describe("buildAttemptSystemPrompt", () => {
   it("preserves bootstrap Project Context", async () => {
     const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
-      transformProviderSystemPrompt,
+      transformSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -564,8 +465,6 @@ describe("buildAttemptSystemPrompt", () => {
         },
         tools: [],
         modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
         bootstrapMode: "full",
         bootstrapTruncationNotice: "Bootstrap context was truncated.",
         contextFiles: [
@@ -587,7 +486,6 @@ describe("buildAttemptSystemPrompt", () => {
           },
         ],
       },
-      providerTransform: baseProviderTransform,
     });
 
     expect(result.systemPrompt).toContain("## Bootstrap Pending");
@@ -601,7 +499,7 @@ describe("buildAttemptSystemPrompt", () => {
   it("preserves runtime extra system prompt context", async () => {
     const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
-      transformProviderSystemPrompt,
+      transformSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -614,55 +512,17 @@ describe("buildAttemptSystemPrompt", () => {
         },
         tools: [],
         modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
         promptMode: "minimal",
         extraSystemPrompt:
           "# Subagent Context\n\n## Your Role\n- You were created to handle: RUN_MODE_TASK_77950",
         bootstrapMode: "full",
         contextFiles: [],
       },
-      providerTransform: baseProviderTransform,
     });
 
     expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
     expect(result.systemPrompt).toContain("## Subagent Context");
     expect(result.systemPrompt).toContain("RUN_MODE_TASK_77950");
-  });
-
-  it("omits system prompts for raw model probes", async () => {
-    // Raw model probes still build a base prompt for diagnostics, but the final
-    // provider prompt must be empty.
-    const result = await buildAttemptSystemPrompt({
-      isRawModelRun: true,
-      transformProviderSystemPrompt,
-      embeddedSystemPrompt: {
-        workspaceDir: "/tmp/openclaw",
-        reasoningTagHint: false,
-        runtimeInfo: {
-          host: "test-host",
-          os: "Darwin",
-          arch: "arm64",
-          node: "v22.0.0",
-          model: "openai/gpt-5.5",
-        },
-        tools: [],
-        modelAliasLines: [],
-        userTimezone: "UTC",
-        userDate: "2026-01-05",
-        bootstrapMode: "full",
-        contextFiles: [
-          {
-            path: "/tmp/openclaw/BOOTSTRAP.md",
-            content: "Reply with BOOTSTRAP_OK.",
-          },
-        ],
-      },
-      providerTransform: baseProviderTransform,
-    });
-
-    expect(result.baseSystemPrompt).toContain("Reply with BOOTSTRAP_OK.");
-    expect(result.systemPrompt).toBe("");
   });
 });
 

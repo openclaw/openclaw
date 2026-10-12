@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ArtifactTransferBusyError } from "./artifact-transfer-service.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
-import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 
 describe("node worker bundle transfer service", () => {
   let root: string;
@@ -17,8 +16,6 @@ describe("node worker bundle transfer service", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  const node = createNodeWorkerBundleTestNode();
-
   it("binds one exact archive download to live node authority", async () => {
     const tarballPath = path.join(root, "bundle.tgz");
     await fs.writeFile(tarballPath, "bundle");
@@ -28,7 +25,6 @@ describe("node worker bundle transfer service", () => {
       generateToken: () => "A".repeat(43),
     });
     const prepared = service.prepare({
-      node,
       gatewayNamespace: "gateway-test",
       artifact: {
         install: "bundle",
@@ -73,7 +69,6 @@ describe("node worker bundle transfer service", () => {
       generateToken: () => "B".repeat(43),
     });
     const prepared = service.prepare({
-      node,
       gatewayNamespace: "gateway-test",
       artifact: {
         install: "bundle",
@@ -101,7 +96,6 @@ describe("node worker bundle transfer service", () => {
     const service = createNodeWorkerBundleTransferService({ now: () => 1_000 });
     try {
       const prepared = service.prepare({
-        node,
         gatewayNamespace: "gateway-test",
         artifact: {
           install: "bundle",

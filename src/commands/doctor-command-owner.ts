@@ -3,18 +3,48 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
+import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+import {
+  getChannelPlugin,
+  resolveChannelPluginRegistration,
+} from "../channels/plugins/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 
-/** Persist legacy channel-qualified owners before runtime compares native sender IDs. */
+/** Resolve installed setup contracts without activating channel runtimes during Doctor. */
+export function createCommandOwnerChannelResolver(cfg: OpenClawConfig) {
+  let plugins: ReturnType<typeof resolveReadOnlyChannelPluginsForConfig>["plugins"] | undefined;
+  return (channel: string) => {
+    const loaded = resolveChannelPluginRegistration(channel, { loadedOnly: true })?.plugin;
+    if (loaded) {
+      return loaded;
+    }
+    if (!plugins) {
+      try {
+        plugins = resolveReadOnlyChannelPluginsForConfig(cfg, {
+          includePersistedAuthState: false,
+          includeSetupFallbackPlugins: true,
+        }).plugins;
+      } catch {
+        // Discovery failures already have Doctor diagnostics; never drop an unknown kind.
+        plugins = [];
+      }
+    }
+    const setup = plugins.find((plugin) => plugin.id === channel);
+    return setup?.messaging?.inferTargetChatType ? setup : (getChannelPlugin(channel) ?? setup);
+  };
+}
+
+/** Preserve plugin-owned target kinds while normalizing legacy owner envelopes. */
 export function migrateLegacyCommandOwners(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const owners = cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(owners)) {
     return cfg;
   }
   let changed = false;
+  const resolveChannel = createCommandOwnerChannelResolver(cfg);
   const ownerAllowFrom = owners.map((entry, index) => {
     // Only the old channel:user:id envelope is unambiguous. Keep native IDs containing
     // colons (for example Matrix and workspace-qualified Slack IDs) untouched.
@@ -22,6 +52,11 @@ export function migrateLegacyCommandOwners(cfg: OpenClawConfig, changes: string[
       typeof entry === "string" ? /^([^:]+):user:([^:\s*]+)$/i.exec(entry.trim()) : null;
     const channel = legacy && normalizeChatChannelId(legacy[1]);
     if (!channel || !legacy) {
+      return entry;
+    }
+    const plugin = resolveChannel(channel);
+    // Without a channel contract, dropping the kind could turn a DM into a shared target.
+    if (!plugin || plugin.messaging?.directTargetStyle === "user-prefixed") {
       return entry;
     }
     changed = true;

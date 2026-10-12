@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import {
   resolveSessionEntryAccessTarget,
   updateResolvedSessionEntry,
@@ -63,25 +64,6 @@ function isExpired(entry: unknown, now: number) {
   return entry.ttlMs !== undefined && now - entry.createdAt > entry.ttlMs;
 }
 
-function toPluginNextTurnInjectionRecord(params: {
-  pluginId: string;
-  pluginName?: string;
-  injection: PluginNextTurnInjection;
-  now: number;
-}): PluginNextTurnInjectionRecord {
-  return {
-    id: params.injection.idempotencyKey?.trim() || randomUUID(),
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    text: params.injection.text,
-    idempotencyKey: params.injection.idempotencyKey?.trim() || undefined,
-    placement: params.injection.placement ?? "prepend_context",
-    ttlMs: params.injection.ttlMs,
-    createdAt: params.now,
-    metadata: params.injection.metadata,
-  };
-}
-
 export async function enqueuePluginNextTurnInjection(params: {
   cfg: OpenClawConfig;
   pluginId: string;
@@ -111,12 +93,18 @@ export async function enqueuePluginNextTurnInjection(params: {
     return { enqueued: false, id: "", sessionKey };
   }
   const now = params.now ?? Date.now();
-  const record = toPluginNextTurnInjectionRecord({
+  const injection = { ...params.injection };
+  const record: PluginNextTurnInjectionRecord = {
+    id: injection.idempotencyKey?.trim() || randomUUID(),
     pluginId: params.pluginId,
     pluginName: params.pluginName,
-    injection: { ...params.injection, sessionKey, text },
-    now,
-  });
+    text,
+    idempotencyKey: injection.idempotencyKey?.trim() || undefined,
+    placement: injection.placement ?? "prepend_context",
+    ttlMs: injection.ttlMs,
+    createdAt: now,
+    metadata: injection.metadata,
+  };
   const scope = { cfg: params.cfg, sessionKey, agentId: params.injection.agentId };
   const updated = await updateResolvedSessionEntry(scope, (entry) => {
     const injections = { ...entry.pluginNextTurnInjections };
@@ -151,7 +139,7 @@ async function drainPluginNextTurnInjections(
     return [];
   }
   const scope = { cfg: params.cfg, sessionKey, agentId: params.agentId };
-  const { entry: selectedEntry } = resolveSessionEntryAccessTarget(scope);
+  const selectedEntry = await readResolvedSessionEntryInWorker(scope);
   // Empty queues need no qualified mutation target. Concurrent enqueues wait for the next turn.
   if (
     !selectedEntry?.pluginNextTurnInjections ||
@@ -275,14 +263,7 @@ export async function patchPluginSessionExtension(params: {
   // extension opted in via `sessionEntrySlotKey`. The slot is a read-only
   // mirror: writes still go through patchSessionExtension; the host overwrites
   // the slot value on every patch and clears it on unset.
-  const rawSlotKey = normalizeOptionalString(registration.extension.sessionEntrySlotKey);
-  const normalizedSlotKey = rawSlotKey ? normalizeSessionEntrySlotKey(rawSlotKey) : undefined;
-  if (normalizedSlotKey?.ok === false) {
-    log.warn(
-      `plugin session extension slot promotion skipped for ${pluginId}/${namespace}: ${normalizedSlotKey.error}`,
-    );
-  }
-  const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
+  const slotKey = registration.extension.sessionEntrySlotKey;
   const updated = await updateResolvedSessionEntry(
     {
       cfg: params.cfg,

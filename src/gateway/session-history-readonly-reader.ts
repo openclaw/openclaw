@@ -23,14 +23,12 @@ import {
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../state/openclaw-agent-db-readonly.js";
-import {
-  isSubagentCoordinationHistoryInput,
-  type SubagentCoordinationDisplayResolver,
-} from "./chat-display-projection.history.js";
+import { isSubagentCoordinationHistoryInput } from "./chat-display-projection.history.js";
 import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
 /** Source and run facts live only for one history operation, on its admitted database. */
@@ -38,16 +36,19 @@ export function createBoundSessionHistorySubagentProjection(
   readSnapshot: <T>(read: (projection: CurrentTranscriptProjection) => T) => T,
   stateDatabase: PreparedSessionHistoryReadTarget["stateDatabase"],
   readSourceDatabases: () => GatewaySessionStoreReadSources | undefined,
+  preparedSource?: (sessionKey: string) => boolean | undefined,
 ): SubagentCoordinationDisplayResolver {
   const runs = new Map<
     string,
     ReturnType<typeof readSessionTranscriptRunInputVisibilityFromProjection>
   >();
-  const readSource = createBoundSessionHistorySubagentSource(
+  const readBoundSource = createBoundSessionHistorySubagentSource(
     readSnapshot,
     stateDatabase,
     readSourceDatabases,
   );
+  const readSource = (sessionKey: string) =>
+    preparedSource?.(sessionKey) ?? readBoundSource(sessionKey);
   return {
     isSubagentSession: readSource,
     isSubagentRunMessage(runId, messageSeq) {
@@ -127,6 +128,11 @@ export function createReadonlySessionHistoryReader(
     }
     return result.value;
   };
+  const subagentCoordination = createBoundSessionHistorySubagentProjection(
+    readSnapshot,
+    target.stateDatabase,
+    () => (sourceDatabases ??= resolveSourceDatabases?.()),
+  );
   return {
     readHistoryRevision: () =>
       readSnapshot((projection) => ({
@@ -170,13 +176,10 @@ export function createReadonlySessionHistoryReader(
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
       readSnapshot((projection) => readTranscriptDisplayDeltaFromProjection(projection, limits)),
     ...createSessionTranscriptReader({
+      subagentCoordination,
       resolveTarget: async () => target.transcript,
       readSnapshot: async (_transcript, read) => readSnapshot(read),
     }),
-    subagentCoordination: createBoundSessionHistorySubagentProjection(
-      readSnapshot,
-      target.stateDatabase,
-      () => (sourceDatabases ??= resolveSourceDatabases?.()),
-    ),
+    subagentCoordination,
   };
 }

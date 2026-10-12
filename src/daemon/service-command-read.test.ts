@@ -221,7 +221,7 @@ describe("native service command inspection", () => {
       { placement: "delegated serial", condition: "absent", explicit: true },
       { placement: "delegated serial", condition: "ready", explicit: false },
     ])(
-      "preserves $condition with fractional elapsed time ($placement, explicit=$explicit)",
+      "preserves native $condition state with fractional elapsed time ($placement, explicit=$explicit)",
       async ({ placement, condition, explicit }) => {
         mockProcessPlatform("win32");
         const windowsEnv = {
@@ -232,7 +232,7 @@ describe("native service command inspection", () => {
         const scriptPath = resolveTaskScriptPath(windowsEnv);
         const backingScriptPath = path.join(root, "gateway.cmd");
         if (condition !== "absent") {
-          // No port is recorded: retain Scheduler state without unrelated listener attribution.
+          // Native state remains useful even when the command cannot identify its process.
           await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
         }
         let now = 0;
@@ -299,19 +299,19 @@ describe("native service command inspection", () => {
           expect(state).toMatchObject({
             command: { programArguments },
             installed: true,
-            running: condition === "running",
+            running: false,
             loadState: { status: "loaded" },
             runtime: {
-              status: condition === "running" ? "running" : "stopped",
+              status: "unknown",
               state: condition === "running" ? "Running" : "Ready",
             },
           });
           expect(state.runtime?.missingUnit).not.toBe(true);
           expect(state.runtime?.inspectionFailure).toBeUndefined();
         }
-        expect(native.scheduler).toHaveBeenCalledTimes(condition === "absent" ? 4 : 6);
+        expect(native.scheduler).toHaveBeenCalledTimes(3);
         expect(run).not.toHaveBeenCalled();
-        expect(now).toBe(condition === "absent" ? 501.25 : 701.75);
+        expect(now).toBe(401);
         for (const allowance of schedulerAllowances) {
           expect(allowance.timeout).toBe(explicit ? Math.floor(allowance.remaining) : 60_000);
           expect(allowance.timeout).toBeGreaterThan(0);
@@ -322,10 +322,7 @@ describe("native service command inspection", () => {
       },
     );
 
-    it.each([
-      { condition: "absent", elapsed: 999.25 },
-      { condition: "installed", elapsed: 1_000 },
-    ])(
+    it.each([{ condition: "installed", elapsed: 1_000 }])(
       "does not launch further native work after reading $condition consumes $elapsed ms",
       async ({ condition, elapsed }) => {
         mockProcessPlatform("win32");
@@ -436,13 +433,13 @@ describe("native service command inspection", () => {
       failure: "malformed HRESULT",
       response: { status: 1, stdout: "-2147024894 native-secret-canary" },
       diagnostic: { kind: "native", exitCode: 1 },
-      reported: "Task Scheduler probe failed (exit 1)",
+      reported: "Task Scheduler check failed (exit 1)",
     },
     {
       failure: "invalid response",
       response: { status: 0, stdout: "native-secret-canary" },
       diagnostic: { kind: "invalid-response" },
-      reported: "Task Scheduler probe returned an invalid response",
+      reported: "Task Scheduler check returned an invalid response",
     },
   ])(
     "preserves safe Windows $failure diagnostics through strict inspection",

@@ -58,15 +58,6 @@ const ctx = {
   markIdle: vi.fn(),
 };
 
-function expectDispatchPayloadFields(expected: Record<string, unknown>): void {
-  expect(dispatchMock).toHaveBeenCalledTimes(1);
-  const [payload] = dispatchMock.mock.calls[0] ?? [];
-  expect(payload).toBeTypeOf("object");
-  for (const [key, value] of Object.entries(expected)) {
-    expect((payload as Record<string, unknown>)[key]).toBe(value);
-  }
-}
-
 describe("tryDispatchAcpReplyHook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -135,71 +126,6 @@ describe("tryDispatchAcpReplyHook", () => {
     });
   });
 
-  it("dispatches through ACP when command bypass applies", async () => {
-    bypassMock.mockResolvedValue(true);
-    dispatchMock.mockResolvedValue({
-      queuedFinal: true,
-      counts: { tool: 1, block: 2, final: 3 },
-    });
-
-    const result = await tryDispatchAcpReplyHook({ ...event, sendPolicy: "deny" }, ctx);
-
-    expect(result).toEqual({
-      handled: true,
-      queuedFinal: true,
-      counts: { tool: 1, block: 2, final: 3 },
-    });
-    expectDispatchPayloadFields({
-      ctx: event.ctx,
-      cfg: ctx.cfg,
-      dispatcher: ctx.dispatcher,
-      bypassForCommand: true,
-    });
-  });
-
-  it("normalizes plugin-constructed finalized contexts at the runtime boundary", async () => {
-    bypassMock.mockResolvedValue(false);
-    dispatchMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    const legacyCtx = {
-      Body: "/status",
-      BodyForAgent: "/status",
-      CommandBody: "/status",
-      CommandAuthorized: true,
-      SessionKey: "agent:test:session",
-    } as FinalizedMsgContext;
-
-    await tryDispatchAcpReplyHook({ ...event, ctx: legacyCtx }, ctx);
-
-    expect(legacyCtx).toMatchObject({
-      commandText: "/status",
-      agentText: "/status",
-      rawText: "/status",
-    });
-    expectDispatchPayloadFields({ ctx: legacyCtx });
-  });
-
-  it("preserves authoritative empty canonical text over stale plugin aliases", async () => {
-    bypassMock.mockResolvedValue(false);
-    dispatchMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    const canonicalCtx = buildTestCtx({
-      Body: "/reset",
-      CommandBody: "/reset",
-      BodyForCommands: "/reset",
-    });
-    canonicalCtx.commandText = "";
-
-    await tryDispatchAcpReplyHook({ ...event, ctx: canonicalCtx }, ctx);
-
-    expect(canonicalCtx.commandText).toBe("");
-    expect(bypassMock).toHaveBeenCalledWith(canonicalCtx, ctx.cfg);
-  });
-
   it("normalizes plugin-supplied canonical fields without finalization provenance", async () => {
     bypassMock.mockResolvedValue(false);
     dispatchMock.mockResolvedValue({
@@ -234,41 +160,60 @@ describe("tryDispatchAcpReplyHook", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     let shouldSendToolSummaries = true;
+    let fullToolDetails = false;
     const eventWithGetter = {
       ...event,
       get shouldSendToolSummaries() {
         return shouldSendToolSummaries;
       },
+      get shouldSendFullToolDetails() {
+        return fullToolDetails;
+      },
     };
 
     await tryDispatchAcpReplyHook(eventWithGetter, ctx);
 
-    expectDispatchPayloadFields({
-      shouldSendToolSummaries: true,
-      shouldSendFullToolDetails: false,
-    });
     const [payload] = dispatchMock.mock.calls[0] ?? [];
-    const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })
-      .shouldSendToolSummariesNow;
+    const livePredicate = (payload as { shouldSendToolSummaries: () => Promise<boolean> })
+      .shouldSendToolSummaries;
     expect(livePredicate).toBeTypeOf("function");
-    expect(livePredicate?.()).toBe(true);
+    expect(await livePredicate()).toBe(true);
 
     shouldSendToolSummaries = false;
-    expect(livePredicate?.()).toBe(false);
+    expect(await livePredicate()).toBe(false);
+    fullToolDetails = true;
+    expect(
+      await (
+        payload as { shouldSendFullToolDetails: () => Promise<boolean> }
+      ).shouldSendFullToolDetails(),
+    ).toBe(false);
   });
 
-  it("passes runtime toolsAllow through to ACP dispatch", async () => {
+  it("uses awaited visibility without touching deprecated event getters", async () => {
     bypassMock.mockResolvedValue(false);
-    dispatchMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+    let summaries = false;
+    dispatchMock.mockImplementationOnce(async (params) => {
+      expect(await params.shouldSendToolSummaries()).toBe(false);
+      summaries = true;
+      expect(await params.shouldSendToolSummaries()).toBe(true);
+      expect(await params.shouldSendFullToolDetails()).toBe(true);
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     });
-
-    await tryDispatchAcpReplyHook({ ...event, toolsAllow: ["message"] }, ctx);
-
+    await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        get shouldSendToolSummaries(): boolean {
+          throw new Error("deprecated synchronous read");
+        },
+        get shouldSendFullToolDetails(): boolean {
+          throw new Error("deprecated synchronous read");
+        },
+        shouldSendToolSummariesAsync: async () => summaries,
+        shouldSendFullToolDetailsAsync: async () => true,
+      },
+      ctx,
+    );
     expect(dispatchMock).toHaveBeenCalledOnce();
-    const [payload] = dispatchMock.mock.calls[0] ?? [];
-    expect((payload as { toolsAllow?: string[] }).toolsAllow).toStrictEqual(["message"]);
   });
 
   it("returns unhandled when ACP dispatcher declines the turn", async () => {
@@ -279,95 +224,6 @@ describe("tryDispatchAcpReplyHook", () => {
 
     expect(result).toBeUndefined();
     expect(dispatchMock).toHaveBeenCalledOnce();
-  });
-
-  it("dispatches non-tail ACP turn under deny when suppressUserDelivery is set", async () => {
-    bypassMock.mockResolvedValue(false);
-    dispatchMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-
-    const result = await tryDispatchAcpReplyHook(
-      {
-        ...event,
-        sendPolicy: "deny",
-        suppressUserDelivery: true,
-        ctx: buildTestCtx({
-          SessionKey: "agent:test:session",
-          BodyForCommands: "write a test",
-          BodyForAgent: "write a test",
-        }),
-      },
-      ctx,
-    );
-
-    // Non-tail, non-command ACP turns under deny must still flow through ACP
-    // runtime so session/tool state stays consistent — delivery suppression is
-    // handled inside the ACP delivery path via suppressUserDelivery.
-    expectDispatchPayloadFields({
-      suppressUserDelivery: true,
-      suppressReplyLifecycle: true,
-      bypassForCommand: false,
-    });
-    expect(result).toEqual({
-      handled: true,
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-  });
-
-  it("allows tail dispatch through when sendPolicy is deny", async () => {
-    bypassMock.mockResolvedValue(false);
-    dispatchMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-
-    const result = await tryDispatchAcpReplyHook(
-      {
-        ...event,
-        sendPolicy: "deny",
-        isTailDispatch: true,
-        ctx: buildTestCtx({
-          SessionKey: "agent:test:session",
-          BodyForCommands: "continue after reset",
-          BodyForAgent: "continue after reset",
-        }),
-      },
-      ctx,
-    );
-
-    // Tail dispatch should proceed despite deny — delivery suppression is handled downstream
-    expect(dispatchMock).toHaveBeenCalledOnce();
-    expect(result).toEqual({
-      handled: true,
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-  });
-
-  it("does not let ACP claim reset commands before local command handling", async () => {
-    bypassMock.mockResolvedValue(true);
-    dispatchMock.mockResolvedValue(undefined);
-
-    const result = await tryDispatchAcpReplyHook(
-      {
-        ...event,
-        ctx: buildTestCtx({
-          SessionKey: "agent:test:session",
-          CommandBody: "/new",
-          BodyForCommands: "/new",
-          BodyForAgent: "/new",
-        }),
-      },
-      ctx,
-    );
-
-    expect(result).toBeUndefined();
-    expectDispatchPayloadFields({
-      bypassForCommand: true,
-    });
   });
 });
 

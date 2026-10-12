@@ -23,17 +23,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
-import { resolveAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
+import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
-  assertAgentDeletionRecoveryHoldPredicate,
-  readAgentDeletionRecoveryHolds,
-} from "../state/agent-deletion-journal-recovery.kernel.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+  readAgentDeletionJournalForCreation,
+  readAgentDeletionRecoveryHoldsInWorker,
+} from "../state/agent-deletion-journal.read.js";
 import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
+import { resolveAgentDeletionRecoveryHoldsInWorker } from "../state/agent-deletion-recovery.js";
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
@@ -43,6 +43,7 @@ import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
 import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import {
   createAgentIdentityConfig,
   mergeIdentityMarkdownContent,
@@ -318,8 +319,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
   const automaticBootstrap = params.bootstrapMain === true || params.bootstrapFirstAgent === true;
-  // Staged auth for a recreated identity must open that identity's databases beneath its
-  // completed deletion record. The scope covers only the receipt, so early exits never hold it.
+  // Database preparation and staged auth for a recreated identity share its creation claim.
   const withCreationClaim = <T>(run: () => Promise<T>) =>
     runWithAgentCreationClaim({ agentId }, run);
 
@@ -346,10 +346,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   let creating = false;
   let identityPublished = false;
   let held: HeldAgentDatabase[] = [];
-  const readCurrentHolds = () =>
-    withExistingOpenClawStateDatabaseCurrentReadOnly(readAgentDeletionRecoveryHolds, {
-      allowNativeRead: true,
-    }) ?? [];
   const recoveryPathMatcher = createOpenClawAgentDatabasePathMatcher();
   const recoveryHoldPredicate = () => ({ agentId, held, applies: creating || !automaticBootstrap });
   const assertRecoveryPathCurrent = () => {
@@ -369,8 +365,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       );
     }
   };
-  const hasBootstrapHold = () =>
-    automaticBootstrap && readCurrentHolds().some((entry) => entry.agentId === agentId);
+  const hasBootstrapHold = async () =>
+    (await readAgentDeletionRecoveryHoldsInWorker()).some((entry) => entry.agentId === agentId);
   const assertHost = () => {
     params.beforePersistentApply?.();
     if (!identityPublished) {
@@ -385,7 +381,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
 
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
-      held = automaticBootstrap ? [] : readCurrentHolds();
+      held = automaticBootstrap ? [] : await readAgentDeletionRecoveryHoldsInWorker();
       const recoveryPaths = selectedRecoveryPaths(
         lockedConfig,
         agentId,
@@ -401,7 +397,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         );
       }
       const gateError =
-        recoveryPaths.length > 0 || hasBootstrapHold()
+        recoveryPaths.length > 0 || (automaticBootstrap && (await hasBootstrapHold()))
           ? undefined
           : await evaluateMainCreationGate(lockedConfig, agentId);
       if (gateError) {
@@ -409,9 +405,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       }
       beforePersistentApply();
       // Held bootstrap can still be a no-op; never claim its journal before that decision.
-      const deletion = hasBootstrapHold()
-        ? undefined
-        : readAgentDeletionJournal(agentId, {}, "runtime");
+      const deletion =
+        automaticBootstrap && (await hasBootstrapHold())
+          ? undefined
+          : await readAgentDeletionJournalForCreation(agentId);
+      beforePersistentApply();
       if (deletion && !deletion.cleanupCompleted) {
         return createError(
           "deletion-pending",
@@ -424,7 +422,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         deletion?.cleanupCompleted &&
         findAgentEntryIndex(listAgentEntries(lockedConfig), agentId) >= 0
       ) {
-        if (!claimCompletedAgentDeletion(agentId, deletion.operationId)) {
+        if (!(await claimCompletedAgentDeletion(agentId, deletion.operationId))) {
           throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
         }
         tombstoneClaimed = true;
@@ -498,11 +496,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           const workspaceDir =
             explicitWorkspace ?? resolveAgentWorkspaceDir(currentConfig, agentId);
           const agentDir = explicitAgentDir ?? resolveAgentDir(currentConfig, agentId);
-          const materializeInjectedMain =
-            existingIndex >= 0 &&
-            isBootstrapMain &&
-            isInjectedBootstrapMainEntry(existingEntry) &&
-            !context.snapshot.exists;
           const creationBase = bootstrappingFirstAgent
             ? {
                 ...currentConfig,
@@ -512,17 +505,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
                 },
               }
             : (params.stagedConfig?.config ?? currentConfig);
-          let nextConfig =
-            existingIndex < 0 || materializeInjectedMain
-              ? applyAgentConfig(creationBase, {
-                  agentId,
-                  name: safeName,
-                  workspace: workspaceDir,
-                  agentDir,
-                  model,
-                  identity,
-                })
-              : creationBase;
+          let nextConfig = applyAgentConfig(creationBase, {
+            agentId,
+            name: safeName,
+            workspace: workspaceDir,
+            agentDir,
+            model,
+            identity,
+          });
           if (params.entry || template) {
             const list = listAgentEntries(nextConfig);
             const index = findAgentEntryIndex(list, agentId);
@@ -633,12 +623,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           // The receipt owns compensation until the config transform publishes this result.
           // Capture the receipt before settlement so a failed close still reaches rollback.
           beforePersistentApply();
-          if (params.prepareConfigCommit) {
-            const prepareConfigCommit = params.prepareConfigCommit;
-            await withCreationClaim(async () => {
-              configCommitReceipt = (await prepareConfigCommit()) ?? undefined;
-            });
-          }
+          await withCreationClaim(async () => {
+            configCommitReceipt = (await params.prepareConfigCommit?.()) ?? undefined;
+            beforePersistentApply();
+            await prepareOpenClawAgentDatabaseExecution(
+              { agentId, path: resolveAuthProfileDatabasePath(agentDir) },
+              assertHost,
+            );
+          });
 
           return {
             nextConfig,
@@ -675,12 +667,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         deletion?.cleanupCompleted &&
         !tombstoneClaimed &&
         committed.result?.status === "created" &&
-        !claimCompletedAgentDeletion(agentId, deletion.operationId)
+        !(await claimCompletedAgentDeletion(agentId, deletion.operationId))
       ) {
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
       if (result.status === "created") {
-        recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
+        await recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
       }
       if (recoveryPaths.length > 0) {
         assertRecoveryCurrent();
@@ -691,10 +683,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           recoveryPathMatcher,
         );
         const selectedPaths = recoveryPaths.filter((pathname) => confirmedPaths.includes(pathname));
-        runOpenClawStateWriteTransaction((database) => {
-          assertRecoveryCurrent();
-          resolveAgentDeletionRecoveryHolds(database, agentId, selectedPaths);
-        });
+        await resolveAgentDeletionRecoveryHoldsInWorker(
+          recoveryHoldPredicate(),
+          selectedPaths,
+          assertRecoveryPathCurrent,
+        );
       }
       return result;
     });

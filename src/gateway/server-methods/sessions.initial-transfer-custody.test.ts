@@ -15,8 +15,6 @@ import {
 import { createRequesterYieldCallback } from "../../agents/openclaw-tools.requester-yield.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as registryPersistence from "../../agents/subagents/registry/subagent-registry-persistence.js";
-import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   activateSubagentRegistry,
   initSubagentRegistry,
@@ -26,15 +24,12 @@ import {
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
-import * as requesterAttachment from "../../agents/subagents/requester-final-attachment.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolvePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import * as sessionSharing from "../session-sharing-preparation.js";
 import { withRequesterTestAuthority } from "./sessions-initial-transfer.test-support.js";
@@ -234,69 +229,8 @@ it.each(["unchanged", "replaced", "empty"] as const)(
   },
 );
 
-it("finishes the initial handoff after the same child completes during promotion retry", async () => {
-  vi.useFakeTimers();
-  const { entry, settle, onYield } = await createYieldedChild();
-  const promotionFailed = createDeferred();
-  const promotion = vi
-    .spyOn(requesterAttachment, "promoteRequesterFinalAttachment")
-    .mockImplementationOnce(() => {
-      promotionFailed.resolve();
-      throw new Error("initial cohort promotion interrupted");
-    });
-  const settlement = settle();
-  try {
-    await Promise.race([
-      promotionFailed.promise,
-      settlement.then(() => {
-        throw new Error("Cohort handoff skipped promotion");
-      }),
-    ]);
-    expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBe("staged-cohort-parent");
-    expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.rearmGeneration).toBe(1);
-    const terminalPublished = createDeferred();
-    const stopObserving = subscribeSubagentRunChanges("persistence", () => {
-      if (subagentRuns.get(entry.runId)?.execution.status === "terminal") {
-        terminalPublished.resolve();
-      }
-    });
-    const settleRootWork = observeRootWork();
-    fixture.announce.mockResolvedValue("requester_turn_pending");
-    try {
-      emitAgentEvent({
-        runId: entry.runId,
-        sessionKey: entry.childSessionKey,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          endedAt: Date.now(),
-          terminalReply: { disposition: "visible", text: "Child finished during the handoff." },
-        },
-      });
-      await terminalPublished.promise;
-      await settleRootWork();
-    } finally {
-      stopObserving();
-    }
-    expect(subagentRuns.get(entry.runId)?.execution.status).toBe("terminal");
-    expect(fixture.wake).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(30_000);
-    await expect(settlement).resolves.toBe(true);
-    expect(subagentRuns.get(entry.runId)).not.toBe(entry);
-    expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBeUndefined();
-    expect(subagentRuns.get(entry.runId)?.requesterTurnYielded).toBeUndefined();
-    expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.rearmGeneration).toBe(1);
-    expect(subagentRuns.get(entry.runId)?.execution.status).toBe("terminal");
-    expect(onYield).toHaveBeenCalledOnce();
-  } finally {
-    await vi.advanceTimersByTimeAsync(30_000);
-    await Promise.allSettled([settlement]);
-    promotion.mockRestore();
-  }
-});
-
 it.each(["source retirement", "transport failure after commit"] as const)(
-  "never repeats the acknowledged cohort release after its %s result",
+  "never repeats the acknowledged cohort commit after its %s result",
   async (outcome) => {
     vi.useFakeTimers();
     const { entry, settle, nativePersistence } = await createYieldedChild();
@@ -313,7 +247,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
               ...scope,
               execute: async (...args) => {
                 const result = await scope.execute(...args);
-                if (args[0].type === "subagents.persistChanges" && ++writes === 2) {
+                if (args[0].type === "subagents.persistChanges" && ++writes === 1) {
                   if (outcome === "transport failure after commit") {
                     throw new SqliteWorkerError(
                       "cohort release acknowledgement lost",
@@ -339,10 +273,10 @@ it.each(["source retirement", "transport failure after commit"] as const)(
         await expect(settle()).resolves.toBe(true);
         expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBeUndefined();
       }
-      expect(writes).toBe(2);
+      expect(writes).toBe(1);
       expect(fixture.wake).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(writes).toBe(2);
+      expect(writes).toBe(1);
       expect(fixture.wake).not.toHaveBeenCalled();
       await closing;
       await closeOpenClawStateDatabaseAsync();
@@ -352,7 +286,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
       expect(restored.requesterTurnRunId).toBeUndefined();
       expect(restored.requesterTurnYielded).toBeUndefined();
       expect(restored.requesterSettleWake?.rearmGeneration).toBe(1);
-      expect(writes).toBe(2);
+      expect(writes).toBe(1);
     } finally {
       await closing;
       worker.mockRestore();
@@ -360,114 +294,52 @@ it.each(["source retirement", "transport failure after commit"] as const)(
   },
 );
 
-it.each([
-  { prepared: false, missing: false },
-  { prepared: true, missing: false },
-  { prepared: true, missing: true },
-])(
-  "recovers the original requester transfer after restart (prepared: $prepared, missing member: $missing)",
-  async ({ prepared, missing }) => {
-    vi.useFakeTimers();
-    const { entries, settle } = await createYieldedChild(true);
-    const failed = createDeferred();
-    const promotion = vi
-      .spyOn(requesterAttachment, "promoteRequesterFinalAttachment")
-      .mockImplementationOnce(() => {
-        failed.resolve();
-        throw new Error("initial promotion interrupted before restart");
-      });
-    let writes = 0;
-    const runWorker = runSubagentStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        runWorker(
-          context,
-          (scope) =>
-            operation({
-              ...scope,
-              execute: (...args) => {
-                if (args[0].type === "subagents.persistChanges") {
-                  writes += 1;
-                }
-                return scope.execute(...args);
-              },
-            }),
-          options,
-        ),
-      );
-    const settlement = prepared ? settle() : undefined;
-    void settlement?.catch(() => {});
-    try {
-      if (settlement) {
-        await Promise.race([
-          failed.promise,
-          settlement.then(() => {
-            throw new Error("Cohort skipped the held promotion");
+it("recovers an untransferred requester cohort after restart in one write", async () => {
+  vi.useFakeTimers();
+  const { entries } = await createYieldedChild(true);
+  let writes = 0;
+  const worker = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation((context, operation, options) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: (...args) => {
+              if (args[0].type === "subagents.persistChanges") {
+                writes += 1;
+              }
+              return scope.execute(...args);
+            },
           }),
-        ]);
-      } else {
-        promotion.mockRestore();
-      }
-      expect(writes).toBe(prepared ? 1 : 0);
-      await resetSubagentRegistryForTests({ persist: false });
-      if (settlement) {
-        await expect(settlement).rejects.toMatchObject({ outcome: "committed" });
-      }
-      await closeOpenClawStateDatabaseAsync();
-      if (missing) {
-        // A durable partial cohort must never become a new, smaller first-stage write.
-        await registryPersistence.mutateSubagentRuns(
-          [entries[1]!.runId],
-          () => ({
-            value: undefined,
-            postimages: new Map([[entries[1]!.runId, null]]),
-          }),
-          { context: captureOpenClawStateWorkerContext() },
-        );
-      }
-      const beforeRestore = writes;
-      await initSubagentRegistry();
-      const restored = expectDefined(
-        subagentRuns.get(entries[0]!.runId),
-        "restored prepared cohort",
-      );
-      expect(restored).not.toBe(entries[0]);
-      expect(restored.requesterTurnRunId).toBe("staged-cohort-parent");
-      if (prepared) {
-        expect(restored.requesterSettleWake).toMatchObject({
-          batchRunIds: entries.map((entry) => entry.runId).toSorted(),
-          rearmGeneration: 1,
-        });
-      } else {
-        expect(restored.requesterSettleWake).toBeUndefined();
-      }
-      const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
-      context.resolveGatewayContext = () => context;
-      const activation = activateSubagentRegistry(context.resolveGatewayContext);
-      if (missing) {
-        await expect(activation).rejects.toMatchObject({
-          outcome: "committed",
-          publication: "superseded",
-        });
-        expect(subagentRuns.get(restored.runId)?.requesterTurnRunId).toBe("staged-cohort-parent");
-        expect(writes).toBe(beforeRestore);
-      } else {
-        await activation;
-        expect(subagentRuns.get(restored.runId)?.requesterTurnRunId).toBeUndefined();
-        expect(subagentRuns.get(restored.runId)?.requesterTurnYielded).toBeUndefined();
-        expect(subagentRuns.get(restored.runId)?.requesterSettleWake?.rearmGeneration).toBe(1);
-        expect(writes).toBe(beforeRestore + (prepared ? 1 : 2));
-      }
-      expect(fixture.wake).not.toHaveBeenCalled();
-    } finally {
-      await resetSubagentRegistryForTests({ persist: false });
-      await Promise.allSettled(settlement ? [settlement] : []);
-      promotion.mockRestore();
-      worker.mockRestore();
-    }
-  },
-);
+        options,
+      ),
+    );
+  try {
+    await resetSubagentRegistryForTests({ persist: false });
+    await closeOpenClawStateDatabaseAsync();
+    await initSubagentRegistry();
+    const restored = expectDefined(subagentRuns.get(entries[0]!.runId), "restored cohort");
+    expect(restored).not.toBe(entries[0]);
+    expect(restored.requesterTurnRunId).toBe("staged-cohort-parent");
+    expect(restored.requesterSettleWake).toBeUndefined();
+    const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
+    context.resolveGatewayContext = () => context;
+    await activateSubagentRegistry(context.resolveGatewayContext);
+    expect(subagentRuns.get(restored.runId)?.requesterTurnRunId).toBeUndefined();
+    expect(subagentRuns.get(restored.runId)?.requesterTurnYielded).toBeUndefined();
+    expect(subagentRuns.get(restored.runId)?.requesterSettleWake).toMatchObject({
+      batchRunIds: entries.map((entry) => entry.runId).toSorted(),
+      rearmGeneration: 1,
+    });
+    expect(writes).toBe(1);
+    expect(fixture.wake).not.toHaveBeenCalled();
+  } finally {
+    await resetSubagentRegistryForTests({ persist: false });
+    worker.mockRestore();
+  }
+});
 
 it.each([false, true])(
   "does not acknowledge the opposite settlement while a cohort write is pending (yielded: %s)",
@@ -512,11 +384,11 @@ it.each([false, true])(
       await vi.dynamicImportSettled();
       releaseAcknowledgement.resolve();
       await expect(first).resolves.toBe(true);
-      await expect(opposite).rejects.toMatchObject({ outcome: "not-committed" });
-      expect(writes).toBe(requesterYielded ? 2 : 1);
+      await expect(opposite).rejects.toThrow("Another requester transfer is already pending");
+      expect(writes).toBe(1);
       const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-        typeof import("../../agents/subagents/registry/subagent-registry.store.sqlite.js")
-      >("../../agents/subagents/registry/subagent-registry.store.sqlite.js");
+        typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
+      >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
       const stored = expectDefined(
         loadSubagentRegistryFromSqlite().get(entry.runId),
         "settled child",
@@ -532,67 +404,7 @@ it.each([false, true])(
   },
 );
 
-it("retains the committed cohort when release admission fails and the caller retires", async () => {
-  const { entry, settle } = await createYieldedChild();
-  const refused = createDeferred();
-  let attempts = 0;
-  let writes = 0;
-  const runWorker = runSubagentStateWorkerOperation;
-  const worker = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      runWorker(
-        context,
-        (scope) =>
-          operation({
-            ...scope,
-            execute: async (...args) => {
-              if (args[0].type === "subagents.persistChanges" && ++attempts === 2) {
-                refused.resolve();
-                throw new Error("release refused before SQL admission");
-              }
-              const result = await scope.execute(...args);
-              if (args[0].type === "subagents.persistChanges") {
-                writes += 1;
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
-  const settlement = settle();
-  void settlement.catch(() => {});
-  try {
-    await Promise.race([
-      refused.promise,
-      settlement.then(() => {
-        throw new Error("Cohort skipped its marker-release write");
-      }),
-    ]);
-    await resetSubagentRegistryForTests({ persist: false });
-    await expect(settlement).rejects.toMatchObject({
-      outcome: "committed",
-      publication: "published",
-    });
-    expect(attempts).toBe(2);
-    expect(writes).toBe(1);
-    const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-      typeof import("../../agents/subagents/registry/subagent-registry.store.sqlite.js")
-    >("../../agents/subagents/registry/subagent-registry.store.sqlite.js");
-    expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
-      requesterTurnRunId: "staged-cohort-parent",
-      requesterTurnYielded: true,
-      requesterSettleWake: { rearmGeneration: 1 },
-    });
-  } finally {
-    await resetSubagentRegistryForTests({ persist: false });
-    await Promise.allSettled([settlement]);
-    worker.mockRestore();
-  }
-});
-
-it("joins a real authority preparation without releasing borrowed facts before yield", async () => {
+it("rejects an overlapping claim without releasing the first authority preparation", async () => {
   const requesterTurnRunId = "joined-authority-parent";
   const runId = "joined-authority-child";
   await writeSubagentSessionEntry({
@@ -691,10 +503,10 @@ it("joins a real authority preparation without releasing borrowed facts before y
         expect(secondSettled).toBe(false);
         expect(onYield).toHaveBeenCalledOnce();
         releaseSecondRead.resolve();
-        await expect(second).resolves.toMatchObject({ details: { status: "yielded" } });
+        await expect(second).rejects.toThrow("Another requester transfer is already pending");
         expect(writes).toBe(1);
         expect(reads).toBe(2);
-        expect(onYield).toHaveBeenCalledTimes(2);
+        expect(onYield).toHaveBeenCalledOnce();
         expect(releases[0]).not.toHaveBeenCalled();
         expect(releases[1]).toHaveBeenCalledOnce();
         revokeRequesterCronAuthority(requesterSessionKey);

@@ -16,7 +16,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_CREDS="$HOME/.claude/.credentials.json"
 STATE_FILE="$HOME/.openclaw/auth-monitor-state"
 
-# Configuration
 WARN_HOURS="${WARN_HOURS:-2}"
 NOTIFY_PHONE="${NOTIFY_PHONE:-}"
 NOTIFY_NTFY="${NOTIFY_NTFY:-}"
@@ -36,13 +35,11 @@ send_notification() {
 
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $message"
 
-    # Check if we notified recently
     if [ $((NOW - LAST_NOTIFIED)) -lt $MIN_INTERVAL ]; then
         echo "Skipping notification (sent recently)"
         return
     fi
 
-    # Send via OpenClaw if phone configured and auth still valid
     if [ -n "$NOTIFY_PHONE" ]; then
         local auth_status="" auth_exit=0
         auth_status="$("$SCRIPT_DIR/claude-auth-status.sh" simple 2>/dev/null)" || auth_exit=$?
@@ -56,7 +53,6 @@ send_notification() {
         fi
     fi
 
-    # Send via ntfy.sh if configured
     if [ -n "$NOTIFY_NTFY" ]; then
         echo "Sending via ntfy.sh to $NOTIFY_NTFY..."
         if curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null \
@@ -76,7 +72,6 @@ send_notification() {
     fi
 }
 
-# Check auth status
 if [ ! -f "$CLAUDE_CREDS" ]; then
     send_notification "Claude Code credentials missing! Run: claude setup-token" "high"
     exit 1

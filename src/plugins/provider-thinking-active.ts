@@ -10,27 +10,16 @@ type ActiveThinkingRegistryState = {
   activeRegistry?: ProviderThinkingRegistry | null;
 };
 
-type ThinkingHookParams<TContext> = {
-  provider: string;
-  context: TContext;
-};
-
-function resolveActiveThinkingProvider(providerId: string, registry?: ProviderThinkingRegistry) {
+export function resolveActiveProviderThinkingProfile(
+  params: { provider: string; context: ProviderDefaultThinkingPolicyContext },
+  registry?: ProviderThinkingRegistry,
+) {
   const state = (
     globalThis as typeof globalThis & {
       [PLUGIN_REGISTRY_STATE]?: ActiveThinkingRegistryState;
     }
   )[PLUGIN_REGISTRY_STATE];
-  return (registry ?? state?.activeRegistry)?.providers?.find((entry) =>
-    matchesProviderPluginRef(entry.provider, providerId),
-  )?.provider;
-}
-
-export function resolveActiveProviderThinkingProfile(
-  params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
-  registry?: ProviderThinkingRegistry,
-) {
-  return resolveActiveThinkingProvider(params.provider, registry)?.resolveThinkingProfile?.(
-    params.context,
-  );
+  return (registry ?? state?.activeRegistry)?.providers
+    ?.find((entry) => matchesProviderPluginRef(entry.provider, params.provider))
+    ?.provider?.resolveThinkingProfile?.(params.context);
 }

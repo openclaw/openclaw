@@ -18,6 +18,7 @@ export async function retireSupersededSubagentRun(params: {
   runs: Map<string, SubagentRunRecord>;
   clearPendingLifecycleError: (runId: string) => void;
   isCurrent?: (current: SubagentRunRecord) => boolean;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const transcriptTarget = params.entry.execution.transcriptTarget;
   const canRetire = (current: SubagentRunRecord | undefined) =>
@@ -88,7 +89,7 @@ export async function retireSupersededSubagentRun(params: {
       }
       return { value: true, postimages: new Map([[params.runId, null]]) };
     },
-    { runs: params.runs },
+    { runs: params.runs, assertCurrent: params.assertCurrent },
   );
   if (deleted) {
     params.clearPendingLifecycleError(params.runId);

@@ -69,51 +69,67 @@ function gatewayInvocation(program) {
   return options && !options.commandOptions.includes("--reset") ? options : undefined;
 }
 
-try {
+async function activate() {
   const program = command[0] && executable(command[0]);
   if (!program) {
     console.error("OpenClaw container activation command was not found");
-    process.exit(127);
+    process.exitCode = 127;
+    return;
   }
   const invocation = gatewayInvocation(program);
   if (invocation) {
     let interrupted;
     let child;
+    const listeners = new Map();
     for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"]) {
-      process.on(signal, () => {
+      const listener = () => {
         interrupted ??= signal;
         // Doctor's maintenance barriers own INT/TERM; HUP/QUIT must use that drain too.
         child?.kill(signal === "SIGHUP" || signal === "SIGQUIT" ? "SIGTERM" : signal);
+      };
+      process.on(signal, listener);
+      listeners.set(signal, listener);
+    }
+    try {
+      child = spawn(
+        process.execPath,
+        [
+          path.join(root, "openclaw.mjs"),
+          ...invocation.rootOptions,
+          "doctor",
+          "--fix",
+          "--non-interactive",
+        ],
+        { stdio: "inherit", env: process.env },
+      );
+      /** @type {Error | undefined} */
+      let failure;
+      child.on("error", (error) => {
+        failure = error;
       });
-    }
-    child = spawn(
-      process.execPath,
-      [
-        path.join(root, "openclaw.mjs"),
-        ...invocation.rootOptions,
-        "doctor",
-        "--fix",
-        "--non-interactive",
-      ],
-      { stdio: "inherit", env: process.env },
-    );
-    let failure;
-    child.on("error", (error) => {
-      failure = error;
-    });
-    const outcome = await new Promise((resolve) =>
-      child.once("close", (code, signal) => resolve({ code, signal })),
-    );
-    if (failure) {
-      throw failure;
-    }
-    const signal = interrupted ?? outcome.signal;
-    if (signal || outcome.code !== 0) {
-      process.exit(signal ? 128 + os.constants.signals[signal] : (outcome.code ?? 1));
+      const outcome = await new Promise((resolve) => {
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      });
+      if (failure) {
+        throw failure;
+      }
+      const signal = interrupted ?? outcome.signal;
+      if (signal || outcome.code !== 0) {
+        process.exitCode = signal ? 128 + os.constants.signals[signal] : (outcome.code ?? 1);
+        return;
+      }
+    } finally {
+      for (const [signal, listener] of listeners) {
+        process.off(signal, listener);
+      }
     }
   }
   // Replace the adapter so tini continues to supervise the original command directly.
   process.execve(program, command, process.env);
+}
+
+try {
+  await activate();
 } catch (error) {
   console.error(
     `OpenClaw container activation failed: ${error instanceof Error ? error.message : String(error)}`,

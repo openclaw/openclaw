@@ -6,6 +6,10 @@ vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
 }));
 
 import { renderMessagePresentationFallbackText } from "../../interactive/payload.js";
+import {
+  isReplyPayloadSessionWriterDeliveryAuthorized,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 
@@ -51,18 +55,47 @@ it.each([
     "Sign in to continue.",
     "Connect calendar: https://auth.example/authorize?state=opaque",
   ],
-])("attaches one %s action to the final visible reply", (kind, text, fallback) => {
-  const input = [{ text: "progress", isStatusNotice: true }, { text: "First answer" }, { text }];
-  const payloads =
-    kind === "app"
-      ? attachApp(input, "telegram")
-      : attachMcpConnectChannelAction({ payloads: input, action: connectAction });
-  expect(payloads[1]).toEqual({ text: "First answer" });
-  if (kind === "app") {
-    expect(payloads[2]).toEqual({ text, presentation });
-  }
-  expect(renderMessagePresentationFallbackText(payloads[2]!)).toBe(`${text}\n\n- ${fallback}`);
-});
+])(
+  "attaches one %s action while preserving final reply writer authority",
+  (kind, text, fallback) => {
+    const finalReply = setReplyPayloadMetadata(
+      { text },
+      {
+        sessionWriterDeliveryAuthority: {
+          sessionKey: "agent:main:main",
+          expectedSessionId: "session-original",
+          expectedWriterRunId: "writer-original",
+        },
+      },
+    );
+    const input = [
+      { text: "progress", isStatusNotice: true },
+      { text: "First answer" },
+      finalReply,
+    ];
+    const payloads =
+      kind === "app"
+        ? attachApp(input, "telegram")
+        : attachMcpConnectChannelAction({ payloads: input, action: connectAction });
+    expect(payloads[1]).toEqual({ text: "First answer" });
+    if (kind === "app") {
+      expect(payloads[2]).toEqual({ text, presentation });
+    }
+    expect(renderMessagePresentationFallbackText(payloads[2]!)).toBe(`${text}\n\n- ${fallback}`);
+    expect(
+      isReplyPayloadSessionWriterDeliveryAuthorized(payloads[2]!, {
+        sessionId: "session-original",
+        activeWriterRunId: "writer-original",
+      }),
+    ).toBe(true);
+    expect(
+      isReplyPayloadSessionWriterDeliveryAuthorized(payloads[2]!, {
+        sessionId: "session-original",
+        activeWriterRunId: "writer-replacement",
+      }),
+    ).toBe(false);
+  },
+);
 
 it("preserves payloads when no channel action can be attached", () => {
   const visible = [{ text: "Final answer" }];

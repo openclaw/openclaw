@@ -56,7 +56,6 @@ describe("plugin install mutation-free preflight", () => {
     resolveMarketplaceInstallShortcutMock.mockResolvedValue({
       ok: true,
       plugin: "superpowers",
-      marketplaceName: "claude-plugins-official",
       marketplaceSource: "claude-plugins-official",
     });
 

@@ -1,4 +1,5 @@
 /** @vitest-environment node */
+import { webcrypto } from "node:crypto";
 import {
   GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -6,6 +7,7 @@ import {
   type ConnectParams,
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as nodes from "../lib/nodes/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   getLatestWebSocket,
@@ -63,6 +65,75 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it.each(["rejected", "expired"])(
+    "waits on the exact pairing request and stops reconnecting when %s",
+    async (decision) => {
+      vi.stubGlobal("crypto", webcrypto);
+      const key = Buffer.alloc(32).toString("base64url");
+      vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockResolvedValue({
+        deviceId: "waiting-browser",
+        privateKey: key,
+        publicKey: key,
+      });
+      vi.spyOn(nodes, "signDevicePayload").mockResolvedValue("signature");
+      const onClose = vi.fn();
+      client = new GatewayBrowserClient({ url: "ws://pairing.example.test", onClose });
+      const { ws, connectFrame } = await startConnect(client);
+      const deviceId = connectFrame.params.device?.id;
+      expect(deviceId).toBe("waiting-browser");
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: false,
+        error: {
+          code: "NOT_PAIRED",
+          message: "pairing required",
+          details: {
+            code: "PAIRING_REQUIRED",
+            requestId: "request-first",
+            deviceId,
+            waitForResolution: true,
+            pauseReconnect: false,
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(ws.readyState).toBe(1);
+      expect(wsInstances).toHaveLength(1);
+      expect(onClose).toHaveBeenLastCalledWith(expect.objectContaining({ willRetry: true }));
+
+      const resolve = (requestId: string, resolvedDeviceId = deviceId) =>
+        ws.emitMessage({
+          type: "event",
+          event: "device.pair.resolved",
+          payload: { requestId, deviceId: resolvedDeviceId, decision, ts: Date.now() },
+        });
+      resolve("another-request");
+      resolve("request-first", "another-device");
+      expect(ws.readyState).toBe(1);
+      resolve("request-first");
+      expect(ws.readyState).toBe(3);
+      ws.emitClose(1008, `pairing ${decision}`);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(wsInstances).toHaveLength(1);
+      expect(client.needsWakeReconnect).toBe(false);
+      expect(onClose).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          willRetry: false,
+          error: expect.objectContaining({
+            details: expect.objectContaining({
+              code: decision === "rejected" ? "PAIRING_REJECTED" : "PAIRING_EXPIRED",
+            }),
+          }),
+        }),
+      );
+
+      client.stop();
+      await startConnect(client);
+      expect(wsInstances).toHaveLength(2);
+    },
+  );
 
   it("requests full control ui operator scopes with explicit shared auth", async () => {
     client = new GatewayBrowserClient({

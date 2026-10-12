@@ -42,12 +42,8 @@ function source() {
   closeOpenClawStateDatabaseForTest();
   const legacy = openNodeSqliteDatabase(pathname);
   try {
-    // Legitimate v15/no-Workshop shape also covered by the state-owner migration tests.
+    // Legitimate v15 shape also covered by the state-owner migration tests.
     legacy.exec(`PRAGMA foreign_keys=OFF;
-      DROP TABLE IF EXISTS skill_workshop_proposal_events;
-      DROP TABLE IF EXISTS skill_workshop_proposal_rollbacks;
-      DROP TABLE IF EXISTS skill_workshop_collection_reviews;
-      DROP TABLE IF EXISTS skill_workshop_proposals;
       PRAGMA user_version=15;
       UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
   } finally {

@@ -1,6 +1,4 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
@@ -75,7 +73,7 @@ export function buildSessionListRowMetadataContext(params: {
         entries = new Map();
         runtimeEntries.set(selection.routeVariants, entries);
       }
-      const key = `${selection.runtimeId}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
+      const key = `${selection.runtimeId}\0${selection.allowApiFallback !== false}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
       let selected = entries.get(key);
       if (!selected) {
         selected = selectModelCatalogRuntimeEntry(selection);
@@ -207,18 +205,10 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   entry?: SessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
   rowContext?: SessionListRowContext;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }) {
-  const { cfg, agentId, sessionKey, entry } = params;
-  // Keep metadata bound to the projected row; rereading its key can adopt a
-  // replacement lifecycle while projecting the original entry.
-  const acpMeta =
-    entry?.acp ??
-    (params.preparedAcpMeta !== undefined
-      ? (params.preparedAcpMeta ?? undefined)
-      : entry
-        ? readAcpSessionMetaForEntry({ cfg, sessionKey, agentId, entry })
-        : readAcpSessionMeta({ sessionKey, agentId }));
+  const { entry } = params;
+  const acpMeta = params.preparedAcpMeta ?? undefined;
   const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentScope: { kind: "prepared", agentId: params.agentId },

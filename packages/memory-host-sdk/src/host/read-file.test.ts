@@ -36,6 +36,36 @@ async function createDirectorySymlink(target: string, linkPath: string): Promise
   }
 }
 
+it.each([
+  { name: "omitted agent limits", contextLimits: undefined, maxChars: 2000 },
+  {
+    name: "partial agent limits",
+    contextLimits: { postCompactionMaxChars: 1800 },
+    maxChars: 2000,
+  },
+  {
+    name: "an explicit agent override",
+    contextLimits: { memoryGetMaxChars: 1000 },
+    maxChars: 1000,
+  },
+])("applies the memory excerpt budget with $name", async ({ contextLimits, maxChars }) => {
+  const content = "cedar memory ".repeat(600);
+  const { workspaceDir } = await fixture({ "workspace/MEMORY.md": content });
+  const result = await readAgentMemoryFile({
+    cfg: {
+      agents: {
+        defaults: { contextLimits: { memoryGetMaxChars: 2000 } },
+        entries: { main: { workspace: workspaceDir, contextLimits } },
+      },
+    },
+    agentId: "main",
+    relPath: "MEMORY.md",
+  });
+  expect(result).toMatchObject({ status: "ok", truncated: true, from: 1, lines: 1 });
+  expect(result.text.split("\n\n")[0]).toBe(content.slice(0, maxChars));
+  expect(result.text).toContain("use read on the source file");
+});
+
 it("follows contained workspace parent aliases while keeping extra directories strict", async () => {
   const { directory, workspaceDir } = await fixture({ "workspace/notes/note.md": "linked notes" });
   await fs.mkdir(path.join(workspaceDir, "memory"));

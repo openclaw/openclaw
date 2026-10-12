@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Builds browser runtime bundles for the diffs viewer assets.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin } from "esbuild";
@@ -25,13 +24,6 @@ const targets = {
   },
 };
 
-function toPosixPath(value: string) {
-  return value.replaceAll("\\", "/");
-}
-
-/**
- * Creates the esbuild plugin that neutralizes Pierre diffs' browser side-effect import.
- */
 export function createPierreDiffsSideEffectImportPlugin(): {
   name: string;
   setup(buildContext: unknown): void;
@@ -41,7 +33,7 @@ export function createPierreDiffsSideEffectImportPlugin() {
     name: "openclaw-diffs-pierre-side-effect-imports",
     setup(buildContext) {
       buildContext.onResolve({ filter: /^diff$/ }, (args) => {
-        const importer = toPosixPath(args.importer);
+        const importer = args.importer.replaceAll("\\", "/");
         if (!importer.endsWith("/@pierre/diffs/dist/utils/parseDiffDecorations.js")) {
           return undefined;
         }
@@ -65,9 +57,6 @@ export function createPierreDiffsSideEffectImportPlugin() {
   } satisfies Plugin;
 }
 
-/**
- * Builds one configured diffs viewer runtime target.
- */
 async function buildDiffsViewerRuntime(targetName: string | undefined) {
   const target = Object.entries(targets).find(([name]) => name === targetName)?.[1];
   if (!target) {

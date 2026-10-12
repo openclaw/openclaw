@@ -3,7 +3,6 @@ import Foundation
 import OpenClawKit
 import PeekabooAutomationKit
 import PeekabooFoundation
-@preconcurrency import ScreenCaptureKit
 
 /// Fulfills `computer.act` on this Mac by driving the embedded Peekaboo
 /// automation engine in-process. Peekaboo covers single/right/double click,
@@ -36,8 +35,11 @@ final class ComputerScreenActionExecutor {
     private let textGraphemePoster: TextGraphemePoster
     /// Tracks whether a left_mouse_down is outstanding so mouse_move emits
     /// drag events (state persists across invokes on the shared instance).
-    private var leftButtonDown = false
     private var heldButtonScopeId: UUID?
+    private var leftButtonDown: Bool {
+        self.heldButtonScopeId != nil
+    }
+
     private let defaultInputScopeId = UUID()
     /// Bounded watchdog that releases a stuck left button if the matching
     /// left_mouse_up never arrives (arm expiry, disconnect, or a failed turn).
@@ -103,7 +105,7 @@ final class ComputerScreenActionExecutor {
 
     private func dispatch(
         _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay,
+        display: ScreenCaptureDisplayGeometry,
         inputScopeId: UUID,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
     {
@@ -122,7 +124,7 @@ final class ComputerScreenActionExecutor {
                 try await self.automation.click(
                     target: .coordinates(point), clickType: params.action.peekabooClickType, snapshotId: nil)
             } else {
-                let button: ComputerMouseButton = params.action == .middleClick ? .middle :
+                let button: CGMouseButton = params.action == .middleClick ? .center :
                     params.action == .rightClick ? .right : .left
                 let count = params.action == .tripleClick ? 3 : params.action == .doubleClick ? 2 : 1
                 try self.rawClick(at: point, button: button, count: count, flags: modifiers)
@@ -209,7 +211,7 @@ final class ComputerScreenActionExecutor {
 
     private func performScroll(
         _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay,
+        display: ScreenCaptureDisplayGeometry,
         modifiers: CGEventFlags,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
     {
@@ -237,17 +239,9 @@ final class ComputerScreenActionExecutor {
 
     // MARK: - Coordinate mapping
 
-    /// The target display in global points plus the capture source width used to
-    /// derive the captured screenshot pixel width for coordinate scaling.
-    private struct ResolvedDisplay {
-        var geometry: OpenClawComputerDisplayGeometry
-        var sourceWidth: Double
-        var sourceHeight: Double
-    }
-
     private func requiredPoint(
         _ params: OpenClawComputerActParams,
-        display: ResolvedDisplay) throws -> CGPoint
+        display: ScreenCaptureDisplayGeometry) throws -> CGPoint
     {
         guard let point = try point(params.x, params.y, params: params, display: display) else {
             throw ComputerActionError.missingCoordinate
@@ -259,7 +253,7 @@ final class ComputerScreenActionExecutor {
         _ x: Double?,
         _ y: Double?,
         params: OpenClawComputerActParams,
-        display: ResolvedDisplay) throws -> CGPoint?
+        display: ScreenCaptureDisplayGeometry) throws -> CGPoint?
     {
         if x == nil, y == nil {
             return nil
@@ -344,7 +338,6 @@ final class ComputerScreenActionExecutor {
     private func setLeftButtonDown(_ down: Bool, flags: CGEventFlags = [], inputScopeId: UUID? = nil) {
         self.buttonReleaseTask?.cancel()
         self.buttonReleaseTask = nil
-        self.leftButtonDown = down
         self.heldButtonScopeId = down ? inputScopeId ?? self.defaultInputScopeId : nil
         self.heldButtonFlags = down ? flags : []
         guard down else { return }
@@ -434,56 +427,25 @@ final class ComputerScreenActionExecutor {
     }
     #endif
 
-    private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ResolvedDisplay {
-        guard AppLaunchRuntimePlan.current.allowsActivation ||
-            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
-        else {
-            throw ComputerActionError.refused(
-                "Screen Recording permission required; relaunch without --no-activate and retry")
-        }
+    private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ScreenCaptureDisplayGeometry {
+        try ScreenCaptureSupport.requirePermission(failure: ComputerActionError.refused)
         // Match ScreenSnapshotService display ordering so a computer.act
         // screenIndex targets the same display the model saw in screen.snapshot.
-        let content = try await SCShareableContent.current
-        let displays = content.displays.sorted { $0.displayID < $1.displayID }
-        guard !displays.isEmpty else { throw ComputerActionError.noDisplays }
-        let idx = params.screenIndex ?? 0
-        guard idx >= 0, idx < displays.count else { throw ComputerActionError.invalidScreenIndex(idx) }
+        let display = try await ScreenCaptureSupport.display(
+            at: params.screenIndex,
+            noDisplays: ComputerActionError.noDisplays,
+            invalidIndex: ComputerActionError.invalidScreenIndex)
         // CGDisplayBounds is the global top-left point space CGEvent uses;
         // SCDisplay.width/height is the capture source size ScreenSnapshotService
         // caps to refWidth, so together they recover the captured pixel scale and
         // the source aspect ratio needed for portrait longest-edge scaling.
-        let bounds = CGDisplayBounds(displays[idx].displayID)
-        let geometry = OpenClawComputerDisplayGeometry(
-            originX: bounds.origin.x,
-            originY: bounds.origin.y,
-            widthPoints: bounds.width,
-            heightPoints: bounds.height)
-        let sourceWidth = Double(displays[idx].width)
-        let sourceHeight = Double(displays[idx].height)
-        // A display can disappear between the ScreenCaptureKit snapshot and
-        // CGDisplayBounds, which returns a zero rectangle for a stale id. Reject
-        // all degenerate geometry here; mapping it would collapse input to (0, 0).
-        guard OpenClawComputerInputGeometry.isValidMappingGeometry(
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
-            display: geometry)
-        else {
-            throw ComputerActionError.noDisplays
-        }
+        let resolved = try ScreenCaptureDisplayGeometry(display: display, noDisplays: ComputerActionError.noDisplays)
         if Self.usesScreenshotCoordinates(params) {
             let refWidth = try Self.requiredReferenceWidth(params)
-            let currentFrameId = OpenClawComputerInputGeometry.displayFrameId(
-                displayID: displays[idx].displayID,
-                sourceWidth: sourceWidth,
-                sourceHeight: sourceHeight,
-                referenceWidth: refWidth,
-                display: geometry)
+            let currentFrameId = resolved.frameId(referenceWidth: refWidth)
             try Self.validateDisplayFrame(params, currentFrameId: currentFrameId)
         }
-        return ResolvedDisplay(
-            geometry: geometry,
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight)
+        return resolved
     }
 
     private static func usesScreenshotCoordinates(_ params: OpenClawComputerActParams) -> Bool {
@@ -520,21 +482,24 @@ final class ComputerScreenActionExecutor {
 
     // MARK: - Raw CoreGraphics primitives
 
-    private func rawClick(at point: CGPoint, button: ComputerMouseButton, count: Int, flags: CGEventFlags) throws {
+    private func rawClick(at point: CGPoint, button: CGMouseButton, count: Int, flags: CGEventFlags) throws {
+        let downType: CGEventType = button == .center ? .otherMouseDown : button == .right ? .rightMouseDown :
+            .leftMouseDown
+        let upType: CGEventType = button == .center ? .otherMouseUp : button == .right ? .rightMouseUp : .leftMouseUp
         // Build every down/up pair before posting the first down. Event creation
         // failure can then never strand a button between a successfully created
         // down and a missing up.
         let pairs = try (1...max(1, count)).map { click in
             let down = try self.mouseEventFactory(
-                button.downType,
+                downType,
                 point,
-                button.cgButton,
+                button,
                 click,
                 flags)
             let up = try self.mouseEventFactory(
-                button.upType,
+                upType,
                 point,
-                button.cgButton,
+                button,
                 click,
                 flags)
             return (down: down, up: up)
@@ -699,61 +664,36 @@ extension OpenClawComputerScrollDirection {
     }
 }
 
-/// Mouse button plus the CoreGraphics event types for the raw click path.
-private enum ComputerMouseButton {
-    case left
-    case right
-    case middle
-
-    var cgButton: CGMouseButton {
-        switch self {
-        case .left: .left
-        case .right: .right
-        case .middle: .center
-        }
-    }
-
-    var downType: CGEventType {
-        switch self {
-        case .left: .leftMouseDown
-        case .right: .rightMouseDown
-        case .middle: .otherMouseDown
-        }
-    }
-
-    var upType: CGEventType {
-        switch self {
-        case .left: .leftMouseUp
-        case .right: .rightMouseUp
-        case .middle: .otherMouseUp
-        }
-    }
-}
-
 /// Parses a portable modifier string ("shift", "cmd+alt") into CGEvent flags.
 enum ComputerModifiers {
-    static func parse(_ raw: String?) throws -> CGEventFlags {
+    enum Syntax {
+        case screen
+        case window
+    }
+
+    static func parse(_ raw: String?, syntax: Syntax = .screen) throws -> CGEventFlags {
         guard let raw, !raw.isEmpty else { return [] }
+        let source = syntax == .window ? raw.lowercased() : raw
         var flags: CGEventFlags = []
-        for piece in raw.split(whereSeparator: { $0 == "+" || $0 == "," || $0 == " " }) {
+        for piece in source.split(whereSeparator: {
+            $0 == "+" || $0 == "," || (syntax == .window ? $0.isWhitespace : $0 == " ")
+        }) {
             let key = piece.lowercased()
-            switch key {
-            case "cmd", "command", "meta", "super", "win", "windows":
-                flags.insert(.maskCommand)
-            case "shift":
-                flags.insert(.maskShift)
-            case "ctrl", "control":
-                flags.insert(.maskControl)
-            case "alt", "opt", "option":
-                flags.insert(.maskAlternate)
-            case "fn", "function":
-                flags.insert(.maskSecondaryFn)
-            default:
-                // A typo like "shfit" would otherwise silently drop the modifier
-                // and perform a materially different high-risk gesture (a plain
-                // click instead of a modifier-click); reject it instead.
-                throw ComputerActionService.ComputerActionError.invalidModifier(key)
+            let flag: CGEventFlags? = switch key {
+            case "cmd", "command", "meta", "super", "win", "windows": .maskCommand
+            case "shift": .maskShift
+            case "ctrl", "control": .maskControl
+            case "alt", "opt", "option": .maskAlternate
+            case "fn", "function": .maskSecondaryFn
+            default: nil
             }
+            // Unknown modifiers must not become an unmodified gesture.
+            guard let flag, syntax == .screen || !["super", "win", "windows", "opt"].contains(key) else {
+                throw syntax == .screen
+                    ? ComputerActionService.ComputerActionError.invalidModifier(key)
+                    : ComputerActionService.ComputerActionError.invalidRequest("unsupported modifier '\(key)'")
+            }
+            flags.formUnion(flag)
         }
         return flags
     }

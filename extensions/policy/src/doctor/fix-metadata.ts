@@ -12,450 +12,511 @@ type PolicyFixMetadata = {
   readonly summary: string;
 };
 
-const m = (
+type PolicyCheckMetadata = {
+  readonly description: string;
+  readonly fix: PolicyFixMetadata;
+};
+
+const defineCheck = (
   checkId: (typeof POLICY_CHECK_IDS)[number],
+  description: string,
   fixClass: PolicyFixClass,
   summary: string,
-  options: Omit<PolicyFixMetadata, "checkId" | "fixClass" | "summary"> = {},
-): PolicyFixMetadata => {
-  const policyPath = POLICY_RULE_METADATA.find((rule) =>
-    rule.checkIds.includes(checkId),
-  )?.policyPath;
+  configTargets?: readonly string[],
+  policyPath = POLICY_RULE_METADATA.find((rule) => rule.checkIds.includes(checkId))?.policyPath,
+): PolicyCheckMetadata => {
   return {
-    checkId,
-    fixClass,
-    summary,
-    ...(policyPath === undefined ? {} : { policyPath }),
-    ...options,
+    description,
+    fix: {
+      checkId,
+      fixClass,
+      summary,
+      ...(policyPath === undefined ? {} : { policyPath }),
+      ...(configTargets === undefined ? {} : { configTargets }),
+    },
   };
 };
 
-const POLICY_FIX_METADATA = [
-  m(CHECK_IDS.policyMissingFile, "manual", "Restore or author the approved policy artifact."),
-  m(CHECK_IDS.policyInvalidFile, "manual", "Repair the policy JSONC syntax or schema."),
-  m(
-    CHECK_IDS.policyUnmigratedToolsFile,
+export const POLICY_CHECK_METADATA = [
+  defineCheck(
+    CHECK_IDS.policyMissingFile,
+    "The enabled Policy plugin has a policy file to verify.",
     "manual",
-    "Run openclaw doctor --fix to migrate governed tool declarations into AGENTS.md.",
+    "Restore or author the approved policy artifact.",
   ),
-  m(
+  defineCheck(
+    CHECK_IDS.policyInvalidFile,
+    "The enabled policy file parses before policy checks run.",
+    "manual",
+    "Repair the policy JSONC syntax or schema.",
+  ),
+  defineCheck(
     CHECK_IDS.policyHashMismatch,
+    "The policy file matches the configured expected hash.",
     "manual",
     "Restore the approved artifact or update the expected hash after review.",
-    { configTargets: ["plugins.entries.policy.config.expectedHash"] },
+    ["plugins.entries.policy.config.expectedHash"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyAttestationMismatch,
+    "The current policy check matches the accepted attestation.",
     "manual",
     "Review the current attestation and update accepted hashes after approval.",
-    { configTargets: ["plugins.entries.policy.config.expectedAttestationHash"] },
+    ["plugins.entries.policy.config.expectedAttestationHash"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyDeniedChannelProvider,
+    "Configured channels satisfy policy deny rules.",
     "automatic",
     "Disable product-managed channels matching the denied provider.",
-    { configTargets: ["channels"] },
+    ["channels"],
   ),
-  m(CHECK_IDS.policyDeniedMcpServer, "reviewRequired", "Remove or disable the denied MCP server.", {
-    configTargets: ["mcp.servers"],
-  }),
-  m(
+  defineCheck(
+    CHECK_IDS.policyDeniedMcpServer,
+    "Configured MCP servers do not match policy deny rules.",
+    "reviewRequired",
+    "Remove or disable the denied MCP server.",
+    ["mcp.servers"],
+  ),
+  defineCheck(
     CHECK_IDS.policyUnapprovedMcpServer,
+    "Configured MCP servers do not match policy allow rules.",
     "reviewRequired",
     "Remove the unapproved MCP server or select an approved replacement.",
-    { configTargets: ["mcp.servers"] },
+    ["mcp.servers"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyDeniedModelProvider,
+    "Configured model providers do not match policy deny rules.",
     "reviewRequired",
     "Remove the model provider or switch references to an approved provider.",
-    { configTargets: ["models"] },
+    ["models"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyUnapprovedModelProvider,
+    "Configured model providers do not match policy allow rules.",
     "reviewRequired",
     "Select an approved model provider.",
-    { configTargets: ["models"] },
+    ["models"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyPrivateNetworkAccess,
+    "Network SSRF policy settings match private-network requirements.",
     "reviewRequired",
     "Disable the concrete private-network access opt-in.",
-    { configTargets: ["network"] },
+    ["network"],
   ),
-  m(
-    CHECK_IDS.policyRoutingBindingsRequired,
-    "reviewRequired",
-    "Add an intentional channel route binding or revise the policy after review.",
-    { configTargets: ["bindings"] },
-  ),
-  m(
-    CHECK_IDS.policyRoutingBindingChannelUnconfigured,
-    "reviewRequired",
-    "Correct the binding channel or configure the intended channel after review.",
-    {
-      configTargets: ["bindings", "channels"],
-    },
-  ),
-  m(
-    CHECK_IDS.policyRoutingAgentMismatch,
-    "reviewRequired",
-    "Review binding precedence and the expected agent before changing message delivery.",
-    { configTargets: ["bindings"] },
-  ),
-  m(
-    CHECK_IDS.policyRoutingMatchKindMismatch,
-    "reviewRequired",
-    "Restore the intended binding specificity or approve the new match kind.",
-    { configTargets: ["bindings"] },
-  ),
-  m(
+  defineCheck(
     CHECK_IDS.policyIngressDmPolicyUnapproved,
+    "Channel direct-message access policy matches ingress requirements.",
     "reviewRequired",
     "Set channel DM policy to an allowed value.",
-    { configTargets: ["channels"] },
+    ["channels"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyIngressDmScopeUnapproved,
+    "Direct-message sessions use the policy-required isolation scope.",
     "reviewRequired",
     "Move session DM scope to the required or stricter ordered value.",
-    { configTargets: ["ingress"] },
+    ["ingress"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyIngressOpenGroupsDenied,
+    "Channel group access does not use open group policy when denied.",
     "automatic",
     "Disable product-managed open group ingress.",
-    { configTargets: ["channels"] },
+    ["channels"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyIngressGroupMentionRequired,
+    "Channel group access keeps mention gates enabled when required.",
     "automatic",
     "Require mention in product-managed group channels.",
-    { configTargets: ["channels"] },
+    ["channels"],
   ),
-  m(
+  defineCheck(
+    CHECK_IDS.policyRoutingBindingsRequired,
+    "Routing policy has at least one channel route binding when required.",
+    "reviewRequired",
+    "Add an intentional channel route binding or revise the policy after review.",
+    ["bindings"],
+  ),
+  defineCheck(
+    CHECK_IDS.policyRoutingBindingChannelUnconfigured,
+    "Route bindings name channels present in configuration.",
+    "reviewRequired",
+    "Correct the binding channel or configure the intended channel after review.",
+    ["bindings", "channels"],
+  ),
+  defineCheck(
+    CHECK_IDS.policyRoutingAgentMismatch,
+    "Authored routing checks resolve to their expected agents.",
+    "reviewRequired",
+    "Review binding precedence and the expected agent before changing message delivery.",
+    ["bindings"],
+  ),
+  defineCheck(
+    CHECK_IDS.policyRoutingMatchKindMismatch,
+    "Authored routing checks match at their expected specificity.",
+    "reviewRequired",
+    "Restore the intended binding specificity or approve the new match kind.",
+    ["bindings"],
+  ),
+  defineCheck(
     CHECK_IDS.policyGatewayNonLoopbackBind,
+    "Gateway bind posture matches policy exposure requirements.",
     "reviewRequired",
     "Set gateway bind address to loopback when remote exposure is not intended.",
-    {
-      configTargets: ["gateway.bind"],
-    },
+    ["gateway.bind"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyGatewayAuthDisabled,
+    "Gateway authentication remains enabled when required by policy.",
     "manual",
     "Configure token, password, or trusted-proxy auth.",
-    { configTargets: ["gateway.auth"] },
+    ["gateway.auth"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyGatewayRateLimitMissing,
+    "Gateway authentication rate-limit posture is explicit when required by policy.",
     "reviewRequired",
     "Add explicit gateway auth rate limits from product defaults.",
-    {
-      configTargets: ["gateway.auth.rateLimit"],
-    },
+    ["gateway.auth.rateLimit"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyGatewayControlUiInsecure,
+    "Gateway Control UI insecure exposure toggles remain disabled by policy.",
     "automatic",
     "Disable the insecure Control UI toggle.",
-    { configTargets: ["gateway.controlUi"] },
+    ["gateway.controlUi"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyGatewayTailscaleFunnel,
+    "Gateway Tailscale Funnel exposure matches policy.",
     "reviewRequired",
     "Disable Tailscale funnel or serve exposure.",
-    { configTargets: ["tailscale"] },
+    ["tailscale"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyGatewayRemoteEnabled,
+    "Remote gateway mode matches policy.",
     "automatic",
     "Disable product-managed remote gateway mode.",
-    { configTargets: ["gateway.remote"] },
+    ["gateway.remote"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyGatewayHttpEndpointEnabled,
+    "Gateway HTTP API endpoints match policy.",
     "automatic",
     "Disable denied Gateway HTTP endpoints.",
-    { configTargets: ["gateway.http"] },
+    ["gateway.http"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+    "Gateway HTTP URL-fetch inputs have allowlists when required by policy.",
     "manual",
     "Add URL allowlists for each URL-fetch input.",
-    { configTargets: ["gateway.http"] },
+    ["gateway.http"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyGatewayNodeCommandDenied,
+    "Gateway node command allowlists match policy.",
     "reviewRequired",
     "Add the command to gateway node denyCommands or update policy after review.",
-    {
-      configTargets: ["gateway.nodes.commands.deny"],
-    },
+    ["gateway.nodes.commands.deny"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyAgentsWorkspaceAccessDenied,
+    "Agent sandbox workspace access matches policy.",
     "reviewRequired",
     "Set agent workspace access to an allowed mode.",
-    { configTargets: ["agents"] },
+    ["agents"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyAgentsToolNotDenied,
+    "Agent workspace mutation/runtime tools are denied when policy requires it.",
     "automatic",
     "Merge required built-in workspace tool denies.",
-    { configTargets: ["agents"] },
+    ["agents"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyToolsProfileUnapproved,
+    "Configured tool profiles match policy allow rules.",
     "reviewRequired",
     "Set the tool profile to an allowed profile.",
-    { configTargets: ["tools.profile"] },
+    ["tools.profile"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
+    "Filesystem tools use workspace-only posture when policy requires it.",
     "reviewRequired",
     "Set workspace-only filesystem posture when required assets remain readable.",
-    {
-      configTargets: ["tools.fs.workspaceOnly"],
-    },
+    ["tools.fs.workspaceOnly"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyToolsExecSecurityUnapproved,
+    "Exec tool security mode matches policy allow rules.",
     "reviewRequired",
     "Set exec security to an allowed value.",
-    { configTargets: ["tools.exec.security"] },
+    ["tools.exec.security"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyToolsExecAskUnapproved,
+    "Exec tool ask mode matches policy allow rules.",
     "reviewRequired",
     "Set exec ask mode to an allowed value.",
-    { configTargets: ["tools.exec.ask"] },
+    ["tools.exec.ask"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyToolsExecHostUnapproved,
+    "Exec tool host routing matches policy allow rules.",
     "reviewRequired",
     "Move exec host to an allowed host mode.",
-    { configTargets: ["tools.exec.host"] },
+    ["tools.exec.host"],
   ),
-  m(CHECK_IDS.policyToolsElevatedEnabled, "automatic", "Set tools elevated mode to disabled.", {
-    configTargets: ["tools.elevated.enabled"],
-  }),
-  m(
+  defineCheck(
+    CHECK_IDS.policyToolsElevatedEnabled,
+    "Elevated tool mode remains disabled when policy requires it.",
+    "automatic",
+    "Set tools elevated mode to disabled.",
+    ["tools.elevated.enabled"],
+  ),
+  defineCheck(
     CHECK_IDS.policyToolsAlsoAllowMissing,
+    "Configured tools.alsoAllow entries include policy expected lists.",
     "reviewRequired",
     "Add expected alsoAllow entries only when policy intentionally grants them.",
-    { configTargets: ["tools.alsoAllow"] },
+    ["tools.alsoAllow"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyToolsAlsoAllowUnexpected,
+    "Configured tools.alsoAllow entries match policy expected lists.",
     "reviewRequired",
     "Remove unexpected alsoAllow entries.",
-    { configTargets: ["tools.alsoAllow"] },
+    ["tools.alsoAllow"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyToolsRequiredDenyMissing,
+    "Configured tool deny lists include tools required by policy.",
     "automatic",
     "Merge required built-in deny tool classes.",
-    {
-      configTargets: ["tools.deny", "agents.entries.<id>.tools.deny"],
-    },
+    ["tools.deny", "agents.entries.<id>.tools.deny"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxModeUnapproved,
+    "Sandbox mode config satisfies policy requirements.",
     "reviewRequired",
     "Set sandbox mode to an allowed value.",
-    { configTargets: ["sandbox.mode"] },
+    ["sandbox.mode"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxBackendUnapproved,
+    "Sandbox backend config satisfies policy requirements.",
     "reviewRequired",
     "Choose an approved sandbox backend that is installed.",
-    { configTargets: ["sandbox.backend"] },
+    ["sandbox.backend"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxContainerPostureUnobservable,
+    "Sandbox container posture policy only targets observable container backends.",
     "unsupported",
     "Add observable container posture evidence before patching.",
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxContainerHostNetworkDenied,
+    "Sandbox container config avoids host network mode.",
     "reviewRequired",
     "Disable container host networking.",
-    {
-      configTargets: ["sandbox.containers"],
-    },
+    ["sandbox.containers"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxContainerNamespaceJoinDenied,
+    "Sandbox container config avoids joining another container network namespace.",
     "reviewRequired",
     "Disable joining container namespaces.",
-    {
-      configTargets: ["sandbox.containers"],
-    },
+    ["sandbox.containers"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxContainerMountModeRequired,
+    "Sandbox container mounts are read-only when policy requires it.",
     "reviewRequired",
     "Change required mounts to read-only.",
-    {
-      configTargets: ["sandbox.containers"],
-    },
+    ["sandbox.containers"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxContainerRuntimeSocketMount,
+    "Sandbox container mounts avoid host container runtime sockets.",
     "reviewRequired",
     "Remove container runtime socket binds.",
-    {
-      configTargets: ["sandbox.containers"],
-    },
+    ["sandbox.containers"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxContainerUnconfinedProfile,
+    "Sandbox container profile config avoids unconfined profiles.",
     "reviewRequired",
     "Remove unconfined container profiles.",
-    {
-      configTargets: ["sandbox.containers"],
-    },
+    ["sandbox.containers"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
+    "Sandbox browser CDP config includes a source range when policy requires it.",
     "manual",
     "Add an explicit browser CDP source range.",
-    {
-      configTargets: ["agents.sandbox.browser"],
-    },
+    ["agents.sandbox.browser"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyDataHandlingTelemetryContentCapture,
+    "Telemetry content capture remains disabled when policy denies it.",
     "automatic",
     "Disable telemetry content capture.",
-    {
-      configTargets: ["diagnostics.otel.captureContent"],
-    },
+    ["diagnostics.otel.captureContent"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
+    "Session retention maintenance is enforced when policy requires it.",
     "reviewRequired",
     "Set session maintenance to enforced mode.",
-    {
-      configTargets: ["session.maintenance.mode"],
-    },
+    ["session.maintenance.mode"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
+    "Session transcript memory indexing remains disabled when policy denies it.",
     "reviewRequired",
     "Disable transcript indexing for the affected agent scope.",
-    {
-      configTargets: ["memory"],
-    },
+    ["memory"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySecretsUnmanagedProvider,
+    "OpenClaw config SecretRefs use configured secret providers when policy requires managed providers.",
     "manual",
     "Migrate the secret to a managed provider.",
-    { configTargets: ["secrets"] },
+    ["secrets"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySecretsDeniedProviderSource,
+    "OpenClaw config secret providers and SecretRefs do not use sources denied by policy.",
     "reviewRequired",
     "Move the secret out of the denied source.",
-    { configTargets: ["secrets"] },
+    ["secrets"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policySecretsInsecureProvider,
+    "Configured secret providers do not opt into insecure posture unless policy allows it.",
     "reviewRequired",
     "Remove insecure provider overrides.",
-    { configTargets: ["secrets"] },
+    ["secrets"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyAuthProfileInvalidMetadata,
+    "OpenClaw config auth profiles declare required provider and mode metadata.",
     "manual",
     "Add required provider and mode metadata to auth profiles.",
-    { configTargets: ["auth.profiles"] },
+    ["auth.profiles"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyAuthProfileUnapprovedMode,
+    "OpenClaw config auth profile modes stay within the policy allowlist.",
     "manual",
     "Change auth mode and credentials through the auth owner flow.",
-    { configTargets: ["auth.profiles"] },
+    ["auth.profiles"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyExecApprovalsMissing,
+    "Required exec approvals artifact is present for policy conformance.",
     "manual",
     "Restore an attributable exec-approvals evidence file.",
-    {
-      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
-    },
+    [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
   ),
-  m(CHECK_IDS.policyExecApprovalsInvalid, "manual", "Repair the exec approvals evidence artifact."),
-  m(
+  defineCheck(
+    CHECK_IDS.policyExecApprovalsInvalid,
+    "Exec approvals artifact parses before policy checks run.",
+    "manual",
+    "Repair the exec approvals evidence artifact.",
+  ),
+  defineCheck(
     CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved,
+    "Exec approval defaults use a policy-approved security mode.",
     "manual",
     "Update reviewed default approval evidence or policy.",
-    {
-      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
-    },
+    [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved,
+    "Per-agent exec approval settings use policy-approved security modes.",
     "manual",
     "Update reviewed agent approval evidence or policy.",
-    {
-      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
-    },
+    [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled,
+    "Exec approval agents do not implicitly auto-allow skill CLIs unless policy allows it.",
     "reviewRequired",
     "Disable auto-allow skills in the approval owner surface.",
-    {
-      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
-    },
+    [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyExecApprovalsAllowlistMissing,
+    "Exec approval allowlists include every pattern required by policy.",
     "manual",
     "Add expected approval patterns through approval review.",
-    {
-      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
-    },
+    [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
+    "Exec approval allowlists do not contain patterns outside policy.",
     "manual",
     "Remove unexpected approval patterns through approval review.",
-    {
-      configTargets: [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
-    },
+    [EXEC_APPROVALS_POLICY_DOCUMENT_NAME],
   ),
-  m(
+  defineCheck(
+    CHECK_IDS.policyUnmigratedToolsFile,
+    "Governed tool declarations have been migrated from TOOLS.md into AGENTS.md.",
+    "manual",
+    "Run openclaw doctor --fix to migrate governed tool declarations into AGENTS.md.",
+  ),
+  defineCheck(
     CHECK_IDS.policyMissingToolRisk,
+    "AGENTS.md tool policy entries declare explicit risk levels.",
     "manual",
     "Add tool risk metadata in the owning tool declaration.",
-    { configTargets: ["tools"] },
+    ["tools"],
   ),
-  m(CHECK_IDS.policyUnknownToolRisk, "manual", "Use a supported tool risk level.", {
-    policyPath: ["tools", "requireMetadata"],
-    configTargets: ["tools"],
-  }),
-  m(
+  defineCheck(
+    CHECK_IDS.policyUnknownToolRisk,
+    "AGENTS.md tool policy entries use known risk levels.",
+    "manual",
+    "Use a supported tool risk level.",
+    ["tools"],
+    ["tools", "requireMetadata"],
+  ),
+  defineCheck(
     CHECK_IDS.policyMissingToolSensitivity,
+    "AGENTS.md tool policy entries declare default artifact sensitivity.",
     "manual",
     "Add tool sensitivity metadata in the owning tool declaration.",
-    { configTargets: ["tools"] },
+    ["tools"],
   ),
-  m(
+  defineCheck(
     CHECK_IDS.policyMissingToolOwner,
+    "AGENTS.md tool policy entries declare an accountable owner.",
     "manual",
     "Add owner metadata in the owning tool declaration.",
-    { configTargets: ["tools"] },
+    ["tools"],
   ),
-  m(CHECK_IDS.policyUnknownToolSensitivity, "manual", "Use a supported tool sensitivity token.", {
-    policyPath: ["tools", "requireMetadata"],
-    configTargets: ["tools"],
-  }),
-] as const satisfies readonly PolicyFixMetadata[];
+  defineCheck(
+    CHECK_IDS.policyUnknownToolSensitivity,
+    "AGENTS.md tool policy entries use known sensitivity levels.",
+    "manual",
+    "Use a supported tool sensitivity token.",
+    ["tools"],
+    ["tools", "requireMetadata"],
+  ),
+] as const satisfies readonly PolicyCheckMetadata[];
 
+// Fix recommendation iteration follows the ID registry, not Doctor registration order.
 export const POLICY_FIX_METADATA_BY_CHECK_ID = new Map(
-  POLICY_FIX_METADATA.map((rule) => [rule.checkId, rule] as const),
+  POLICY_CHECK_METADATA.toSorted(
+    (left, right) =>
+      POLICY_CHECK_IDS.indexOf(left.fix.checkId) - POLICY_CHECK_IDS.indexOf(right.fix.checkId),
+  ).map(({ fix }) => [fix.checkId, fix]),
 );

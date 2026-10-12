@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessageEvent, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type {
+  AssistantMessageEvent,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  StreamFn,
+} from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost } from "../host.js";
 import {
   codeModeToolSurfaceObserver,
   reasoningTagTextPolicy,
@@ -11,27 +18,36 @@ import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { createOpenAIProviderClient } from "../providers/openai-provider-client.js";
-import {
-  clearPendingCommentaryText,
-  tagUnresolvedTextAsCommentary,
-  type PendingCommentaryTags,
-} from "../utils/assistant-text-phase.js";
+import { toOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
+  withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
+import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { createAssistantOutput } from "./assistant-output.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
-import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  isNativeOpenAIEndpoint,
+  resolveOpenAICompletionsCompat,
+} from "./openai-completions-compat.js";
+import { bufferContextLimitedCompletions } from "./openai-completions-context-budget-buffer.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
-import { buildOpenAICompletionsRequest } from "./openai-completions-params.js";
+import {
+  buildOpenAICompletionsRequest,
+  resolveCompletionsContextOutputBudget,
+} from "./openai-completions-params.js";
 import {
   processCompletionsStream,
+  observeOpenAICompletionsProgress,
   shouldEmitOpenAICompletionsReasoning,
 } from "./openai-completions-stream.js";
+import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -61,6 +77,7 @@ import {
   transportAbortError,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
+import { supportsModelTools } from "./transport-utils.js";
 
 export { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 
@@ -244,13 +261,44 @@ function createDirectCompletionsEventStream(
 }
 
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
-  return (model, context, options) =>
-    streamOpenAICompletionsRequest(
+  const streamResponses = createOpenAIResponsesTransportStreamFn();
+  return (model, context, options) => {
+    const completionsOptions = options as OpenAICompletionsOptions | undefined;
+    // Official Chat Completions rejects function tools alongside reasoning for
+    // current GPT models; Responses serves the same API-key route and keeps reasoning.
+    if (
+      model.reasoning &&
+      context.tools?.length &&
+      supportsModelTools(model) &&
+      isNativeOpenAIEndpoint(model)
+    ) {
+      const toolChoice = completionsOptions?.toolChoice;
+      const responsesOptions: SimpleStreamOptions &
+        Pick<OpenAIResponsesOptions, "reasoningEffort" | "toolChoice"> = {
+        ...options,
+        // Managed Completions defaults an unset selector to high; Responses would
+        // otherwise apply its own model default, which is none for some models.
+        ...(completionsOptions?.reasoning === undefined &&
+        completionsOptions?.reasoningEffort === undefined
+          ? { reasoningEffort: "high" }
+          : {}),
+        ...(toolChoice && typeof toolChoice === "object"
+          ? { toolChoice: toOpenAIResponsesToolChoice(toolChoice) }
+          : {}),
+      };
+      return streamResponses(
+        getAiTransportHost().inheritManagedTransport(model, { ...model, api: "openai-responses" }),
+        context,
+        responsesOptions,
+      );
+    }
+    return streamOpenAICompletionsRequest(
       model as Model<"openai-completions">,
       context,
-      options as OpenAICompletionsOptions | undefined,
+      completionsOptions,
       "managed",
     );
+  };
 }
 
 export function streamOpenAICompletionsRequest(
@@ -262,7 +310,7 @@ export function streamOpenAICompletionsRequest(
   const { eventStream, stream } = createWritableTransportEventStream();
   void (async () => {
     const output: MutableAssistantOutput = createAssistantOutput(model);
-    const provisionalCommentaryTags: PendingCommentaryTags = new Map();
+    let discardCandidate = false;
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -291,7 +339,8 @@ export function streamOpenAICompletionsRequest(
               sawStreamDONE: undefined,
             }
           : createManagedCompletionsClient(model, context, options, apiKey, cacheRetention);
-      let params = buildOpenAICompletionsRequest(model, context, options, policy);
+      const builtParams = buildOpenAICompletionsRequest(model, context, options, policy);
+      let params = builtParams;
       const encodeBody = prepareModelRequestBody(options);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
@@ -315,6 +364,7 @@ export function streamOpenAICompletionsRequest(
           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
       }
+      const contextOutputBudget = resolveCompletionsContextOutputBudget(builtParams, params);
       const emitReasoning =
         mode === "direct"
           ? directEmitReasoning
@@ -334,44 +384,90 @@ export function streamOpenAICompletionsRequest(
               }),
               ...(await encodeBody(params)),
             };
-      const { data: responseStream, response } = await client.chat.completions
-        .create(
-          params as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-          requestOptions,
-        )
-        .withResponse();
+      const request = client.chat.completions.create(
+        params as OpenAI.Chat.Completions.ChatCompletionCreateParams,
+        requestOptions,
+      );
+      const response = await request.asResponse();
+      const responseStream = {
+        async *[Symbol.asyncIterator]() {
+          // Parse only after provider acceptance; JSON bodies are consumed here too.
+          if (!params.stream) {
+            yield (await boundResponseBody(response, {
+              maxBytes: 16 * 1024 * 1024,
+              onOverflow: ({ maxBytes }) =>
+                new Error(`Chat Completions JSON response exceeds ${maxBytes} bytes`),
+            }).json()) as OpenAI.Chat.Completions.ChatCompletion; // SAFETY: Provider JSON follows the Chat Completions wire contract.
+            return;
+          }
+          const data = await request;
+          if (Symbol.asyncIterator in data) {
+            yield* data;
+          } else {
+            yield data;
+          }
+        },
+      };
       const hookedResponseStream = withProviderResponseHook({
         stream: responseStream,
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
         hook: createOpenAIProviderAcceptanceHook(options, response, model),
-        onReady: () => stream.push({ type: "start", partial: output }),
+        onReady: () => {
+          if (contextOutputBudget === undefined) {
+            stream.push({ type: "start", partial: output });
+          }
+        },
       });
+      const providerStream = observeOpenAICompletionsProgress(
+        withFirstStreamEventTimeout(hookedResponseStream, {
+          provider: model.provider,
+          api: model.api,
+          model: model.id,
+          timeoutMs: getFirstStreamEventTimeoutMs(options) ?? 0,
+          stage: "completions",
+          abort: firstEventAbort.abort,
+          onTimeout: getFirstStreamEventTimeoutHandler(options),
+          hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+        }),
+        options?.signal,
+      );
+      const buffered =
+        contextOutputBudget === undefined
+          ? undefined
+          : await bufferContextLimitedCompletions(providerStream, options?.signal);
+      discardCandidate = Boolean(
+        buffered?.bounded && (buffered.failed || buffered.finishReason === "length"),
+      );
+      if (buffered && !discardCandidate) {
+        stream.push({ type: "start", partial: output });
+      }
       const directEvents =
         mode === "direct" ? createDirectCompletionsEventStream(output, stream) : undefined;
       try {
         await processCompletionsStream(
-          hookedResponseStream,
+          buffered?.stream ?? providerStream,
           output,
           model,
-          directEvents?.stream ?? stream,
+          discardCandidate ? { push() {} } : (directEvents?.stream ?? stream),
           {
             ...(directEvents
               ? {
                   mode: "direct" as const,
                   beforeContentBlock: directEvents.beforeContentBlock,
-                  provisionalCommentaryTags,
                 }
               : { mode: "managed" as const }),
-            signal: options?.signal,
+            signal: discardCandidate ? undefined : options?.signal,
             emitReasoning,
             strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
-            firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
-            abortFirstEventStream: firstEventAbort.abort,
-            onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
             sawStreamDONE,
           },
         );
+        if (discardCandidate) {
+          throw new Error(
+            `Context length exceeded: automatic output budget of ${contextOutputBudget} tokens exhausted before completion.`,
+          );
+        }
         if (directEvents) {
           if (options?.signal?.aborted) {
             throw transportAbortError(options.signal);
@@ -392,22 +488,20 @@ export function streamOpenAICompletionsRequest(
       directEvents?.finish(output.stopReason === "toolUse");
       finalizeTransportStream({ stream, output, signal: options?.signal });
     } catch (error) {
+      if (discardCandidate) {
+        output.content = [];
+      }
       failTransportStream({
         stream,
         output,
         signal: options?.signal,
         error,
         cleanup: () => {
-          if (mode === "managed") {
-            output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-          }
           finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
-          clearPendingCommentaryText(provisionalCommentaryTags);
-          tagUnresolvedTextAsCommentary(output);
           if (mode === "direct") {
             for (const block of output.content) {
               delete (block as { index?: number }).index;
-              delete (block as { partialArgs?: string }).partialArgs;
+              delete (block as { partialJson?: string }).partialJson;
               delete (block as { streamIndex?: number }).streamIndex;
             }
           }
@@ -468,7 +562,11 @@ function createManagedCompletionsClient(
   );
   // The SDK consumes DONE without yielding it; native tool calls need to distinguish it from EOF.
   const doneDetector = createSseDoneDetector();
-  const baseFetch = buildGuardedModelFetch(model);
+  // The SDK replaces the fetch signal; keep liveness keyed to the exact
+  // caller signal watched by the idle timer.
+  const baseFetch = buildGuardedModelFetch(model, undefined, {
+    onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
+  });
   const doneDetectingFetch: typeof globalThis.fetch = async (url, init) => {
     const response = await baseFetch(url as never, init);
     if (!response.body || !response.ok) {
@@ -488,11 +586,7 @@ function createManagedCompletionsClient(
         },
       }),
     );
-    return new Response(transformed, {
-      headers: response.headers,
-      status: response.status,
-      statusText: response.statusText,
-    });
+    return new Response(transformed, response);
   };
   const clientConfig = buildOpenAICompletionsClientConfig(
     model,

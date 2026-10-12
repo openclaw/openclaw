@@ -13,6 +13,7 @@ import type {
   SessionCreatedActor,
   SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRuntimeSpawnModelAutoSelection } from "./agent-runtime-session-spawn-context.js";
 import type {
@@ -40,7 +41,7 @@ export type PreparedGatewaySessionLifecycle = {
   repositoryWorkspaceId?: string;
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   /** Reacquire source custody only around the final persistence operation. */
-  withCommit?: <T>(run: (assertSourceCurrent: () => void) => Promise<T>) => Promise<T>;
+  withCommit?: <T>(run: (assertSourceCurrent: SessionSourceAssertion) => Promise<T>) => Promise<T>;
   rollback?: () => Promise<void>;
 };
 
@@ -138,6 +139,7 @@ export type CreateGatewaySessionParams = {
   spawnToolPolicy?: {
     version: 1;
     completionOwnerSessionKey?: string;
+    delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
     allow: string[];
     deny: string[];
   };
@@ -147,6 +149,7 @@ export type CreateGatewaySessionParams = {
   defaultSessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionToolOverrides;
+  communication?: SessionEntry["communication"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -192,6 +195,7 @@ export type CreateGatewaySessionParams = {
   /** Trusted in-process creation provenance; never populated from public Gateway params. */
   creation?: {
     via: SessionCreatedVia;
+    surface?: SessionEntry["createdSurface"];
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;
@@ -202,6 +206,8 @@ export type CreateGatewaySessionParams = {
     /** Trusted config-resolved spawn model provenance for the `model` field. */
     spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
   };
+  /** Creation-only publication, committed with the exact new row before its initial turn. */
+  childSessionPublication?: import("../channels/message-access/child-session-publication.js").ChildSessionPublication;
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
@@ -213,5 +219,5 @@ export type CreateGatewaySessionParams = {
   onCreatedSessionCommitted?: (created: CreatedGatewaySession) => void;
   afterSessionCommitted?: SessionEntryCreateWithTranscriptOptions["afterCommitted"];
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
-  commitGuard?: () => void;
+  commitGuard?: SessionSourceAssertion;
 };

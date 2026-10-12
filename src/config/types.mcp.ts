@@ -1,4 +1,3 @@
-// Defines MCP server and tool approval configuration types.
 import type { z } from "zod";
 import type { McpServerConfigInput } from "./zod-schema.mcp-server.js";
 import type { McpConfigSchema } from "./zod-schema.root-support.js";

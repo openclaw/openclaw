@@ -10,9 +10,17 @@ import {
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  waitForSessionTranscriptProjection,
+} from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { createSessionTranscriptHeader } from "../../config/sessions/transcript-header.js";
 import { assertMemoryAudienceSession } from "../../plugins/memory-audience.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -215,24 +223,98 @@ describe("provider-owned memory flush", () => {
     await projected.execute("flush-save", {});
   }
 
-  async function executeLookupTool(params: EmbeddedAgentParams) {
-    if (!params.memoryFlushTools) {
-      throw new Error("missing tools-arm run context");
-    }
-    const tool: AnyAgentTool = {
-      name: "knowledge_grep",
-      label: "Search pages",
-      description: "Search existing memory",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ content: [{ type: "text", text: "found" }], details: {} }),
-    };
-    setPluginToolMeta(tool, { pluginId: "knowledge", optional: false });
-    const [projected] = projectMemoryFlushTools([tool], params.memoryFlushTools);
-    if (!projected) {
-      throw new Error("declared lookup tool was not projected");
-    }
-    await projected.execute("flush-lookup", {});
-  }
+  it.each([undefined, ZERO_USAGE_FIXTURE])(
+    "flushes transcript pressure without provider usage %j without publishing estimated usage",
+    async (usage) => {
+      registerToolsFlushPlan();
+      const { entry, overrides } = await createToolsFlushFixture({
+        totalTokens: 2,
+        totalTokensFresh: false,
+      });
+      const scope = { ...overrides, agentId: "main", sessionId: entry.sessionId };
+      const transcript = SessionManager.fromEntries([
+        createSessionTranscriptHeader({ cwd: rootDir, sessionId: entry.sessionId }),
+      ]);
+      await transcript.appendMessageAsync({
+        role: "user",
+        content: "x".repeat(310_000),
+        timestamp: 1,
+      });
+      await transcript.appendMessageAsync(
+        makeAssistantMessageFixture({
+          content: [{ type: "text", text: "Acknowledged" }],
+          usage,
+          stopReason: "stop",
+          errorMessage: undefined,
+        }),
+      );
+      await replaceTranscriptEvents(scope, [transcript.getHeader(), ...transcript.getEntries()]);
+      await waitForSessionTranscriptProjection(scope);
+      runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+        await executePersistenceTool(params);
+        return { payloads: [], meta: {} };
+      });
+
+      const result = await runDefaultMemoryFlush(entry, { ...overrides, promptForEstimate: "" });
+
+      expect(result.outcome).toBe("completed");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(scope)).toMatchObject({
+        totalTokens: 2,
+        totalTokensFresh: false,
+        memoryFlush: { kind: "succeeded", compactionCount: 1 },
+      });
+    },
+  );
+
+  it("does not count unavailable output twice in a memory-flush projection", async () => {
+    registerToolsFlushPlan();
+    const { entry, overrides } = await createToolsFlushFixture({ totalTokensFresh: false });
+    const scope = { ...overrides, agentId: "main", sessionId: entry.sessionId };
+    const transcript = SessionManager.fromEntries([
+      createSessionTranscriptHeader({ cwd: rootDir, sessionId: entry.sessionId }),
+    ]);
+    await transcript.appendMessageAsync(
+      makeAssistantMessageFixture({
+        content: [{ type: "text", text: "x".repeat(300_000) }],
+        usage: {
+          ...ZERO_USAGE_FIXTURE,
+          input: 1,
+          output: 2_000,
+          totalTokens: 2_001,
+          contextUsage: { state: "unavailable" },
+        },
+        stopReason: "stop",
+        errorMessage: undefined,
+      }),
+    );
+    await replaceTranscriptEvents(scope, [transcript.getHeader(), ...transcript.getEntries()]);
+    await waitForSessionTranscriptProjection(scope);
+
+    const result = await runDefaultMemoryFlush(entry, { ...overrides, promptForEstimate: "" });
+
+    expect(result.outcome).toBe("skipped");
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "does not flush empty history for a large pending input with fresh=%s",
+    async (totalTokensFresh) => {
+      registerToolsFlushPlan();
+      const { entry, overrides } = await createToolsFlushFixture({
+        totalTokens: 0,
+        totalTokensFresh,
+      });
+
+      const result = await runDefaultMemoryFlush(entry, {
+        ...overrides,
+        promptForEstimate: "x".repeat(310_000),
+      });
+
+      expect(result.outcome).toBe("skipped");
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not resolve a legacy file plan for a session that cannot write its workspace", async () => {
     const registry = createEmptyPluginRegistry();
@@ -345,25 +427,6 @@ describe("provider-owned memory flush", () => {
     expect(requireEmbeddedAgentCall(3).memoryFlushTools?.flushId).not.toBe(firstId);
   });
 
-  it("gives a reset session incarnation a new tools flush ID", async () => {
-    registerToolsFlushPlan();
-    const { entry, overrides } = await createToolsFlushFixture();
-    runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
-      await executePersistenceTool(params);
-      return { payloads: [], meta: {} };
-    });
-    expect((await runDefaultMemoryFlush(entry, overrides)).outcome).toBe("completed");
-
-    // A reset keeps the session ID and restarts the count but rotates the lifecycle revision.
-    const reset = { ...entry, lifecycleRevision: "incarnation-2" };
-    await writeTestSessionStore(overrides.storePath, overrides.sessionKey, reset);
-    expect((await runDefaultMemoryFlush(reset, overrides)).outcome).toBe("completed");
-
-    const firstId = requireEmbeddedAgentCall(0).memoryFlushTools?.flushId;
-    expect(firstId).toMatch(/^[a-f0-9-]{36}$/);
-    expect(requireEmbeddedAgentCall(1).memoryFlushTools?.flushId).not.toBe(firstId);
-  });
-
   it.each([
     { source: "owner direct", chatType: "direct", senderIsOwner: true, audience: "owner-private" },
     {
@@ -404,53 +467,19 @@ describe("provider-owned memory flush", () => {
     },
   );
 
-  it.each([
-    { evidence: "none", outcome: "failed", kind: "failed" },
-    { evidence: "lookup", outcome: "failed", kind: "failed" },
-    { evidence: "tool", outcome: "completed", kind: "succeeded" },
-    { evidence: "silent", outcome: "completed", kind: "succeeded" },
-    { evidence: "visible-silent", outcome: "completed", kind: "succeeded" },
-    { evidence: "earlier-silent", outcome: "failed", kind: "failed" },
-  ])(
-    "requires persistence evidence for tools flush: $evidence",
-    async ({ evidence, outcome, kind }) => {
-      registerToolsFlushPlan();
-      const { entry, overrides } = await createToolsFlushFixture();
-      const onVisibleErrorPayloads = vi.fn();
-      runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        if (evidence === "tool") {
-          await executePersistenceTool(params);
-        } else if (evidence === "lookup") {
-          await executeLookupTool(params);
-        }
-        return {
-          payloads:
-            evidence === "earlier-silent" ? [{ text: "NO_REPLY" }, { text: "Finished." }] : [],
-          meta: {
-            finalAssistantRawText:
-              evidence === "silent"
-                ? "NO_REPLY"
-                : evidence === "visible-silent"
-                  ? "<final>NO_REPLY</final>"
-                  : "Finished.",
-            finalAssistantVisibleText: evidence === "visible-silent" ? "NO_REPLY" : undefined,
-          },
-        };
-      });
+  it("rejects an earlier silent reply as persistence evidence", async () => {
+    registerToolsFlushPlan();
+    const { entry, overrides } = await createToolsFlushFixture();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }, { text: "Finished." }],
+      meta: { finalAssistantRawText: "Finished." },
+    });
 
-      const result = await runDefaultMemoryFlush(entry, { ...overrides, onVisibleErrorPayloads });
+    const result = await runDefaultMemoryFlush(entry, overrides);
 
-      expect(result.outcome).toBe(outcome);
-      expect(loadSessionEntry(overrides)?.memoryFlush).toMatchObject({ kind });
-      if (outcome === "failed") {
-        expect(onVisibleErrorPayloads).toHaveBeenCalledWith([
-          expect.objectContaining({
-            text: expect.stringContaining("no persistence tool call succeeded"),
-          }),
-        ]);
-      }
-    },
-  );
+    expect(result.outcome).toBe("failed");
+    expect(loadSessionEntry(overrides)?.memoryFlush).toMatchObject({ kind: "failed" });
+  });
 
   it("skips tools flush without a source memory audience", async () => {
     registerToolsFlushPlan();

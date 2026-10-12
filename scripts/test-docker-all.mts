@@ -150,8 +150,7 @@ type ForegroundEntry = {
   command: string;
   env?: NodeJS.ProcessEnv;
   label: string;
-  phaseDetails?: Record<string, unknown>;
-  phases?: Array<Record<string, unknown>>;
+  phaseDetails: Record<string, unknown>;
 };
 
 type ShutdownSignal = "SIGINT" | "SIGKILL" | "SIGTERM";
@@ -480,29 +479,16 @@ export function githubWorkflowRerunCommand(
   if (allowUnreleasedChangelog) {
     fields.push("-f", "allow_unreleased_changelog=true");
   }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
-    );
-  }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
-    );
-  }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_scenarios=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
-    );
-  }
-  if (bareImage) {
-    fields.push("-f", `docker_e2e_bare_image=${shellQuote(bareImage)}`);
-  }
-  if (functionalImage) {
-    fields.push("-f", `docker_e2e_functional_image=${shellQuote(functionalImage)}`);
+  for (const [name, value] of [
+    ["published_upgrade_survivor_baseline", env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
+    ["published_upgrade_survivor_baselines", env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
+    ["published_upgrade_survivor_scenarios", env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
+    ["docker_e2e_bare_image", bareImage],
+    ["docker_e2e_functional_image", functionalImage],
+  ]) {
+    if (value) {
+      fields.push("-f", `${name}=${shellQuote(value)}`);
+    }
   }
   if (bareImage || functionalImage) {
     fields.push("-f", "shared_image_policy=existing-only");
@@ -598,9 +584,6 @@ async function writeTimingStore(timingStore: TimingStore, results: LaneResult[])
     version: 1,
   };
   for (const result of results) {
-    if (!result || typeof result.elapsedSeconds !== "number") {
-      continue;
-    }
     next.lanes[result.name] = {
       durationSeconds: result.elapsedSeconds,
       status: result.status,
@@ -1076,7 +1059,7 @@ export function runShellCommand({
         resolve({
           signal,
           status: exitCode,
-          timedOut,
+          timedOut: timedOut || exitCode === 124,
           noOutputTimedOut,
           ...(cancelled ? { cancelled: true as const } : {}),
         });
@@ -1193,7 +1176,7 @@ export function runShellCaptureCommand({
           stderrTruncated,
           stdout,
           stdoutTruncated,
-          timedOut,
+          timedOut: timedOut || exitCode === 124,
           ...(cancelled ? { cancelled: true as const } : {}),
         });
       };
@@ -1250,19 +1233,17 @@ export async function runCleanupSmokePhase(
   return failure;
 }
 
-async function runForegroundGroup(entries: ForegroundEntry[], env: NodeJS.ProcessEnv) {
+async function runForegroundGroup(
+  entries: ForegroundEntry[],
+  env: NodeJS.ProcessEnv,
+  phases: Array<Record<string, unknown>>,
+) {
   const failures: Array<{ entry: ForegroundEntry; error: unknown }> = [];
   for (const entry of entries) {
     try {
-      const { command, label, phaseDetails = {}, phases } = entry;
-      const entryEnv = { ...env, ...entry.env };
-      if (phases) {
-        await runPhase(phases, `build:${label}`, phaseDetails, async () => {
-          await runForeground(label, command, entryEnv);
-        });
-      } else {
-        await runForeground(label, command, entryEnv);
-      }
+      await runPhase(phases, `build:${entry.label}`, entry.phaseDetails, () =>
+        runForeground(entry.label, entry.command, { ...env, ...entry.env }),
+      );
     } catch (error) {
       if (hasUnjoinedWork(error) && failures.length === 0) {
         throw error;
@@ -1470,10 +1451,9 @@ function laneEnv(
   poolLane: DockerE2eLane,
   baseEnv: NodeJS.ProcessEnv,
   logDir: string,
-  cacheKey: string | undefined,
 ): DockerLaneEnv {
   const name = poolLane.name;
-  const cacheName = cacheKey || name;
+  const cacheName = poolLane.cacheKey || name;
   const env: DockerLaneEnv = {
     ...baseEnv,
     OPENCLAW_DOCKER_CACHE_HOME_DIR: path.resolve(
@@ -1504,7 +1484,7 @@ async function runLane(
   const timeoutMs = lane.timeoutMs ?? fallbackTimeoutMs;
   const noOutputTimeoutMs = lane.noOutputTimeoutMs;
   const logFile = path.join(logDir, `${name}.log`);
-  const env = laneEnv(lane, baseEnv, logDir, lane.cacheKey);
+  const env = laneEnv(lane, baseEnv, logDir);
   const command = prepareHarnessCommand(lane.command, env);
   await mkdir(env.OPENCLAW_DOCKER_CLI_TOOLS_DIR, { recursive: true });
   await mkdir(env.OPENCLAW_DOCKER_CACHE_HOME_DIR, { recursive: true });
@@ -1845,21 +1825,21 @@ function throwIfSchedulerStopping(result?: Pick<ShellCommandResult, "status" | "
   }
 }
 
-function shellCommandSkippedForShutdown(signal: ShutdownSignal | null = null) {
+function shellCommandSkippedForShutdown() {
   return {
     cancelled: true as const,
     noOutputTimedOut: false,
-    signal,
+    signal: null,
     status: 143,
     timedOut: false,
   };
 }
 
-function shellCaptureSkippedForShutdown(label: string, signal: ShutdownSignal | null = null) {
+function shellCaptureSkippedForShutdown(label: string) {
   return {
     cancelled: true as const,
     label,
-    signal,
+    signal: null,
     status: 143,
     stderr: "",
     stderrTruncated: false,
@@ -2328,7 +2308,6 @@ async function main() {
         command: liveDockerScriptCommand("test-live-build-docker.sh", "", { skipBuild: false }),
         label: "shared live-test image once",
         phaseDetails: { imageKind: "live" },
-        phases,
       });
     }
     for (const imageKind of ["bare", "functional"] as const) {
@@ -2344,10 +2323,9 @@ async function main() {
         },
         label: `shared ${imageKind} Docker E2E image once: ${image}`,
         phaseDetails: { image, imageKind },
-        phases,
       });
     }
-    await runForegroundGroup(buildEntries, baseEnv);
+    await runForegroundGroup(buildEntries, baseEnv, phases);
   } else {
     console.log(`==> Shared Docker image builds: skipped`);
   }

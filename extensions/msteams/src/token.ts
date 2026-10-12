@@ -2,19 +2,13 @@ import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 
-export {
-  hasConfiguredMSTeamsCredentials,
-  resolveMSTeamsCredentials,
-  type MSTeamsCredentials,
-  type MSTeamsFederatedCredentials,
-} from "./token-config.js";
-
 export async function resolveDelegatedAccessToken(params: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  accountId?: string | null;
 }): Promise<string | undefined> {
-  const tokens = await loadMSTeamsDelegatedTokens();
+  const tokens = await loadMSTeamsDelegatedTokens(params.accountId);
   if (!tokens) {
     return undefined;
   }
@@ -32,7 +26,7 @@ export async function resolveDelegatedAccessToken(params: {
       refreshToken: tokens.refreshToken,
       scopes: tokens.scopes,
     });
-    await saveMSTeamsDelegatedTokens(refreshed);
+    await saveMSTeamsDelegatedTokens(refreshed, params.accountId);
     return refreshed.accessToken;
   } catch {
     return undefined;

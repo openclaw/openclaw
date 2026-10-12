@@ -17,9 +17,6 @@ vi.mock("./attempt-results.js", () => ({
   buildCodexTurnStartFailureResult: vi.fn(),
   isInvalidCodexImagePayloadError: () => recovery.kind === "image",
 }));
-vi.mock("./thread-lifecycle-errors.js", () => ({
-  isCodexContextRestartSelectionChangedError: () => false,
-}));
 vi.mock("./run-attempt-lifecycle.js", () => ({
   emitCodexAppServerEvent: vi.fn(),
   runCodexAgentEndHook: vi.fn(),
@@ -62,7 +59,6 @@ function createFixture(acknowledged: boolean) {
   // of this opaque marker; the separate transport tests exercise real issuance.
   const resources = {
     state,
-    markTrajectoryEndRecorded: vi.fn(),
     prompt: {
       turnState: { codexTurnPromptText: "reviewed continuation" },
       context: {

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
 import { queryObjects } from "node:v8";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
@@ -24,6 +24,7 @@ import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-acces
 import { getSessionColdStorageStatus } from "../config/sessions/session-cold-storage-status.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -34,7 +35,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -148,38 +149,56 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await testState.cleanup();
   });
 
-  it("does not generate conversation recaps for Cron runs", async () => {
-    const cronTarget = {
-      key: "agent:main:cron:job-1:run:run-1",
-      agentId: "main",
-    };
-    await upsertSessionEntryCore(
+  it("does not enqueue recaps for excluded sessions or disabled utility routing", async () => {
+    const cases: { key: string; entry?: Partial<SessionEntry>; utilityModel?: string }[] = [
       {
-        agentId: cronTarget.agentId,
-        sessionKey: cronTarget.key,
-      },
-      {
-        sessionId: "cron-run",
-        lifecycleRevision: "lifecycle-1",
-        updatedAt: 1,
-        activitySummary: {
-          version: 1,
-          formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-          text: "A cached Cron recap must not be exposed.",
-          updatedAt: 1,
+        key: "agent:main:cron:job-1:run:run-1",
+        entry: {
           sessionId: "cron-run",
-          lifecycleRevision: "lifecycle-1",
-          generation: null,
-          maxSeq: 0,
-          leafEntryId: null,
-          coveredMessages: 0,
-          totalMessages: 0,
-          omittedContent: false,
+          activitySummary: {
+            version: 1,
+            formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+            text: "A cached Cron recap must not be exposed.",
+            updatedAt: 1,
+            sessionId: "cron-run",
+            lifecycleRevision: "lifecycle-1",
+            generation: null,
+            maxSeq: 0,
+            leafEntryId: null,
+            coveredMessages: 0,
+            totalMessages: 0,
+            omittedContent: false,
+          },
         },
       },
-    );
-
-    expect(service.ensure(cronTarget)).toEqual({ state: "unavailable" });
+      { key: "agent:main:pending-recap", entry: { initializationPending: true } },
+      { key: "agent:main:disabled-recap", utilityModel: "" },
+      { key: "agent:main:subagent:child", entry: { category: "Work" } },
+      { key: "agent:main:legacy-child", entry: { spawnedBy: "agent:main:main" } },
+      { key: "agent:main:dashboard:incognito-private" },
+    ];
+    for (const { key, entry, utilityModel = "test/utility" } of cases) {
+      cfg = { agents: { defaults: { utilityModel } } };
+      const excluded = {
+        agentId: "main",
+        sessionKey: key,
+        sessionId: entry?.sessionId ?? key.replaceAll(":", "-"),
+      };
+      await upsertSessionEntryCore(excluded, {
+        sessionId: excluded.sessionId,
+        lifecycleRevision: "lifecycle-1",
+        updatedAt: 1,
+        ...entry,
+      });
+      await persistSessionTranscriptTurn(excluded, {
+        messages: [{ eventId: `event-${key}`, message: { role: "user", content: "Private work" } }],
+        touchSessionEntry: false,
+      });
+      expect(service.ensure({ key, agentId: "main" })).toEqual({ state: "unavailable" });
+      expect(prepare).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+    }
+    await service.dispose();
     expect(prepare).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });
@@ -221,16 +240,32 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     complete.mockImplementation(async () =>
       result(`Recap through batch ${complete.mock.calls.length}.`),
     );
+    const unrelatedLabel = "Unrelated retained recap inventory marker";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:unrelated-recap" },
+      {
+        sessionId: "unrelated-recap-session",
+        updatedAt: Date.now(),
+        label: unrelatedLabel,
+        skillsSnapshot: { prompt: "Unrelated saved prompt. ".repeat(1024), skills: [] },
+      },
+    );
+    read();
+    const parse = vi.spyOn(JSON, "parse");
+    onTestFinished(() => parse.mockRestore());
     await awaitPublication(() => {
       for (let index = 0; index < 12; index += 1) {
         service.ensure(target);
       }
     });
+    expect(parse.mock.calls.some(([json]) => json.includes(unrelatedLabel))).toBe(false);
+    parse.mockRestore();
     expect(view()?.state).toBe("current");
     expect(complete).toHaveBeenCalledTimes(3);
     const first = complete.mock.calls[0]?.[0];
     const second = complete.mock.calls[1]?.[0];
     expect(first).toMatchObject({ model: "utility", provider: "test" });
+    expect(first?.purpose).toBe("session-activity-summary");
     expect(JSON.parse(first!.prompt).messages[0]).toContain("Outcome 0");
     expect(JSON.parse(first!.prompt).messages.at(-1)).toContain("Outcome 63");
     expect(JSON.parse(second!.prompt)).toMatchObject({ previousRecap: "Recap through batch 1." });
@@ -350,30 +385,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     }
   });
 
-  it("commits a recap without decoding unrelated retained session entries", async () => {
-    await messages(2);
-    const unrelatedLabel = "Unrelated retained recap inventory marker";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:unrelated-recap" },
-      {
-        sessionId: "unrelated-recap-session",
-        updatedAt: Date.now(),
-        label: unrelatedLabel,
-        skillsSnapshot: { prompt: "Unrelated saved prompt. ".repeat(1024), skills: [] },
-      },
-    );
-    read();
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      await awaitPublication(() => service.ensure(target));
-      expect(view()?.state).toBe("current");
-      expect(read()?.activitySummary?.coveredMessages).toBe(2);
-      expect(parse.mock.calls.some(([json]) => json.includes(unrelatedLabel))).toBe(false);
-    } finally {
-      parse.mockRestore();
-    }
-  });
-
   it("uses committed resident facts for recap notifications and current-authority checks", async () => {
     await messages(2);
     const prompt = "Saved recap prompt marker. ".repeat(40_000);
@@ -412,6 +423,21 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       parse.mockRestore();
       queries.restore();
       completion.resolve(result("Completed the requested work."));
+    }
+    const committed = createDeferred();
+    changed.mockImplementation(() => committed.resolve());
+    const settlementReads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      await withinTest(committed.promise, testSignal);
+      expect(
+        settlementReads.queries.filter((sql) =>
+          /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i.test(
+            sql,
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      settlementReads.restore();
     }
     // Transcript notifications defer the dirty follow-up until the refresh interval;
     // the terminal event requests its immediate completion without another model call.
@@ -672,35 +698,46 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         touchSessionEntry: false,
       });
     }
-    const preparations: Array<(value: typeof prepared) => void> = [];
-    prepare.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          preparations.push(resolve);
-        }),
-    );
+    const firstPreparations = createDeferred<typeof prepared>();
+    const nextPreparation = createDeferred<typeof prepared>();
+    const slotsOccupied = createDeferred();
+    const slotReused = createDeferred();
+    prepare
+      .mockImplementationOnce(() => firstPreparations.promise)
+      .mockImplementationOnce(() => {
+        slotsOccupied.resolve();
+        return firstPreparations.promise;
+      })
+      .mockImplementation(() => {
+        slotReused.resolve();
+        return nextPreparation.promise;
+      });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       service.ensure(target);
       service.ensure(secondTarget);
       service.ensure(thirdTarget);
-      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+      await withinTest(slotsOccupied.promise, testSignal);
+      expect(prepare).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(20_000);
       expect(view()?.state).toBe("updating");
       expect(prepare).toHaveBeenCalledTimes(2);
-      for (const resolve of preparations) {
-        resolve(prepared);
-      }
-      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(3));
-      expect(complete).not.toHaveBeenCalled();
-      const disposal = service.dispose();
-      preparations[2]!(prepared);
-      await vi.advanceTimersByTimeAsync(0);
-      await disposal;
+      firstPreparations.resolve(prepared);
+      await withinTest(slotReused.promise, testSignal);
+      expect(prepare).toHaveBeenCalledTimes(3);
       expect(complete).not.toHaveBeenCalled();
     } finally {
-      vi.useRealTimers();
+      const disposal = service.dispose();
+      // A source read already in flight can still reach a mock during disposal.
+      firstPreparations.resolve(prepared);
+      nextPreparation.resolve(prepared);
+      try {
+        await disposal;
+      } finally {
+        vi.useRealTimers();
+      }
     }
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it("keeps a replacement owner's pending status when the old service disposes", async () => {
@@ -932,15 +969,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(listed.sessions[0]?.activitySummary).toEqual({ state: "unavailable" });
   });
 
-  it("does not enqueue model work while trusted session initialization is pending", async () => {
-    await messages(1);
-    await patchSessionEntryCore(scope, () => ({ initializationPending: true }));
-    expect(service.ensure(target)).toEqual({ state: "unavailable" });
-    await service.dispose();
-    expect(prepare).not.toHaveBeenCalled();
-    expect(complete).not.toHaveBeenCalled();
-  });
-
   it("readmits a relocated store and fences a delayed result from its previous owner", async () => {
     await messages(2);
     await awaitPublication(() => service.ensure(target));
@@ -987,33 +1015,5 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(loadSessionEntryReadOnly(originalScope)?.activitySummary?.text).toBe(
       "Completed the requested work.",
     );
-  });
-
-  it("honors disabled utility routing and excludes hidden child and incognito sessions", async () => {
-    await messages(1);
-    cfg = { agents: { defaults: { utilityModel: "" } } };
-    expect(service.ensure(target).state).toBe("unavailable");
-    cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
-    for (const { key, ...entry } of [
-      { key: "agent:main:subagent:child", category: "Work" },
-      { key: "agent:main:legacy-child", spawnedBy: "agent:main:main" },
-      { key: "agent:main:dashboard:incognito-private" },
-    ]) {
-      const childScope = { agentId: "main", sessionKey: key, sessionId: key.replaceAll(":", "-") };
-      await upsertSessionEntryCore(childScope, {
-        sessionId: childScope.sessionId,
-        updatedAt: 1,
-        ...entry,
-      });
-      await persistSessionTranscriptTurn(childScope, {
-        messages: [
-          { eventId: `event-${key}`, message: { role: "user", content: "Private child work" } },
-        ],
-        touchSessionEntry: false,
-      });
-      expect(service.ensure({ key, agentId: "main" }).state).toBe("unavailable");
-    }
-    expect(prepare).not.toHaveBeenCalled();
-    expect(complete).not.toHaveBeenCalled();
   });
 });

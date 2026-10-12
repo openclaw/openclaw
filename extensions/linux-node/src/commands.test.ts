@@ -1,10 +1,52 @@
-import fs from "node:fs/promises";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLinuxNodeCommands } from "./commands.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";
 
-type LinuxNodeCommandDeps = Parameters<typeof createLinuxNodeCommands>[0];
+const boundary = vi.hoisted(() => ({
+  runCommand: vi.fn<(argv: string[], options: CommandOptions) => Promise<SpawnResult>>(),
+  resolveExecutable: vi.fn<typeof import("./executables.js").resolveExecutable>(),
+  readdir: vi.fn<() => Promise<string[]>>(),
+  readFile: vi.fn<(filePath: string) => Promise<Buffer | string>>(),
+  stat: vi.fn<(filePath: string) => Promise<{ size: number }>>(),
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readdir: boundary.readdir,
+      readFile: boundary.readFile,
+      stat: boundary.stat,
+    },
+  };
+});
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: boundary.runCommand,
+}));
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
+  withTempWorkspace: async (_options: unknown, run: (workspace: { dir: string }) => unknown) =>
+    await run({ dir: "/tmp" }),
+}));
+vi.mock("./executables.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./executables.js")>()),
+  resolveExecutable: boundary.resolveExecutable,
+}));
+
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+type HarnessOptions = {
+  config?: ResolvedLinuxNodePluginConfig;
+  platform?: NodeJS.Platform;
+  resolveExecutable?: typeof import("./executables.js").resolveExecutable;
+  runCommand?: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
+  readFile?: (filePath: string) => Promise<Buffer>;
+  statFile?: (filePath: string) => Promise<{ size: number }>;
+  now?: Date;
+};
 
 const maxMediaRawBytes = Math.floor((25 * 1024 * 1024 - 64 * 1024) / 4) * 3;
 
@@ -28,24 +70,37 @@ function success(stdout = ""): SpawnResult {
 
 const jpeg640x480 = Buffer.from("ffd8ffc0000b0801e0028001011100ffd9", "hex");
 
-function createHarness(overrides: Partial<LinuxNodeCommandDeps> = {}) {
+function createHarness(overrides: HarnessOptions = {}) {
   const runCommand = vi.fn(async (_argv: string[], _options: CommandOptions) => success());
-  const deps: LinuxNodeCommandDeps = {
-    config: enabledConfig,
-    platform: "linux",
-    env: { PATH: "/usr/bin" },
-    resolveExecutable: (command) => `/usr/bin/${command}`,
-    runCommand,
-    listVideoDevices: async () => [
-      { id: "/dev/video0", name: "Test Camera", position: "unknown", deviceType: "v4l2" },
-    ],
-    readFile: async (filePath) => (filePath.endsWith(".jpg") ? jpeg640x480 : Buffer.from("mp4")),
-    statFile: async (filePath) => ({ size: filePath.endsWith(".jpg") ? jpeg640x480.length : 3 }),
-    withTempFile: async (suffix, run) => await run(`/tmp/capture${suffix}`),
-    now: () => new Date("2026-07-13T12:00:10.000Z"),
-    ...overrides,
-  };
-  const commands = createLinuxNodeCommands(deps);
+  Object.defineProperty(process, "platform", {
+    ...platformDescriptor,
+    value: overrides.platform ?? "linux",
+  });
+  vi.stubEnv("PATH", "/usr/bin");
+  vi.setSystemTime(overrides.now ?? new Date("2026-07-13T12:00:10.000Z"));
+  boundary.resolveExecutable.mockImplementation(
+    overrides.resolveExecutable ?? ((command) => `/usr/bin/${command}`),
+  );
+  boundary.readdir.mockResolvedValue(["video0"]);
+  boundary.readFile.mockImplementation(async (filePath) =>
+    filePath.startsWith("/sys/")
+      ? "Test Camera\n"
+      : overrides.readFile
+        ? await overrides.readFile(filePath)
+        : filePath.endsWith(".jpg")
+          ? jpeg640x480
+          : Buffer.from("mp4"),
+  );
+  boundary.stat.mockImplementation(
+    overrides.statFile ??
+      (async (filePath) => ({ size: filePath.endsWith(".jpg") ? jpeg640x480.length : 3 })),
+  );
+  boundary.runCommand.mockImplementation(async (argv, options) =>
+    argv.includes("-list_formats")
+      ? success("[video4linux2,v4l2] Raw : yuyv422 : YUYV 4:2:2")
+      : await (overrides.runCommand ?? runCommand)(argv, options),
+  );
+  const commands = createLinuxNodeCommands(overrides.config ?? enabledConfig);
   const command = (name: string) => {
     const found = commands.find((entry) => entry.command === name);
     if (!found) {
@@ -59,13 +114,17 @@ function createHarness(overrides: Partial<LinuxNodeCommandDeps> = {}) {
 }
 
 describe("linux-node commands", () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
+
   afterEach(() => {
+    Object.defineProperty(process, "platform", platformDescriptor);
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   it("lists only V4L2 nodes that expose capture formats through FFmpeg", async () => {
-    vi.spyOn(fs, "readdir").mockResolvedValue(["video1", "media0", "video0"] as never);
-    vi.spyOn(fs, "readFile").mockResolvedValue("Integrated Camera\n" as never);
     const runCommand = vi.fn(async (argv: string[]) =>
       success(
         argv.at(-1) === "/dev/video0"
@@ -73,7 +132,10 @@ describe("linux-node commands", () => {
           : "Not a video capture device",
       ),
     );
-    const { command } = createHarness({ listVideoDevices: undefined, runCommand });
+    const { command } = createHarness();
+    boundary.readdir.mockResolvedValue(["video1", "media0", "video0"]);
+    boundary.readFile.mockResolvedValue("Integrated Camera\n");
+    boundary.runCommand.mockImplementation(runCommand);
     await expect(command("camera.list").handle()).resolves.toBe(
       JSON.stringify({
         devices: [
@@ -247,7 +309,7 @@ describe("linux-node commands", () => {
   it("accounts for GeoClue second precision when maxAgeMs is zero", async () => {
     const output = `\nNew location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (1783944010 seconds since the Epoch)\n`;
     const harness = createHarness({
-      now: () => new Date("2026-07-13T12:00:10.900Z"),
+      now: new Date("2026-07-13T12:00:10.900Z"),
       runCommand: async () => success(output),
     });
 

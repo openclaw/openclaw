@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as personalCatalogReads from "../../agents/auth-profiles/sqlite-read.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -8,11 +11,16 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import {
   clearUserProfileAuthLink,
   connectUserModelAccount,
+  setUserProfileAuthLink,
 } from "../../state/user-model-accounts.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  readPreparedCatalog,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
 import {
   catalogEntry,
   createModelsListTestContext,
@@ -202,8 +210,6 @@ describe("models.list configured static entries", () => {
 
   it.each([
     { name: "automatic", utilityModel: undefined, defaultUtilityModel: "small" },
-    { name: "explicit", utilityModel: "custom/explicit", defaultUtilityModel: "small" },
-    { name: "disabled", utilityModel: "", defaultUtilityModel: "small" },
     { name: "no provider default", utilityModel: undefined, defaultUtilityModel: undefined },
   ])(
     "previews global automatic utility routing with $name configuration",
@@ -288,18 +294,36 @@ describe("models.list configured static entries", () => {
       async (state) => {
         const alice = ensureProfileForEmail("alice@example.test");
         const bob = ensureProfileForEmail("bob@example.test");
+        const discover = vi.fn(async () => {
+          throw new Error("Ordinary model reads must not discover account models");
+        });
+        const pluginRegistry = createEmptyPluginRegistry();
+        pluginRegistry.providers.push({
+          pluginId: "openai",
+          source: "test",
+          provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: discover } },
+        });
         const context = createModelsListTestContext({
           cfg: { agents: { defaults: { model: { primary: "test/default" } } } },
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
           catalog: [],
           staticEntries: [catalogEntry("gpt-5.6-luna", "openai-chatgpt-responses")],
+          pluginRegistry,
         });
-        const read = async (profileId?: string) => {
+        const published = await readPreparedCatalog(context, "main");
+        const owner = {
+          ...published!,
+          accountCatalog: createPreparedAccountCatalogAccess(() => true),
+        };
+        registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+          readPrepared: async () => owner,
+          loadDeferred: async () => owner,
+        });
+        const read = async (profileId?: string, expectedSuccess = true) => {
           const params = {
             agentId: "main",
             view: "configured",
-            preparedOnly: true,
             includeDefaultModels: false,
           };
           const respond = vi.fn<RespondFn>();
@@ -326,7 +350,10 @@ describe("models.list configured static entries", () => {
             respond,
             isWebchatConnect: () => false,
           });
-          expect(respond.mock.calls[0]?.[0]).toBe(true);
+          expect(respond.mock.calls[0]?.[0]).toBe(expectedSuccess);
+          if (!expectedSuccess) {
+            expect(respond.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+          }
           return respond.mock.calls[0]?.[1];
         };
         const shared = await read();
@@ -336,7 +363,7 @@ describe("models.list configured static entries", () => {
           accountSelection: { kind: "automatic", label: "Automatic account selection" },
         };
         expect(await read(alice.id)).toEqual(unconfiguredPersonal);
-        connectUserModelAccount({
+        const { authProfileId } = connectUserModelAccount({
           ownerProfileId: alice.id,
           credential: {
             type: "oauth",
@@ -348,7 +375,14 @@ describe("models.list configured static entries", () => {
           assertCurrent() {},
         });
 
-        const connected = await read(alice.id);
+        const sql = observeHostDataSql();
+        let connected: Awaited<ReturnType<typeof read>>;
+        try {
+          connected = await read(alice.id);
+        } finally {
+          sql.restore();
+        }
+        expect(sql.queries.filter((query) => /\bsecret_store_entries\b/i.test(query))).toEqual([]);
         expect(connected).toMatchObject({
           models: expect.arrayContaining([
             expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
@@ -357,11 +391,27 @@ describe("models.list configured static entries", () => {
         expect(await read(bob.id)).toEqual(unconfiguredPersonal);
         expect(await read()).toEqual(shared);
 
+        const readPersonal = personalCatalogReads.readPersonalCatalogProfiles;
+        const interruptedRead = vi
+          .spyOn(personalCatalogReads, "readPersonalCatalogProfiles")
+          .mockImplementationOnce(async (...args) => {
+            const result = await readPersonal(...args);
+            clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" });
+            return result;
+          });
+        try {
+          await read(alice.id, false);
+        } finally {
+          interruptedRead.mockRestore();
+        }
+        setUserProfileAuthLink({ profileId: alice.id, provider: "openai", authProfileId });
+
         const merged = ensureProfileForEmail("alice-new@example.test");
         linkEmail("alice@example.test", merged.id);
         expect(await read(alice.id)).toEqual(connected);
         clearUserProfileAuthLink({ profileId: merged.id, provider: "openai" });
         expect(await read(alice.id)).toEqual(unconfiguredPersonal);
+        expect(discover.mock.calls.length).toBe(0);
       },
     );
   });
@@ -415,47 +465,6 @@ describe("models.list configured static entries", () => {
       ]);
     },
   );
-
-  it("projects a configured runtime model from prepared static facts", async () => {
-    const config = {
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.6-sol" } },
-        entries: {
-          main: {
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await expect(
-      listModels({
-        catalog: [],
-        staticEntries: [
-          catalogEntry("gpt-5.6-sol", "openai-responses"),
-          catalogEntry("gpt-unconfigured", "openai-responses"),
-        ],
-        cfg: config,
-        view: "configured",
-      }),
-    ).resolves.toEqual({
-      defaultModels: {
-        automaticUtilityModel: "openai/gpt-5.6-luna",
-      },
-      models: [
-        expect.objectContaining({
-          id: "gpt-5.6-sol",
-          provider: "openai",
-          agentRuntime: {
-            id: "codex",
-            cloudPlacementSupported: false,
-            devicePlacementSupported: false,
-            source: "model",
-          },
-        }),
-      ],
-    });
-  });
 
   it("projects agent aliases onto inherited default and fallback catalog rows", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {

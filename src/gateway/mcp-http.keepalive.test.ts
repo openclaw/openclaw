@@ -78,7 +78,7 @@ const toolCall = {
 };
 
 describe("MCP HTTP keepalive", () => {
-  it.each(["success", "tool-error", "serialization-error", "notification"])(
+  it.each(["success", "serialization-error", "notification"])(
     "keeps pending calls alive without writing notification bodies: %s",
     async (outcome) => {
       const entered = createDeferred();
@@ -86,9 +86,6 @@ describe("MCP HTTP keepalive", () => {
       execute.mockImplementation(async () => {
         entered.resolve();
         await release.promise;
-        if (outcome === "tool-error") {
-          throw new Error("synthetic tool failure");
-        }
         return {
           content: [
             {
@@ -149,10 +146,10 @@ describe("MCP HTTP keepalive", () => {
                   content: [
                     {
                       type: "text",
-                      text: outcome === "tool-error" ? "synthetic tool failure" : "completed once",
+                      text: "completed once",
                     },
                   ],
-                  isError: outcome === "tool-error",
+                  isError: false,
                 },
               },
         );

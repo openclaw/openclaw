@@ -4,11 +4,13 @@ import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_DELETION_RECOVERY_SOURCE_KEY as SOURCE_KEY,
+  assertAgentDeletionRecoveryHoldsMatch,
   decodeHolds,
   readAgentDeletionRecoveryHolds,
   readReport,
   type RecoveryDatabase,
   type RecoveryReport,
+  type AgentDeletionRecoveryHoldPredicate,
 } from "./agent-deletion-journal-recovery.kernel.js";
 import type { HeldAgentDatabase } from "./agent-deletion-journal.types.js";
 import { createOpenClawAgentDatabasePathMatcher } from "./openclaw-agent-db.paths.js";
@@ -55,6 +57,19 @@ export function reconstructAgentDeletionJournal(
   if (!reconstructAgentDeletionJournalSchema(database.db, database.path)) {
     return decodeHolds(database, previous?.held ?? []);
   }
+  return recordAgentDeletionRecoveryHolds(database, held, { now });
+}
+
+/** Quarantine and reconstruction use the same durable maintenance holds. */
+export function recordAgentDeletionRecoveryHolds(
+  database: RecoveryDatabase,
+  held: readonly HeldAgentDatabase[],
+  { now = Date.now(), description = DESCRIPTION }: { now?: number; description?: string } = {},
+): HeldAgentDatabase[] {
+  if (!database.db.isTransaction) {
+    throw new Error("Agent deletion recovery requires a shared-state transaction.");
+  }
+  const previous = readReport(database);
   const entries = new Map<string, HeldAgentDatabase>();
   for (const entry of [
     ...(previous?.held ?? []),
@@ -65,7 +80,7 @@ export function reconstructAgentDeletionJournal(
   ]) {
     entries.set(JSON.stringify([entry.agentId, entry.path]), entry);
   }
-  const report: RecoveryReport = { description: DESCRIPTION, held: [...entries.values()] };
+  const report: RecoveryReport = { description, held: [...entries.values()] };
   recordLegacyMigrationReceipt(database.db, {
     sourceKey: SOURCE_KEY,
     migrationKind: SOURCE_KEY,
@@ -87,11 +102,15 @@ export function resolveAgentDeletionRecoveryHolds(
   database: RecoveryDatabase,
   agentId: string,
   targetPaths: readonly string[],
+  predicate?: AgentDeletionRecoveryHoldPredicate,
 ): number {
   if (!database.db.isTransaction) {
     throw new Error("Agent deletion recovery resolution requires a shared-state transaction.");
   }
   const report = readReport(database);
+  if (predicate) {
+    assertAgentDeletionRecoveryHoldsMatch(decodeHolds(database, report?.held ?? []), predicate);
+  }
   if (!report) {
     return 0;
   }

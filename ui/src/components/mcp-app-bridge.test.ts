@@ -1,9 +1,14 @@
 import { InMemoryTransport } from "@modelcontextprotocol/client";
 import { App } from "@modelcontextprotocol/ext-apps";
 import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ApplicationContext } from "../app/context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { bindMcpAppResourceHandlers, OpenClawAppBridge } from "./mcp-app-bridge.ts";
 import { McpAppConfirm } from "./mcp-app-confirm.ts";
 import {
@@ -14,11 +19,25 @@ import {
   type McpAppFileOpenEventDetail,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import { McpAppView } from "./mcp-app-view.ts";
+import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
+import { McpAppView } from "./mcp-app-view.tsx";
+
+const transportMocks = vi.hoisted(() => ({ next: undefined as (() => unknown) | undefined }));
+
+vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>();
+  return {
+    ...actual,
+    PostMessageTransport: vi.fn(function () {
+      return transportMocks.next?.();
+    }),
+  };
+});
 
 afterEach(() => {
   document.body.replaceChildren();
   delete (document as unknown as Record<string, unknown>).activeElement;
+  transportMocks.next = undefined;
   vi.restoreAllMocks();
 });
 
@@ -27,7 +46,7 @@ it("confirms file paths in the pane before requesting or opening a file", async 
   const bridge = new OpenClawAppBridge(
     null,
     { name: "OpenClaw", version: "test" },
-    buildMcpAppHostCapabilities(undefined, false, false, false, { openFiles: true }),
+    buildMcpAppHostCapabilities(undefined, false, false, { openFiles: true }),
   );
   const app = new App({ name: "file-proof", version: "1" }, {}, { autoResize: false });
   const root = document.createElement("div");
@@ -122,8 +141,7 @@ it("negotiates extension capabilities and preserves rich request metadata over t
   const bridge = new OpenClawAppBridge(
     null,
     { name: "OpenClaw", version: "test" },
-    buildMcpAppHostCapabilities(undefined, true, true, true, {
-      richMessage: true,
+    buildMcpAppHostCapabilities(undefined, true, true, {
       richModelContext: true,
       fileResources: true,
     }),
@@ -241,33 +259,66 @@ it("negotiates extension capabilities and preserves rich request metadata over t
   }
 });
 
-const LINK_VIEW_NAME = `test-mcp-app-link-${crypto.randomUUID()}`;
-customElements.define(LINK_VIEW_NAME, class extends McpAppView {});
-
-it("routes vendor links through the real view handler and AppBridge only for its focused current owner", async () => {
+it("routes vendor links through the mounted view and AppBridge only for its focused current owner", async () => {
   const [hostTransport, appTransport] = InMemoryTransport.createLinkedPair();
-  const bridge = new OpenClawAppBridge(
-    null,
-    { name: "OpenClaw", version: "test" },
-    { openLinks: {} },
-  );
+  const transportReady = createDeferred();
+  transportMocks.next = () => {
+    transportReady.resolve();
+    return hostTransport;
+  };
   const app = new App({ name: "link-proof", version: "1" }, {}, { autoResize: false });
-  const view = document.createElement(LINK_VIEW_NAME) as McpAppView;
-  // Exercise the production handler registration over the real SDK transport;
-  // sandbox loading is independent of this synchronous navigation authority.
-  Reflect.set(Reflect.get(view, "setupTask"), "autoRun", false);
-  const client = { request: vi.fn() };
+  const client = {
+    request: vi.fn(async () => ({
+      sandboxUrl: "/mcp-app-sandbox?ticket=test",
+      sandboxPort: 8444,
+      html: "<p>Parts library</p>",
+      toolInput: {},
+      toolResult: { content: [] },
+    })),
+  };
   const hello = { type: "hello-ok" };
   const navigate = vi.fn();
-  const gateway = { snapshot: { client, phase: "connected", hello }, connectionRevision: 1 };
-  Reflect.set(view, "context", { gateway, navigate });
-  view.sessionKey = "agent:main:one";
-  view.agentId = "main";
-  view.viewId = "current-view";
-  document.body.append(view);
-  await view.updateComplete;
-  const frame = document.createElement("iframe");
-  view.append(frame);
+  const gateway = {
+    snapshot: { client, phase: "connected", hello },
+    connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+  };
+  const provider = createSolidApplicationContextProvider({
+    gateway,
+    navigate,
+    theme: { subscribe: () => () => {} },
+  } as unknown as ApplicationContext);
+  vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
+  const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
+  vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
+    this: HTMLIFrameElement,
+    value,
+  ) {
+    frameSource.set!.call(this, value);
+    queueMicrotask(() =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: window,
+          data: { method: "ui/notifications/sandbox-proxy-ready" },
+        }),
+      ),
+    );
+  });
+  const mounted = mountSolid(
+    () =>
+      createComponent(McpAppView, {
+        sessionKey: "agent:main:one",
+        agentId: "main",
+        viewId: "current-view",
+      }),
+    { wrapper: provider.wrapper },
+  );
+  const view = mounted.container.querySelector<McpAppViewElement>("mcp-app-view")!;
+  await transportReady.promise;
+  await app.connect(appTransport);
+  await waitForSolid(() => expect(view.querySelector("iframe")).not.toBeNull());
+  const frame = view.querySelector("iframe")!;
   let focused = true;
   let visible = true;
   frame.checkVisibility = () => visible;
@@ -275,34 +326,8 @@ it("routes vendor links through the real view handler and AppBridge only for its
     get: () => (focused ? frame : document.body),
     configurable: true,
   });
-  const resources = {
-    bridge,
-    iframe: frame,
-    cleanups: new Set(),
-    frameHeight: 600,
-    transport: null,
-    disposed: false,
-  };
-  Reflect.set(view, "resources", resources);
-  const signal = new AbortController();
-  Reflect.get(view, "bindOpenLinkHandler").call(
-    view,
-    bridge,
-    {
-      client,
-      sessionKey: view.sessionKey,
-      viewId: view.viewId,
-      agentId: view.agentId,
-      connectionRevision: 1,
-      hello,
-    },
-    resources,
-    signal.signal,
-  );
   const externalWindow = { opener: window };
   const open = vi.spyOn(window, "open").mockReturnValue(externalWindow as unknown as Window);
-  await bridge.connect(hostTransport);
-  await app.connect(appTransport);
   const vendorUrl = "https://chatgpt.com/plugins/parts/app/browse?path=%2Fparts%3Fq%3Dbolt";
   try {
     for (const url of [
@@ -331,16 +356,7 @@ it("routes vendor links through the real view handler and AppBridge only for its
     visible = false;
     await refused();
     visible = true;
-    view.sessionKey = "agent:main:other";
-    await refused();
-    view.sessionKey = "agent:main:one";
-    view.viewId = "replacement";
-    await refused();
-    view.viewId = "current-view";
-    view.agentId = "other";
-    await refused();
-    view.agentId = "main";
-    gateway.snapshot.client = { request: vi.fn() };
+    gateway.snapshot.client = { request: vi.fn(client.request) };
     await refused();
     gateway.snapshot.client = client;
     gateway.snapshot.phase = "reconnecting";
@@ -352,19 +368,10 @@ it("routes vendor links through the real view handler and AppBridge only for its
     gateway.snapshot.hello = { type: "hello-ok" };
     await refused();
     gateway.snapshot.hello = hello;
-    Reflect.set(view, "resources", null);
-    await refused();
-    Reflect.set(view, "resources", resources);
-    resources.disposed = true;
-    await refused();
-    resources.disposed = false;
-    signal.abort();
-    await refused();
   } finally {
-    Reflect.set(view, "resources", null);
-    view.remove();
+    await view.teardown();
+    mounted.unmount();
     await app.close();
-    await bridge.close();
   }
 });
 
@@ -373,7 +380,7 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
   const bridge = new OpenClawAppBridge(
     null,
     { name: "OpenClaw", version: "test" },
-    buildMcpAppHostCapabilities(undefined, true, false, true, { fileResources: true }),
+    buildMcpAppHostCapabilities(undefined, true, false, { fileResources: true }),
   );
   const app = new App({ name: "resources-proof", version: "1" }, {}, { autoResize: false });
   const frame = document.createElement("iframe");

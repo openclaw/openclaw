@@ -9,7 +9,7 @@ export const nodeInvokePolicy = {
   pendingActionTtlMs: 10 * 60_000,
   pendingActionMaxPerNode: 64,
   canReadPendingNodePairing(client: GatewayClient | null): boolean {
-    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const scopes = client?.connect.scopes ?? [];
     return scopes.includes(ADMIN_SCOPE) || scopes.includes(PAIRING_SCOPE);
   },
   rejectClaudeAgentRun(command: string, respond: RespondFn): boolean {

@@ -20,6 +20,7 @@ import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
 } from "../doctor-auth-flat-profiles.js";
+import { withPersistedAuthProfileStoreRead } from "../doctor-auth-flat-profiles.test-support.js";
 import { repairAuthProfileMigration } from "./auth-profile-repair.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
@@ -217,13 +218,16 @@ it("keeps the recorded target when import verification rolls back", async () => 
         },
       });
       const map = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
-      const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-        cfg,
-        env: fixture.env,
-        prompter: { confirmAutoFix: async () => true },
-        openAICodexAuthProfileIdMap: map,
-        deps: { loadPersistedAuthProfileStore: () => null },
-      });
+      const result = await withPersistedAuthProfileStoreRead(
+        () => null,
+        () =>
+          maybeMigrateAuthProfileJsonStoresToSqlite({
+            cfg,
+            env: fixture.env,
+            prompter: { confirmAutoFix: async () => true },
+            openAICodexAuthProfileIdMap: map,
+          }),
+      );
       expect(result.warnings.join("\n")).toContain("SQLite verification failed");
       const retryMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
       expect(retryMap.get("claude-cli:work")).toBe("anthropic:work");

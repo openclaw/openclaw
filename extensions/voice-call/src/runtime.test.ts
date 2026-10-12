@@ -7,7 +7,10 @@ import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
-import { registerFastContextMemoryProvider } from "./runtime.fast-context.test-support.js";
+import {
+  createMockSessionRuntime,
+  registerFastContextMemoryProvider,
+} from "./runtime.fast-context.test-support.js";
 import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
@@ -141,44 +144,6 @@ import { createVoiceCallRuntime } from "./runtime.js";
 
 function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
-}
-
-type MockSessionEntry = {
-  sessionId?: string;
-  updatedAt?: number;
-  [key: string]: unknown;
-};
-
-function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
-  return {
-    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-    loadSessionStore: vi.fn(() => sessionStore),
-    saveSessionStore: vi.fn(async () => {}),
-    updateSessionStore: vi.fn(async (_storePath, mutator: (store: never) => unknown) =>
-      mutator(sessionStore as never),
-    ),
-    getSessionEntry: vi.fn(
-      ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as MockSessionEntry,
-    ),
-    patchSessionEntry: vi.fn(
-      async ({
-        sessionKey,
-        fallbackEntry,
-        update,
-      }: {
-        sessionKey: string;
-        fallbackEntry: MockSessionEntry;
-        update: (entry: MockSessionEntry) => Promise<MockSessionEntry> | MockSessionEntry;
-      }) => {
-        const current = (sessionStore[sessionKey] as MockSessionEntry | undefined) ?? fallbackEntry;
-        const patch = await update(current);
-        const next = { ...current, ...patch };
-        sessionStore[sessionKey] = next;
-        return next;
-      },
-    ),
-    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-  };
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
@@ -466,6 +431,17 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(defaultRegistration.agentId).toBe("operator");
     expect(defaultRegistration.instructions).toContain("- Name: Main Voice");
     expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
+    const briefRegistration = resolveCallRegistration({
+      callId: "call-brief",
+      direction: "outbound",
+      from: "+15550001111",
+      to: "+15550002222",
+      agentId: "operator",
+      metadata: { brief: { task: "Arrange a plumber visit", approvals: "No paid work" } },
+    });
+    expect(briefRegistration.instructions).toContain("Arrange a plumber visit");
+    expect(briefRegistration.instructions).toContain("No paid work");
+    expect(defaultRegistration.instructions).not.toContain("Arrange a plumber visit");
 
     const supportRegistration = resolveCallRegistration({
       ...outboundContact,
@@ -599,7 +575,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",
-      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      metadata: {
+        requesterSessionKey: "agent:main:discord:channel:general",
+        brief: { task: "Check shipment reference ABC" },
+        ownerInstructions: ["Ask for tomorrow delivery"],
+      },
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
@@ -650,8 +630,15 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "x_search",
       "memory_search",
       "memory_get",
+      "voice_call",
     ]);
+    expect(consultParams.toolBindings).toEqual({
+      voice_call: { kind: "active-call", callId: "call-1" },
+    });
     expect(consultParams.extraSystemPrompt).toContain("one or two bounded read-only queries");
+    expect(consultParams.extraSystemPrompt).toContain('bound call id is "call-1"');
+    expect(consultParams.extraSystemPrompt).toContain("Check shipment reference ABC");
+    expect(consultParams.extraSystemPrompt).toContain("Ask for tomorrow delivery");
     expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });

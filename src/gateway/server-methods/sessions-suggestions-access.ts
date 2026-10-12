@@ -2,7 +2,6 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionSuggestionEvent,
   type SessionSuggestionResolution,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -10,8 +9,13 @@ import {
   SessionWorkStartInvalidatedError,
   isSessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import type { SessionRowReadView } from "../session-row-prepared-read.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
+import type { captureIncognitoSessionMutationFacts } from "../session-sharing-incognito.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
@@ -29,30 +33,13 @@ import {
 } from "../session-sharing.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-function canSeeSuggestionTarget(params: {
-  client: GatewayClient | null;
-  cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
-  sharing?: ReturnType<typeof prepareProjectedSessionSharing>;
-}): boolean {
-  return (
-    !hasOperatorBoundary(params.client, params.cfg) ||
-    (
-      params.sharing?.entryFilter ??
-      createSessionListEntryFilter({ client: params.client, cfg: params.cfg })
-    )?.(params.target.storeKey, params.target.entry) !== false
-  );
-}
-
 export function requireSuggestionTarget(params: {
-  client: GatewayClient | null;
   context: GatewayRequestContext;
   sessionKey: string;
   agentId?: string;
   respond: RespondFn;
 }) {
   const cfg = params.context.getRuntimeConfig();
-  const policyConfig = params.context.getCommittedRuntimeConfig?.() ?? cfg;
   const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
   if (!requestedAgent.ok) {
     params.respond(false, undefined, requestedAgent.error);
@@ -63,7 +50,7 @@ export function requireSuggestionTarget(params: {
     sessionKey: params.sessionKey,
     agentId: requestedAgent.agentId,
   });
-  if (!target || !canSeeSuggestionTarget({ client: params.client, cfg: policyConfig, target })) {
+  if (!target) {
     params.respond(
       false,
       undefined,
@@ -78,36 +65,38 @@ export function requireVisibleSuggestionRole(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   client: GatewayClient | null;
   sessionKey: string;
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
+  target: ReturnType<typeof resolveSessionSharingTarget>;
   respond: RespondFn;
   sharing?: ReturnType<typeof prepareProjectedSessionSharing>;
 }) {
-  const role =
-    params.sharing?.roleForTarget(params.target) ??
-    resolveSessionSharingRole({
-      client: params.client,
-      cfg: params.cfg,
-      target: params.target,
-    });
+  const { target, client, cfg, sharing } = params;
+  const entryFilter = hasOperatorBoundary(client, cfg)
+    ? (sharing?.entryFilter ?? createSessionListEntryFilter({ client, cfg }))
+    : undefined;
+  if (!target || entryFilter?.(target.storeKey, target.entry) === false) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
+    );
+    return null;
+  }
+  const role = sharing?.roleForTarget(target) ?? resolveSessionSharingRole({ client, cfg, target });
   const incognitoError = authorizeIncognitoSessionTarget({
     client: params.client,
     sessionKey: params.sessionKey,
-    target: params.target,
+    target,
   });
   if (incognitoError) {
     params.respond(false, undefined, incognitoError);
     return null;
   }
-  if (resolveSessionVisibility(params.target.entry) !== "draft") {
+  if (resolveSessionVisibility(target.entry) !== "draft") {
     return role;
   }
-  const error = params.sharing
-    ? params.sharing.authorizeTarget(params.target)
-    : authorizeSessionSharingTarget({
-        client: params.client,
-        cfg: params.cfg,
-        target: params.target,
-      });
+  const error = sharing
+    ? sharing.authorizeTarget(target)
+    : authorizeSessionSharingTarget({ client, cfg, target });
   if (!error) {
     return role;
   }
@@ -116,18 +105,10 @@ export function requireVisibleSuggestionRole(params: {
 }
 
 export function authorizeSessionSuggestionMutation(
-  params: Parameters<typeof requireVisibleSuggestionRole>[0],
+  params: Parameters<typeof requireVisibleSuggestionRole>[0] & { target: SessionSharingTarget },
   action: "add" | SessionSuggestionResolution,
 ): boolean {
   const { cfg, client, target, respond } = params;
-  if (!canSeeSuggestionTarget(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
-    );
-    return false;
-  }
   const role = requireVisibleSuggestionRole(params);
   if (role === null) {
     return false;
@@ -168,9 +149,7 @@ export function authorizeSessionSuggestionMutation(
   return true;
 }
 
-export function suggestionScope(
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
-) {
+export function suggestionScope(target: SessionSharingTarget) {
   return { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath };
 }
 
@@ -196,24 +175,6 @@ type SessionSuggestionMutation<T> = {
   mutate: (scope: SuggestionWriteScope, assertCurrent: () => void) => Promise<T>;
 } & ({ kind: "start"; action: "add" | SessionSuggestionResolution } | { kind: "settle" });
 
-function resolveCurrentSuggestionTarget(
-  target: SessionSharingTarget,
-  expectedSessionId: string | undefined,
-  current: SessionSharingTarget | null,
-) {
-  if (
-    !current ||
-    current.agentId !== target.agentId ||
-    current.canonicalKey !== target.canonicalKey ||
-    current.storeKey !== target.storeKey ||
-    current.storePath !== target.storePath ||
-    current.entry.sessionId !== expectedSessionId
-  ) {
-    throw new SessionWorkStartInvalidatedError("session changed before suggestion mutation");
-  }
-  return current;
-}
-
 export async function createSessionSuggestionMutation(params: {
   target: SessionSharingTarget;
   context: GatewayRequestContext;
@@ -223,7 +184,7 @@ export async function createSessionSuggestionMutation(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }) {
-  const scope = { ...suggestionScope(params.target), env: { ...process.env } };
+  const scope = captureSessionTranscriptTargetBinding(suggestionScope(params.target));
   const expectedSessionId = params.target.entry.sessionId;
   const facts = await prepareSessionMutationFacts({
     cfg: params.context.getRuntimeConfig(),
@@ -237,7 +198,17 @@ export async function createSessionSuggestionMutation(params: {
     if (!current.sourcePath) {
       throw new SessionMutationFactsUnavailableError();
     }
-    const target = resolveCurrentSuggestionTarget(params.target, expectedSessionId, current.target);
+    const target = current.target;
+    if (
+      !target ||
+      target.agentId !== params.target.agentId ||
+      target.canonicalKey !== params.target.canonicalKey ||
+      target.storeKey !== params.target.storeKey ||
+      target.storePath !== params.target.storePath ||
+      target.entry.sessionId !== expectedSessionId
+    ) {
+      throw new SessionWorkStartInvalidatedError("session changed before suggestion mutation");
+    }
     const policyConfig = params.context.getCommittedRuntimeConfig?.() ?? cfg;
     const sharing = prepareProjectedSessionSharing({
       cfg: policyConfig,
@@ -319,16 +290,30 @@ export async function createSessionSuggestionMutation(params: {
   return { run, readCurrent, release: facts.release };
 }
 
-export function publishSuggestion(
-  context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
-  requestedSessionKey: string,
-  event: SessionSuggestionEvent,
-): void {
-  context.broadcast("session.suggestion", event, {
-    sessionKeys: [
-      ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
-    ].toSorted(),
-    agentId: event.suggestion.agentId,
-  });
+export function readCollaborationTarget(
+  projection: Pick<SessionRowProjection, "describe" | "sharingTargetState">,
+  query: { key: string; agentId: string },
+  read: Pick<SessionRowReadView, "describe"> = projection,
+  actorFacts?: ReturnType<typeof captureIncognitoSessionMutationFacts>,
+) {
+  if (actorFacts) {
+    const target = actorFacts.readCurrent().target;
+    return target && { ...target, generation: target.readSource.databaseIdentity };
+  }
+  if (isIncognitoSessionKey(query.key)) {
+    const row = read.describe(query);
+    return (
+      row && {
+        agentId: row.agentId,
+        canonicalKey: row.key,
+        storeKey: row.key,
+        storeKeys: [row.key],
+        storePath: row.storeTarget.storePath,
+        entry: row.entry,
+        generation: row.generation,
+      }
+    );
+  }
+  const current = projection.sharingTargetState(query);
+  return current.status === "ready" ? current.target : null;
 }

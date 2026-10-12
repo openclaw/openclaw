@@ -4,6 +4,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.ts";
 import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
+import { readBoundedArtifactText } from "./bounded-artifact-text.mts";
 import { collectBundledPluginBuildEntries } from "./bundled-plugin-build-entries.mjs";
 import { groupBy } from "./group-by.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
@@ -545,21 +546,7 @@ function readQaSuiteSummaryText(summaryPath: string) {
     process.env[QA_SUMMARY_MAX_BYTES_ENV] || String(DEFAULT_QA_SUMMARY_MAX_BYTES),
     QA_SUMMARY_MAX_BYTES_ENV,
   );
-  const stat = fs.statSync(summaryPath);
-  if (!stat.isFile()) {
-    throw new Error(`QA suite summary is not a file: ${summaryPath}`);
-  }
-  if (stat.size > maxBytes) {
-    throw new Error(
-      `QA suite summary exceeded ${maxBytes} bytes: ${summaryPath} (${stat.size} bytes)`,
-    );
-  }
-  const text = fs.readFileSync(summaryPath, "utf8");
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes > maxBytes) {
-    throw new Error(`QA suite summary exceeded ${maxBytes} bytes: ${summaryPath} (${bytes} bytes)`);
-  }
-  return text;
+  return readBoundedArtifactText(summaryPath, maxBytes, "QA suite summary");
 }
 
 function validateQaSuiteSummary(summary: unknown) {

@@ -1,6 +1,7 @@
 import { expectTypeOf, it } from "vitest";
 import type {
   captureNativeSessionGenerationAuthority,
+  createNativeSessionInitializationOwner,
   resolveNativeSessionBinding,
   NativeSessionGenerationOperations,
   NativeSessionGenerationOperationsV2,
@@ -29,5 +30,15 @@ it("retains the native-session signatures consumed by released official harnesse
   >();
   expectTypeOf<Parameters<NativeSessionGenerationOperationsV2["reclaim"]>>().toEqualTypeOf<
     [expectedPreviousSessionId: string, authority: NativeSessionBindingAuthority]
+  >();
+});
+
+it("retains synchronous released initialization links alongside awaited links", () => {
+  type Owner = ReturnType<typeof createNativeSessionInitializationOwner>;
+  type Initialization = ReturnType<Owner["prepare"]>;
+  expectTypeOf<ReturnType<Initialization["link"]>>().toEqualTypeOf<void>();
+  expectTypeOf<ReturnType<Initialization["linkAsync"]>>().toEqualTypeOf<Promise<void>>();
+  expectTypeOf<Parameters<Initialization["linkAsync"]>>().toEqualTypeOf<
+    Parameters<Initialization["link"]>
   >();
 });

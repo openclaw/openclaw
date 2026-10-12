@@ -23,22 +23,16 @@ const COPILOT_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 70],
 ]);
 
-type CopilotWorkspaceBootstrapResult = {
-  bootstrapFiles: Awaited<ReturnType<typeof resolveBootstrapContextForRun>>["bootstrapFiles"];
-  contextFiles: EmbeddedContextFile[];
-  instructions?: string;
-};
-
-export async function resolveCopilotWorkspaceBootstrapContext(params: {
+export async function loadCopilotWorkspaceInstructions(params: {
   attempt: AgentHarnessAttemptParamsV2;
   /** SDK workspace after sandbox resolution; undefined before resolution. */
   effectiveWorkspaceDir: string | undefined;
   warn?: (message: string) => void;
-}): Promise<CopilotWorkspaceBootstrapResult> {
+}): Promise<string | undefined> {
   const { attempt } = params;
   const workspaceDir = readResolvedWorkspacePath(attempt.workspaceDir);
   if (!workspaceDir) {
-    return { bootstrapFiles: [], contextFiles: [] };
+    return undefined;
   }
   try {
     const bootstrapContext = await resolveBootstrapContextForRun({
@@ -58,18 +52,14 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
       sourceWorkspaceDir: workspaceDir,
       targetWorkspaceDir: readResolvedWorkspacePath(params.effectiveWorkspaceDir) ?? workspaceDir,
     });
-    return {
-      bootstrapFiles: bootstrapContext.bootstrapFiles,
-      contextFiles,
-      instructions: renderCopilotWorkspaceBootstrapInstructions(contextFiles),
-    };
+    return renderCopilotWorkspaceBootstrapInstructions(contextFiles);
   } catch (error) {
     params.warn?.(
       `[copilot-attempt] failed to load workspace bootstrap instructions: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
-    return { bootstrapFiles: [], contextFiles: [] };
+    return undefined;
   }
 }
 

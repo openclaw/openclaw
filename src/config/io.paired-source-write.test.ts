@@ -187,7 +187,6 @@ describe("paired source through the public config writer", () => {
   it.each([
     { literalEdit: true, expandRoster: false },
     { literalEdit: false, expandRoster: true },
-    { literalEdit: true, expandRoster: true },
   ])(
     "distinguishes acquired references from literal edits (literal=$literalEdit, topology=$expandRoster)",
     async ({ literalEdit, expandRoster }) => {

@@ -26,7 +26,9 @@ export function isVisibleAssistantResultEventForRun(event: unknown, runId: strin
     !isRecord(event) ||
     !isRecord(event.message) ||
     readSessionTranscriptRunId(event.message) !== runId ||
-    resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined
+    resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined ||
+    // An interim stop asked the provider to continue, so it is progress, not the answer.
+    event.message.endTurn === false
   ) {
     return false;
   }
@@ -41,15 +43,16 @@ export function isVisibleAssistantResultEventForRun(event: unknown, runId: strin
 
 export type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
 
-/** Match content before checking any active-branch identity in the same snapshot. */
+/** Navigation only filters candidates; canonical content and active identity remain authoritative. */
 export function matchesTranscriptEvent(
   event: unknown,
   match: SessionTranscriptEventMatch,
+  projection?: "navigation",
 ): boolean {
   if (match.kind === "latest") {
     return true;
   }
-  if (match.kind === "visible-final") {
+  if (match.kind === "visible-final" && projection !== "navigation") {
     return isVisibleAssistantResultEventForRun(event, match.runId);
   }
   const message = asOptionalRecord(asOptionalRecord(event)?.message);
@@ -58,7 +61,9 @@ export function matchesTranscriptEvent(
       message?.idempotencyKey === match.key &&
       (!match.assistant || message.role === "assistant") &&
       (match.runId === undefined || readSessionTranscriptRunId(message) === match.runId) &&
-      (!match.deliveryMirror || isOpenClawDeliveryMirrorAssistantMessage(message))
+      (projection === "navigation" ||
+        !match.deliveryMirror ||
+        isOpenClawDeliveryMirrorAssistantMessage(message))
     );
   }
   return message?.role === "assistant" && readSessionTranscriptRunId(message) === match.runId;

@@ -16,7 +16,7 @@ async function emptyStateText(panel: HTMLElement): Promise<string> {
   const empty = panel.querySelector("openclaw-panel-empty-state");
   expect(empty).not.toBeNull();
   await empty!.updateComplete;
-  return empty!.shadowRoot?.textContent ?? "";
+  return empty!.textContent ?? "";
 }
 
 describe("session discussion panel", () => {

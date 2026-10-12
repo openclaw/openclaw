@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases.js";
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
@@ -10,11 +11,9 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -34,12 +33,15 @@ import {
   prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntry } from "./session-accessor.js";
-import { isCanonicalSqliteSessionMainKeyCurrent } from "./session-canonical-key-read.js";
-import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import {
+  readCanonicalSessionMainKey,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
@@ -70,13 +72,27 @@ it.each(["cold", "preexisting"] as const)(
       closeOpenClawAgentDatabasesForTest();
     }
 
-    await runSessionStartupMigration({
-      cfg: { agents: { entries: { main: {} } } },
-      env,
-      log: { info: vi.fn(), warn: vi.fn() },
-    });
+    const statements = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+    try {
+      await runSessionStartupMigration({
+        cfg: { agents: { entries: { main: {} } } },
+        env,
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+    } finally {
+      statements.restore();
+    }
+    // Schema re-admission preserves the unchanged stored policy.
+    expect(
+      statements.queries.filter((sql) =>
+        /select "main_key" from "session_key_contract"/iu.test(sql),
+      ),
+    ).toEqual([]);
 
-    expect(isCanonicalSqliteSessionMainKeyCurrent(options, undefined)).toBe(true);
+    expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, options)).toEqual({
+      found: true,
+      value: "main",
+    });
     expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(lifetime === "preexisting");
     if (lifetime === "preexisting") {
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(initial);
@@ -174,8 +190,16 @@ it.each([false, true])(
     await runSessionStartupMigration({ cfg, env, log, handoffDatabase });
 
     expect(handoffDatabase).toHaveBeenCalledExactlyOnceWith(survivorOptions);
-    expect(isCanonicalSqliteSessionMainKeyCurrent(survivorOptions, undefined)).toBe(true);
-    expect(isCanonicalSqliteSessionMainKeyCurrent(deletedOptions, "previous")).toBe(true);
+    expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, survivorOptions)).toEqual(
+      {
+        found: true,
+        value: "main",
+      },
+    );
+    expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, deletedOptions)).toEqual({
+      found: true,
+      value: "previous",
+    });
     expect(isOpenClawAgentDatabaseOpen(deleted.path)).toBe(false);
     expect(() => openOpenClawAgentDatabase(deletedOptions)).toThrow("agent ops is deleted");
     expect(log.warn).not.toHaveBeenCalled();
@@ -259,7 +283,7 @@ it("observes committed deletion before startup handoff after canonical database 
     await withAgentDeletion(
       "alpha",
       async (begin) => {
-        const deletion = begin({
+        const deletion = await begin({
           agentId: "alpha",
           agentDir,
           sessionsDir: path.join(stateDir, "agents", "alpha", "sessions"),
@@ -268,8 +292,8 @@ it("observes committed deletion before startup handoff after canonical database 
           deleteFiles: false,
         });
         await prepareAgentDeleteDatabases(cfg, "alpha", agentDir, { env });
-        deletion.assertCurrent();
-        deletion.finish();
+        await deletion.assertCurrentAsync();
+        await deletion.finish();
       },
       { env },
     );
@@ -361,7 +385,10 @@ it.each(["missing", "receipt-held", "malformed-receipt", "malformed-journal"])(
         );
         expect(handoffDatabase).toHaveBeenCalledTimes(2);
         for (const scope of options) {
-          expect(isCanonicalSqliteSessionMainKeyCurrent(scope, undefined)).toBe(true);
+          expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, scope)).toEqual({
+            found: true,
+            value: "main",
+          });
           expect(isOpenClawAgentDatabaseOpen(scope.path)).toBe(true);
         }
         const { store } = loadCombinedSessionStoreForGatewayCore(cfg, {
@@ -545,7 +572,10 @@ it.each(["registry", "main-key"] as const)(
       });
       expect(log.warn).not.toHaveBeenCalled();
       expect(yielded).toBe(true);
-      expect(isCanonicalSqliteSessionMainKeyCurrent(options, undefined)).toBe(true);
+      expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, options)).toEqual({
+        found: true,
+        value: "main",
+      });
       expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
         expect.objectContaining({ agentId: "main", path: initial.path }),
       );

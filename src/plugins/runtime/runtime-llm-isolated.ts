@@ -167,6 +167,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     const operation = (async () => {
       const { runIsolatedCompletion } = await import("../../agents/isolated-completion.js");
       return await runIsolatedCompletion({
+        purpose: "plugin-completion",
         config: params.cfg,
         provider: params.provider,
         model: params.model,

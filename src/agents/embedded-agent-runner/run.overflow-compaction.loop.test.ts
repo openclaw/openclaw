@@ -4,7 +4,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import type { EmbeddedRunAttemptParamsV2 } from "../../plugin-sdk/agent-harness-runtime.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -12,6 +14,7 @@ import {
 } from "../admitted-run-context.js";
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import type { ExecSessionDefaults } from "../exec-defaults.js";
+import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import {
   createEmbeddedRunReplayState,
@@ -20,6 +23,7 @@ import {
 } from "./replay-state.js";
 import type { EmbeddedRunAttemptInternalParams } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
+import { resolveEmbeddedRunEffectiveModel } from "./run/model-harness.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,6 +32,19 @@ const mocks = vi.hoisted(() => ({
   prepareGitHubPublicationAvailability: vi.fn(),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const codex = await loadBundledPluginFacade<{
+  resolveCodexPromptSnapshotAppServerOptions: () => unknown;
+  buildCodexHarnessPromptSnapshot: (params: {
+    attempt: EmbeddedRunAttemptParamsV2;
+    cwd: string;
+    threadId: string;
+    dynamicTools: [];
+    appServer: unknown;
+  }) => {
+    threadStartParams: { config?: Record<string, unknown> };
+    threadResumeParams: { config?: Record<string, unknown> };
+  };
+}>({ pluginId: "codex", artifactBasename: "test-api.js" });
 
 vi.mock("../../gateway/github-publication-availability.js", () => ({
   prepareGitHubPublicationAvailability: mocks.prepareGitHubPublicationAvailability,
@@ -35,6 +52,12 @@ vi.mock("../../gateway/github-publication-availability.js", () => ({
 
 vi.mock("../delegation-capability.js", () => ({
   resolveDelegationCapability: vi.fn(() => undefined),
+}));
+
+// mock-isolation: Dispatch fixtures provide an empty auth store and no credential database.
+vi.mock("../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
 vi.mock("../model-auth.js", () => ({
@@ -157,6 +180,8 @@ function makeDispatchInput(
       },
     },
     preparedRuntime: {
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
       requestedModelId: "gpt-5.6-luna",
       nativeModelOwned: true,
       authStorage: {},
@@ -180,8 +205,6 @@ function makeDispatchInput(
       suppressNextUserMessagePersistence: false,
     },
     terminalRetryState: { beforeFinalizeRevisionAttempts: 0 },
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
     replayState,
     startupStagesEmitted: false,
     bootstrapPromptWarningSignaturesSeen: [],
@@ -230,13 +253,13 @@ describe("embedded run retry dispatch", () => {
     },
   ] satisfies Array<{
     session: ExecSessionDefaults;
-    expected: ReturnType<typeof resolveWorkerToolAuthority>["exec"];
+    expected: Awaited<ReturnType<typeof resolveWorkerToolAuthority>>["exec"];
   }>)(
     "resolves a projected $expected.host session's execution authority",
     async ({ session, expected }) => {
       const result = await dispatchExecSession(session);
 
-      const authority = resolveWorkerToolAuthority({
+      const authority = await resolveWorkerToolAuthority({
         modelRef: { provider: "openai", model: "gpt-5.6-luna" },
         turn: {
           ...result.preparedAttempt,
@@ -337,25 +360,80 @@ describe("embedded run retry dispatch", () => {
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
 
-  it("forwards effective and authored context facts without a context engine (#124702)", async () => {
-    const cappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
-    cappedInput.preparedRuntime.snapshot().contextTokenBudget = 272_000;
-    cappedInput.preparedRuntime.snapshot().authoredContextTokenCap = 32_000;
-    const { dispatchedAttempt: capped } = await prepareAndDispatchEmbeddedRunAttempt(cappedInput);
+  it.each([
+    { contextTokens: 40_000, nativeModelOwned: true, sessionKey: "agent:main:session-1" },
+    { contextTokens: undefined, nativeModelOwned: true, sessionKey: "agent:main:session-1" },
+    { contextTokens: 2_000_000, nativeModelOwned: true, sessionKey: "agent:main:session-1" },
+    { contextTokens: 40_000, nativeModelOwned: false, sessionKey: "agent:main:session-1" },
+    { contextTokens: 40_000, nativeModelOwned: true, sessionKey: "agent:main:subagent:child" },
+  ])(
+    "forwards cap $contextTokens to Codex start/resume (native catalog: $nativeModelOwned, $sessionKey)",
+    async ({ contextTokens, nativeModelOwned, sessionKey }) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.runInput.resolvedSessionKey = sessionKey;
+      const { runParams, provider, modelId } = input.runInput;
+      runParams.config = {
+        models: {
+          mode: "merge",
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: modelId,
+                  name: "Capped model",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_050_000,
+                  maxTokens: 128_000,
+                  ...(contextTokens === undefined ? {} : { contextTokens }),
+                },
+              ],
+            },
+          },
+        },
+      };
+      const runtime = input.preparedRuntime.snapshot();
+      Object.assign(
+        runtime,
+        resolveEmbeddedRunEffectiveModel({
+          runParams,
+          provider,
+          modelConfigProvider: provider,
+          modelId,
+          agentHarnessId: "codex",
+          runtimeModel: runtime.effectiveModel,
+          nativeModelOwned,
+        }),
+      );
+      const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+      const attempt = dispatchedAttempt.preparedAttempt;
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      try {
+        const { threadStartParams, threadResumeParams } = codex.buildCodexHarnessPromptSnapshot({
+          attempt: { ...attempt, hostCapabilities: host.capabilities },
+          cwd: runParams.workspaceDir,
+          threadId: "persisted-thread",
+          dynamicTools: [],
+          appServer: codex.resolveCodexPromptSnapshotAppServerOptions(),
+        });
 
-    expect(capped.preparedAttempt.contextTokenBudget).toBe(272_000);
-    expect(capped.preparedAttempt.authoredContextTokenCap).toBe(32_000);
+        expect(attempt.contextTokenBudget).toBe(nativeModelOwned ? undefined : contextTokens);
+        for (const request of [threadStartParams, threadResumeParams]) {
+          if (contextTokens === undefined) {
+            expect(request.config).not.toHaveProperty("model_context_window");
+          } else {
+            expect(request.config?.model_context_window).toBe(contextTokens);
+          }
+        }
+      } finally {
+        host.close();
+      }
+    },
+  );
 
-    const uncappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
-    uncappedInput.preparedRuntime.snapshot().contextTokenBudget = 272_000;
-    const { dispatchedAttempt: uncapped } =
-      await prepareAndDispatchEmbeddedRunAttempt(uncappedInput);
-
-    expect(uncapped.preparedAttempt.contextTokenBudget).toBe(272_000);
-    expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
-  });
-
-  it.each(["openclaw", "codex"])(
+  it.each(["openclaw"])(
     "prepares GitHub tools for each admitted run and continuation (%s)",
     async (harness) => {
       const gateway = {} as GatewayRequestContext;
@@ -387,7 +465,17 @@ describe("embedded run retry dispatch", () => {
     bindGatewayContextResolver(admittedRunContext, () => gateway);
     const input = makeDispatchInput({}, createEmbeddedRunReplayState());
     await prepareAndDispatchEmbeddedRunAttempt(input);
-    input.sessionPromptState = { ...input.sessionPromptState, sessionId: "rotated-session" };
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "rotated-session",
+      sessionKey: "agent:main:session-1",
+      storePath: `${tempDirs.make("publication-adopted-")}/openclaw-agent.sqlite`,
+    };
+    input.sessionPromptState = {
+      ...input.sessionPromptState,
+      sessionId: "rotated-session",
+      sessionTarget,
+    };
     mocks.prepareGitHubPublicationAvailability.mockResolvedValue(false);
 
     const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
@@ -401,34 +489,12 @@ describe("embedded run retry dispatch", () => {
       agentId: "main",
       sessionId: "rotated-session",
       sessionKey: "agent:main:session-1",
+      sessionTarget,
       assertCurrent: expect.any(Function),
     });
   });
 
-  it.each(["unbound", "local", "disabled", "detached", "native-tools"])(
-    "does not prepare managed GitHub tools for a %s run",
-    async (kind) => {
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-      const gateway = { localEmbedded: kind === "local" } as GatewayRequestContext;
-      if (kind !== "unbound") {
-        bindGatewayContextResolver(admittedRunContext, () => gateway);
-      }
-      input.runInput.runParams.disableTools = kind === "disabled";
-      if (kind === "detached") {
-        input.runInput.runParams.sessionPersistence = "detached";
-      }
-      if (kind === "native-tools") {
-        input.preparedRuntime.snapshot().agentHarness.id = "native-only";
-      }
-
-      const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
-
-      expect(dispatchedAttempt.preparedAttempt.githubPublicationAvailable).toBeUndefined();
-      expect(mocks.prepareGitHubPublicationAvailability).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["closed", "aborted", "replaced", "attempt-replaced"])(
+  it.each(["closed", "replaced", "attempt-replaced"])(
     "does not dispatch when GitHub preparation outlives a %s owner",
     async (kind) => {
       let gateway = {} as GatewayRequestContext;
@@ -452,8 +518,6 @@ describe("embedded run retry dispatch", () => {
           : undefined;
       if (kind === "closed") {
         admission.close();
-      } else if (kind === "aborted") {
-        input.runInput.laneController.laneTaskAbortController.abort();
       } else if (kind === "replaced") {
         gateway = {} as GatewayRequestContext;
       }

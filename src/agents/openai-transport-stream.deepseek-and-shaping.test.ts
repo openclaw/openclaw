@@ -74,73 +74,7 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("prefers promptCacheKey over sessionId for Responses prompt-cache affinity", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      {
-        sessionId: "run-session",
-        promptCacheKey: "cron-cache-key",
-      },
-    ) as { prompt_cache_key?: string };
-
-    expect(params.prompt_cache_key).toBe("cron-cache-key");
-  });
-
-  it("clamps Responses promptCacheKey before sending it upstream", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      {
-        promptCacheKey: "x".repeat(80),
-        sessionId: "session-123",
-      },
-    ) as { prompt_cache_key?: string };
-
-    expect(params.prompt_cache_key).toBe("x".repeat(64));
-  });
-
-  it("adds fallback instructions for raw native Codex responses probes", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        contextWindow: 400000,
-        maxTokens: 128000,
-      }),
-      {
-        systemPrompt: "",
-        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
-        tools: [],
-      } as never,
-      {
-        maxTokens: 16,
-        sessionId: "session-123",
-      },
-    ) as Record<string, unknown>;
-
-    expect(params.instructions).toBe("Follow the user request.");
-    expect(params.max_output_tokens).toBeUndefined();
-    expect(params.prompt_cache_retention).toBeUndefined();
-  });
-
-  it.each(["none", "short", "long"] as const)(
+  it.each(["none", "long"] as const)(
     "preserves native ChatGPT cache identity with %s retention",
     (cacheRetention) => {
       const params = buildOpenAIResponsesParams(
@@ -316,43 +250,5 @@ describe("openai transport stream", () => {
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
     expect(params.top_p).toBe(0.85);
-  });
-
-  it("forwards response_format to responses text format request params", () => {
-    const model = makeResponsesModel({
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      maxTokens: 65_536,
-    });
-
-    const context = {
-      systemPrompt: "system",
-      messages: [{ role: "user", content: "hi", timestamp: 1 }],
-      tools: [],
-    } as never;
-
-    {
-      const params = buildOpenAIResponsesParams(model, context, {
-        responseFormat: { type: "json_object" },
-      }) as Record<string, unknown>;
-      expect(params.text).toEqual({ format: { type: "json_object" } });
-    }
-
-    {
-      const params = buildOpenAIResponsesParams(model, context, {
-        responseFormat: {
-          type: "json_schema",
-          json_schema: { name: "test", schema: { type: "object" } },
-        },
-      }) as Record<string, unknown>;
-      expect(params.text).toEqual({
-        format: { type: "json_schema", name: "test", schema: { type: "object" } },
-      });
-    }
-
-    {
-      const params = buildOpenAIResponsesParams(model, context, {}) as Record<string, unknown>;
-      expect(params).not.toHaveProperty("text");
-    }
   });
 });

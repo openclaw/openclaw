@@ -50,6 +50,13 @@ Node-local Computer Use plugins register one provider through
 matching Gateway invoke policy; the provider owns availability, execution,
 serialization, frame state, driver lifecycle, and cleanup.
 
+`capabilities()` is a synchronous declaration read. Keep it free of driver
+acquisition and native availability probes: Gateway tool discovery reads it
+before preparing a desktop. Keep its provider generation stable for the
+registered provider's lifetime; execution-specific frame generations remain
+owned by the driver. Use `prepare`, `isAvailable`, and `openExecution` for
+runtime readiness and resource ownership.
+
 The same entry point exports the canonical TypeBox schemas, static types, and
 compiled validators for the two command payloads and the snapshot result. A
 node host accepts one provider for the command pair; registering another

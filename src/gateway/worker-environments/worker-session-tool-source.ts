@@ -21,6 +21,7 @@ import {
   PlacedSessionsSendSchema,
 } from "../../agents/tools/sessions-placement-tool-contract.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
 import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
@@ -93,18 +94,21 @@ export function createWorkerSessionToolSourceRunner(params: {
     if (!capability) {
       throw new Error("Worker source turn has no operational owner");
     }
-    const assertToolCurrent = () => {
-      capability.receiptAuthority();
-      operation.request.signal?.throwIfAborted();
-      if (
-        !params.placements.isWorkerTurnToolAuthorized(
-          operation.source.turnClaim,
-          operation.request.toolName,
-        )
-      ) {
-        throw new Error("Worker tool authority changed");
-      }
-    };
+    const assertToolCurrent = composeSessionSourceAssertion(
+      [capability.receiptAuthority],
+      (assertSource) => {
+        assertSource();
+        operation.request.signal?.throwIfAborted();
+        if (
+          !params.placements.isWorkerTurnToolAuthorized(
+            operation.source.turnClaim,
+            operation.request.toolName,
+          )
+        ) {
+          throw new Error("Worker tool authority changed");
+        }
+      },
+    );
     return await runWithScopedSessionAccess({
       cfg: getRuntimeConfig(),
       agentId: operation.source.agentId,
@@ -125,13 +129,16 @@ export function createWorkerSessionToolSourceRunner(params: {
               ...(operation.request.signal ? { approvalSignals: [operation.request.signal] } : {}),
             },
             async () => {
-              const assertSource = () => {
-                assertToolCurrent();
-                const source = operation.source;
-                if (source.agentId !== owner.agentId || source.sessionKey !== owner.sessionKey) {
-                  throw new Error("Worker source turn owner changed");
-                }
-              };
+              const assertSource = composeSessionSourceAssertion(
+                [assertToolCurrent],
+                (assertCurrent) => {
+                  assertCurrent();
+                  const source = operation.source;
+                  if (source.agentId !== owner.agentId || source.sessionKey !== owner.sessionKey) {
+                    throw new Error("Worker source turn owner changed");
+                  }
+                },
+              );
               const callGateway = async <R = Record<string, unknown>>(
                 request: Parameters<AgentToolGatewayRequestCaller>[0],
                 sessionSpawnContext?: ReturnType<typeof buildSubagentExecutionSessionSpawnContext>,

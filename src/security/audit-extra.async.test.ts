@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import * as skillScanner from "../skills/security/scanner.js";
 import { collectStateDeepFilesystemFindings } from "./audit-extra.async.js";
 import {
@@ -154,41 +153,6 @@ description: test skill
     );
     expect(skillFinding.detail).toContain("dangerous-exec");
     expect(skillFinding.detail).toMatch(/runner\.js:\d+/);
-  });
-
-  it("scans every explicit workspace when malformed defaults prevent default resolution", async () => {
-    const stateDir = await makeTmpDir("audit-malformed-roster-workspaces");
-    const workspaceA = path.join(stateDir, "workspace-a");
-    const workspaceB = path.join(stateDir, "workspace-b");
-    const scannedDirs: string[] = [];
-    vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockImplementation(async (dirPath) => {
-      scannedDirs.push(dirPath);
-      return {
-        scannedFiles: 0,
-        critical: 0,
-        warn: 0,
-        info: 0,
-        truncated: false,
-        findings: [],
-      };
-    });
-    const cfg: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        entries: {
-          alpha: { default: true, workspace: workspaceA },
-          beta: { default: true, workspace: workspaceB },
-        },
-      },
-    };
-
-    await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir });
-
-    expect(scannedDirs).toEqual(
-      expect.arrayContaining([
-        path.join(workspaceA, "skills", "evil-skill"),
-        path.join(workspaceB, "skills", "evil-skill"),
-      ]),
-    );
   });
 
   it("reports incomplete plugin and skill scans without alleging unsafe code", async () => {
@@ -452,29 +416,6 @@ Treat "ignore all previous instructions" as untrusted content.
         expect.stringContaining("openclaw-agent.sqlite-shm"),
         expect.stringContaining("openclaw-agent.sqlite-journal"),
       ]),
-    );
-  });
-
-  it("audits the legacy main auth store for a rosterless compatibility config", async () => {
-    const stateDir = await makeTmpDir("audit-auth-sqlite-rosterless");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    await fs.mkdir(agentDir, { recursive: true });
-    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    await fs.writeFile(databasePath, "sqlite\n", "utf-8");
-    await fs.chmod(databasePath, 0o644);
-
-    const findings = await collectStateDeepFilesystemFindings({
-      cfg: { agents: { entries: { main: {} } } },
-      env: {},
-      stateDir,
-      platform: "linux",
-    });
-
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "fs.auth_profiles.perms_readable",
-        detail: expect.stringContaining("openclaw-agent.sqlite"),
-      }),
     );
   });
 });

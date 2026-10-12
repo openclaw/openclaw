@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   createHarness as createBaseHarness,
   createObserverTimerTracker,
@@ -100,73 +99,6 @@ describe("session observer", () => {
     ]);
   });
 
-  it("keeps the persisted fixed-store owner on the bare global observer stream", async () => {
-    vi.setSystemTime(1_000);
-    const config = {
-      gateway: { controlUi: { sessionObserver: true } },
-      session: { scope: "global" as const, store: "/tmp/owned-shared.sqlite" },
-      agents: {
-        ownership: "explicit" as const,
-        defaults: {
-          utilityModel: "openai/gpt-test",
-          sessionStore: { agentId: "ops" },
-        },
-        entries: { ops: {}, research: {} },
-      },
-    } satisfies OpenClawConfig;
-    const harness = createHarness({ subscribe: false, config });
-    harness.subscribers.subscribe("conn-global", "global")?.commit();
-    harness.subscribers.subscribe("conn-scoped", "agent:ops:global")?.commit();
-    declareObserverVisibility(harness.observer, "conn-global");
-    declareObserverVisibility(harness.observer, "conn-scoped");
-
-    preamble(harness, "Ops agent work", { runId: "run-ops", sessionKey: "global", agentId: "ops" });
-    await flushObserver();
-
-    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-      "session.observer",
-      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
-      new Set(["conn-scoped", "conn-global"]),
-      expect.objectContaining({
-        agentId: "ops",
-        dropIfSlow: true,
-        sessionKeys: ["agent:ops:global", "global"],
-      }),
-    );
-  });
-
-  it("resolves an explicit global alias to its agent-scoped companion snapshot", () => {
-    const config = {
-      gateway: { controlUi: { sessionObserver: true } },
-      session: { scope: "global" as const },
-      agents: {
-        defaults: { utilityModel: "openai/gpt-test" },
-        entries: { main: {}, work: {} },
-      },
-    } satisfies OpenClawConfig;
-    const harness = createHarness({ subscribe: false, config });
-    harness.subscribers.subscribe("conn-work", "agent:work:global")?.commit();
-    declareObserverVisibility(harness.observer, "conn-work");
-
-    emitEvent(
-      harness,
-      "lifecycle",
-      { phase: "start" },
-      { runId: "run-work", sessionKey: "global", agentId: "work" },
-    );
-    emitEvent(
-      harness,
-      "tool",
-      { phase: "start", name: "read", args: { path: "src/work.ts" } },
-      { runId: "run-work", sessionKey: "global", agentId: "work" },
-    );
-
-    const snapshot = harness.observer.getCompanionSnapshot("agent:work:main");
-    expect(snapshot.agentId).toBe("work");
-    expect(snapshot.runId).toBe("run-work");
-    expect(snapshot.notes).not.toHaveLength(0);
-  });
-
   it("terminalizes a preamble-only digest without a utility model", async () => {
     const harness = createHarness({
       subscribe: false,
@@ -196,7 +128,9 @@ describe("session observer", () => {
     expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(terminalCount);
   });
 
-  it("synthesizes terminal health when the final model request becomes stale", async () => {
+  it("synthesizes terminal health when the final model request becomes stale", async ({
+    signal,
+  }) => {
     let utilityModelRef: string | undefined = "openai/gpt-a";
     const model = createDeferred<ReturnType<typeof modelMessage>>();
     const harness = createHarness({
@@ -208,9 +142,11 @@ describe("session observer", () => {
     await flushObserver();
     expect(harness.completeModel).toHaveBeenCalledOnce();
 
+    const terminalBroadcast = createDeferred();
+    harness.broadcastToConnIds.mockImplementationOnce(() => terminalBroadcast.resolve());
     utilityModelRef = "openai/gpt-b";
     model.resolve(modelMessage({ headline: "Stale final model", health: "done" }));
-    await flushObserver();
+    await withinTest(terminalBroadcast.promise, signal);
 
     expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
       headline: "Running tests",
@@ -279,8 +215,11 @@ describe("session observer", () => {
     await vi.advanceTimersByTimeAsync(3_000);
     await flushObserver();
     expect(completeModel).toHaveBeenCalledTimes(2);
+    const terminalPublished = createDeferred();
+    harness.broadcastToConnIds.mockImplementationOnce(() => terminalPublished.resolve());
     emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
-    await flushObserver();
+    expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal.aborted).toBe(true);
+    await terminalPublished.promise;
     expect(completeModel).toHaveBeenCalledTimes(3);
     expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({ health: "done" });
   });

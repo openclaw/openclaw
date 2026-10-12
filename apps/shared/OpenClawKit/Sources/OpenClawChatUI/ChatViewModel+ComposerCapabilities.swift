@@ -446,9 +446,9 @@ extension OpenClawChatViewModel {
                     }
                 }
                 let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: scopedPatch)
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    scopedPatch)
                 guard isCurrentMutation() else { return }
                 guard let index = self.sessionIndexForModelState(sessionKey: originalSessionKey) else { return }
                 if let permissionMode = patch.permissionMode {

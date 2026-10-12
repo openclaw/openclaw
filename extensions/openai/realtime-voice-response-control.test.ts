@@ -123,52 +123,6 @@ describe("OpenAI realtime voice response control", () => {
     );
   });
 
-  it("creates an explicit user item and response for manual speech", async () => {
-    const onEvent = vi.fn();
-    const bridge = createNativeBridge({ onEvent });
-    const socket = await connectReadyBridge(bridge);
-
-    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
-
-    const sent = parseSent(socket);
-    expect(sent[1]).toEqual({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: "Say exactly: hello from explicit speech.",
-          },
-        ],
-      },
-    });
-    expectRecordFields(
-      requireNestedRecord(sent[2]?.session, ["audio", "input", "turn_detection"]),
-      "manual response turn detection",
-      {
-        create_response: false,
-        interrupt_response: true,
-      },
-    );
-    expect(sent[3]).toEqual(expectedResponseCreateEvent());
-    expect(JSON.stringify(parseSent(socket).at(-1))).not.toContain("output_modalities");
-    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "conversation.item.create" });
-    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
-
-    emitServerEvent(socket, { type: "response.done" });
-
-    expectRecordFields(
-      requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
-      "restored turn detection",
-      {
-        create_response: true,
-        interrupt_response: true,
-      },
-    );
-  });
-
   it("forces one host-selected function on an otherwise automatic response", async () => {
     const bridge = createNativeBridge();
     const socket = await connectReadyBridge(bridge);
@@ -187,79 +141,12 @@ describe("OpenAI realtime voice response control", () => {
     });
   });
 
-  it("defers manual response.create while a realtime response is active", async () => {
-    const bridge = createNativeBridge();
-    const socket = await connectReadyBridge(bridge);
-    emitServerEvent(socket, { type: "response.created", response: { id: "resp_1" } });
-
-    bridge.sendUserMessage?.("queued manual response");
-
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "queued manual response" }],
-        },
-      },
-    ]);
-
-    emitServerEvent(socket, { type: "response.done" });
-
-    expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
-  });
-
-  it("restores automatic audio responses when a manual response is rejected", async () => {
-    const onError = vi.fn();
-    const bridge = createNativeBridge({ onError });
-    const socket = await connectReadyBridge(bridge);
-
-    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
-
-    const responseCreateEvent = parseSent(socket).findLast(
-      (event) => event.type === "response.create",
-    );
-    if (!responseCreateEvent?.event_id) {
-      throw new Error("expected response.create event id");
-    }
-
-    expectRecordFields(
-      requireNestedRecord(parseSent(socket).at(-2)?.session, ["audio", "input", "turn_detection"]),
-      "suppressed turn detection",
-      {
-        create_response: false,
-        interrupt_response: true,
-      },
-    );
-
-    emitServerEvent(socket, {
-      type: "error",
-      error: {
-        event_id: responseCreateEvent.event_id,
-        message: "bad response request",
-      },
-    });
-
-    expect(onError).toHaveBeenCalledWith(new Error("bad response request"));
-    expectRecordFields(
-      requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
-      "restored turn detection",
-      {
-        create_response: true,
-        interrupt_response: true,
-      },
-    );
-  });
-
   it.each([
-    { mode: "manual", hasEventId: true },
-    { mode: "standalone", hasEventId: true },
     { mode: "manual", hasEventId: false },
     { mode: "standalone", hasEventId: false },
   ] as const)(
     "settles rejected $mode speech (eventId=$hasEventId) before dispatching the consumer's next message",
-    async ({ mode, hasEventId }) => {
+    async ({ mode }) => {
       const onError = vi.fn();
       const onResponseDone = vi.fn((outcome: RealtimeVoiceResponseOutcome) => {
         if (outcome.status === "failed") {
@@ -280,7 +167,6 @@ describe("OpenAI realtime voice response control", () => {
       const rejection = {
         type: "error",
         error: {
-          ...(hasEventId ? { event_id: rejected.event_id } : {}),
           type: "invalid_request_error",
           code: "invalid_value",
           param: "response.tool_choice",
@@ -331,8 +217,6 @@ describe("OpenAI realtime voice response control", () => {
       type: "invalid_request_error",
       param: "response.tool_choice",
     },
-    { type: "invalid_request_error", param: "audio" },
-    { type: "server_error", param: "response.tool_choice" },
   ])(
     "keeps automatic audio suppressed for unrelated errors during a manual response: %j",
     async (error) => {

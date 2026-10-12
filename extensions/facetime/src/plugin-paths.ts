@@ -27,12 +27,7 @@ function resolveHelperStateFile(name: "helper-ipc-key" | "helper-build.sha256"):
   return resolve(homedir(), "Library", "Application Support", "OpenClaw", "FaceTime", name);
 }
 
-async function resolveNativeInstall(params: {
-  access?: typeof access;
-  readFile?: typeof readFile;
-}): Promise<{ buildId: string; capture: string; directory: string; helper: string }> {
-  const checkAccess = params.access ?? access;
-  const loadFile = params.readFile ?? readFile;
+async function resolveNativeInstall(): Promise<{ buildId: string; capture: string }> {
   for (const directory of NATIVE_DIRS) {
     const capture = resolve(directory, "facetime-audio-capture");
     const helper = resolve(directory, "FaceTimeHelper.dylib");
@@ -40,19 +35,19 @@ async function resolveNativeInstall(params: {
     const protocolFile = resolve(directory, "native-protocol.env");
     try {
       await Promise.all([
-        checkAccess(capture, constants.X_OK),
-        checkAccess(helper, constants.R_OK),
-        checkAccess(buildIdFile, constants.R_OK),
-        checkAccess(protocolFile, constants.R_OK),
+        access(capture, constants.X_OK),
+        access(helper, constants.R_OK),
+        access(buildIdFile, constants.R_OK),
+        access(protocolFile, constants.R_OK),
       ]);
       const [buildId, protocol] = await Promise.all([
-        loadFile(buildIdFile, "utf8").then((value) => value.trim()),
-        loadFile(protocolFile, "utf8").then((value) => value.trim()),
+        readFile(buildIdFile, "utf8").then((value) => value.trim()),
+        readFile(protocolFile, "utf8").then((value) => value.trim()),
       ]);
       if (!/^[\da-f]{64}$/u.test(buildId) || protocol !== NATIVE_PROTOCOL) {
         continue;
       }
-      return { buildId, capture, directory, helper };
+      return { buildId, capture };
     } catch {
       // Try the other supported Homebrew prefix.
     }
@@ -60,22 +55,14 @@ async function resolveNativeInstall(params: {
   throw new Error(`Compatible FaceTime native helpers are not installed. Run: ${INSTALL_COMMAND}`);
 }
 
-export async function inspectFaceTimeNativePackage(
-  params: {
-    access?: typeof access;
-    readFile?: typeof readFile;
-  } = {},
-): Promise<boolean> {
-  return await resolveNativeInstall(params).then(
+export async function inspectFaceTimeNativePackage(): Promise<boolean> {
+  return await resolveNativeInstall().then(
     () => true,
     () => false,
   );
 }
 
-export async function inspectFaceTimeArtifacts(params: {
-  access?: typeof access;
-  readFile?: typeof readFile;
-}): Promise<{
+export async function inspectFaceTimeArtifacts(): Promise<{
   nativeInstall: boolean;
   stagedHelper: boolean;
   helperKey: boolean;
@@ -83,10 +70,9 @@ export async function inspectFaceTimeArtifacts(params: {
   stagedHelperDylibs: number;
   cachedDriver: boolean;
 }> {
-  const checkAccess = params.access ?? access;
   const readable = async (file: string, mode: number) => {
     try {
-      await checkAccess(file, mode);
+      await access(file, mode);
       return true;
     } catch {
       return false;
@@ -112,7 +98,7 @@ export async function inspectFaceTimeArtifacts(params: {
     stagedHelperDylibs,
     cachedDriver,
   ] = await Promise.all([
-    inspectFaceTimeNativePackage(params),
+    inspectFaceTimeNativePackage(),
     readable(resolveHelperDylib(), constants.R_OK),
     readable(resolveHelperStateFile("helper-ipc-key"), constants.R_OK),
     readable(resolveHelperStateFile("helper-build.sha256"), constants.R_OK),
@@ -142,22 +128,15 @@ export async function inspectFaceTimeArtifacts(params: {
   };
 }
 
-export async function ensureCaptureBinary(
-  params: {
-    access?: typeof access;
-    readFile?: typeof readFile;
-  } = {},
-): Promise<string> {
-  return (await resolveNativeInstall(params)).capture;
+export async function ensureCaptureBinary(): Promise<string> {
+  return (await resolveNativeInstall()).capture;
 }
 
 export async function ensureHelperArtifacts(params: {
   pluginRoot: string;
   runCommandWithTimeout: PluginRuntime["system"]["runCommandWithTimeout"];
-  access?: typeof access;
-  readFile?: typeof readFile;
 }): Promise<{ buildId: string; dylib: string; ipcKey: string }> {
-  const installation = await resolveNativeInstall(params);
+  const installation = await resolveNativeInstall();
   const stageScript = resolve(params.pluginRoot, "scripts", "stage-helper.sh");
   const result = await params.runCommandWithTimeout(["/bin/bash", stageScript, "--if-needed"], {
     timeoutMs: 120_000,
@@ -167,13 +146,11 @@ export async function ensureHelperArtifacts(params: {
       `FaceTime native helper staging failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
     );
   }
-  const checkAccess = params.access ?? access;
-  const loadFile = params.readFile ?? readFile;
   const dylib = resolveHelperDylib();
-  await checkAccess(dylib, constants.R_OK);
-  const ipcKey = (await loadFile(resolveHelperStateFile("helper-ipc-key"), "utf8")).trim();
+  await access(dylib, constants.R_OK);
+  const ipcKey = (await readFile(resolveHelperStateFile("helper-ipc-key"), "utf8")).trim();
   const stagedBuildId = (
-    await loadFile(resolveHelperStateFile("helper-build.sha256"), "utf8")
+    await readFile(resolveHelperStateFile("helper-build.sha256"), "utf8")
   ).trim();
   if (!/^[\da-f]{64}$/u.test(ipcKey)) {
     throw new Error("FaceTime helper produced an invalid IPC authentication key");

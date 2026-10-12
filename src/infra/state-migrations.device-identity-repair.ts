@@ -1,5 +1,6 @@
 // Owner-authorized detection and Doctor-only replacement for invalid device identity rows.
 import path from "node:path";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   DeviceIdentityStorageError,
   generateStoredDeviceIdentity,
@@ -29,10 +30,13 @@ export function detectLegacyDeviceIdentity(params: {
   let hasInvalidCanonical = false;
   if (doctorAuthorized) {
     try {
-      readStoredDeviceIdentityReadOnly({
-        env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
-        identityKey: IDENTITY_KEY,
-      });
+      // Planning must preserve WAL/SHM files as well as SQLite rows.
+      withArtifactPreservingStateReads(() =>
+        readStoredDeviceIdentityReadOnly({
+          env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
+          identityKey: IDENTITY_KEY,
+        }),
+      );
     } catch (error) {
       hasInvalidCanonical = error instanceof DeviceIdentityStorageError;
     }

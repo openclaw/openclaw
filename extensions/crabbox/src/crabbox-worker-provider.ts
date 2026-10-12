@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   WorkerProviderError,
@@ -7,6 +8,7 @@ import {
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import {
@@ -157,27 +159,11 @@ export function createCrabboxWorkerProvider(
         });
       binaries.set(candidate, resolution);
     }
-    let onAbort: (() => void) | undefined;
-    try {
-      const binary = signal
-        ? await Promise.race([
-            resolution,
-            new Promise<never>((_resolve, reject) => {
-              onAbort = () => reject(toErrorObject(signal.reason, "Crabbox acquisition aborted"));
-              signal.addEventListener("abort", onAbort, { once: true });
-              if (signal.aborted) {
-                onAbort();
-              }
-            }),
-          ])
-        : await resolution;
-      signal?.throwIfAborted();
-      return binary;
-    } finally {
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
-    }
+    const binary = await racePromiseWithAbortSignal(resolution, signal, ({ reason }) =>
+      toErrorObject(reason, "Crabbox acquisition aborted"),
+    );
+    signal?.throwIfAborted();
+    return binary;
   };
   const machineOptions = createCrabboxMachineOptionsResolver({
     resolveBinary,
@@ -272,7 +258,7 @@ export function createCrabboxWorkerProvider(
     signal?.throwIfAborted();
     const binary = await resolveBinary(parsed.binary, preparationSignal);
     preparationSignal?.throwIfAborted();
-    const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
+    const deadline = performance.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
     const nodeBootstrapTimeoutMs = resolveCrabboxNodeEnrollmentTimeoutMs(
       options?.nodeBootstrapTimeoutMs,
     );
@@ -360,7 +346,8 @@ export function createCrabboxWorkerProvider(
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
-      if (parsed.setup && !(project?.preparation && allocationChoice.kind === "checkpoint")) {
+      // The image key covers the exact setup script, so a fork already carries its results.
+      if (parsed.setup && allocationChoice.kind !== "checkpoint") {
         await runProvisionSetup({
           ...inspectedParams,
           phase: "profile setup",
@@ -491,7 +478,15 @@ export function createCrabboxWorkerProvider(
       let enrollment: CrabboxWorkerNodeEnrollment;
       let runtimeSetupFailed = false;
       try {
-        if (!project && options?.prepareNodeRuntime) {
+        // A fork of an image captured for this exact runtime already holds it. Enrollment still
+        // verifies the runtime, and the node fetches a missing worker bundle from the Gateway.
+        const forkHasRuntime =
+          allocationChoice.kind === "checkpoint" &&
+          isDeepStrictEqual(
+            await warmImages.checkpointRuntimeIdentity(allocationChoice.checkpointId),
+            nodeRuntimeIdentity,
+          );
+        if (!project && options?.prepareNodeRuntime && !forkHasRuntime) {
           const runtime = await options.prepareNodeRuntime();
           assertCurrent();
           const setup = createCrabboxNodeRuntimeSetup({
@@ -719,29 +714,43 @@ export function createCrabboxWorkerProvider(
       // Stop renewal before binary acquisition can delay or fail teardown.
       await heartbeats.stop(lease.leaseId);
       const { context, profile } = await resolveLeaseContext(lease);
-      // Lifecycle profiles omit placement overrides. Successful enrollment records
-      // the class and OS that own the warm policy and reusable image after restart.
-      let captureError: unknown;
-      try {
-        const allocation = await warmImages.lookupLease(context.id);
-        const captureProfile = resolveCrabboxWarmImageProfile(
-          profile,
-          allocation?.machineClass ?? profile.class,
-          allocation ? (allocation.os ?? "linux") : profile.target,
-        );
-        if (captureProfile.warmImage) {
-          await warmImages.capture({ ...context, profile: captureProfile });
+      const captureStarted = Promise.withResolvers<void>();
+      let capturing = false;
+      const teardown = (async () => {
+        try {
+          const allocation = await warmImages.lookupLease(context.id);
+          const captureProfile = resolveCrabboxWarmImageProfile(
+            profile,
+            allocation?.machineClass ?? profile.class,
+            allocation ? (allocation.os ?? "linux") : profile.target,
+          );
+          if (captureProfile.warmImage) {
+            await warmImages.capture({
+              ...context,
+              profile: captureProfile,
+              onCaptureStart: () => {
+                capturing = true;
+                captureStarted.resolve();
+              },
+            });
+          }
+        } catch (error) {
+          warn(
+            `Crabbox warm image capture failed for lease ${context.id}: ${coerceErrorMessage(error)}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
+          );
         }
-      } catch (error) {
-        captureError = error;
-      }
-      await stopLease(context);
-      if (captureError) {
-        // Capture recovery remains recorded separately from confirmed source cleanup.
-        warn(
-          `Crabbox warm image capture failed during teardown: ${coerceErrorMessage(captureError)}`,
-        );
-      }
+        await stopLease(context).catch((error: unknown) => {
+          if (!capturing) {
+            throw error;
+          }
+          warn(
+            `Crabbox teardown stop failed for lease ${context.id}: ${coerceErrorMessage(error)}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
+          );
+        });
+      })();
+      // Only a claimed capture detaches. If the Gateway exits during it, OpenClaw
+      // will not stop the lease; Crabbox's idle timeout / TTL reaps it.
+      await Promise.race([teardown, captureStarted.promise]);
     },
   };
 }

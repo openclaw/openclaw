@@ -1,4 +1,4 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { createServer } from "node:http";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
@@ -76,15 +76,20 @@ function createBrowser(pages: unknown[]) {
     on: vi.fn(),
   };
   const close = vi.fn<Browser["close"]>();
+  const events = new EventEmitter();
   const browser = {
     contexts: () => [ctx],
-    on: vi.fn(),
+    on: events.on.bind(events),
+    off: events.off.bind(events),
     close,
   } as unknown as Browser;
   connectOverCdpMock.mockImplementation(async (transport) => {
     const closed = new Promise<void>((resolve) => {
       // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's transport owns this callback.
-      transport.onclose = () => resolve();
+      transport.onclose = () => {
+        events.emit("disconnected", browser);
+        resolve();
+      };
     });
     close.mockImplementation(async () => {
       transport.close();

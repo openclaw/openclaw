@@ -31,12 +31,6 @@ const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim()
 const GOOGLE_LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
-type RealtimeSmokeCliOptions = {
-  help: boolean;
-  openAIAudioCycles: number;
-  openAIOnly: boolean;
-};
-
 // Keep live stacks behind their owning smoke paths so help and safety helpers stay lightweight.
 type Browser = import("playwright").Browser;
 type RealtimeVoiceBridge = import("../../src/talk/provider-types.ts").RealtimeVoiceBridge;
@@ -59,14 +53,8 @@ type OpenAIHttpOptions = {
   timeoutMs?: number;
 };
 
-type OpenAIRealtimeBrowserResponseReader = (
-  response: Response,
-  label: string,
-  maxBytes: number,
-) => Promise<string>;
-
 type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
-  openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
+  openclawReadBoundedRealtimeResponseText?: typeof readOpenAIRealtimeBrowserResponseText;
 };
 
 function usage(): string {
@@ -84,7 +72,7 @@ function usage(): string {
   ].join("\n");
 }
 
-function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
+function parseRealtimeSmokeArgs(argv = process.argv.slice(2)) {
   let openAIAudioCycles = DEFAULT_OPENAI_AUDIO_CYCLES;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];

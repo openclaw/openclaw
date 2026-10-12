@@ -7,6 +7,7 @@ import { resolveSubagentCompletionResultText } from "../completion/subagent-comp
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 
@@ -24,6 +25,10 @@ type SubagentAnnounceResultDeps = Pick<
 };
 
 export type PreparedAnnounceResult = { text: string | undefined; isCurrent: () => boolean };
+
+export class SubagentAnnouncePreparationConflictError extends Error {
+  override name = "SubagentAnnouncePreparationConflictError";
+}
 
 function announceResultFacts(child: SubagentRunRecord) {
   return {
@@ -65,7 +70,9 @@ export async function readSubagentRunAnnounceResultUsing(
 ): Promise<PreparedAnnounceResult> {
   const child = deps.readSubagentRun(observed.runId);
   if (!child || !isSameSubagentRunOwner(child, observed)) {
-    throw new Error("The completed child run's owner changed before announcement.");
+    throw new SubagentAnnouncePreparationConflictError(
+      "The completed child run's owner changed before announcement.",
+    );
   }
   const isCurrent = captureAnnounceResultAuthority(child, deps.readSubagentRun);
   const terminalReply = child.completion?.terminalReply;
@@ -85,29 +92,35 @@ export async function readSubagentRunAnnounceResultUsing(
     target?.storePath ??
     deps.resolveSessionStorePathCore(deps.getRuntimeConfig().session?.store, { agentId });
   const sessionKey = target?.sessionKey ?? childSessionKey;
-  const sessionId =
-    target?.sessionId ?? deps.readSubagentSessionEntry(storePath, sessionKey)?.sessionId;
-  const scope = { agentId, storePath, sessionKey };
-  const found = sessionId
-    ? await deps.findTranscriptEvent({ ...scope, sessionId }, { kind: "visible-final", runId })
-    : undefined;
-  let event: unknown = found?.event;
-  if (!event) {
-    // Delete commits the canonical archive before its derived file is published.
-    event = (await deps.findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, runId))
-      ?.event;
-  }
-  if (!isCurrent()) {
-    throw new Error("The completed child run's transcript identity changed during announcement.");
-  }
-  const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
-  if (!answer) {
-    return {
-      text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
-      isCurrent,
-    };
-  }
-  return { text: answer, isCurrent };
+  return withSubagentSessionSource({ agentId, storePath, sessionKey }, async (source) => {
+    const sourcePath = source ? ("kind" in source ? source.path : source.actor.path) : storePath;
+    const sessionId =
+      target?.sessionId ??
+      (await deps.readSubagentSessionEntry(sourcePath, sessionKey, agentId))?.sessionId;
+    const scope = { agentId, storePath: sourcePath, sessionKey };
+    const found = sessionId
+      ? await deps.findTranscriptEvent({ ...scope, sessionId }, { kind: "visible-final", runId })
+      : undefined;
+    let event: unknown = found?.event;
+    if (!event) {
+      // Delete commits the canonical archive before its derived file is published.
+      event = (await deps.findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, runId))
+        ?.event;
+    }
+    if (!isCurrent()) {
+      throw new SubagentAnnouncePreparationConflictError(
+        "The completed child run's transcript identity changed during announcement.",
+      );
+    }
+    const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
+    if (!answer) {
+      return {
+        text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
+        isCurrent,
+      };
+    }
+    return { text: answer, isCurrent };
+  });
 }
 
 function describeSubagentOutcome(child: ChildCompletionRow): string {
@@ -130,15 +143,6 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
     return error ? `${outcome.status}: ${error}` : outcome.status;
   }
   return "unknown";
-}
-
-function formatChildResultData(resultText?: string | null): string {
-  return (
-    wrapPromptDataBlock({
-      label: "Child result",
-      text: resultText?.trim() || "(no output)",
-    }) || "Child result: (no output)"
-  );
 }
 
 export type ChildCompletionRow = Pick<
@@ -212,7 +216,10 @@ export function buildChildCompletionFindings(
           truncationMarker: "…",
         }),
         `status: ${truncateUtf16WithEllipsis(outcome, MAX_CHILD_COMPLETION_FIELD_CHARS)}`,
-        formatChildResultData(resultText),
+        wrapPromptDataBlock({
+          label: "Child result",
+          text: resultText?.trim() || "(no output)",
+        }) || "Child result: (no output)",
       ].join("\n"),
     );
   }

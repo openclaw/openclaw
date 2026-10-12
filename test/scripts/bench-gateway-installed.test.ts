@@ -378,161 +378,152 @@ describe("installed Gateway startup benchmark entry", () => {
     },
   );
 
-  it("refuses a paired CPU diagnostic before either installation launches", async ({ signal }) => {
-    const { baseline, candidate } = await comparisonFixture();
-    const result = await runFixture(baseline, signal, undefined, ["--installed-cpu-diagnostic"]);
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("CPU diagnostics require one installed package");
-    for (const target of [baseline, candidate]) {
-      await expect(fs.access(target.events)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-  });
-
-  it("compares alternating pairs with independent retained state and complete first requests", async ({
-    signal,
-  }) => {
-    const { baseline, candidate } = await comparisonFixture();
-    const result = await runFixture(baseline, signal);
-    const report = JSON.parse(await fs.readFile(baseline.output, "utf8"));
-    expect(result.status, JSON.stringify({ result, report })).toBe(0);
-    expect(report.outcome).toBe("passed");
-    expect(report.samples.map((sample: { arm: string }) => sample.arm)).toEqual([
-      "baseline",
-      "candidate",
-      "baseline",
-      "candidate",
-      "candidate",
-      "baseline",
-      "baseline",
-      "candidate",
-      "candidate",
-      "baseline",
-      "baseline",
-      "candidate",
-      "candidate",
-      "baseline",
-      "baseline",
-      "candidate",
-      "candidate",
-      "baseline",
-    ]);
-    expect(report.after).toEqual(report.before);
-    expect(report.comparison.after).toEqual(report.comparison.before);
-    expect(report.dependencyParity.packages).toBe(3);
-    expect(report.establishedReadySummary).toBeNull();
-    for (const [arm, target] of [
-      ["baseline", baseline],
-      ["candidate", candidate],
-    ] as const) {
-      const samples = report.samples.filter((sample: { arm: string }) => sample.arm === arm);
-      expect(samples.map((sample: { armIndex: number }) => sample.armIndex)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8,
-      ]);
-      const events = await readEvents(target.events);
-      expect(events.filter((event) => event.type === "start").map((event) => event.index)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8,
-      ]);
-      expect(
-        new Set(events.filter((event) => event.type === "start").map((event) => event.home)),
-      ).toEqual(new Set([target.stateRoot]));
-      expect(events.filter((event) => event.type === "stop")).toHaveLength(9);
-      for (const sample of samples) {
-        expect(sample).toMatchObject({
-          outcome: "passed",
-          errors: [],
-          observations: {
-            status: { response: { ok: true } },
-            health: { response: { ok: true } },
-            shutdown: { acknowledgment: { accepted: true } },
-          },
-        });
+  it.for(["paired-cpu", "dependency-integrity", "pending-lifecycle"] as const)(
+    "refuses %s before launching any installation",
+    async (mode, { signal }) => {
+      const { baseline, candidate } =
+        mode === "pending-lifecycle"
+          ? { baseline: await fixture(), candidate: undefined }
+          : await comparisonFixture();
+      if (mode === "pending-lifecycle") {
+        await fs.writeFile(
+          path.join(baseline.packageRoot, ".openclaw-lifecycle-pending"),
+          "pending",
+        );
+      } else if (mode === "dependency-integrity") {
+        const lockPath = path.join(candidate!.packageRoot, "..", "..", "package-lock.json");
+        const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
+        lock.packages["node_modules/fixture-dependency"].integrity = "changed";
+        await writeJson(lockPath, lock);
       }
-    }
-    expect(report.outerSettlement).toMatchObject({
-      beforeCleanup: "dead",
-      joined: true,
-      exitCode: 0,
-    });
-  });
-
-  it.for(["version", "integrity", "optional"])(
-    "refuses dependency %s drift before either package starts",
-    async (field, { signal }) => {
-      const { baseline, candidate } = await comparisonFixture();
-      const lockPath = path.join(candidate.packageRoot, "..", "..", "package-lock.json");
-      const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
-      lock.packages["node_modules/fixture-dependency"][field] =
-        field === "optional" ? false : "changed";
-      await writeJson(lockPath, lock);
-      const result = await runFixture(baseline, signal);
+      const result = await runFixture(
+        baseline,
+        signal,
+        undefined,
+        mode === "paired-cpu" ? ["--installed-cpu-diagnostic"] : [],
+      );
       expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("Installed dependency records differ");
-      const report = JSON.parse(await fs.readFile(baseline.output, "utf8"));
-      expect(report.samples).toHaveLength(18);
-      expect(
-        report.samples.every((sample: { outcome: string }) => sample.outcome === "not-run"),
-      ).toBe(true);
-      for (const target of [baseline, candidate]) {
+      if (mode === "paired-cpu") {
+        expect(result.stderr).toContain("CPU diagnostics require one installed package");
+      } else {
+        const report = JSON.parse(await fs.readFile(baseline.output, "utf8"));
+        if (mode === "dependency-integrity") {
+          expect(result.stderr).toContain("Installed dependency records differ");
+          expect(report.samples).toHaveLength(18);
+        } else {
+          expect(report.outcome).toBe("failed");
+        }
+        expect(
+          report.samples.every((sample: { outcome: string }) => sample.outcome === "not-run"),
+        ).toBe(true);
+      }
+      for (const target of candidate ? [baseline, candidate] : [baseline]) {
         await expect(fs.access(target.events)).rejects.toMatchObject({ code: "ENOENT" });
       }
     },
   );
 
-  it("retains nine real launches, first RPCs and acknowledged exits in one state directory", async ({
-    signal,
-  }) => {
-    const target = await fixture();
-    const result = await runFixture(target, signal);
-    const report = JSON.parse(await fs.readFile(target.output, "utf8"));
-    expect(result.error).toBeUndefined();
-    expect(result.status, JSON.stringify({ stderr: result.stderr, report })).toBe(0);
-    expect(result.stdout).toContain('"name":"launch"');
-    expect(result.stdout).toContain('"name":"health"');
-    expect(report.outcome).toBe("passed");
-    expect(report.outerSettlement).toMatchObject({
-      beforeCleanup: "dead",
-      exitCode: 0,
-      joined: true,
-      outcome: "passed",
-    });
-    expect(report.after).toEqual(report.before);
-    expect(report.samples).toHaveLength(9);
-    const events = await readEvents(target.events);
-    expect(events.filter((event) => event.type === "start").map((event) => event.index)).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8,
-    ]);
-    expect(
-      new Set(events.filter((event) => event.type === "start").map((event) => event.home)),
-    ).toEqual(new Set([target.stateRoot]));
-    expect(
-      events.filter((event) => event.type === "descendant").map((event) => event.listeners),
-    ).toEqual(Array(9).fill(0));
-    expect(events.filter((event) => event.type === "stop")).toHaveLength(9);
-    expect(
-      events
-        .filter((event) => event.type === "start")
-        .every((event) => !event.execArgv.includes("--cpu-prof")),
-    ).toBe(true);
-    await expect(fs.access(`${target.output}.profiles`)).rejects.toMatchObject({ code: "ENOENT" });
-    for (const [index, sample] of report.samples.entries()) {
-      expect(sample).toMatchObject({
-        index,
-        phase: index === 0 ? "fresh" : "established",
+  it.for(["single", "paired"] as const)(
+    "retains settled launches and state in a %s cohort",
+    async (mode, { signal }) => {
+      const { baseline, candidate } =
+        mode === "paired"
+          ? await comparisonFixture()
+          : { baseline: await fixture(), candidate: undefined };
+      const result = await runFixture(baseline, signal);
+      const report = JSON.parse(await fs.readFile(baseline.output, "utf8"));
+      expect(result.error).toBeUndefined();
+      expect(result.status, JSON.stringify({ stderr: result.stderr, report })).toBe(0);
+      expect(result.stdout).toContain('"name":"launch"');
+      expect(result.stdout).toContain('"name":"health"');
+      expect(report.outcome).toBe("passed");
+      expect(report.outerSettlement).toMatchObject({
+        beforeCleanup: "dead",
+        exitCode: 0,
+        joined: true,
         outcome: "passed",
-        errors: [],
-        observations: {
-          shutdown: { acknowledgment: { accepted: true } },
-          health: { response: { ok: true, payload: { ok: true, plugins: { unavailable: 1 } } } },
-        },
       });
-      expect(
-        events
-          .filter((event) => event.type === "request" && event.index === index)
-          .map((event) => event.method),
-      ).toEqual(["connect", "status", "health"]);
-    }
-    expect(report.establishedReadySummary).not.toBeNull();
-  });
+      expect(report.after).toEqual(report.before);
+      if (candidate) {
+        expect(report.samples.map((sample: { arm: string }) => sample.arm)).toEqual([
+          "baseline",
+          "candidate",
+          "baseline",
+          "candidate",
+          "candidate",
+          "baseline",
+          "baseline",
+          "candidate",
+          "candidate",
+          "baseline",
+          "baseline",
+          "candidate",
+          "candidate",
+          "baseline",
+          "baseline",
+          "candidate",
+          "candidate",
+          "baseline",
+        ]);
+        expect(report.comparison.after).toEqual(report.comparison.before);
+        expect(report.dependencyParity.packages).toBe(3);
+        expect(report.establishedReadySummary).toBeNull();
+      } else {
+        expect(report.samples).toHaveLength(9);
+        expect(report.establishedReadySummary).not.toBeNull();
+      }
+      const targets = candidate
+        ? ([
+            ["baseline", baseline],
+            ["candidate", candidate],
+          ] as const)
+        : ([[undefined, baseline]] as const);
+      for (const [arm, target] of targets) {
+        const samples = candidate
+          ? report.samples.filter((sample: { arm: string }) => sample.arm === arm)
+          : report.samples;
+        if (candidate) {
+          expect(samples.map((sample: { armIndex: number }) => sample.armIndex)).toEqual([
+            0, 1, 2, 3, 4, 5, 6, 7, 8,
+          ]);
+        }
+        const events = await readEvents(target.events);
+        const starts = events.filter((event) => event.type === "start");
+        expect(starts.map((event) => event.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        expect(new Set(starts.map((event) => event.home))).toEqual(new Set([target.stateRoot]));
+        expect(events.filter((event) => event.type === "stop")).toHaveLength(9);
+        expect(
+          events.filter((event) => event.type === "descendant").map((event) => event.listeners),
+        ).toEqual(Array(9).fill(0));
+        expect(starts.every((event) => !event.execArgv.includes("--cpu-prof"))).toBe(true);
+        await expect(fs.access(`${target.output}.profiles`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        for (const [index, sample] of samples.entries()) {
+          expect(sample).toMatchObject({
+            phase: index === 0 ? "fresh" : "established",
+            outcome: "passed",
+            errors: [],
+            observations: {
+              status: { response: { ok: true } },
+              shutdown: { acknowledgment: { accepted: true } },
+              health: {
+                response: { ok: true, payload: { ok: true, plugins: { unavailable: 1 } } },
+              },
+            },
+          });
+          if (!candidate) {
+            expect(sample.index).toBe(index);
+          }
+          expect(
+            events
+              .filter((event) => event.type === "request" && event.index === index)
+              .map((event) => event.method),
+          ).toEqual(["connect", "status", "health"]);
+        }
+      }
+    },
+  );
 
   it("retains a failed first request and all unrun slots without reporting an established summary", async ({
     signal,
@@ -615,19 +606,6 @@ describe("installed Gateway startup benchmark entry", () => {
     expect(
       report.samples.slice(2).every((sample: { outcome: string }) => sample.outcome === "not-run"),
     ).toBe(true);
-  });
-
-  it("refuses an unsettled normal installation before launching any sample", async ({ signal }) => {
-    const target = await fixture();
-    await fs.writeFile(path.join(target.packageRoot, ".openclaw-lifecycle-pending"), "pending");
-    const result = await runFixture(target, signal);
-    expect(result.status, result.stderr).toBe(1);
-    const report = JSON.parse(await fs.readFile(target.output, "utf8"));
-    expect(report.outcome).toBe("failed");
-    expect(
-      report.samples.every((sample: { outcome: string }) => sample.outcome === "not-run"),
-    ).toBe(true);
-    await expect(fs.access(target.events)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.runIf(process.platform === "win32")(

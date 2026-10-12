@@ -1,7 +1,6 @@
 // QA Lab owns bounded profile partitioning and canonical shard evidence aggregation.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
@@ -14,18 +13,15 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
+import { resolveQaChannelDriverSelection } from "./profile-channel-selection.runtime.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
 } from "./profile-planning.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
-import {
-  qaTransportSupportsModuleFlows,
-  type QaTransportAdapterFactory,
-} from "./qa-transport-registry.js";
+import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
@@ -39,12 +35,6 @@ type QaProfileEvidenceShard = {
   categoryIds: string[];
   estimatedCost: number;
   scenarioIds: string[];
-};
-
-type QaProfileEvidenceShardPlan = {
-  channelDriver: "qa-channel" | "crabline" | "live";
-  profile: string;
-  shards: QaProfileEvidenceShard[];
 };
 
 function resolveQaProfileEvidenceSelection(profile: string) {
@@ -61,29 +51,16 @@ function resolveQaProfileEvidenceSelection(profile: string) {
     profile === "smoke-ci" ? "mock-openai" : DEFAULT_QA_LIVE_PROVIDER_MODE,
   );
   const primaryModel = defaultQaModelForMode(providerMode);
-  const liveAdapterFactories =
-    membership.profile.channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
+  const { liveAdapterFactories, defaultChannel, supportsChannel, resolveModuleFlowSupport } =
+    resolveQaChannelDriverSelection(membership.profile.channelDriver);
   const executionSelection = resolveQaRunProfileExecutionSelection({
     scenarios: membership.selectedScenarios,
     providerMode,
     primaryModel,
     channelDriver: membership.profile.channelDriver,
-    defaultChannel:
-      membership.profile.channelDriver === "crabline"
-        ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL
-        : undefined,
-    supportsChannel:
-      membership.profile.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
-    resolveModuleFlowSupport:
-      membership.profile.channelDriver === "live"
-        ? (channel) =>
-            channel
-              ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
-                  channelId: channel,
-                  driver: "live",
-                })
-              : false
-        : undefined,
+    defaultChannel,
+    supportsChannel,
+    resolveModuleFlowSupport,
   });
   if (executionSelection.selectedScenarios.length === 0) {
     throw new Error(`QA profile ${profile} does not select any executable scenarios.`);
@@ -136,12 +113,6 @@ function listExclusiveQaProfileChannels(
   });
 }
 
-type QaProfileScenarioGroup = {
-  categoryIds: Set<string>;
-  key: string;
-  scenarios: QaSeedScenarioWithSource[];
-};
-
 function buildQaProfileScenarioGroups(params: {
   categoriesByScenarioRef: ReadonlyMap<string, readonly string[]>;
   factories: readonly QaTransportAdapterFactory[] | undefined;
@@ -179,10 +150,7 @@ function buildQaProfileScenarioGroups(params: {
     target.scenarios.push(scenario);
   }
 
-  const buildGroup = (
-    key: string,
-    scenarios: QaSeedScenarioWithSource[],
-  ): QaProfileScenarioGroup => ({
+  const buildGroup = (key: string, scenarios: QaSeedScenarioWithSource[]) => ({
     categoryIds: new Set(
       scenarios.map((scenario) =>
         selectQaProfileScenarioCategory(
@@ -207,14 +175,14 @@ function buildQaProfileScenarioGroups(params: {
 export function createQaProfileEvidenceShardPlan(
   profile: string,
   shardCount = DEFAULT_QA_PROFILE_SHARD_COUNT,
-): QaProfileEvidenceShardPlan {
+) {
   return buildQaProfileEvidenceShardPlan(shardCount, resolveQaProfileEvidenceSelection(profile));
 }
 
 function buildQaProfileEvidenceShardPlan(
   shardCount: number,
   selection: ReturnType<typeof resolveQaProfileEvidenceSelection>,
-): QaProfileEvidenceShardPlan {
+) {
   if (!Number.isInteger(shardCount) || shardCount < 1 || shardCount > MAX_QA_PROFILE_SHARD_COUNT) {
     throw new Error(`QA profile shard count must be between 1 and ${MAX_QA_PROFILE_SHARD_COUNT}.`);
   }

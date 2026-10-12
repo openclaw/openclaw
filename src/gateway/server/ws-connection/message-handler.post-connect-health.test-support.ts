@@ -31,9 +31,6 @@ export const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
   role: "operator",
 } as const satisfies Record<string, unknown>;
-export const NODE_PAIR_REMOVE_PARAMS = {
-  nodeId: "device-1",
-} as const satisfies Record<string, unknown>;
 export const BACKEND_CONNECT_PARAMS = {
   minProtocol: PROTOCOL_VERSION,
   maxProtocol: PROTOCOL_VERSION,
@@ -62,10 +59,6 @@ export function captureSecurityEvents(): {
 
 export function createCloseMock() {
   return vi.fn<CloseGatewayConnection>();
-}
-
-export function createBackendClient() {
-  return { id: "gateway-client", version: "dev", platform: "test", mode: "backend" };
 }
 
 export function waitForFast(assertion: () => void | Promise<void>) {

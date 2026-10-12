@@ -10,12 +10,14 @@ import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
   killProcessTreeMock,
-  makeSpawnSyncResult,
   resetSchtasksBaseMocks,
   withWindowsEnv,
 } from "./test-helpers/schtasks-fixtures.js";
 
 const timeState = vi.hoisted(() => ({ now: 0 }));
+const readWindowsProcessStartTime = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessStartTimeSync>(),
+);
 const readGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
 );
@@ -40,6 +42,10 @@ vi.mock("node:child_process", async (original) => ({
   spawnSync,
 }));
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
+  readWindowsProcessStartTimeSync: readWindowsProcessStartTime,
+}));
 vi.mock("../utils.js", async (original) => ({
   ...(await original<typeof import("../utils.js")>()),
   sleep: async (ms: number) => {
@@ -93,6 +99,7 @@ function taskkillPids() {
 beforeEach(() => {
   resetSchtasksBaseMocks();
   readGatewayOwnerLease.mockReset();
+  readWindowsProcessStartTime.mockReset().mockReturnValue(null);
   spawnSync.mockReset();
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
@@ -161,6 +168,9 @@ it.each(["snapshot", "per-pid"])(
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const legacy = acquireGatewayStateOwner({ databasePath });
       let forced = false;
+      readWindowsProcessStartTime.mockImplementation(() =>
+        forced ? null : Date.parse("2026-09-27T00:00:00.000Z"),
+      );
       let firstSnapshot = true;
       inspectPortUsageMock.mockResolvedValue({
         port: 18789,
@@ -196,9 +206,6 @@ it.each(["snapshot", "per-pid"])(
             status: 0,
             signal: null,
           };
-        }
-        if (args?.some((arg) => arg.includes("$process.StartTime"))) {
-          return makeSpawnSyncResult({ stdout: forced ? "" : "2026-09-27T00:00:00.000Z" });
         }
         if (firstSnapshot && discovery === "per-pid") {
           firstSnapshot = false;

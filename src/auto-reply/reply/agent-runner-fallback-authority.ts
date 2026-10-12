@@ -4,19 +4,41 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { ReplyOperation, ReplyToolAuthorityRoute } from "./reply-run-registry.contracts.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import { resolveFollowupRunToolAuthorityFingerprintAsync } from "./reply-tool-authority.js";
 
 /** Keep selection changes separate from the concrete route and its effective tool authority. */
-export function resolveReplySteeringAuthority(
+export async function resolveReplySteeringAuthority(
   followupRun: FollowupRun,
   operation: ReplyOperation | undefined,
+  assertCurrent: () => void = () => {},
 ) {
-  const incomingFingerprint = resolveFollowupRunToolAuthorityFingerprint(followupRun);
   const activeFingerprint = operation?.toolAuthorityFingerprint;
   const activeRoute = operation?.toolAuthorityRoute;
+  const incomingFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(
+    followupRun,
+    undefined,
+    assertCurrent,
+  );
   const incomingAtActiveRoute = activeRoute
-    ? resolveFollowupRunToolAuthorityFingerprint(followupRun, activeRoute)
+    ? await resolveFollowupRunToolAuthorityFingerprintAsync(followupRun, activeRoute, assertCurrent)
     : undefined;
+  assertCurrent();
+  if (operation?.result || operation?.abortSignal.aborted) {
+    // Losing the target returns valid incoming input to follow-up custody.
+    return {
+      toolAuthorityFingerprint: incomingFingerprint,
+      automaticFallbackRoute: undefined,
+      pendingInputAuthorityFingerprint: undefined,
+      shouldQueueAuthorityMismatch: true,
+    };
+  }
+  if (
+    operation &&
+    (operation.toolAuthorityRoute !== activeRoute ||
+      operation.toolAuthorityFingerprint !== activeFingerprint)
+  ) {
+    throw new Error("Reply steering authority changed during preparation");
+  }
   const authorityMismatch = operation !== undefined && activeFingerprint !== incomingFingerprint;
   const routeOnlyMismatch =
     authorityMismatch &&

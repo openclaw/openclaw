@@ -110,12 +110,7 @@ export function resolveDefaultModelAuthStatus(
   };
 }
 
-function catalogRouteObservation(
-  entry: ModelCatalogEntry | undefined,
-): ModelRouteObservation | undefined {
-  if (!entry) {
-    return undefined;
-  }
+function catalogRouteObservation(entry: ModelCatalogEntry): ModelRouteObservation | undefined {
   const baseUrl = entry.baseUrl;
   if (entry.api === undefined && baseUrl === undefined) {
     return undefined;
@@ -156,29 +151,23 @@ export async function warnIfModelConfigLooksOff(
   prompter: WizardPrompter,
   options?: DefaultModelAuthOptions,
 ) {
-  const warnings: string[] = [];
+  let warning: string | undefined;
   const authStatus = resolveDefaultModelAuthStatus(config, options);
   if (authStatus.status === "missing") {
-    warnings.push(
-      `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
-        {
-          provider: authStatus.provider,
-          config,
-          includeEnvVar: authStatus.authRequirement !== "subscription",
-        },
-      )}`,
-    );
+    warning = `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+      {
+        provider: authStatus.provider,
+        config,
+        includeEnvVar: authStatus.authRequirement !== "subscription",
+      },
+    )}`;
   } else if (authStatus.status === "incompatible") {
-    warnings.push(
-      `Model route is incompatible for "${authStatus.provider}/${authStatus.model}": ${authStatus.message}`,
-    );
+    warning = `Model route is incompatible for "${authStatus.provider}/${authStatus.model}": ${authStatus.message}`;
   } else if (authStatus.status === "indeterminate") {
-    warnings.push(
-      `Auth readiness could not be confirmed for "${authStatus.provider}/${authStatus.model}". Verify the selected model route and credential source before continuing.`,
-    );
+    warning = `Auth readiness could not be confirmed for "${authStatus.provider}/${authStatus.model}". Verify the selected model route and credential source before continuing.`;
   }
 
-  if (warnings.length > 0) {
-    await prompter.note(warnings.join("\n"), "Model check");
+  if (warning) {
+    await prompter.note(warning, "Model check");
   }
 }

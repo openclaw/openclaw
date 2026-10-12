@@ -31,13 +31,7 @@ function readCount(row: unknown): number {
     return 0;
   }
   const count = Reflect.get(row, "count");
-  if (typeof count === "bigint") {
-    return Number(count);
-  }
-  if (typeof count === "number") {
-    return count;
-  }
-  return 0;
+  return typeof count === "bigint" || typeof count === "number" ? Number(count) : 0;
 }
 
 export function isVectorKnnRow(value: unknown): value is VectorKnnRow {

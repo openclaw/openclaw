@@ -1,3 +1,4 @@
+import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -18,7 +19,7 @@ import type {
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import {
-  directoryContainsOnlyDerivedWorkspaceEntries,
+  directoryContainsOnlyWorkspaceEntries,
   localPath,
   localWorkspaceNode,
 } from "./workspace-reconcile-fs.js";
@@ -123,18 +124,19 @@ export async function preflightWorkspaceApplyImpl(
       continue;
     }
     const currentNode = currentNodes.get(entryPath);
-    const deletionAlreadySatisfied =
-      currentNode === undefined &&
-      !(await fs.lstat(localPath(params.root, entryPath)).catch((error: unknown) => {
+    if (currentNode === undefined) {
+      // This preflight runs in a Git worker. Avoid a threadpool round trip for
+      // every already-absent deletion without caching facts across passes.
+      try {
+        if (!lstatSync(localPath(params.root, entryPath), { throwIfNoEntry: false })) {
+          continue;
+        }
+      } catch (error) {
         if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-          return undefined;
+          continue;
         }
         throw error;
-      }));
-    if (deletionAlreadySatisfied) {
-      // A deletion can already be satisfied because local also removed an
-      // unchanged ancestor. Do not turn that convergence into a conflict.
-      continue;
+      }
     }
     let localAncestorConflict = false;
     let replacedBaseAncestor = false;
@@ -179,11 +181,7 @@ export async function preflightWorkspaceApplyImpl(
         local?.type === "directory" &&
         (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&
         currentNodes.get(entryPath)?.type !== "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
-          params.root,
-          entryPath,
-          isRetainedInput,
-        ))
+        (await directoryContainsOnlyWorkspaceEntries(params.root, entryPath, isRetainedInput))
       ) {
         local = undefined;
       }

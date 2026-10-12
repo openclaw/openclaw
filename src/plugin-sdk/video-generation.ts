@@ -27,10 +27,7 @@ export type {
   VideoGenerationModelCapabilitiesContext,
   VideoGenerationRequest,
   VideoGenerationResult,
-  VideoGenerationMode,
-  VideoGenerationProviderOptionType,
   VideoGenerationModeCapabilities,
-  VideoGenerationTransformCapabilities,
   VideoGenerationProviderCapabilities,
   VideoGenerationCatalogModelEntry,
   VideoGenerationProvider,
@@ -149,5 +146,3 @@ export {
   resolveVideoGenerationReferenceUrls,
   runDashscopeVideoGenerationTask,
 } from "../video-generation/dashscope-compatible.js";
-
-export type { DashscopeVideoGenerationResponse } from "../video-generation/dashscope-compatible.js";

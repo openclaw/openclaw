@@ -24,7 +24,7 @@ export function gatewayPresentationScope(
   const revision = gateway.connectionRevision;
   const snapshot = gateway.snapshot;
   const ready = snapshot.phase === "connected" && snapshot.client?.recoveryScopeReady !== false;
-  const user = snapshot.phase === "connected" ? (snapshot.selfUser ?? null) : undefined;
+  const user = snapshot.phase === "connected" ? snapshot.selfUser : undefined;
   const userId = user?.id;
   const recoveryScope = snapshot.client?.offlineRecoveryRetired
     ? undefined
@@ -49,13 +49,18 @@ export function gatewayPresentationScope(
     return next.scope;
   }
   // First authentication completes the existing owner; reconnects may temporarily
-  // clear selfUser without retiring that owner's mounted pages or loader results.
+  // clear selfUser, including after hello while users.self is pending. Only an
+  // explicit null resolves profileless without retiring mounted pages or loaders.
   previous.userId ??= userId;
   previous.recoveryScope ??= recoveryScope;
   previous.scope.readyOnce ||= ready;
   if (user !== undefined) {
     previous.scope.displayUser = user;
-  } else if (snapshot.phase !== "reconnecting" && snapshot.phase !== "reload-required") {
+  } else if (
+    snapshot.phase !== "connected" &&
+    snapshot.phase !== "reconnecting" &&
+    snapshot.phase !== "reload-required"
+  ) {
     previous.scope.displayUser = null;
   }
   return previous.scope;

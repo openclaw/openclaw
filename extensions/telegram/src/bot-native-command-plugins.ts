@@ -14,11 +14,7 @@ import {
   resolveTelegramNativeCommandThreadContext,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
-import {
-  buildTelegramRoutingTarget,
-  buildTelegramGroupFrom,
-  buildTelegramThreadParams,
-} from "./bot/helpers.js";
+import { buildTelegramRoutingTarget, buildTelegramGroupFrom } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -33,41 +29,25 @@ type TelegramNativeReplyChannelData = {
   reaction?: { emoji?: unknown };
 };
 
-function resolveTelegramNativeReplyChannelData(
-  result: TelegramNativeReplyPayload,
-): TelegramNativeReplyChannelData | undefined {
-  return result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
-}
-
-function hasTelegramNativeReplyReaction(result: TelegramNativeReplyPayload): boolean {
-  const reactionEmoji = resolveTelegramNativeReplyChannelData(result)?.reaction?.emoji;
-  return typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
-}
-
-function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
+function inspectTelegramNativeReply(result: TelegramNativeReplyPayload) {
+  const telegramData = result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
+  const hasReaction = Boolean(normalizeOptionalString(telegramData?.reaction?.emoji));
   const { channelData: _channelData, ...portableContent } = result;
-  if (hasOutboundReplyContent(portableContent, { trimText: true })) {
-    return true;
-  }
-  const telegramData = resolveTelegramNativeReplyChannelData(result);
-  return Boolean(
-    buildInlineKeyboard(telegramData?.buttons) || hasTelegramNativeReplyReaction(result),
-  );
-}
-
-function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): boolean {
-  const telegramData = resolveTelegramNativeReplyChannelData(result);
-  return Boolean(
-    typeof result.text === "string" &&
-    result.text.trim() &&
-    !result.mediaUrl &&
-    (!result.mediaUrls || result.mediaUrls.length === 0) &&
-    !result.presentation &&
-    !result.interactive &&
-    !result.btw &&
-    !hasTelegramNativeReplyReaction(result) &&
-    telegramData?.pin !== true,
-  );
+  return {
+    telegramData,
+    hasReaction,
+    renderable:
+      hasOutboundReplyContent(portableContent, { trimText: true }) ||
+      Boolean(buildInlineKeyboard(telegramData?.buttons) || hasReaction),
+    editable:
+      !result.mediaUrl &&
+      (!result.mediaUrls || result.mediaUrls.length === 0) &&
+      !result.presentation &&
+      !result.interactive &&
+      !result.btw &&
+      !hasReaction &&
+      telegramData?.pin !== true,
+  };
 }
 
 async function resolveTelegramCommandTranscriptContext(params: {
@@ -123,9 +103,12 @@ export async function executeTelegramPluginCommand(
   if (!dispatch) {
     return;
   }
-  const targetSessionEntry = dispatch.nativeCommandRuntime.getSessionEntry({
+  const targetSessionEntry = await dispatch.nativeCommandRuntime.getSessionEntryAsync({
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
+    storePath: dispatch.nativeCommandRuntime.resolveStorePath(dispatch.runtimeCfg.session?.store, {
+      agentId: dispatch.route.agentId,
+    }),
   });
   const from = dispatch.isGroup
     ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec)
@@ -160,7 +143,7 @@ export async function executeTelegramPluginCommand(
           dispatch.bot.api.sendMessage(
             dispatch.chatId,
             params.candidate.progressMessage!,
-            buildTelegramThreadParams(dispatch.threadSpec),
+            dispatch.threadParams,
           ),
       });
       progressMessageId = sent.message_id;
@@ -201,24 +184,19 @@ export async function executeTelegramPluginCommand(
     await cleanupProgressPlaceholder();
     return;
   }
-  const hasReaction = hasTelegramNativeReplyReaction(result);
-  const deliverableResult: TelegramNativeReplyPayload = hasRenderableTelegramNativeReplyPayload(
-    result,
-  )
+  const { hasReaction, renderable, editable, telegramData } = inspectTelegramNativeReply(result);
+  const deliverableResult: TelegramNativeReplyPayload = renderable
     ? hasReaction && !normalizeOptionalString(result.replyToId)
       ? { ...result, replyToId: String(dispatch.msg.message_id) }
       : result
     : { text: EMPTY_RESPONSE_FALLBACK };
-  const progressResultText =
-    typeof deliverableResult.text === "string" && deliverableResult.text.trim().length > 0
-      ? deliverableResult.text
-      : null;
-  const telegramResultData = resolveTelegramNativeReplyChannelData(deliverableResult);
+  const progressResultText = deliverableResult.text;
   if (
     progressMessageId != null &&
     dispatch.telegramDeps.editMessageTelegram &&
-    progressResultText &&
-    isEditableTelegramProgressResult(deliverableResult)
+    typeof progressResultText === "string" &&
+    progressResultText.trim().length > 0 &&
+    (!renderable || editable)
   ) {
     try {
       await dispatch.telegramDeps.editMessageTelegram(
@@ -230,7 +208,7 @@ export async function executeTelegramPluginCommand(
           accountId: dispatch.route.accountId,
           textMode: "markdown",
           linkPreview: dispatch.runtimeTelegramCfg.linkPreview,
-          buttons: telegramResultData?.buttons,
+          buttons: renderable ? telegramData?.buttons : undefined,
         },
       );
       await recordSentMessage(dispatch.chatId, progressMessageId, dispatch.runtimeCfg, {
@@ -247,20 +225,25 @@ export async function executeTelegramPluginCommand(
         isGroup: dispatch.isGroup,
         groupId: dispatch.isGroup ? String(dispatch.chatId) : undefined,
       });
+      await dispatch.recordDeliveredReply(
+        commandBody,
+        progressResultText,
+        String(progressMessageId),
+      );
       return;
     } catch {
       // Fall through to cleanup + normal delivered reply if editing fails.
     }
   }
   await cleanupProgressPlaceholder();
-  await deliverReplies({
+  const delivered = await deliverReplies({
     replies: [deliverableResult],
-    ...dispatch.buildDeliveryBaseOptions({
-      sessionKeyForInternalHooks: dispatch.targetSessionKey,
-      policySessionKey: dispatch.targetSessionKey,
-    }),
+    ...dispatch.deliveryOptions,
     ...(hasReaction ? { replyToMode: "all" as const } : {}),
     silent:
       dispatch.runtimeTelegramCfg.silentErrorReplies === true && deliverableResult.isError === true,
   });
+  if (delivered.delivered && deliverableResult.text) {
+    await dispatch.recordDeliveredReply(commandBody, deliverableResult.text, "final");
+  }
 }

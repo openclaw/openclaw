@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
+import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
@@ -25,21 +25,24 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readPendingInput } from "../../config/sessions/session-pending-input-operations.kernel.js";
+import type { PendingInputSnapshot } from "../../config/sessions/session-pending-input-operations.types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-support.js";
-import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -50,44 +53,6 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("ordinary chat input admission", () => {
-  it("acknowledges staged chat input and joins its terminal disposition without host pending-input writes", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
-    const sql = observeHostDataSql();
-    try {
-      const ack = await fixture.send(
-        vi.fn<RespondFn>((ok) => {
-          if (ok) {
-            pendingAtAck = listSessionPendingInputs(fixture.scope);
-          }
-        }),
-      );
-      expect(ack.mock.calls[0]?.[0]).toBe(true);
-      expect(await pendingAtAck).toMatchObject({
-        items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
-      });
-      const recorder = await fixture.dispatchedRecorder;
-      await recorder.completeProcessingAsync?.(
-        buildAgentRunTerminalOutcome({ status: "error", stopReason: "rpc" }),
-      );
-      recorder.finishPendingInput?.("cancelled");
-      expect(() => recorder.withPendingInput?.(() => {})).toThrow("ownership ended");
-      await fixture.finishDispatch();
-      const writes = sql.queries.filter((query) =>
-        /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_(?:pending_inputs|input_completions)\b/i.test(
-          query,
-        ),
-      );
-      expect(writes).toEqual([]);
-    } finally {
-      sql.restore();
-      await fixture.cleanup();
-    }
-    expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-      items: [{ state: "cancelled", runId: fixture.params.idempotencyKey }],
-    });
-  });
-
   async function createMentionFixture(
     options: { active?: boolean; preserveContent?: boolean } = {},
   ) {
@@ -143,25 +108,34 @@ describe("ordinary chat input admission", () => {
       );
       expect(await fixture.read()).toEqual([]);
       const recorder = await fixture.dispatchedRecorder;
-      const reads = vi.spyOn(StatementSync.prototype, "all");
-      const gets = vi.spyOn(StatementSync.prototype, "get");
-      const writes = vi.spyOn(StatementSync.prototype, "run");
-      const committed = await recorder.persistApproved();
-      await fixture.read();
-      const mentionStatements = [
-        ...reads.mock.calls,
-        ...gets.mock.calls,
-        ...writes.mock.calls,
-      ].filter((args) =>
-        args.some(
-          (value) => typeof value === "string" && value.startsWith("notifications.mentions."),
-        ),
-      );
-      reads.mockRestore();
-      gets.mockRestore();
-      writes.mockRestore();
-      expect(mentionStatements).toEqual([]);
+      const sql = observeHostDataSql();
+      let committed: Awaited<ReturnType<typeof recorder.persistApproved>>;
+      try {
+        committed = await recorder.persistApproved();
+        await fixture.read();
+        expect(
+          sql.calls
+            .flatMap((call) => call.mock.calls)
+            .filter((args) =>
+              args.some(
+                (value) => typeof value === "string" && value.startsWith("notifications.mentions."),
+              ),
+            ),
+        ).toEqual([]);
+        expect(
+          sql.queries.filter((query) =>
+            /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_nodes\b/i.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(committed?.appended).toBe(true);
+      expect(
+        loadSessionEntry(fixture.scope)?.profileInvolvement?.profiles[
+          fixture.bobClient.authenticatedUserProfile.profileId
+        ],
+      ).toMatchObject({ hidden: false, lastMention: { sequence: expect.any(Number) } });
       expect(await fixture.read()).toMatchObject([
         {
           messageId: committed?.messageId,
@@ -309,14 +283,19 @@ describe("ordinary chat input admission", () => {
   });
 
   it.each([
-    { id: "openclaw-control-ui", mode: "webchat", displayName: "Web" },
-    { id: "cli", mode: "cli", displayName: "CLI" },
-    { id: "openclaw-macos", mode: "ui", displayName: "macOS" },
-    { id: "gateway-client", mode: "backend", displayName: "Automation" },
-  ] satisfies Array<Pick<GatewayClientInfo, "id" | "mode" | "displayName">>)(
-    "stages the approved $id follow-up and its source before ACK without changing the active transcript",
-    async (clientInfo) => {
-      const fixture = await createBrowserFollowupFixture();
+    { id: "openclaw-control-ui", mode: "webchat", displayName: "Web", storage: "durable" },
+    { id: "cli", mode: "cli", displayName: "CLI", storage: "durable" },
+    { id: "openclaw-macos", mode: "ui", displayName: "macOS", storage: "durable" },
+    { id: "gateway-client", mode: "backend", displayName: "Automation", storage: "durable" },
+    { id: "openclaw-control-ui", mode: "webchat", displayName: "Web", storage: "native-incognito" },
+  ] satisfies Array<
+    Pick<GatewayClientInfo, "id" | "mode" | "displayName"> & {
+      storage: "durable" | "native-incognito";
+    }
+  >)(
+    "stages the approved $id $storage follow-up and its source before ACK without changing the active transcript",
+    async ({ storage, ...clientInfo }) => {
+      const fixture = await createBrowserFollowupFixture({ storage });
       fixture.client.connect.client = { ...fixture.client.connect.client, ...clientInfo };
       fixture.params.queueMode = "followup";
       const profile = ensureProfileForEmail("alice@example.test");
@@ -333,6 +312,7 @@ describe("ordinary chat input admission", () => {
       let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
       let pendingAtAck: ReturnType<typeof readPending> | undefined;
       let pendingAtNotification: ReturnType<typeof readPending> | undefined;
+      let nativePendingAtAck: PendingInputSnapshot | undefined;
       fixture.context.getSessionEventSubscriberConnIds = () => new Set(["observer"]);
       vi.spyOn(fixture.context, "broadcastToConnIds").mockImplementation((event, payload) => {
         if (event === "sessions.changed" && isRecord(payload) && payload.reason === "send") {
@@ -343,6 +323,26 @@ describe("ordinary chat input admission", () => {
         if (ok) {
           transcriptAtAck = loadTranscriptEventsSync(scope);
           pendingAtAck = readPending();
+          if (storage === "native-incognito") {
+            const database = getOpenClawAgentDatabaseIfOpen({
+              agentId: scope.agentId,
+              path: scope.storePath,
+            });
+            if (!database) {
+              throw new Error("Native incognito input must remain in its existing owner");
+            }
+            const snapshot = readPendingInput(database, {
+              kind: "stage",
+              sessionKey: scope.sessionKey,
+              sessionId: scope.sessionId,
+              idempotencyKey: `${params.idempotencyKey}:user`,
+              trackCompletion: true,
+            });
+            if (snapshot.kind !== "stage") {
+              throw new Error("Native incognito ACK must retain its staged input");
+            }
+            nativePendingAtAck = snapshot;
+          }
         }
       });
       try {
@@ -359,6 +359,22 @@ describe("ordinary chat input admission", () => {
         );
         expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
         expect(transcriptAtAck).toEqual(activeTranscript);
+        if (storage === "native-incognito") {
+          expect(nativePendingAtAck).toMatchObject({
+            current: true,
+            existing: { state: "queued", run_id: params.idempotencyKey },
+          });
+          const accepted = nativePendingAtAck?.existing;
+          if (!accepted) {
+            throw new Error("Native incognito ACK omitted its pending input custody");
+          }
+          expect(JSON.parse(accepted.message_json)).toMatchObject({
+            role: "user",
+            content: approvedContent,
+            idempotencyKey: `${params.idempotencyKey}:user`,
+            __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
+          });
+        }
         expect(await pendingAtAck).toMatchObject({
           status: "fulfilled",
           value: {
@@ -420,42 +436,94 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it("commits an existing idle session input before ACK through restart-safe admission", async () => {
-    const fixture = await createBrowserFollowupFixture({ active: false });
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
-    const respond = vi.fn<RespondFn>((ok) => {
-      if (ok) {
-        transcriptAtAck = loadTranscriptEventsSync(fixture.scope);
+  it.each([{ acp: false }, { acp: true }, { acp: true, restart: true }])(
+    "keeps idle input custody with its runtime (%j)",
+    async ({ acp, restart }) => {
+      const fixture = await createBrowserFollowupFixture({ active: false });
+      if (acp) {
+        seedCanonicalAcpSessionMeta({
+          sessionKey: fixture.scope.sessionKey,
+          sessionId: fixture.scope.sessionId,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "idle-custody",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 1,
+          },
+        });
       }
-    });
-    try {
-      await fixture.send(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started", messageSeq: 2 }),
-        undefined,
-        expect.anything(),
-      );
-      expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
-      expect(transcriptAtAck?.at(-1)).toMatchObject({
-        message: {
-          role: "user",
-          content: fixture.params.message,
-          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-        },
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const sql = observeHostDataSql();
+      const read = acpReads.readAcpSessionMetaForEntries;
+      const restarting = restart
+        ? vi
+            .spyOn(acpReads, "readAcpSessionMetaForEntries")
+            .mockImplementationOnce(async (...args) => {
+              const result = await read(...args);
+              rotateAgentEventLifecycleGeneration();
+              return result;
+            })
+        : undefined;
+      let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
+      const respond = vi.fn<RespondFn>((ok) => {
+        if (ok) {
+          transcriptAtAck = loadTranscriptEventsSync(fixture.scope);
+        }
       });
-      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-      expect(
-        clone.mock.calls.filter(
-          ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
-        ).length,
-      ).toBeLessThanOrEqual(1);
-    } finally {
-      clone.mockRestore();
-      await fixture.cleanup();
-    }
-  });
+      try {
+        await fixture.send(respond);
+        expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
+          [],
+        );
+        if (restart) {
+          expect(respond).toHaveBeenCalledOnce();
+          expect(respond).not.toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "started" }),
+            undefined,
+            expect.anything(),
+          );
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+          expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+          return;
+        }
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "started", ...(acp ? {} : { messageSeq: 2 }) }),
+          undefined,
+          expect.anything(),
+        );
+        if (acp) {
+          expect(transcriptAtAck).toEqual(fixture.activeTranscript);
+          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({ total: 1 });
+          expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("acp");
+        } else {
+          expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
+          expect(transcriptAtAck?.at(-1)).toMatchObject({
+            message: {
+              role: "user",
+              content: fixture.params.message,
+              idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+            },
+          });
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        }
+        expect(
+          clone.mock.calls.filter(
+            ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
+          ).length,
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        sql.restore();
+        restarting?.mockRestore();
+        clone.mockRestore();
+        await fixture.cleanup();
+      }
+    },
+  );
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "holds an idle %s browser input in custody while its workspace is syncing",
@@ -478,8 +546,12 @@ describe("ordinary chat input admission", () => {
         patch: { workerBundleHash: "a".repeat(64) },
       });
       fixture.context.workerSessionPlacementService = placements;
+      const sql = observeHostDataSql();
       try {
         const respond = await fixture.send();
+        expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
+          [],
+        );
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ status: "started" }),
@@ -493,54 +565,11 @@ describe("ordinary chat input admission", () => {
           items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
         });
       } finally {
+        sql.restore();
         await fixture.cleanup();
       }
     },
   );
-
-  it("retries a failed custody write with the same request identity without acknowledging lost input", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    const refusal = refusePendingInputCommit({
-      operation: "stage",
-      message: "custody unavailable",
-      sessionId: fixture.scope.sessionId,
-      runId: fixture.params.idempotencyKey,
-    });
-    try {
-      const rejected = await fixture.send();
-      expect(rejected).toHaveBeenCalledWith(
-        false,
-        expect.objectContaining({ status: "error" }),
-        expect.objectContaining({ message: expect.stringContaining("custody unavailable") }),
-        expect.anything(),
-      );
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-      expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
-      await getSessionWorkAdmissionRelease({
-        scope: fixture.scope.storePath,
-        identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
-      });
-
-      refusal.mockRestore();
-      const retried = await fixture.send();
-      expect(retried).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "started" }),
-        undefined,
-        expect.anything(),
-      );
-      expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-        total: 1,
-        items: [{ state: "queued", message: { content: fixture.approvedContent } }],
-      });
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-    } finally {
-      refusal.mockRestore();
-      await fixture.cleanup();
-    }
-  });
 
   it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
     "revalidates %s after message approval before committing custody",

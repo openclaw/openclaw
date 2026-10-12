@@ -52,6 +52,17 @@ the same `event_id` is rejected durably for the tombstone retention window.
 See [Channel outbound API](/plugins/sdk-channel-outbound#durable-ingress-monitors)
 for the monitor API and shutdown contract.
 
+The dispatch lifecycle optionally exposes
+`readLaneBacklog(): Promise<readonly ChannelIngressQueueRecord<unknown, unknown>[]>`.
+It reads same-lane durable rows that have not yet been handed off, excluding the
+current event, retry-delayed pending rows, and locally released or ended claims.
+Channel buffers can match their own payloads to wait for already-admitted input;
+the core drain remains the owner of lane state. The SDK inbound debouncer's
+optional `shouldHoldFlush(items)` hook can defer a quiet-timer flush until its
+existing deadline. Appends during a check join the same batch; a check may
+flush it without waiting for another quiet window. Explicit flushes bypass
+the check.
+
 That tombstone is the layering rule for replay guards
 (`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate
 replay guard only when the guard's identity or retention exceeds the queue's

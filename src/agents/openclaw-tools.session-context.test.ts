@@ -194,41 +194,37 @@ describe("openclaw session lookup context", () => {
     },
   );
 
-  it.each([
-    { scope: "global", mainKey: "main", runSessionKey: "global" },
-    {
-      scope: "global",
-      mainKey: "main",
-      runSessionKey: "agent:research:dashboard:control",
+  it.each([{ scope: "global", mainKey: "main", runSessionKey: "global" }] as const)(
+    "routes progress cards to $runSessionKey under $scope scope",
+    async (scenario) => {
+      const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
+        card: null,
+      });
+      try {
+        const tools = createOpenClawTools({
+          config: {
+            agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+            session: { scope: scenario.scope, mainKey: scenario.mainKey },
+          },
+          agentSessionKey: "agent:research:main",
+          runSessionKey: scenario.runSessionKey,
+          requesterAgentIdOverride: "research",
+          disablePluginTools: true,
+          disableMessageTool: true,
+          wrapBeforeToolCallHook: false,
+        });
+
+        await requireTool(tools, "progress_card").execute("synthetic-progress", {});
+
+        expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
+          sessionKey: scenario.runSessionKey,
+          agentId: "research",
+        });
+      } finally {
+        gatewayCall.mockRestore();
+      }
     },
-  ] as const)("routes progress cards to $runSessionKey under $scope scope", async (scenario) => {
-    const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
-      card: null,
-    });
-    try {
-      const tools = createOpenClawTools({
-        config: {
-          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-          session: { scope: scenario.scope, mainKey: scenario.mainKey },
-        },
-        agentSessionKey: "agent:research:main",
-        runSessionKey: scenario.runSessionKey,
-        requesterAgentIdOverride: "research",
-        disablePluginTools: true,
-        disableMessageTool: true,
-        wrapBeforeToolCallHook: false,
-      });
-
-      await requireTool(tools, "progress_card").execute("synthetic-progress", {});
-
-      expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
-        sessionKey: scenario.runSessionKey,
-        agentId: "research",
-      });
-    } finally {
-      gatewayCall.mockRestore();
-    }
-  });
+  );
 
   it("binds nested session lookups to the durable caller", async () => {
     const runSessionKey = "agent:research:main";
@@ -360,19 +356,6 @@ describe("openclaw session lookup context", () => {
     setRuntimeConfigSnapshot(accessibleConfig);
     const restored = await list.execute("restored", {});
     expect((restored.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
-    );
-  });
-
-  it("keeps an explicitly pinned session policy even when it initially matches runtime config", async () => {
-    const pinnedConfig = sessionPolicyConfig();
-    mockSessionDiscovery();
-    setRuntimeConfigSnapshot(structuredClone(pinnedConfig));
-    const tools = createTools(pinnedConfig, { sessionConfigSource: "pinned" });
-    setRuntimeConfigSnapshot(sessionPolicyConfig("self"));
-
-    const result = await requireTool(tools, "sessions_list").execute("pinned", {});
-    expect((result.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
       expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
     );
   });

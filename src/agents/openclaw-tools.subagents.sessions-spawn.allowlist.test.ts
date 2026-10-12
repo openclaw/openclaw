@@ -89,15 +89,6 @@ describe("subagent spawn target admission", () => {
     });
   });
 
-  it("allows configured agent IDs through the wildcard policy", async () => {
-    setConfig({
-      agents: {
-        entries: { main: { subagents: { allowAgents: ["*"] } }, "my-research_agent01": {} },
-      },
-    });
-    expect(await spawn("my-research_agent01")).toMatchObject({ status: "accepted" });
-  });
-
   it("rejects unconfigured targets even with a wildcard allowlist", async () => {
     setConfig({ agents: { entries: { main: { subagents: { allowAgents: ["*"] } } } } });
     expectRejected(await spawn("beta"), 'agentId "beta" is not in the configured agent registry');

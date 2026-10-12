@@ -2,13 +2,29 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertNativeProtocolContract } from "../../packages/gateway-protocol/scripts/native-codegen.js";
+import {
+  assertNativeProtocolContract,
+  generateNativeProtocol,
+} from "../../packages/gateway-protocol/scripts/native-codegen.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("native protocol build artifacts", () => {
+  it("keeps background and Talk identifiers as strings rather than undeclared native models", async () => {
+    const output = await generateNativeProtocol(root, "swift");
+    assertNativeProtocolContract("swift", output);
+    const swift = output["GatewayModels.swift"];
+    expect(swift).not.toContain("UserBackgroundAssetId");
+    expect(swift).toContain(
+      "public struct UserBackgroundAsset: Codable, Sendable {\n    public let assetid: String",
+    );
+    expect(swift).toContain(
+      "public struct TalkClientCloseParams: Codable, Sendable {\n    public let sessionkey: String\n    public let voicesessionid: String",
+    );
+  });
+
   it("generates through a symlink, skips unchanged outputs, recovers deletion, and invalidates schema changes", () => {
     const fixture = tempDirs.make("native-protocol-source-");
     const { directories, files } = JSON.parse(

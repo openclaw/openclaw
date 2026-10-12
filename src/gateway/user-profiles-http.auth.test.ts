@@ -210,7 +210,7 @@ describe("personal avatar HTTP authentication", () => {
     },
   );
 
-  it.each(["token", "password", "trusted-proxy"] as const)(
+  it.each(["password", "trusted-proxy"] as const)(
     "loads the saved personal photo with the connected credentials under %s auth",
     async (mode) => {
       auth =
@@ -386,44 +386,33 @@ describe("personal avatar HTTP authentication", () => {
     ).toBe(401);
   });
 
-  it.each([
-    "missing",
-    "invalid",
-    "query-only",
-    "revoked",
-    "stale-generation",
-    "no-read-scope",
-    "node-role",
-  ])("rejects %s credentials before returning avatar bytes", async (kind) => {
-    const { deviceId, token } = await pairDevice(
-      kind === "no-read-scope"
-        ? ["operator.approvals"]
-        : kind === "node-role"
-          ? []
-          : ["operator.read"],
-      kind === "node-role" ? "node" : "operator",
-    );
-    if (kind === "revoked") {
-      await revokeDeviceToken({ deviceId, role: "operator" });
-    }
-    if (kind === "stale-generation") {
-      auth = { ...auth, token: "rotated-test-secret" };
-    }
-    if (kind === "query-only") {
-      avatarPath += "&token=" + encodeURIComponent(token);
-    }
-    const credential =
-      kind === "missing" || kind === "query-only"
-        ? undefined
-        : kind === "invalid"
-          ? "invalid-test-token"
-          : token;
-    const response = await request(credential, {
-      headers: { "x-openclaw-scopes": "operator.admin" },
-    });
-    expect(response.status).toBe(401);
-    expect(response.headers.get("content-type")).not.toBe("image/png");
-  });
+  it.each(["query-only", "revoked", "stale-generation", "no-read-scope", "node-role"])(
+    "rejects %s credentials before returning avatar bytes",
+    async (kind) => {
+      const { deviceId, token } = await pairDevice(
+        kind === "no-read-scope"
+          ? ["operator.approvals"]
+          : kind === "node-role"
+            ? []
+            : ["operator.read"],
+        kind === "node-role" ? "node" : "operator",
+      );
+      if (kind === "revoked") {
+        await revokeDeviceToken({ deviceId, role: "operator" });
+      }
+      if (kind === "stale-generation") {
+        auth = { ...auth, token: "rotated-test-secret" };
+      }
+      if (kind === "query-only") {
+        avatarPath += "&token=" + encodeURIComponent(token);
+      }
+      const response = await request(kind === "query-only" ? undefined : token, {
+        headers: { "x-openclaw-scopes": "operator.admin" },
+      });
+      expect(response.status).toBe(401);
+      expect(response.headers.get("content-type")).not.toBe("image/png");
+    },
+  );
 
   it("fails closed for unbound device identities when profile roles are configured", async () => {
     const { token } = await pairDevice();

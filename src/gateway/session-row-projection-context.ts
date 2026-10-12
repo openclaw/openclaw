@@ -114,7 +114,11 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     /** True means the publication changes only these derived facts. */
     invalidate(change: SessionRowChange): boolean {
       if (!("all" in change)) {
-        if (change.scope === "runtime" && !change.facts && !change.factsInvalidated) {
+        if (
+          change.scope === "runtime" &&
+          (!change.facts || change.facts.kind === "unchanged") &&
+          !change.factsInvalidated
+        ) {
           return true;
         }
         modelFactsDirty = true;
@@ -124,19 +128,16 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         return true;
       }
       switch (change.scope) {
-        case "config-presentation":
-          return true;
         case "config-profiles":
         case "profiles":
           current.userProfileIdentityById.clear();
           identityProjection.invalidate();
           profileRevision++;
           return true;
+        case "config-presentation":
         case "subagent-runs":
-          return true;
         case "worker-environments":
         case "worker-placements":
-          return true;
         case "agent-runs":
         case "sessions":
           // Registries are presented live; stored writes publish their own exact keys.
@@ -192,12 +193,15 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
       }
       if (row.subagentRevision !== subagentRevision) {
         row.materialized.source.childLinks = projectSessionRowChildLinks(readChildLinks(row));
-        row.materialized.row.swarm = buildSessionSwarmSummary(
+        const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,
           row.agentId,
           { includeChildren: true },
         );
+        if (!isDeepStrictEqual(row.materialized.row.swarm, swarm)) {
+          row.materialized.row.swarm = swarm;
+        }
         row.subagentRevision = subagentRevision;
       }
     },

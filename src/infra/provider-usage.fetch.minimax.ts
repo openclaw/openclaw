@@ -22,24 +22,23 @@ type FetchMinimaxUsageOptions = {
 const DEFAULT_MINIMAX_USAGE_ORIGIN = "https://api.minimaxi.com";
 const MINIMAX_USAGE_PATH = "/v1/token_plan/remains";
 
-const RESET_KEYS = [
+function snakeAndCamelFields(...names: string[]): string[] {
+  return names.flatMap((name) => {
+    const camel = name.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+    return camel === name ? [name] : [name, camel];
+  });
+}
+
+const RESET_KEYS = snakeAndCamelFields(
   "reset_at",
-  "resetAt",
   "reset_time",
-  "resetTime",
   "next_reset_at",
-  "nextResetAt",
   "next_reset_time",
-  "nextResetTime",
   "expires_at",
-  "expiresAt",
   "expire_at",
-  "expireAt",
   "end_time",
-  "endTime",
   "window_end",
-  "windowEnd",
-] as const;
+);
 
 const PERCENT_KEYS = [
   "used_percent",
@@ -57,87 +56,54 @@ const PERCENT_KEYS = [
 // dedicated remaining-percent fields as their authoritative values.
 const REMAINING_PERCENT_KEYS = ["usage_percent", "usagePercent"] as const;
 
-const CURRENT_INTERVAL_TOTAL_KEYS = [
-  "current_interval_total_count",
-  "currentIntervalTotalCount",
-] as const;
-const CURRENT_INTERVAL_REMAINING_KEYS = [
-  "current_interval_usage_count",
-  "currentIntervalUsageCount",
-] as const;
-const CURRENT_INTERVAL_REMAINING_PERCENT_KEYS = [
-  "current_interval_remaining_percent",
-  "currentIntervalRemainingPercent",
-] as const;
-const CURRENT_INTERVAL_STATUS_KEYS = ["current_interval_status", "currentIntervalStatus"] as const;
-const CURRENT_WEEKLY_TOTAL_KEYS = [
-  "current_weekly_total_count",
-  "currentWeeklyTotalCount",
-] as const;
-const CURRENT_WEEKLY_REMAINING_KEYS = [
-  "current_weekly_usage_count",
-  "currentWeeklyUsageCount",
-] as const;
-const CURRENT_WEEKLY_REMAINING_PERCENT_KEYS = [
-  "current_weekly_remaining_percent",
-  "currentWeeklyRemainingPercent",
-] as const;
-const CURRENT_WEEKLY_STATUS_KEYS = ["current_weekly_status", "currentWeeklyStatus"] as const;
-const MODEL_REMAINING_PERCENT_KEYS = [
-  ...CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
-  ...CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
-] as const;
-const NO_USAGE_KEYS = [] as const;
+function modelWindowFields(period: "interval" | "weekly", reset: string, label?: string) {
+  return {
+    label,
+    total: snakeAndCamelFields(`current_${period}_total_count`),
+    remaining: snakeAndCamelFields(`current_${period}_usage_count`),
+    remainingPercent: snakeAndCamelFields(`current_${period}_remaining_percent`),
+    status: snakeAndCamelFields(`current_${period}_status`),
+    reset: snakeAndCamelFields(reset),
+  };
+}
 
-const USED_KEYS = [
+const INTERVAL_WINDOW = modelWindowFields("interval", "end_time");
+const WEEKLY_WINDOW = modelWindowFields("weekly", "weekly_end_time", "Week");
+const MODEL_REMAINING_PERCENT_KEYS = [
+  ...INTERVAL_WINDOW.remainingPercent,
+  ...WEEKLY_WINDOW.remainingPercent,
+] as const;
+
+const USED_KEYS = snakeAndCamelFields(
   "used",
   "usage",
   "used_amount",
-  "usedAmount",
   "used_tokens",
-  "usedTokens",
   "used_quota",
-  "usedQuota",
   "used_times",
-  "usedTimes",
   "prompt_used",
-  "promptUsed",
   "used_prompt",
-  "usedPrompt",
   "prompts_used",
-  "promptsUsed",
   "consumed",
-] as const;
+);
 
 const TOTAL_KEYS = [
-  "total",
-  "total_amount",
-  "totalAmount",
-  "total_tokens",
-  "totalTokens",
-  "total_quota",
-  "totalQuota",
-  "total_times",
-  "totalTimes",
-  "prompt_total",
-  "promptTotal",
-  "total_prompt",
-  "totalPrompt",
-  "prompt_limit",
-  "promptLimit",
-  "limit_prompt",
-  "limitPrompt",
-  "prompts_total",
-  "promptsTotal",
-  "total_prompts",
-  "totalPrompts",
-  ...CURRENT_INTERVAL_TOTAL_KEYS,
-  ...CURRENT_WEEKLY_TOTAL_KEYS,
-  "limit",
-  "quota",
-  "quota_limit",
-  "quotaLimit",
-  "max",
+  ...snakeAndCamelFields(
+    "total",
+    "total_amount",
+    "total_tokens",
+    "total_quota",
+    "total_times",
+    "prompt_total",
+    "total_prompt",
+    "prompt_limit",
+    "limit_prompt",
+    "prompts_total",
+    "total_prompts",
+  ),
+  ...INTERVAL_WINDOW.total,
+  ...WEEKLY_WINDOW.total,
+  ...snakeAndCamelFields("limit", "quota", "quota_limit", "max"),
 ] as const;
 
 const REMAINING_KEYS = [
@@ -155,48 +121,35 @@ const REMAINING_KEYS = [
   "remain_times",
   "remainingTimes",
   "remaining_times",
-  "prompt_remain",
-  "promptRemain",
-  "remain_prompt",
-  "remainPrompt",
-  "prompt_remaining",
-  "promptRemaining",
-  "remaining_prompt",
-  "remainingPrompt",
-  "prompts_remaining",
-  "promptsRemaining",
-  "prompt_left",
-  "promptLeft",
-  "prompts_left",
-  "promptsLeft",
+  ...snakeAndCamelFields(
+    "prompt_remain",
+    "remain_prompt",
+    "prompt_remaining",
+    "remaining_prompt",
+    "prompts_remaining",
+    "prompt_left",
+    "prompts_left",
+  ),
   "left",
   // MiniMax usage endpoints misname these: values are remaining quota, not consumed.
   // See https://github.com/MiniMax-AI/MiniMax-M2/issues/99
-  ...CURRENT_INTERVAL_REMAINING_KEYS,
-  ...CURRENT_WEEKLY_REMAINING_KEYS,
+  ...INTERVAL_WINDOW.remaining,
+  ...WEEKLY_WINDOW.remaining,
 ] as const;
 
 const PLAN_KEYS = ["plan", "plan_name", "planName", "product", "tier"] as const;
 
-const WINDOW_HOUR_KEYS = [
-  "window_hours",
-  "windowHours",
-  "duration_hours",
-  "durationHours",
-  "hours",
-] as const;
+const WINDOW_HOUR_KEYS = snakeAndCamelFields("window_hours", "duration_hours", "hours");
 
-const WINDOW_MINUTE_KEYS = [
-  "window_minutes",
-  "windowMinutes",
-  "duration_minutes",
-  "durationMinutes",
-  "minutes",
-] as const;
+const WINDOW_MINUTE_KEYS = snakeAndCamelFields("window_minutes", "duration_minutes", "minutes");
 
-function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
+function pickNumber(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  parse = parseFiniteNumber,
+): number | undefined {
   for (const key of keys) {
-    const parsed = parseFiniteNumber(record[key]);
+    const parsed = parse(record[key]);
     if (parsed !== undefined) {
       return parsed;
     }
@@ -252,16 +205,11 @@ function pickUsageRecord(
   const queue: Array<{ value: Record<string, unknown> | unknown[]; depth: number }> = [
     { value: root, depth: 0 },
   ];
-  const seen = new Set<object>();
   let best: { record: Record<string, unknown>; usedPercent: number } | undefined;
   let bestScore = 0;
 
   for (const { value, depth } of queue) {
     if (isRecord(value)) {
-      if (seen.has(value)) {
-        continue;
-      }
-      seen.add(value);
       const score = scoreUsageRecord(value);
       // Breadth-first order already favors shallower records and the first tied record.
       if (score > bestScore) {
@@ -288,23 +236,6 @@ function pickUsageRecord(
   return best;
 }
 
-function deriveWindowLabelFromTimestamps(record: Record<string, unknown>): string | undefined {
-  const startTime = parseEpoch(record.start_time ?? record.startTime);
-  const endTime = parseEpoch(record.end_time ?? record.endTime);
-  if (startTime !== undefined && endTime !== undefined && endTime > startTime) {
-    const durationHours = (endTime - startTime) / 3_600_000;
-    if (durationHours >= 1 && Number.isFinite(durationHours)) {
-      const rounded = Math.round(durationHours);
-      return `${rounded}h`;
-    }
-    const durationMinutes = Math.round((endTime - startTime) / 60_000);
-    if (durationMinutes > 0) {
-      return `${durationMinutes}m`;
-    }
-  }
-  return undefined;
-}
-
 function deriveWindowLabel(payload: Record<string, unknown>): string {
   const hours = pickNumber(payload, WINDOW_HOUR_KEYS);
   if (hours) {
@@ -314,106 +245,71 @@ function deriveWindowLabel(payload: Record<string, unknown>): string {
   if (minutes) {
     return `${minutes}m`;
   }
-  return deriveWindowLabelFromTimestamps(payload) ?? "5h";
+  const startTime = parseEpoch(payload.start_time ?? payload.startTime);
+  const endTime = parseEpoch(payload.end_time ?? payload.endTime);
+  if (startTime !== undefined && endTime !== undefined && endTime > startTime) {
+    const durationHours = (endTime - startTime) / 3_600_000;
+    if (durationHours >= 1) {
+      return `${Math.round(durationHours)}h`;
+    }
+    const durationMinutes = Math.round((endTime - startTime) / 60_000);
+    if (durationMinutes > 0) {
+      return `${durationMinutes}m`;
+    }
+  }
+  return "5h";
 }
 
-function deriveUsedPercent(
-  payload: Record<string, unknown>,
-  keys: {
-    total?: readonly string[];
-    used?: readonly string[];
-    remaining?: readonly string[];
-    percent?: readonly string[];
-    remainingPercent?: readonly string[];
-    remainingPercentUnit?: "percent" | "ratio-or-percent";
-    preferRemainingPercent?: boolean;
-  } = {},
-): number | null {
-  const remainingPercentRaw = pickNumber(payload, keys.remainingPercent ?? REMAINING_PERCENT_KEYS);
-  const remainingPercentUnit = keys.remainingPercentUnit ?? "ratio-or-percent";
-  const fromRemainingPercent =
-    remainingPercentRaw === undefined
-      ? null
-      : clampPercent(
-          100 -
-            clampPercent(
-              remainingPercentUnit === "ratio-or-percent" && remainingPercentRaw <= 1
-                ? remainingPercentRaw * 100
-                : remainingPercentRaw,
-            ),
-        );
-  if (keys.preferRemainingPercent === true && fromRemainingPercent !== null) {
-    return fromRemainingPercent;
-  }
-
-  const total = pickNumber(payload, keys.total ?? TOTAL_KEYS);
-  let used = pickNumber(payload, keys.used ?? USED_KEYS);
-  const remaining = pickNumber(payload, keys.remaining ?? REMAINING_KEYS);
+function deriveUsedPercent(payload: Record<string, unknown>): number | null {
+  const total = pickNumber(payload, TOTAL_KEYS);
+  let used = pickNumber(payload, USED_KEYS);
+  const remaining = pickNumber(payload, REMAINING_KEYS);
   if (used === undefined && remaining !== undefined && total !== undefined) {
     used = total - remaining;
   }
 
-  const fromCounts =
-    total && total > 0 && used !== undefined && Number.isFinite(used)
-      ? clampPercent((used / total) * 100)
-      : null;
-
   // Count-derived usage is more stable across provider percent field variations.
-  if (fromCounts !== null) {
-    return fromCounts;
+  if (total && total > 0 && used !== undefined && Number.isFinite(used)) {
+    return clampPercent((used / total) * 100);
   }
 
-  const percentRaw = pickNumber(payload, keys.percent ?? PERCENT_KEYS);
+  const percentRaw = pickNumber(payload, PERCENT_KEYS);
   if (percentRaw !== undefined) {
     return clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
   }
 
   // usage_percent / usagePercent in MiniMax's API represents remaining quota,
   // not consumed quota. Invert to get usedPercent.
-  return fromRemainingPercent;
-}
-
-function hasModelUsageEvidence(record: Record<string, unknown>): boolean {
-  return (
-    hasAny(record, MODEL_REMAINING_PERCENT_KEYS) ||
-    (pickNumber(record, CURRENT_INTERVAL_TOTAL_KEYS) ?? 0) > 0 ||
-    (pickNumber(record, CURRENT_WEEKLY_TOTAL_KEYS) ?? 0) > 0
-  );
-}
-
-function isChatModelUsageRecord(record: Record<string, unknown>): boolean {
-  const name = normalizeLowercaseStringOrEmpty(record.model_name);
-  return name === "general" || name.startsWith("minimax-m");
-}
-
-function isBoundedMinimaxStatus(status: number | undefined): boolean {
-  return status === 1 || status === 2;
-}
-
-function isBoundedModelUsageRecord(record: Record<string, unknown>): boolean {
-  return (
-    isBoundedMinimaxStatus(pickNumber(record, CURRENT_INTERVAL_STATUS_KEYS)) ||
-    isBoundedMinimaxStatus(pickNumber(record, CURRENT_WEEKLY_STATUS_KEYS))
-  );
+  const remainingPercent = pickNumber(payload, REMAINING_PERCENT_KEYS);
+  return remainingPercent === undefined
+    ? null
+    : 100 - clampPercent(remainingPercent <= 1 ? remainingPercent * 100 : remainingPercent);
 }
 
 // MiniMax's current API uses `general` for the chat quota and can report zero counts
 // with authoritative percentage fields. Prefer that owner before status-based fallbacks.
 function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> | undefined {
-  const records = modelRemains.filter(isRecord).filter(hasModelUsageEvidence);
+  const records = modelRemains
+    .filter(isRecord)
+    .filter(
+      (record) =>
+        hasAny(record, MODEL_REMAINING_PERCENT_KEYS) ||
+        (pickNumber(record, INTERVAL_WINDOW.total) ?? 0) > 0 ||
+        (pickNumber(record, WEEKLY_WINDOW.total) ?? 0) > 0,
+    );
   return (
-    records.find(isChatModelUsageRecord) ?? records.find(isBoundedModelUsageRecord) ?? records[0]
+    records.find((record) => {
+      const name = normalizeLowercaseStringOrEmpty(record.model_name);
+      return name === "general" || name.startsWith("minimax-m");
+    }) ??
+    records.find((record) =>
+      [INTERVAL_WINDOW.status, WEEKLY_WINDOW.status].some((keys) => {
+        const status = pickNumber(record, keys);
+        return status === 1 || status === 2;
+      }),
+    ) ??
+    records[0]
   );
-}
-
-function pickEpoch(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
-  for (const key of keys) {
-    const parsed = parseEpoch(record[key]);
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return undefined;
 }
 
 function deriveMinimaxModelWindows(record: Record<string, unknown>): {
@@ -422,30 +318,17 @@ function deriveMinimaxModelWindows(record: Record<string, unknown>): {
 } {
   const windows: UsageWindow[] = [];
   let recognized = false;
-  for (const window of [
-    {
-      total: CURRENT_INTERVAL_TOTAL_KEYS,
-      remaining: CURRENT_INTERVAL_REMAINING_KEYS,
-      remainingPercent: CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
-      status: CURRENT_INTERVAL_STATUS_KEYS,
-      reset: ["end_time", "endTime"],
-    },
-    {
-      label: "Week",
-      total: CURRENT_WEEKLY_TOTAL_KEYS,
-      remaining: CURRENT_WEEKLY_REMAINING_KEYS,
-      remainingPercent: CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
-      status: CURRENT_WEEKLY_STATUS_KEYS,
-      reset: ["weekly_end_time", "weeklyEndTime"],
-    },
-  ]) {
-    const usedPercent = deriveUsedPercent(record, {
-      ...window,
-      used: NO_USAGE_KEYS,
-      percent: NO_USAGE_KEYS,
-      remainingPercentUnit: "percent",
-      preferRemainingPercent: true,
-    });
+  for (const window of [INTERVAL_WINDOW, WEEKLY_WINDOW]) {
+    const remainingPercent = pickNumber(record, window.remainingPercent);
+    const total = pickNumber(record, window.total);
+    const remaining = pickNumber(record, window.remaining);
+    const used = total !== undefined && remaining !== undefined ? total - remaining : undefined;
+    const usedPercent =
+      remainingPercent !== undefined
+        ? 100 - clampPercent(remainingPercent)
+        : total && total > 0 && used !== undefined && Number.isFinite(used)
+          ? clampPercent((used / total) * 100)
+          : null;
     if (usedPercent === null) {
       continue;
     }
@@ -457,7 +340,7 @@ function deriveMinimaxModelWindows(record: Record<string, unknown>): {
     windows.push({
       label: window.label ?? deriveWindowLabel(record),
       usedPercent,
-      resetAt: pickEpoch(record, window.reset),
+      resetAt: pickNumber(record, window.reset, parseEpoch),
     });
   }
   return { recognized, windows };
@@ -537,7 +420,9 @@ export async function fetchMinimaxUsage(
       return buildUsageErrorSnapshot("minimax", "Unsupported response shape");
     }
 
-    const resetAt = pickEpoch(usageRecord, RESET_KEYS) ?? pickEpoch(payload, RESET_KEYS);
+    const resetAt =
+      pickNumber(usageRecord, RESET_KEYS, parseEpoch) ??
+      pickNumber(payload, RESET_KEYS, parseEpoch);
     windows = [
       {
         label: deriveWindowLabel(usageRecord),

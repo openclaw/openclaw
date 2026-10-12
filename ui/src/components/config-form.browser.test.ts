@@ -1,10 +1,13 @@
-// Control UI tests cover config form behavior.
 import { render } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
-import { analyzeConfigSchema, renderConfigForm as renderConfigFormBase } from "./config-form.ts";
+import {
+  analyzeConfigSchema,
+  renderConfigForm as renderConfigFormBase,
+  type JsonSchema,
+} from "./config-form.ts";
 
 function renderConfigForm(
   props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
@@ -14,37 +17,40 @@ function renderConfigForm(
   return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
 }
 
-const rootSchema = {
-  type: "object",
-  properties: {
-    gateway: {
-      type: "object",
-      properties: {
-        auth: {
-          type: "object",
-          properties: {
-            token: { type: "string" },
-          },
-        },
-      },
-    },
-    allowFrom: {
-      type: "array",
-      items: { type: "string" },
-    },
-    mode: {
-      type: "string",
-      enum: ["off", "token"],
-    },
-    enabled: {
-      type: "boolean",
-    },
-    bind: {
-      anyOf: [{ const: "auto" }, { const: "lan" }, { const: "tailnet" }, { const: "loopback" }],
-    },
+function object(properties: Record<string, JsonSchema>): JsonSchema {
+  return { type: "object", properties };
+}
+
+const rootSchema = object({
+  gateway: object({
+    auth: object({
+      token: { type: "string" },
+    }),
+  }),
+  allowFrom: {
+    type: "array",
+    items: { type: "string" },
   },
-};
+  mode: {
+    type: "string",
+    enum: ["off", "token"],
+  },
+  enabled: {
+    type: "boolean",
+  },
+  bind: {
+    anyOf: [{ const: "auto" }, { const: "lan" }, { const: "tailnet" }, { const: "loopback" }],
+  },
+});
 const rootAnalysis = analyzeConfigSchema(rootSchema);
+let container: HTMLDivElement;
+let onPatch: ReturnType<typeof vi.fn<Parameters<typeof renderConfigFormBase>[0]["onPatch"]>>;
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  onPatch = vi.fn();
+});
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -55,12 +61,10 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 function selectSegmented(control: HTMLElement) {
-  const group = expectElement(
-    control.closest<HTMLElement & { value: string }>("wa-radio-group"),
-    "segmented radio group",
-  );
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  expectElement(
+    control.querySelector<HTMLInputElement>('.settings-segmented__input[type="radio"]'),
+    "segmented radio input",
+  ).click();
 }
 
 afterEach(async () => {
@@ -68,145 +72,128 @@ afterEach(async () => {
 });
 
 describe("config form renderer", () => {
-  it("renders translated schema hint labels and help with English fallback", async () => {
-    const label = "Gateway Token";
-    const help = "Token used to authenticate with the Gateway.";
-    const labelHash = configHintTranslationKey("gateway.auth.token", "label", label)
-      .split(".")
-      .at(-1)!;
-    const helpHash = configHintTranslationKey("gateway.auth.token", "help", help)
-      .split(".")
-      .at(-1)!;
-    i18n.registerTranslation("tr", {
-      configHints: {
-        "gateway%2Eauth%2Etoken": {
-          label: { [labelHash]: "Ağ geçidi belirteci" },
-          help: { [helpHash]: "Ağ geçidi kimlik doğrulamasında kullanılan belirteç." },
-        },
-      },
-    });
-    await i18n.setLocale("tr");
-    const container = document.createElement("div");
-    const props = {
-      schema: rootAnalysis.schema,
-      uiHints: {
-        "gateway.auth.token": {
-          label,
-          help,
-        },
-      },
-      unsupportedPaths: rootAnalysis.unsupportedPaths,
-      value: {},
-      onPatch: vi.fn(),
-    };
-
-    render(renderConfigForm(props), container);
-
-    expect(container.querySelector("input")?.getAttribute("aria-label")).toBe(
-      "Ağ geçidi belirteci",
-    );
-    expect(container.textContent).toContain("Ağ geçidi kimlik doğrulamasında kullanılan belirteç.");
-
-    await i18n.setLocale("en");
-    render(renderConfigForm(props), container);
-    expect(container.querySelector("input")?.getAttribute("aria-label")).toBe("Gateway Token");
-    expect(container.textContent).toContain("Token used to authenticate with the Gateway.");
-  });
-
   it.each([
-    ["approvals", "Approvals", "Onaylar"],
-    ["telemetry", "Telemetry", "Telemetri"],
-    ["cloudWorkers", "Cloud Workers", "Bulut çalışanları"],
+    {
+      key: "gateway.auth.token",
+      label: "Gateway Token",
+      translated: "Ağ geçidi belirteci",
+      help: "Token used to authenticate with the Gateway.",
+      translatedHelp: "Ağ geçidi kimlik doğrulamasında kullanılan belirteç.",
+      field: true,
+    },
+    {
+      key: "cloudWorkers",
+      label: "Cloud Workers",
+      translated: "Bulut çalışanları",
+      help: "Section help from the Gateway.",
+      translatedHelp: "Bölüm açıklaması.",
+      field: false,
+    },
   ])(
-    "localizes top-level %s hints and preserves missing-copy fallbacks",
-    async (key, label, translatedLabel) => {
-      const help = "Section help from the Gateway.";
-      const labelHash = configHintTranslationKey(key, "label", label).split(".").at(-1)!;
-      const helpHash = configHintTranslationKey(key, "help", help).split(".").at(-1)!;
+    "localizes $key hints and preserves missing-copy fallbacks",
+    async ({ key, label, translated, help, translatedHelp, field }) => {
+      const hash = (kind: "label" | "help", text: string) =>
+        configHintTranslationKey(key, kind, text).split(".").at(-1)!;
       i18n.registerTranslation("tr", {
         configHints: {
-          [key]: {
-            label: { [labelHash]: translatedLabel },
-            help: { [helpHash]: "Bölüm açıklaması." },
+          [field ? "gateway%2Eauth%2Etoken" : key]: {
+            label: { [hash("label", label)]: translated },
+            help: { [hash("help", help)]: translatedHelp },
           },
         },
       });
-      const container = document.createElement("div");
-      const analysis = analyzeConfigSchema({
-        type: "object",
-        properties: {
-          [key]: {
-            type: "object",
-            description: "Schema description.",
-            properties: { enabled: { type: "boolean" } },
-          },
-        },
-      });
-      const props = { value: {}, onPatch: vi.fn(), uiHints: { [key]: { label, help } } };
+      const analysis = field
+        ? rootAnalysis
+        : analyzeConfigSchema(
+            object({
+              [key]: {
+                type: "object",
+                description: "Schema description.",
+                properties: { enabled: { type: "boolean" } },
+              },
+            }),
+          );
+      const props = { value: {}, onPatch, uiHints: { [key]: { label, help } } };
       const heading = () =>
-        container.querySelector("h2.settings-section__heading")?.textContent?.trim();
-      const description = () =>
-        container.querySelector(".settings-section__desc")?.textContent?.trim();
-
-      await i18n.setLocale("tr");
-      renderAnalyzedFormFixture(container, analysis, props);
-      expect(heading()).toBe(translatedLabel);
-      expect(description()).toBe("Bölüm açıklaması.");
-
-      await i18n.setLocale("en");
-      renderAnalyzedFormFixture(container, analysis, props);
-      expect(heading()).toBe(label);
-      expect(description()).toBe(help);
-
-      await i18n.setLocale("tr");
-      renderAnalyzedFormFixture(container, analysis, {
-        ...props,
-        uiHints: { [key]: { label, help: "Updated Gateway help without a translation." } },
-      });
-      expect(heading()).toBe(translatedLabel);
-      expect(description()).toBe("Updated Gateway help without a translation.");
-
-      renderAnalyzedFormFixture(container, analysis, { ...props, uiHints: {} });
-      expect(heading()).toBe(key === "cloudWorkers" ? "CloudWorkers" : label);
-      expect(description()).toBe("Schema description.");
+        field
+          ? container.querySelector("input.settings-input")?.getAttribute("aria-label")
+          : container.querySelector("h2.settings-section__heading")?.textContent?.trim();
+      const expectHelp = (text: string) => {
+        if (field) {
+          expect(container.textContent).toContain(text);
+        } else {
+          expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+            text,
+          );
+        }
+      };
+      for (const [locale, expectedLabel, expectedHelp] of [
+        ["tr", translated, translatedHelp],
+        ["en", label, help],
+      ] as const) {
+        await i18n.setLocale(locale);
+        renderAnalyzedFormFixture(container, analysis, props);
+        expect(heading()).toBe(expectedLabel);
+        expectHelp(expectedHelp);
+      }
+      if (!field) {
+        await i18n.setLocale("tr");
+        renderAnalyzedFormFixture(container, analysis, {
+          ...props,
+          uiHints: { [key]: { label, help: "Updated Gateway help without a translation." } },
+        });
+        expect(heading()).toBe(translated);
+        expectHelp("Updated Gateway help without a translation.");
+        renderAnalyzedFormFixture(container, analysis, { ...props, uiHints: {} });
+        expect(heading()).toBe("CloudWorkers");
+        expectHelp("Schema description.");
+      }
     },
   );
 
-  it("keeps page-owned section copy ahead of Gateway hints", () => {
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, rootAnalysis, {
-      value: {},
-      activeSection: "gateway",
-      uiHints: { gateway: { label: "Runtime gateway label", help: "Runtime gateway help" } },
-      onPatch: vi.fn(),
-    });
-
-    expect(container.querySelector("h2.settings-section__heading")?.textContent?.trim()).toBe(
-      "Gateway",
-    );
-    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
-      "Gateway server settings (port, auth, binding)",
-    );
-  });
+  it.each([false, true])(
+    "renders section copy once, scoped to the subsection: %s",
+    (subsection) => {
+      renderAnalyzedFormFixture(container, rootAnalysis, {
+        value: {},
+        activeSection: "gateway",
+        activeSubsection: subsection ? "auth" : undefined,
+        uiHints: { gateway: { label: "Runtime gateway label", help: "Runtime gateway help" } },
+        onPatch,
+      });
+      expect(
+        Array.from(
+          container.querySelectorAll(
+            ".settings-section > .settings-section__header .settings-section__heading",
+          ),
+          (node) => node.textContent?.trim(),
+        ),
+      ).toEqual([subsection ? "Auth" : "Gateway"]);
+      if (subsection) {
+        expect(container.querySelector(".cfg-object")).toBeNull();
+        expect(
+          Array.from(container.querySelectorAll(".settings-row__title"), (node) =>
+            node.textContent?.trim(),
+          ),
+        ).toEqual(["Token"]);
+      } else {
+        expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+          "Gateway server settings (port, auth, binding)",
+        );
+      }
+    },
+  );
 
   it("conceals core-classified encryption, private-key, and local service env values", () => {
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
+    const analysis = analyzeConfigSchema(
+      object({
         encryptKey: { type: "string" },
         privateKey: { type: "string" },
-        localService: {
-          type: "object",
-          properties: {
-            env: {
-              type: "object",
-              properties: { FOO: { type: "string" } },
-            },
-          },
-        },
-      },
-    });
+        localService: object({
+          env: object({ FOO: { type: "string" } }),
+        }),
+      }),
+    );
 
     renderAnalyzedFormFixture(container, analysis, {
       value: {
@@ -215,7 +202,7 @@ describe("config form renderer", () => {
         localService: { env: { FOO: "env-value" } },
       },
       revealSensitive: false,
-      onPatch: vi.fn(),
+      onPatch,
     });
 
     for (const label of ["Encrypt Key", "Private Key", "FOO"]) {
@@ -237,10 +224,7 @@ describe("config form renderer", () => {
     ["string or SecretRef", { type: ["string", "object"] }],
   ])("keeps a masked sensitive %s field editable across keystrokes", async (_name, tokenSchema) => {
     const { userEvent } = await import("vitest/browser");
-    const container = document.createElement("div");
-    document.body.append(container);
-    onTestFinished(() => container.remove());
-    const analysis = analyzeConfigSchema({ type: "object", properties: { token: tokenSchema } });
+    const analysis = analyzeConfigSchema(object({ token: tokenSchema }));
     const revealed = new Set<string>();
     let value: Record<string, unknown> = {};
     const draw = () =>
@@ -282,8 +266,6 @@ describe("config form renderer", () => {
   });
 
   it("renders inputs and patches values", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
     const analysis = rootAnalysis;
     renderAnalyzedFormFixture(container, analysis, {
       uiHints: {
@@ -314,11 +296,10 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
     const checkbox = expectElement(
-      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
       "enabled switch",
     );
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    checkbox.click();
     expect(onPatch).toHaveBeenCalledWith(["enabled"], true);
 
     const addButton = expectElement(
@@ -347,42 +328,38 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
-  it("shows phone presentations without changing raw config values", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
+  it("preserves raw phone values and focus as presentations change", () => {
+    const analysis = analyzeConfigSchema(
+      object({
         fromNumber: { type: "string" },
         target: { type: "string" },
         accounts: {
           type: "object",
-          additionalProperties: {
-            type: "object",
-            properties: {
-              allowFrom: {
-                type: "array",
-                items: { type: "string" },
-              },
+          additionalProperties: object({
+            allowFrom: {
+              type: "array",
+              items: { type: "string" },
             },
-          },
+          }),
         },
-      },
-    });
-    renderAnalyzedFormFixture(container, analysis, {
-      uiHints: {
-        fromNumber: { presentation: "phone-number" },
-        target: { presentation: "phone-number" },
-        "accounts.*.allowFrom.*": { presentation: "phone-number" },
-      },
-      value: {
-        fromNumber: "+4930123456",
-        target: "token-value",
-        accounts: { work: { allowFrom: ["+81312345678"] } },
-      },
-      onPatch,
-    });
+      }),
+    );
+    const draw = (fromNumber: string) =>
+      renderAnalyzedFormFixture(container, analysis, {
+        uiHints: {
+          fromNumber: { presentation: "phone-number" },
+          target: { presentation: "phone-number" },
+          "accounts.*.allowFrom.*": { presentation: "phone-number" },
+        },
+        value: {
+          fromNumber,
+          target: "token-value",
+          accounts: { work: { allowFrom: ["+81312345678"] } },
+        },
+        onPatch,
+      });
 
+    draw("+4930123456");
     const phoneInputs = Array.from(
       container.querySelectorAll<HTMLInputElement>(".settings-phone-presentation input"),
     );
@@ -416,125 +393,85 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["fromNumber"], " +4930123456 ");
     fromNumberInput.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenLastCalledWith(["fromNumber"], "+4930123456");
+    draw("+123");
+    fromNumberInput.focus();
+    for (const phone of ["+4930123456", "+123"]) {
+      draw(phone);
+      const presentation = fromNumberInput.closest(".settings-phone-presentation")!;
+      if (phone === "+123") {
+        expect(presentation.querySelector(".settings-phone-presentation__value")).toBeNull();
+      } else {
+        expect(
+          presentation.querySelector(".settings-phone-presentation__value")?.textContent,
+        ).toContain("+49 30 123456");
+      }
+      expect(presentation.querySelector("input.settings-input")).toBe(fromNumberInput);
+      expect(document.activeElement).toBe(fromNumberInput);
+    }
   });
 
-  it("keeps phone inputs focused while presentation appears and disappears", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: { phone: { type: "string" } },
-    });
-    const renderValue = (phone: string) => {
-      renderAnalyzedFormFixture(container, analysis, {
-        uiHints: { phone: { presentation: "phone-number", advanced: false } },
-        value: { phone },
-        onPatch: vi.fn(),
-      });
-    };
-
-    renderValue("+123");
-    const input = expectElement(
-      container.querySelector<HTMLInputElement>("input.settings-input"),
-      "phone input",
+  it.each([false, true])("renders named toggle rows with wildcard hints: %s", (wildcard) => {
+    const analysis = analyzeConfigSchema(
+      wildcard
+        ? object({
+            plugins: object({
+              entries: {
+                type: "object",
+                additionalProperties: object({ enabled: { type: "boolean" } }),
+              },
+            }),
+          })
+        : object({
+            features: object({ beta: { type: "boolean", description: "Enable beta features" } }),
+          }),
     );
-    input.focus();
-
-    renderValue("+4930123456");
-    expect(container.querySelector(".settings-phone-presentation__value")?.textContent).toContain(
-      "+49 30 123456",
-    );
-    expect(container.querySelector("input.settings-input")).toBe(input);
-    expect(document.activeElement).toBe(input);
-
-    renderValue("+123");
-    expect(container.querySelector(".settings-phone-presentation__value")).toBeNull();
-    expect(container.querySelector("input.settings-input")).toBe(input);
-    expect(document.activeElement).toBe(input);
-    container.remove();
-  });
-
-  it("renders subsection labels exactly once", () => {
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, rootAnalysis, {
-      value: {},
-      activeSection: "gateway",
-      activeSubsection: "auth",
-      onPatch: vi.fn(),
-    });
-
-    const headings = Array.from(
-      container.querySelectorAll(
-        ".settings-section > .settings-section__header .settings-section__heading",
-      ),
-    ).map((node) => node.textContent?.trim());
-    expect(headings).toEqual(["Auth"]);
-    // The subsection object emits its fields directly; no nested details block
-    // repeats the subsection title inside the group.
-    expect(container.querySelector(".cfg-object")).toBeNull();
-    const rowTitles = Array.from(container.querySelectorAll(".settings-row__title")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(rowTitles).toEqual(["Token"]);
-  });
-
-  it("renders boolean fields as named toggle rows", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        features: {
-          type: "object",
-          properties: {
-            beta: { type: "boolean", description: "Enable beta features" },
-          },
-        },
-      },
-    });
     renderAnalyzedFormFixture(container, analysis, {
-      value: { features: { beta: false } },
+      uiHints: wildcard ? { "plugins.entries.*.enabled": { label: "Plugin Enabled" } } : {},
+      value: wildcard
+        ? { plugins: { entries: { "voice-call": { enabled: true } } } }
+        : { features: { beta: false } },
       onPatch,
     });
-
     const checkbox = expectElement(
-      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
-      "beta switch",
+      container.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
+      "named toggle",
     );
-    const row = expectElement(checkbox.closest(".settings-row"), "beta toggle row");
+    const row = expectElement(checkbox.closest(".settings-row"), "toggle row");
+    const label = wildcard ? "Plugin Enabled" : "Beta";
     expect(row.tagName).toBe("DIV");
-    expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe("Beta");
-    expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
-      "Enable beta features",
+    expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe(label);
+    expect(
+      container.querySelector(`#${checkbox.getAttribute("aria-labelledby")}`)?.textContent?.trim(),
+    ).toBe(label);
+    if (!wildcard) {
+      expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
+        "Enable beta features",
+      );
+    }
+    checkbox.click();
+    expect(onPatch).toHaveBeenCalledWith(
+      wildcard ? ["plugins", "entries", "voice-call", "enabled"] : ["features", "beta"],
+      !wildcard,
     );
-    expect(checkbox.textContent?.trim()).toBe("Beta");
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["features", "beta"], true);
   });
 
   it("keeps dropdown selects on their configured value after options render", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "object",
-      properties: {
-        provider: {
-          type: "string",
-          enum: ["anthropic", "codex", "gemini", "openai", "openrouter", "zai"],
-        },
-        bind: {
-          anyOf: [
-            { const: "auto" },
-            { const: "lan" },
-            { const: "tailnet" },
-            { const: "loopback" },
-            { const: "public" },
-            { const: "off" },
-          ],
-        },
+    const schema = object({
+      provider: {
+        type: "string",
+        enum: ["anthropic", "codex", "gemini", "openai", "openrouter", "zai"],
       },
-    };
+      bind: {
+        anyOf: [
+          { const: "auto" },
+          { const: "lan" },
+          { const: "tailnet" },
+          { const: "loopback" },
+          { const: "public" },
+          { const: "off" },
+        ],
+      },
+    });
     const analysis = analyzeConfigSchema(schema);
 
     renderAnalyzedFormFixture(container, analysis, {
@@ -551,14 +488,11 @@ describe("config form renderer", () => {
   });
 
   it("shows an unset default-on boolean as its placeholder instead of an off toggle", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        cron: { type: "object", properties: { enabled: { type: "boolean" } } },
-      },
-    });
+    const analysis = analyzeConfigSchema(
+      object({
+        cron: object({ enabled: { type: "boolean" } }),
+      }),
+    );
     render(
       renderConfigForm({
         schema: analysis.schema,
@@ -570,7 +504,7 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.querySelector("wa-switch.settings-toggle")).toBeNull();
+    expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();
     const select = expectElement(
       container.querySelector<HTMLSelectElement>('select[aria-label="Automations Enabled"]'),
       "automations enabled select",
@@ -588,77 +522,23 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["cron", "enabled"], undefined);
   });
 
-  it("renders map fields from additionalProperties", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "object",
-      properties: {
-        slack: {
-          type: "object",
-          additionalProperties: {
-            type: "string",
-          },
-        },
-      },
-    };
-    const analysis = analyzeConfigSchema(schema);
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { slack: { channelA: "ok" } },
-      onPatch,
-    });
-
-    const removeButton = expectElement(
+  it.each([
+    { key: "slack", additionalProperties: { type: "string" }, value: { channelA: "ok" } },
+    { key: "accounts", additionalProperties: true, value: { default: { enabled: true } } },
+  ])("removes entries from the $key map", ({ key, additionalProperties, value }) => {
+    const analysis = analyzeConfigSchema(
+      object({ [key]: { type: "object", additionalProperties } }),
+    );
+    expect(analysis.unsupportedPaths).toEqual([]);
+    renderAnalyzedFormFixture(container, analysis, { value: { [key]: value }, onPatch });
+    expectElement(
       container.querySelector(".cfg-map button[aria-label='Remove entry']"),
       "map remove button",
-    );
-    removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["slack"], {});
-  });
-
-  it("supports wildcard uiHints for map entries", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "object",
-      properties: {
-        plugins: {
-          type: "object",
-          properties: {
-            entries: {
-              type: "object",
-              additionalProperties: {
-                type: "object",
-                properties: {
-                  enabled: { type: "boolean" },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    const analysis = analyzeConfigSchema(schema);
-    renderAnalyzedFormFixture(container, analysis, {
-      uiHints: {
-        "plugins.entries.*.enabled": { label: "Plugin Enabled" },
-      },
-      value: { plugins: { entries: { "voice-call": { enabled: true } } } },
-      onPatch,
-    });
-
-    const label = expectElement(
-      Array.from(container.querySelectorAll(".settings-row__title")).find(
-        (node) => node.textContent?.trim() === "Plugin Enabled",
-      ),
-      "plugin enabled label",
-    );
-    expect(label.textContent?.trim()).toBe("Plugin Enabled");
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith([key], {});
   });
 
   it("filters by authored metadata tags without rendering field chips", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
     const analysis = rootAnalysis;
     renderAnalyzedFormFixture(container, analysis, {
       uiHints: {
@@ -700,55 +580,44 @@ describe("config form renderer", () => {
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "object",
-      properties: {
-        models: {
+    const schema = object({
+      models: object({
+        providers: {
           type: "object",
-          properties: {
-            providers: {
-              type: "object",
-              additionalProperties: {
-                type: "object",
-                properties: {
-                  apiKey: {
-                    anyOf: [
-                      { type: "string" },
-                      {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: { type: "string", const: "env" },
-                              provider: { type: "string" },
-                              id: { type: "string" },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: { type: "string", const: "file" },
-                              provider: { type: "string" },
-                              id: { type: "string" },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
+          additionalProperties: object({
+            apiKey: {
+              anyOf: [
+                { type: "string" },
+                {
+                  oneOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        source: { type: "string", const: "env" },
+                        provider: { type: "string" },
+                        id: { type: "string" },
                       },
-                    ],
-                  },
+                      required: ["source", "provider", "id"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        source: { type: "string", const: "file" },
+                        provider: { type: "string" },
+                        id: { type: "string" },
+                      },
+                      required: ["source", "provider", "id"],
+                      additionalProperties: false,
+                    },
+                  ],
                 },
-              },
+              ],
             },
-          },
+          }),
         },
-      },
-    };
+      }),
+    });
     const analysis = analyzeConfigSchema(schema);
     expect(analysis.unsupportedPaths).toEqual([]);
 
@@ -774,20 +643,12 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["models", "providers", "openai", "apiKey"], "new-key");
   });
 
-  it("accepts renderable unions", () => {
-    const renderableUnionSchema = {
-      type: "object",
-      properties: {
-        mixed: {
-          anyOf: [{ type: "string" }, { type: "object", properties: {} }],
-        },
-      },
-    };
-    let analysis = analyzeConfigSchema(renderableUnionSchema);
-    expect(analysis.unsupportedPaths).toEqual([]);
-
-    const typedWithAnyBranchSchema = {
-      type: "object",
+  it.each([
+    {
+      properties: { mixed: { anyOf: [{ type: "string" }, object({})] } },
+      unsupported: [],
+    },
+    {
       properties: {
         lastTouchedAt: {
           title: "Config Last Touched At",
@@ -795,185 +656,104 @@ describe("config form renderer", () => {
           anyOf: [{ type: "string" }, {}],
         },
       },
-    };
-    analysis = analyzeConfigSchema(typedWithAnyBranchSchema);
-    expect(analysis.unsupportedPaths).toEqual(["lastTouchedAt"]);
-
-    const nullableSingleBranchSchema = {
-      type: "object",
-      properties: {
-        note: {
-          anyOf: [{ type: "string", nullable: true }],
-        },
-      },
-    };
-    analysis = analyzeConfigSchema(nullableSingleBranchSchema);
-    expect(analysis.unsupportedPaths).toEqual([]);
-    expect(analysis.schema?.properties?.note?.nullable).toBe(true);
-
-    const nullableSchema = {
-      type: "object",
-      properties: {
-        note: { type: ["string", "null"] },
-      },
-    };
-    analysis = analyzeConfigSchema(nullableSchema);
-    expect(analysis.unsupportedPaths).toEqual([]);
-
-    const untypedAdditionalPropertiesSchema = {
-      type: "object",
+      unsupported: ["lastTouchedAt"],
+    },
+    {
+      properties: { note: { anyOf: [{ type: "string", nullable: true }] } },
+      unsupported: [],
+      nullable: true,
+    },
+    { properties: { note: { type: ["string", "null"] } }, unsupported: [] },
+    {
       properties: {
         channels: {
           type: "object",
           properties: {
-            whatsapp: {
-              type: "object",
-              properties: {
-                enabled: { type: "boolean" },
-              },
-            },
+            whatsapp: object({ enabled: { type: "boolean" } }),
           },
           additionalProperties: {},
         },
       },
-    };
-    analysis = analyzeConfigSchema(untypedAdditionalPropertiesSchema);
-    expect(analysis.unsupportedPaths).toEqual([]);
-  });
-
-  it("accepts transform-backed public config schema shapes", () => {
-    const schema = {
-      type: "object",
+      unsupported: [],
+    },
+    {
       properties: {
-        lastTouchedAt: {
-          anyOf: [{ type: "string" }, { type: "number" }],
-        },
-        setupCommand: {
-          anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-        },
-        allowedDomains: {
-          type: "array",
-          items: { type: "string" },
-        },
-        displayWidth: {
-          type: "string",
-        },
+        lastTouchedAt: { anyOf: [{ type: "string" }, { type: "number" }] },
+        setupCommand: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
+        allowedDomains: { type: "array", items: { type: "string" } },
+        displayWidth: { type: "string" },
       },
-    };
-    const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).toEqual([]);
-
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, analysis, {
+      unsupported: [],
       value: {
         lastTouchedAt: "2026-05-05T00:00:00.000Z",
         setupCommand: "apt-get update",
         allowedDomains: ["example.com"],
         displayWidth: "960px",
       },
-      onPatch: vi.fn(),
+    },
+  ])(
+    "analyzes public union shapes: $properties",
+    ({ properties, unsupported, nullable, value }) => {
+      const analysis = analyzeConfigSchema({ type: "object", properties });
+      expect(analysis.unsupportedPaths).toEqual(unsupported);
+      if (nullable) {
+        expect(analysis.schema?.properties?.note?.nullable).toBe(true);
+      }
+      if (value) {
+        renderAnalyzedFormFixture(container, analysis, { value, onPatch });
+        expect(container.textContent).not.toContain("Unsupported schema node");
+      }
+    },
+  );
+
+  it.each([
+    {
+      key: "allowFrom",
+      items: { type: "string" },
+      defaults: ["+15550000000"],
+      value: ["+15550001111", "+15550002222"],
+      help: "Sender ids allowed to reach the agent.",
+    },
+    {
+      key: "groups",
+      items: { type: "array", default: ["nested-default"], items: { type: "string" } },
+      defaults: [["root-default"]],
+      value: [["first"], ["second"]],
+      help: "Group sender ids.",
+    },
+  ])("renders $key metadata only on the array header", ({ key, items, defaults, value, help }) => {
+    const analysis = analyzeConfigSchema(
+      object({ [key]: { type: "array", items, default: defaults } }),
+    );
+    renderAnalyzedFormFixture(container, analysis, {
+      uiHints: { [key]: { help } },
+      value: { [key]: value },
+      onPatch,
     });
-    expect(container.textContent).not.toContain("Unsupported schema node");
+    const descriptions = Array.from(container.querySelectorAll(".settings-row__desc"), (node) =>
+      node.textContent?.trim(),
+    );
+    expect(descriptions.filter((text) => text === help)).toHaveLength(1);
+    expect(
+      descriptions.filter((text) => text === `Default: ${JSON.stringify(defaults)}`),
+    ).toHaveLength(1);
+    expect(descriptions.some((text) => text?.includes("nested-default"))).toBe(false);
   });
 
-  it("treats additionalProperties true as editable map fields", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        accounts: {
-          type: "object",
-          additionalProperties: true,
-        },
-      },
-    };
-    const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).toEqual([]);
-
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { accounts: { default: { enabled: true } } },
+  it.each([true, false])("renders section help only with a docs URL: %s", (hasDocs) => {
+    renderAnalyzedFormFixture(container, rootAnalysis, {
+      uiHints: hasDocs
+        ? { gateway: { docsUrl: "https://docs.openclaw.ai/gateway/configuration" } }
+        : {},
+      value: {},
+      activeSection: "gateway",
       onPatch,
     });
 
-    const removeButton = expectElement(
-      container.querySelector(".cfg-map button[aria-label='Remove entry']"),
-      "accounts remove button",
-    );
-    removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
-  });
-
-  it("shows field help once instead of repeating it on every array item", () => {
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        allowFrom: {
-          type: "array",
-          items: { type: "string" },
-          default: ["+15550000000"],
-        },
-      },
-    });
-    renderAnalyzedFormFixture(container, analysis, {
-      // Item paths collapse their numeric segment, so the item rows resolve
-      // this same hint; only the array header should render it.
-      uiHints: { allowFrom: { help: "Sender ids allowed to reach the agent." } },
-      value: { allowFrom: ["+15550001111", "+15550002222"] },
-      onPatch: vi.fn(),
-    });
-
-    const help = Array.from(container.querySelectorAll(".settings-row__desc")).filter(
-      (node) => node.textContent?.trim() === "Sender ids allowed to reach the agent.",
-    );
-    expect(help).toHaveLength(1);
-    expect(container.textContent).toContain('Default: ["+15550000000"]');
-  });
-
-  it("does not repeat array header metadata on nested array items", () => {
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        groups: {
-          type: "array",
-          default: [["root-default"]],
-          items: {
-            type: "array",
-            default: ["nested-default"],
-            items: { type: "string" },
-          },
-        },
-      },
-    });
-    renderAnalyzedFormFixture(container, analysis, {
-      uiHints: { groups: { help: "Group sender ids." } },
-      value: { groups: [["first"], ["second"]] },
-      onPatch: vi.fn(),
-    });
-
-    const descriptions = Array.from(container.querySelectorAll(".settings-row__desc")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(descriptions.filter((description) => description === "Group sender ids.")).toHaveLength(
-      1,
-    );
-    expect(
-      descriptions.filter((description) => description === 'Default: [["root-default"]]'),
-    ).toHaveLength(1);
-    expect(descriptions.some((description) => description?.includes("nested-default"))).toBe(false);
-  });
-
-  it("renders section help when the top-level hint has a docs URL", () => {
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, rootAnalysis, {
-      uiHints: { gateway: { docsUrl: "https://docs.openclaw.ai/gateway/configuration" } },
-      value: {},
-      activeSection: "gateway",
-      onPatch: vi.fn(),
-    });
-
+    if (!hasDocs) {
+      expect(container.querySelector(".settings-section__help-button")).toBeNull();
+      return;
+    }
     const button = expectElement(
       container.querySelector<HTMLButtonElement>(".settings-section__help-button"),
       "section help button",
@@ -993,16 +773,5 @@ describe("config form renderer", () => {
     expect(link.getAttribute("href")).toBe("https://docs.openclaw.ai/gateway/configuration");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
-  });
-
-  it("omits section help when the top-level hint has no docs URL", () => {
-    const container = document.createElement("div");
-    renderAnalyzedFormFixture(container, rootAnalysis, {
-      value: {},
-      activeSection: "gateway",
-      onPatch: vi.fn(),
-    });
-
-    expect(container.querySelector(".settings-section__help-button")).toBeNull();
   });
 });

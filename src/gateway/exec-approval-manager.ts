@@ -55,9 +55,7 @@ import {
 } from "./operator-approval-store.js";
 import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
 
-export { EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS } from "./exec-approval-lifecycle.js";
 export type {
-  ExecApprovalIdLookupResult,
   ExecApprovalRecord,
   OperatorApprovalLifecycleEvent,
   OperatorStandingGrantMintSpec,
@@ -162,7 +160,7 @@ export class ExecApprovalManager<
     });
   }
 
-  private scheduleAuthorityClosure(recordId: string): void {
+  protected override scheduleAuthorityClosure(recordId: string): void {
     void this.forceDenyIfRuntimeAuthorityClosed(recordId)
       .then((closed) => {
         if (closed?.outcome === "denied" && closed.liveRecord) {
@@ -315,11 +313,15 @@ export class ExecApprovalManager<
         localEntry &&
         isExecApprovalRuntimeActive(this.options, localEntry.record)
       ) {
-        this.options.retainPlacementStandingGrant?.({
+        const retain =
+          this.options.retainPlacementStandingGrantAsync ??
+          this.options.retainPlacementStandingGrant;
+        await retain?.({
           ...standingGrant,
           approvalId: recordId,
           nowMs: result.record.resolvedAtMs ?? Date.now(),
         });
+        this.assertPendingPersistenceCurrent(localEntry);
       }
       if (
         result.outcome === "resolved" ||
@@ -680,21 +682,21 @@ export class ExecApprovalManager<
     }, recordId);
   }
 
-  /** Observes a registered decision; Gateway closure rejects the wait, not the approval. */
-  awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
-    this.assertNotRetired();
-    this.scheduleAuthorityClosure(recordId);
-    const snapshot = this.getLocalSnapshot(recordId);
-    if (!snapshot) {
-      return null;
+  /** Delivery eligibility stays with the exact pending record across adapter awaits. */
+  isPendingDeliveryCurrent(record: ExecApprovalRecord<TPayload>): boolean {
+    if (
+      this.retired ||
+      this.pending.get(record.id)?.record !== record ||
+      record.resolvedAtMs !== undefined ||
+      record.expiresAtMs <= Date.now()
+    ) {
+      return false;
     }
-    if (snapshot.resolvedAtMs === undefined && snapshot.expiresAtMs <= Date.now()) {
-      void this.expireDue(recordId).catch((error: unknown) => {
-        this.reportError(error, { approvalId: recordId, operation: "expire" });
-      });
+    if (isExecApprovalRuntimeActive(this.options, record)) {
+      return true;
     }
-    const entry = this.pending.get(recordId);
-    return entry ? this.observeEntry(entry, entry.promise) : null;
+    this.scheduleAuthorityClosure(record.id);
+    return false;
   }
 
   /** Projects an allowed decision only while its exact runtime authority is live. */

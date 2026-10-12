@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   dropRepoOwnedCustomElements,
   isRepoOwnedDefineStack,
@@ -17,40 +17,50 @@ describe("jsdom custom element tracking", () => {
     expect(definitions?.some((entry) => entry.name === "openclaw-jsdom-contract-probe")).toBe(true);
   });
 
-  it("drops repo-owned tags and keeps dependency-owned ones", () => {
-    const tracking = trackCustomElementRegistry(customElements);
-    if (!tracking) {
-      throw new Error("expected a jsdom registry");
-    }
-    customElements.define("openclaw-repo-owned-probe", class extends HTMLElement {});
-    // Dependency packages are externalized and register once per worker, so their
-    // definitions must survive a reset that the module graph cannot replay.
-    tracking.definitions.push({ name: "wa-dependency-probe" });
+  it.each([false, true])(
+    "drops repo-owned tags and keeps dependency-owned ones (spy=%s)",
+    (spy) => {
+      const tracking = trackCustomElementRegistry(customElements);
+      if (!tracking) {
+        throw new Error("expected a jsdom registry");
+      }
+      const tag = `openclaw-repo-owned-probe-${spy}`;
+      const registration = spy ? vi.spyOn(customElements, "define") : undefined;
+      try {
+        customElements.define(tag, class extends HTMLElement {});
+      } finally {
+        registration?.mockRestore();
+      }
+      // Dependency packages are externalized and register once per worker, so their
+      // definitions must survive a reset that the module graph cannot replay.
+      tracking.definitions.push({ name: "wa-dependency-probe" });
 
-    dropRepoOwnedCustomElements(tracking);
+      dropRepoOwnedCustomElements(tracking);
 
-    expect(customElements.get("openclaw-repo-owned-probe")).toBeUndefined();
-    expect(tracking.definitions.some((entry) => entry.name === "wa-dependency-probe")).toBe(true);
-    // A repo module re-evaluated by the next file must be able to register again.
-    expect(() =>
-      customElements.define("openclaw-repo-owned-probe", class extends HTMLElement {}),
-    ).not.toThrow();
-  });
+      expect(customElements.get(tag)).toBeUndefined();
+      expect(tracking.definitions.some((entry) => entry.name === "wa-dependency-probe")).toBe(true);
+      // A repo module re-evaluated by the next file must be able to register again.
+      expect(() => customElements.define(tag, class extends HTMLElement {})).not.toThrow();
+    },
+  );
 
-  it("attributes a define call to the module that made it", () => {
-    const stack = (caller: string) =>
-      `Error\n    at define (/repo/test/jsdom-custom-elements.ts:58:9)\n${caller}`;
+  it.each(["", "    at Mock (/repo/node_modules/vitest/dist/chunks/spy.DQ0ZsPbi.js:320:40)\n"])(
+    "attributes a define call to its owner behind %j",
+    (forwarder) => {
+      const stack = (caller: string) =>
+        `Error\n    at define (/repo/test/jsdom-custom-elements.ts:58:9)\n${forwarder}${caller}`;
 
-    expect(isRepoOwnedDefineStack(stack("    at /repo/ui/src/components/tooltip.ts:576:18"))).toBe(
-      true,
-    );
-    expect(
-      isRepoOwnedDefineStack(
-        stack(
-          "    at file:///repo/node_modules/@lit/reactive-element/decorators/custom-element.js:27:24",
+      expect(
+        isRepoOwnedDefineStack(stack("    at /repo/ui/src/components/tooltip.ts:576:18")),
+      ).toBe(true);
+      expect(
+        isRepoOwnedDefineStack(
+          stack(
+            "    at file:///repo/node_modules/@lit/reactive-element/decorators/custom-element.js:27:24",
+          ),
         ),
-      ),
-    ).toBe(false);
-    expect(isRepoOwnedDefineStack(undefined)).toBe(false);
-  });
+      ).toBe(false);
+      expect(isRepoOwnedDefineStack(undefined)).toBe(false);
+    },
+  );
 });

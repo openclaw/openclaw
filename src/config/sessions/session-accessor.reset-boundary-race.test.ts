@@ -39,7 +39,10 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
             (worker) =>
               operation({
                 execute: (command, commandOptions) => {
-                  if (command.type === "session.lifecycle.reset") {
+                  if (
+                    command.type === "session.lifecycle.reset" ||
+                    command.type === "session.lifecycle.project"
+                  ) {
                     // The snapshot is prepared, but the worker has not begun its transaction.
                     const inject = transactionInjection.run;
                     transactionInjection.run = null;
@@ -51,22 +54,6 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
             options,
           ),
       };
-    },
-  };
-});
-
-vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof agentDatabase>();
-  return {
-    ...actual,
-    runOpenClawAgentWriteTransaction: <T>(
-      run: Parameters<typeof actual.runOpenClawAgentWriteTransaction<T>>[0],
-      options: Parameters<typeof actual.runOpenClawAgentWriteTransaction<T>>[1],
-    ) => {
-      const inject = transactionInjection.run;
-      transactionInjection.run = null;
-      inject?.();
-      return actual.runOpenClawAgentWriteTransaction(run, options);
     },
   };
 });
@@ -209,6 +196,7 @@ describe("reset boundary concurrency", () => {
       ),
     ).toContain("concurrent");
 
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
     await waitForSessionTranscriptProjection(scope);
     expect(

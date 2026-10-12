@@ -22,6 +22,7 @@ export interface ControlUiGitHubError extends Error {
   readonly statusCode: number;
   readonly upstreamStatus: number;
   readonly retryable: boolean;
+  readonly retryAtMs: number | undefined;
   readonly retryAfterMs: number | undefined;
 }
 type GitHubGraphQLUnavailableError = ControlUiGitHubError;
@@ -30,6 +31,7 @@ export type ControlUiGitHubPreviewIdentity = {
   cacheScope: string;
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
+  stale?: true;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { isWithinDir } from "@openclaw/fs-safe/path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -69,15 +68,17 @@ type SessionKeyCanonicalizationOptions = {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
-  skipCrossAgentRemap?: boolean;
-  preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
   legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 };
 
 function canonicalizeSessionKeyForAgent(
-  params: SessionKeyCanonicalizationOptions & { key: string },
+  params: SessionKeyCanonicalizationOptions & {
+    key: string;
+    skipCrossAgentRemap?: boolean;
+    preserveCanonicalAgentOwner?: boolean;
+  },
 ): string {
   const raw = params.key.trim();
   if (!raw) {
@@ -230,7 +231,12 @@ export function canonicalizeSessionStore({
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const canonicalKey = canonicalizeSessionKeyForAgent({ ...options, key });
+    const canonicalKey = canonicalizeSessionKeyForAgent({
+      ...options,
+      key,
+      skipCrossAgentRemap: options.preserveAmbiguousKeys,
+      preserveCanonicalAgentOwner: true,
+    });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
       legacyKeys.push(key);
@@ -322,12 +328,6 @@ function sessionStoreMayNeedCanonicalization(params: {
     if (lowerKey === DEFAULT_MAIN_KEY || lowerKey === params.mainKey) {
       return true;
     }
-    if (lowerKey.startsWith("subagent:")) {
-      return true;
-    }
-    if (lowerKey.startsWith("group:") || lowerKey.startsWith("channel:")) {
-      return true;
-    }
     if (!lowerKey.startsWith("agent:")) {
       return true;
     }
@@ -366,10 +366,7 @@ function sessionStoreMayNeedCanonicalization(params: {
 export function listLegacySessionKeys({
   store,
   ...options
-}: Omit<
-  SessionKeyCanonicalizationOptions,
-  "skipCrossAgentRemap" | "preserveCanonicalAgentOwner"
-> & {
+}: SessionKeyCanonicalizationOptions & {
   store: Record<string, SessionEntryLike>;
 }): string[] {
   return Object.keys(store).filter(
@@ -580,8 +577,6 @@ export async function migrateOrphanedSessionKeys(params: {
         agentId: storeAgentId,
         mainKey,
         scope,
-        skipCrossAgentRemap: preserveAmbiguousKeys,
-        preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
         legacySessionSurfaces: legacySessionSurfaces.surfaces,
@@ -701,32 +696,22 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     if (!migrationFileExists(target.storePath)) {
       continue;
     }
-    const group = storeGroups.find(({ target: existing }) =>
+    let group = storeGroups.find(({ target: existing }) =>
       sessionStorePathsMatch(existing.storePath, target.storePath),
     );
     const matchingDeclaredTargets = declaredTargets.filter((declaredTarget) =>
       sessionStorePathsMatch(target.storePath, declaredTarget.storePath),
     );
-    if (group) {
-      group.agentIds.add(normalizeAgentId(target.agentId));
-      group.aliasCandidates.add(target.storePath);
-      for (const declaredTarget of matchingDeclaredTargets) {
-        group.agentIds.add(declaredTarget.agentId);
-        group.aliasCandidates.add(declaredTarget.storePath);
-      }
-      continue;
+    if (!group) {
+      group = { target, agentIds: new Set(), aliasCandidates: new Set() };
+      storeGroups.push(group);
     }
-    storeGroups.push({
-      target,
-      agentIds: new Set([
-        normalizeAgentId(target.agentId),
-        ...matchingDeclaredTargets.map((declaredTarget) => declaredTarget.agentId),
-      ]),
-      aliasCandidates: new Set([
-        target.storePath,
-        ...matchingDeclaredTargets.map((declaredTarget) => declaredTarget.storePath),
-      ]),
-    });
+    group.agentIds.add(normalizeAgentId(target.agentId));
+    group.aliasCandidates.add(target.storePath);
+    for (const declaredTarget of matchingDeclaredTargets) {
+      group.agentIds.add(declaredTarget.agentId);
+      group.aliasCandidates.add(declaredTarget.storePath);
+    }
   }
 
   for (const { target, agentIds, aliasCandidates } of storeGroups) {
@@ -744,13 +729,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     const pluginForeignMainAliasRisk = pluginTargets.some((pluginTarget) =>
       sessionStorePathsMatch(storePath, pluginTarget.storePath),
     );
-    let parsed: ReturnType<typeof readSessionStoreJson5>;
-    try {
-      parsed = readSessionStoreJson5(storePath);
-    } catch (err) {
-      warnings.push(`Could not read ${storePath}: ${String(err)}`);
-      continue;
-    }
+    const parsed = readSessionStoreJson5(storePath);
     if (!parsed.ok) {
       continue;
     }
@@ -787,7 +766,6 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     }
 
     const readVerifiedCoreImport = prepareDeferredPluginSessionImportReader({
-      cfg: params.cfg,
       target,
       env,
     });
@@ -941,11 +919,9 @@ function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
 function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
-  env?: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv,
 ): string {
-  const expand = (s: string) =>
-    s.startsWith("~") ? expandHomePrefix(s, { env: env ?? process.env, homedir: os.homedir }) : s;
-  return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
+  return path.resolve(expandHomePrefix(template.replaceAll("{agentId}", agentId), { env }));
 }
 
 export function mergeSessionStoreAliasPlans(

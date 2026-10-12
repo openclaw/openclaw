@@ -7,8 +7,8 @@ import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   initSubagentRegistry,

@@ -11,10 +11,9 @@ type CustomPluginUiDisabledContext = Pick<ApplicationContext<"labs">, "basePath"
 export function renderCustomPluginUiDisabled(
   context: CustomPluginUiDisabledContext | undefined,
   pluginId: string,
-  onNavigate?: () => void,
 ) {
   if (
-    !context?.plugins?.errors.some(
+    !context?.plugins.errors.some(
       (diagnostic) =>
         diagnostic.pluginId === pluginId && diagnostic.code === "custom-plugin-ui-disabled",
     )
@@ -29,7 +28,6 @@ export function renderCustomPluginUiDisabled(
       @click=${(event: MouseEvent) => {
         if (shouldHandleNavigationClick(event)) {
           event.preventDefault();
-          onNavigate?.();
           context.navigate("labs");
         }
       }}

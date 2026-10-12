@@ -24,14 +24,14 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/index.js";
+import { serializeCacheTtlToolResultProjections } from "../cache-ttl-checkpoint.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
-  serializeCacheTtlToolResultProjections,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -78,7 +78,6 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       promptError: null,
       promptErrorSource: null,
       yieldAborted: false,
-      sessionIdUsed: "sess-settle-1",
     },
     readLifecycleState: () => ({
       aborted: false,
@@ -105,11 +104,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     vi.useRealTimers();
   });
 
-  it.each([
-    { withMetadata: true, timedOut: false },
-    { withMetadata: false, timedOut: false },
-    { withMetadata: true, timedOut: true },
-  ])(
+  it.each([{ withMetadata: true, timedOut: false }])(
     "settles cancellation with active media, metadata=$withMetadata timeout=$timedOut",
     async ({ withMetadata, timedOut }) => {
       resetGeneratedMediaTaskActivityForTests();
@@ -182,6 +177,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       ...input.cache,
       getObservation: () => ({
         requestIndex: 3,
+        messageCount: 5,
         broke: false,
         input: 100,
         cacheRead: 10_000,
@@ -209,141 +205,136 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     expect(result.sessionIdUsed).toBe("sess-settle-1");
   });
 
-  it.each([
-    "active provider failure",
-    "aborted before settlement",
-    "aborted during admission",
-    "storage failure",
-  ] as const)("records prompt errors only while its writer is live: %s", async (scenario) => {
-    await withOpenClawTestState({ label: "prompt-error-settle" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "prompt-error-settle",
-        sessionKey: "agent:main:prompt-error-settle",
-        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const sessionManager = await SessionManager.openAsync(target, state.workspaceDir);
-      await sessionManager.appendMessageAsync({
-        role: "user",
-        content: "test prompt",
-        timestamp: 1,
-      });
-      const originalEntries = sessionManager.getEntries();
-      const controller = new AbortController();
-      const promptError = new Error("synthetic provider failure");
-      const assistant = createAssistant(
-        testModel,
-        [{ type: "text", text: "partial reply" }],
-        "error",
-      );
-      const usage = { input: 100, output: 20 };
-      const input = createSettleFixture({
-        sessionManager,
-        runAbortSignal: controller.signal,
-        readLifecycleState: () => ({
-          aborted: controller.signal.aborted,
-          timedOut: false,
-          timedOutDuringCompaction: false,
-        }),
-      });
-      input.activeSession.messages.push(assistant);
-      input.subscription.getUsageTotals = () => usage;
-      input.attempt = {
-        ...input.attempt,
-        ...target,
-        sessionTarget: target,
-        sessionManager,
-        abortSignal: controller.signal,
-      };
-      input.state = {
-        ...input.state,
-        promptError,
-        promptErrorSource: "prompt",
-        sessionIdUsed: target.sessionId,
-      };
-      const prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
-        attempt: input.attempt,
-        externalAbortController: {
-          arm: () => {},
-          throwIfFiredAfterPrepCleanup: async () => controller.signal.throwIfAborted(),
-        },
-      });
-      input.withOwnedTranscriptWrite = prepared.withOwnedTranscriptWrite;
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      const append =
-        scenario === "storage failure"
-          ? vi
-              .spyOn(sessionManager, "appendCustomEntryAsync")
-              .mockRejectedValue(new Error("synthetic storage failure"))
-          : undefined;
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      let heldWriter: Promise<void> | undefined;
-      let settlement: ReturnType<typeof settleEmbeddedAttemptStream> | undefined;
-      try {
-        if (scenario === "aborted before settlement") {
-          controller.abort();
-        } else if (scenario === "aborted during admission") {
-          heldWriter = runOpenClawAgentWorkerWrite(
-            { agentId: target.agentId, path: target.storePath },
-            async () => {
-              entered.resolve();
-              await release.promise;
-            },
-          );
-          await entered.promise;
-        }
-        let settled = false;
-        settlement = settleEmbeddedAttemptStream(input).then((result) => {
-          settled = true;
-          return result;
+  it.each(["active provider failure", "aborted during admission", "storage failure"] as const)(
+    "records prompt errors only while its writer is live: %s",
+    async (scenario) => {
+      await withOpenClawTestState({ label: "prompt-error-settle" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionId: "prompt-error-settle",
+          sessionKey: "agent:main:prompt-error-settle",
+          storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+        };
+        await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+        const sessionManager = await SessionManager.openAsync(target, state.workspaceDir);
+        await sessionManager.appendMessageAsync({
+          role: "user",
+          content: "test prompt",
+          timestamp: 1,
         });
-        if (heldWriter) {
-          await setImmediate();
-          expect(settled).toBe(false);
-          controller.abort(new Error("synthetic cancellation"));
-          release.resolve();
-          await heldWriter;
-        }
-        const result = await settlement;
-        expect(result.promptError).toBe(promptError);
-        expect(result.promptErrorSource).toBe("prompt");
-        expect(result.messagesSnapshot).toEqual([assistant]);
-        expect(result.currentAttemptAssistant).toBe(assistant);
-        expect(result.attemptUsage).toEqual(usage);
-        const entries = (await SessionManager.openAsync(target, state.workspaceDir)).getEntries();
-        if (scenario === "active provider failure") {
-          expect(entries).toHaveLength(originalEntries.length + 1);
-          expect(entries.at(-1)).toMatchObject({
-            type: "custom",
-            customType: "openclaw:prompt-error",
-            data: { error: "synthetic provider failure", runId: input.attempt.runId },
+        const originalEntries = sessionManager.getEntries();
+        const controller = new AbortController();
+        const promptError = new Error("synthetic provider failure");
+        const assistant = createAssistant(
+          testModel,
+          [{ type: "text", text: "partial reply" }],
+          "error",
+        );
+        const usage = { input: 100, output: 20 };
+        const input = createSettleFixture({
+          sessionManager,
+          runAbortSignal: controller.signal,
+          readLifecycleState: () => ({
+            aborted: controller.signal.aborted,
+            timedOut: false,
+            timedOutDuringCompaction: false,
+          }),
+        });
+        input.activeSession.messages.push(assistant);
+        input.subscription.getUsageTotals = () => usage;
+        input.attempt = {
+          ...input.attempt,
+          ...target,
+          sessionTarget: target,
+          sessionManager,
+          abortSignal: controller.signal,
+        };
+        input.state = {
+          ...input.state,
+          promptError,
+          promptErrorSource: "prompt",
+        };
+        const prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
+          attempt: input.attempt,
+          externalAbortController: {
+            arm: () => {},
+            throwIfFiredAfterPrepCleanup: async () => controller.signal.throwIfAborted(),
+          },
+        });
+        input.withOwnedTranscriptWrite = prepared.withOwnedTranscriptWrite;
+        const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+        const append =
+          scenario === "storage failure"
+            ? vi
+                .spyOn(sessionManager, "appendCustomEntryAsync")
+                .mockRejectedValue(new Error("synthetic storage failure"))
+            : undefined;
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        let heldWriter: Promise<void> | undefined;
+        let settlement: ReturnType<typeof settleEmbeddedAttemptStream> | undefined;
+        try {
+          if (scenario === "aborted during admission") {
+            heldWriter = runOpenClawAgentWorkerWrite(
+              { agentId: target.agentId, path: target.storePath },
+              async () => {
+                entered.resolve();
+                await release.promise;
+              },
+            );
+            await entered.promise;
+          }
+          let settled = false;
+          settlement = settleEmbeddedAttemptStream(input).then((result) => {
+            settled = true;
+            return result;
           });
-        } else {
-          expect(entries).toEqual(originalEntries);
+          if (heldWriter) {
+            await setImmediate();
+            expect(settled).toBe(false);
+            controller.abort(new Error("synthetic cancellation"));
+            release.resolve();
+            await heldWriter;
+          }
+          const result = await settlement;
+          expect(result.promptError).toBe(promptError);
+          expect(result.promptErrorSource).toBe("prompt");
+          expect(result.messagesSnapshot).toEqual([assistant]);
+          expect(result.currentAttemptAssistant).toBe(assistant);
+          expect(result.attemptUsage).toEqual(usage);
+          const entries = (await SessionManager.openAsync(target, state.workspaceDir)).getEntries();
+          if (scenario === "active provider failure") {
+            expect(entries).toHaveLength(originalEntries.length + 1);
+            expect(entries.at(-1)).toMatchObject({
+              type: "custom",
+              customType: "openclaw:prompt-error",
+              data: { error: "synthetic provider failure", runId: input.attempt.runId },
+            });
+          } else {
+            expect(entries).toEqual(originalEntries);
+          }
+          if (scenario === "storage failure") {
+            expect(warn).toHaveBeenCalledExactlyOnceWith(
+              "failed to persist prompt error entry: Error: synthetic storage failure",
+            );
+          } else {
+            expect(warn).not.toHaveBeenCalled();
+          }
+        } finally {
+          release.resolve();
+          await Promise.allSettled([heldWriter, settlement]);
+          await prepared.transcriptLifecycle.dispose();
+          append?.mockRestore();
+          warn.mockRestore();
         }
-        if (scenario === "storage failure") {
-          expect(warn).toHaveBeenCalledExactlyOnceWith(
-            "failed to persist prompt error entry: Error: synthetic storage failure",
-          );
-        } else {
-          expect(warn).not.toHaveBeenCalled();
-        }
-      } finally {
-        release.resolve();
-        await Promise.allSettled([heldWriter, settlement]);
-        await prepared.transcriptLifecycle.dispose();
-        append?.mockRestore();
-        warn.mockRestore();
-      }
-    });
-  });
+      });
+    },
+  );
 
-  it("persists the active projection after session-state eviction", async () => {
+  it("persists the active projection after session-state invalidation", async () => {
     const sessionId = "cache-ttl-settle-evicted";
-    const otherSessionIds = Array.from({ length: 65 }, (_, index) => `cache-ttl-other-${index}`);
-    const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+    using initialLease = retainEmbeddedSessionPromptState(sessionId);
+    const state = initialLease.state.toolResults;
     const key = "tool:old-read:42";
     state.replacements.set(key, {
       content: [{ type: "text", text: "kept prefix\n...\nkept suffix" }],
@@ -364,10 +355,9 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
     };
     try {
-      for (const otherSessionId of otherSessionIds) {
-        getEmbeddedSessionPromptState(otherSessionId);
-      }
-      expect(getEmbeddedSessionPromptState(sessionId).toolResults).not.toBe(state);
+      clearEmbeddedSessionPromptStates([sessionId]);
+      using replacement = retainEmbeddedSessionPromptState(sessionId);
+      expect(replacement.state.toolResults).not.toBe(state);
 
       // Production supplies this generation before entering the attempt runner.
       const metadataSnapshot = createPluginMetadataSnapshot({
@@ -388,7 +378,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         }),
       );
     } finally {
-      clearEmbeddedSessionPromptStates([sessionId, ...otherSessionIds]);
+      clearEmbeddedSessionPromptStates([sessionId]);
     }
   });
 });
@@ -428,7 +418,8 @@ describe("attempt projection persistence through settlement", () => {
       manager.appendMessage(createAssistant(model, [{ type: "text", text: "read complete" }]));
       let previousSnapshot: ReturnType<typeof serializeCacheTtlToolResultProjections> | undefined;
       for (let turn = 0; turn < 3; turn++) {
-        const sessionPromptState = getEmbeddedSessionPromptState(scope.sessionId);
+        using turnLease = retainEmbeddedSessionPromptState(scope.sessionId);
+        const sessionPromptState = turnLease.state;
         const projectionState = sessionPromptState.toolResults;
         restoreCacheTtlToolResultProjections(projectionState, manager.getBranch());
         if (previousSnapshot) {

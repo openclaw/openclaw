@@ -31,18 +31,6 @@ export function resolveLegacyNpmPackageInstallPath(params: {
   return path.join(params.npmRoot, "node_modules", ...params.packageName.split("/"));
 }
 
-function collectCandidateOfficialPackageNames(candidate: {
-  npmSpec?: string;
-  clawhubSpec?: string;
-}): Set<string> {
-  return new Set(
-    [
-      candidate.npmSpec ? parseRegistryNpmSpec(candidate.npmSpec)?.name : undefined,
-      candidate.clawhubSpec ? parseClawHubPluginSpec(candidate.clawhubSpec)?.name : undefined,
-    ].filter((name): name is string => Boolean(name)),
-  );
-}
-
 function collectInstalledRecordPackageNames(record: PluginInstallRecord): Set<string> {
   const names =
     record.source === "npm"
@@ -64,17 +52,19 @@ export function isTrustedOfficialInstallRecordForCandidate(params: {
   record: PluginInstallRecord | undefined;
   candidate: { npmSpec?: string; clawhubSpec?: string };
 }): boolean {
-  const record = params.record;
-  if (!record) {
-    return false;
-  }
-  if (record.source !== "npm" && record.source !== "clawhub") {
+  const { record, candidate } = params;
+  if (!record || (record.source !== "npm" && record.source !== "clawhub")) {
     return false;
   }
   if (record.source === "clawhub" && record.clawhubChannel !== "official") {
     return false;
   }
-  const candidatePackageNames = collectCandidateOfficialPackageNames(params.candidate);
+  const candidatePackageNames = new Set(
+    [
+      candidate.npmSpec ? parseRegistryNpmSpec(candidate.npmSpec)?.name : undefined,
+      candidate.clawhubSpec ? parseClawHubPluginSpec(candidate.clawhubSpec)?.name : undefined,
+    ].filter((name): name is string => Boolean(name)),
+  );
   return (
     candidatePackageNames.size > 0 &&
     [...collectInstalledRecordPackageNames(record)].some((name) => candidatePackageNames.has(name))
@@ -127,8 +117,8 @@ export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
 
 export function recordMatchesBundledPackage(
   record: PluginInstallRecord,
-  bundled: { name?: string; packageName?: string },
+  bundled: { packageName?: string },
 ): boolean {
-  const packageName = bundled.packageName?.trim() || bundled.name?.trim();
+  const packageName = bundled.packageName?.trim();
   return Boolean(packageName && collectInstalledRecordPackageNames(record).has(packageName));
 }

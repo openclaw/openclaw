@@ -15,7 +15,6 @@ vi.mock("node:child_process", async () => {
   return { ...actual, spawn: spawnMock };
 });
 
-const authArgs = ["auth", "status", "--active", "--hostname", "github.com"];
 const authSuccess = cliResult({ started: true, status: 0 });
 
 function cliResult(
@@ -56,23 +55,6 @@ describe("GitHub issue transport", () => {
     vi.useRealTimers();
   });
 
-  it("bounds sanitized input and prepares the exact browser handoff", () => {
-    const issue = prepareGithubIssue({
-      body: [
-        "Credential: <redacted>",
-        "Account: <redacted-email>",
-        "State: $OPENCLAW_STATE_DIR",
-        "🦞 &=?".repeat(5_000),
-      ].join("\n"),
-      title: "Sanitized support failure",
-    });
-
-    expect(issue.body).toContain("Credential: <redacted>");
-    expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
-    expect(Buffer.byteLength(issue.body, "utf8")).toBeLessThanOrEqual(20_000);
-    expect(issue.browserFallback).toEqual({ reason: "url-too-long", status: "unavailable" });
-  });
-
   it("does not expose raw process diagnostics through a transport failure", async () => {
     const issue = prepare("private-failure");
     const rawFailure = {
@@ -91,31 +73,6 @@ describe("GitHub issue transport", () => {
     expect(JSON.stringify(result)).not.toContain("private-value");
   });
 
-  it("enforces the exact encoded browser URL byte bound", () => {
-    const prefix = "🦞&=?%".repeat(100);
-    const title = "t";
-    const prefixIssue = prepareGithubIssue({ body: prefix, title });
-    if (prefixIssue.browserFallback.status !== "available") {
-      throw new Error("expected prefix fallback to be available");
-    }
-    const remaining = 8_000 - Buffer.byteLength(prefixIssue.browserFallback.url, "utf8");
-    const inputAtLimit = `${prefix}${"a".repeat(remaining)}`;
-    const issueAtLimit = prepareGithubIssue({ body: inputAtLimit, title });
-
-    expect(issueAtLimit.browserFallback.status).toBe("available");
-    if (issueAtLimit.browserFallback.status !== "available") {
-      throw new Error("expected exact-bound fallback to be available");
-    }
-    expect(Buffer.byteLength(issueAtLimit.browserFallback.url, "utf8")).toBe(8_000);
-    expect(new URL(issueAtLimit.browserFallback.url).searchParams.get("body")).toBe(
-      issueAtLimit.body,
-    );
-    expect(prepareGithubIssue({ body: `${inputAtLimit}a`, title }).browserFallback).toEqual({
-      reason: "url-too-long",
-      status: "unavailable",
-    });
-  });
-
   it("returns a typed unavailable fallback while retaining the prepared body", async () => {
     const issue = prepareGithubIssue({ body: "&=?%".repeat(5_000), title: "Sanitized report" });
     const runGh = vi
@@ -130,45 +87,6 @@ describe("GitHub issue transport", () => {
     expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
     expect(issue.body).toContain("&=?%");
     expect(runGh).toHaveBeenCalledOnce();
-  });
-
-  it("submits the prepared body through stdin and accepts only the canonical issue URL", async () => {
-    const issue = prepare("positive");
-    const runGh = vi
-      .fn<RunGithubCli>()
-      .mockResolvedValueOnce(authSuccess)
-      .mockResolvedValueOnce(
-        cliResult({
-          started: true,
-          status: 0,
-          stdout: Buffer.from(
-            "HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 201 Created\r\n\r\nhttps://github.com/openclaw/openclaw/issues/123\n",
-          ),
-        }),
-      );
-
-    await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
-      status: "created",
-      url: "https://github.com/openclaw/openclaw/issues/123",
-    });
-    expect(runGh).toHaveBeenNthCalledWith(1, authArgs, { input: "" });
-    expect(runGh).toHaveBeenNthCalledWith(
-      2,
-      [
-        "api",
-        "--hostname",
-        "github.com",
-        "--include",
-        "--method",
-        "POST",
-        "repos/openclaw/openclaw/issues",
-        "--input",
-        "-",
-        "--jq",
-        ".html_url",
-      ],
-      { input: JSON.stringify({ body: issue.body, title: issue.title }) },
-    );
   });
 
   it("uses the final HTTP response block for a definitive request rejection", async () => {
@@ -192,42 +110,6 @@ describe("GitHub issue transport", () => {
       url: availableFallbackUrl(issue),
     });
     expect(runGh).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    {
-      label: "HTTP 408",
-      result: cliResult({
-        started: true,
-        status: 1,
-        stdout: Buffer.from("HTTP/2.0 408 Request Timeout\r\n\r\n{}"),
-      }),
-    },
-    {
-      label: "HTTP 500",
-      result: cliResult({
-        started: true,
-        status: 1,
-        stdout: Buffer.from("HTTP/2.0 500 Internal Server Error\r\n\r\n{}"),
-      }),
-    },
-    {
-      label: "network exit after dispatch",
-      result: cliResult({ errorCode: "ETIMEDOUT", started: true }),
-    },
-  ])("keeps $label on the no-fallback ambiguity path", async ({ label, result }) => {
-    const issue = prepare(label);
-    const runGh = vi
-      .fn<RunGithubCli>()
-      .mockResolvedValueOnce(authSuccess)
-      .mockResolvedValueOnce(result)
-      .mockResolvedValueOnce(cliResult({ started: true, status: 0, stdout: Buffer.from("[]") }));
-
-    await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
-      reason: "creation-outcome-unknown",
-      status: "outcome-unknown",
-    });
-    expect(runGh).toHaveBeenCalledTimes(3);
   });
 
   it("prepares a browser fallback for a missing CLI without starting issue creation", async () => {

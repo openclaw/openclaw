@@ -9,8 +9,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
-import { GATEWAY_SUPERVISOR_EXIT_MARGIN_MS } from "../../infra/gateway-shutdown-budget.js";
+import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -19,8 +18,12 @@ import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js"
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixtureUrl = resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.modelAcquisitionFixture);
-const stopTimeoutMs = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
-const shutdownTimeoutMs = stopTimeoutMs - GATEWAY_SUPERVISOR_EXIT_MARGIN_MS;
+// This synthetic native deadline keeps the real-process proof independent of
+// the generated service policy, whose full drain takes several minutes.
+const stopTimeoutSeconds = 10;
+const stopTimeoutMs = stopTimeoutSeconds * 1_000;
+// Short native deadlines reserve a quarter for supervisor exit.
+const shutdownTimeoutMs = 7_500;
 
 it
   .skipIf(process.platform !== "darwin" && process.platform !== "linux")
@@ -37,7 +40,12 @@ it
     // cancellation, Gateway close, and process exit all run unchanged.
     await fs.writeFile(
       path.join(bin, "systemctl"),
-      `#!/bin/sh\nprintf 'LoadState=loaded\\nTimeoutStopUSec=${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}s\\n'\n`,
+      `#!/bin/sh\nprintf 'LoadState=loaded\\nTimeoutStopUSec=${stopTimeoutSeconds}s\\n'\n`,
+      { mode: 0o755 },
+    );
+    await fs.writeFile(
+      path.join(bin, "launchctl"),
+      `#!/bin/sh\nprintf '\\tstate = SIGTERMed\\n\\texit timeout = ${stopTimeoutSeconds}\\n\\tpid = %s\\n' "$(cat "$0.pid")"\n`,
       { mode: 0o755 },
     );
     const child = spawn(process.execPath, [...resolveRuntimeWorkerArgv(fixtureUrl), root, mode], {
@@ -74,6 +82,9 @@ it
     });
     child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
     try {
+      // Native queries may run through the spawn broker, so their parent PID is
+      // not necessarily the Gateway PID that the loaded job must identify.
+      await fs.writeFile(path.join(bin, "launchctl.pid"), String(child.pid));
       await withinTest(
         awaitGateBeforeSettlement(
           ready.promise,
@@ -82,30 +93,25 @@ it
         ),
         signal,
       );
-      expect(output).toContain(`shutdown=${shutdownTimeoutMs}ms`);
+      expect(output).toContain(
+        `shutdown=${process.platform === "darwin" ? GATEWAY_SHUTDOWN_TIMEOUT_MS : shutdownTimeoutMs}ms`,
+      );
       const started = performance.now();
       expect(child.kill("SIGTERM")).toBe(true);
       const exit = await withinTest(closed, signal);
       const elapsed = performance.now() - started;
-      expect(exit, output).toEqual([0, null]);
+      expect(exit, output).toEqual(mode === "cooperative" ? [0, null] : [null, "SIGKILL"]);
       expect(elapsed, output).toBeLessThan(stopTimeoutMs);
       expect(output).toContain("process proof: acquisition-cancelled");
-      // The fixture's launchd label is synthetic, so the per-stop re-inspection cannot
-      // find a job to read and the startup budget is retained instead. Both
-      // attributions prove the same thing this case is guarding: the shutdown budget
-      // came from the 20 second native stop timeout and not from the platform-neutral
-      // policy, which would report a 330000ms source and a far longer deadline.
+      // The synthetic manager's loaded deadline must govern the actual stop,
+      // including on macOS where native inspection happens only after SIGTERM.
       expect(output).toMatch(
-        new RegExp(
-          `shutdown budget at shutdown:.*source=(?:.*=${stopTimeoutMs}ms|startup shutdown budget=${shutdownTimeoutMs}ms)`,
-        ),
+        new RegExp(`shutdown budget at shutdown:.*source=.*=${stopTimeoutMs}ms`),
       );
       if (process.platform === "darwin") {
-        // The label resolves to no real job, so this cannot assert a successful read.
-        // What it does assert is that the darwin probe ran inside a real spawned
-        // Gateway on a real stop: only the launchd reader emits this, and reverting the
-        // darwin dispatch removes it.
-        expect(output).toContain("Unable to inspect the launchd job");
+        expect(output).toContain(
+          `source=launchd system/ai.openclaw.model-shutdown.test exit timeout=${stopTimeoutMs}ms`,
+        );
       }
       if (mode === "cooperative") {
         expect(output).toContain("process proof: acquisition-joined");
@@ -116,9 +122,13 @@ it
         expect(output).toContain("shutdown deadline reached");
         expect(elapsed, output).toBeGreaterThanOrEqual(shutdownTimeoutMs);
       }
-      expect(output.indexOf("acquisition-cancelled")).toBeLessThan(
-        output.indexOf("process-exit:0"),
-      );
+      if (mode === "cooperative") {
+        expect(output.indexOf("acquisition-cancelled")).toBeLessThan(
+          output.indexOf("process-exit:0"),
+        );
+      } else {
+        expect(output).not.toContain("process-exit:");
+      }
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

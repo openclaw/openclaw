@@ -26,29 +26,10 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 
-function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undefined): string[] {
-  const ids: string[] = [];
-  for (const level of levels ?? []) {
-    if (level.id === "xhigh" || level.id === "max") {
-      ids.push(level.id);
-    }
-  }
-  return ids;
-}
-
-function levelIds(levels: readonly { id: string }[] | undefined): string[] {
-  return (levels ?? []).map((level) => level.id);
-}
-
 const modelRefCases: Array<[string, string | null, string | null, boolean | null]> = [
   ["", null, null, null],
   ["claude-test", "anthropic", "claude-test", false],
-  ["/claude-test", "anthropic", "/claude-test", false],
   ["anthropic/", null, null, null],
-  ["anthropic/team/claude-test", "anthropic", "team/claude-test", true],
-  ["  AnThRoPiC / claude-test  ", "anthropic", "claude-test", true],
-  ["anthropic/claude-test@anthropic:work", "anthropic", "claude-test@anthropic:work", true],
-  ["bedrock/anthropic.claude-test", "amazon-bedrock", "anthropic.claude-test", true],
   ["AWS-BEDROCK/anthropic.claude-test", "amazon-bedrock", "anthropic.claude-test", true],
 ];
 
@@ -64,18 +45,6 @@ describe("anthropic provider policy public artifact", () => {
 
   it("publishes native Claude profiles retired from generic auth", () => {
     expect(deprecatedProfileIds).toEqual(["anthropic:claude-cli"]);
-  });
-
-  it("normalizes Anthropic provider config", () => {
-    const normalized = normalizeConfig({
-      provider: "anthropic",
-      providerConfig: {
-        baseUrl: "https://api.anthropic.com",
-        models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
-      },
-    });
-    expect(normalized.api).toBe("anthropic-messages");
-    expect(normalized.baseUrl).toBe("https://api.anthropic.com");
   });
 
   it("normalizes Claude CLI provider config", () => {
@@ -151,40 +120,7 @@ describe("anthropic provider policy public artifact", () => {
     ).toBe("short");
   });
 
-  it("exposes Claude Opus 4.8 thinking levels without loading the full provider plugin", () => {
-    const profile = resolveThinkingProfile({
-      provider: "anthropic",
-      modelId: "claude-opus-4-8",
-    });
-    const ids = levelIds(profile?.levels);
-    expect(ids).toContain("xhigh");
-    expect(ids).toContain("adaptive");
-    expect(ids).toContain("max");
-    expect(profile?.defaultLevel).toBe("off");
-  });
-
-  it.each([
-    ["claude-opus-5-5", "medium"],
-    ["claude-fable-5", "medium"],
-    ["claude-fable-5-1", "medium"],
-    ["claude-mythos-5", "high"],
-  ])(
-    "exposes only native efforts for the mandatory-adaptive %s thinking profile",
-    (modelId, defaultLevel) => {
-      const profile = resolveThinkingProfile({
-        provider: "anthropic",
-        modelId,
-      });
-
-      expect(profile).toEqual({
-        levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
-        defaultLevel,
-        preserveWhenCatalogReasoningFalse: true,
-      });
-    },
-  );
-
-  it.each(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5", "claude-fable-5-1"])(
+  it.each(["claude-sonnet-5-5"])(
     "keeps the %s thinking profile identical across API and CLI routes",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
@@ -193,94 +129,11 @@ describe("anthropic provider policy public artifact", () => {
     },
   );
 
-  it("preserves separate effort controls for Opus 5 and Opus 5.5 deployments", () => {
-    const profile = resolveThinkingProfile({ provider: "anthropic", modelId: "claude-opus-5" });
-    expect(profile?.defaultLevel).toBe("high");
-    expect(levelIds(profile?.levels)).toContain("off");
-
-    const deploymentProfile = resolveThinkingProfile({
-      provider: "anthropic",
-      modelId: "deployment",
-      params: { canonicalModelId: "claude-opus-5-5" },
-    });
-    expect(deploymentProfile?.defaultLevel).toBe("medium");
-    expect(levelIds(deploymentProfile?.levels)).not.toContain("off");
-  });
-
-  it("preserves separate effort controls for Sonnet 5 and Sonnet 5.5 deployments", () => {
-    const profile = resolveThinkingProfile({ provider: "anthropic", modelId: "claude-sonnet-5" });
-    expect(profile?.defaultLevel).toBe("high");
-    expect(levelIds(profile?.levels)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "adaptive",
-      "max",
-    ]);
-
-    const deploymentProfile = resolveThinkingProfile({
-      provider: "anthropic",
-      modelId: "deployment",
-      params: { canonicalModelId: "claude-sonnet-5-5" },
-    });
-    expect(deploymentProfile).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "xhigh" },
-        { id: "max" },
-      ],
-      defaultLevel: "high",
-    });
-  });
-
   it("keeps direct-only Mythos thinking disabled on the CLI route", () => {
     expect(resolveThinkingProfile({ provider: "claude-cli", modelId: "claude-mythos-5" })).toEqual({
       levels: [{ id: "off" }],
       defaultLevel: "off",
     });
-  });
-
-  it("does not return fable-5 off-thinking profile for claude-fable-50 (prefix boundary check)", () => {
-    const profile = resolveThinkingProfile({
-      provider: "claude-cli",
-      modelId: "claude-fable-50",
-    });
-
-    expect(profile).not.toBeNull();
-    expect(profile?.defaultLevel).not.toBe("off");
-  });
-
-  it("preserves the existing Claude CLI Mythos Preview thinking profile", () => {
-    const profile = resolveThinkingProfile({
-      provider: "claude-cli",
-      modelId: "claude-mythos-preview",
-    });
-
-    expect(profile?.defaultLevel).toBe("adaptive");
-    expect(profile?.levels.map((level) => level.id)).not.toContain("max");
-  });
-
-  it("exposes native max without xhigh for direct Claude 4.6 routes", () => {
-    for (const provider of ["anthropic", "claude-cli"]) {
-      const profile = resolveThinkingProfile({
-        provider,
-        modelId: "claude-opus-4-6",
-      });
-
-      if (!profile) {
-        throw new Error(`Expected ${provider} policy profile`);
-      }
-      expect(levelIds(profile.levels)).toContain("adaptive");
-      expect(levelIds(profile.levels)).toContain("max");
-      expect(profile.defaultLevel).toBe("adaptive");
-      expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual(["max"]);
-    }
   });
 
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {

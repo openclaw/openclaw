@@ -27,6 +27,21 @@ export function readSessionStateSequence(
 }
 
 export const sessionStateReadOperations = {
+  "sessionState.pendingNotices": (_input: undefined, db) => ({
+    type: "sessionState.pendingNotices" as const,
+    cursors: executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        // Older admitted stores omit watcher_store_path until the first feature write.
+        .selectAll()
+        .whereRef("material_sequence", ">", "last_seen_sequence"),
+    ).rows.map((row) => ({
+      watcherSessionKey: row.watcher_session_key,
+      targetSessionKey: row.target_session_key,
+      watcherStorePath: row.watcher_store_path ?? null,
+    })),
+  }),
   "sessionState.ambientTargets": (input: { watcherSessionKey: string }, db) => ({
     type: "sessionState.ambientTargets" as const,
     targets: executeSqliteQuerySync(

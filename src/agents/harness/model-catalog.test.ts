@@ -101,7 +101,6 @@ describe("agent harness model catalog", () => {
     { baseRuntime: "native-one", agentRuntime: undefined, observedRuntime: "native-one" },
     { baseRuntime: "openclaw", agentRuntime: "native-one", observedRuntime: "native-one" },
     { baseRuntime: "native-one", agentRuntime: "openclaw", observedRuntime: undefined },
-    { baseRuntime: "native-one", agentRuntime: "native-two", observedRuntime: "native-two" },
   ])(
     "observes only the selected runtime with configured=$baseRuntime selected=$agentRuntime",
     async ({ baseRuntime, agentRuntime, observedRuntime }) => {
@@ -161,81 +160,70 @@ describe("agent harness model catalog", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains successful default acquisition unless a failed alternative revokes the generation (revoked: %s)",
-    async (revokeOnFailure) => {
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: "fixture/model",
-            models: {
-              "fixture/model": {
-                agentRuntime: { id: "native-one" },
-                pickerRuntimes: ["native-two"],
-              },
+  it("retains successful default acquisition when an alternative fails", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "fixture/model",
+          models: {
+            "fixture/model": {
+              agentRuntime: { id: "native-one" },
+              pickerRuntimes: ["native-two"],
             },
           },
         },
-      };
-      const initial: ModelCatalogSnapshot = { entries: [], routeVariants: [] };
-      const observed: ModelCatalogEntry = {
-        provider: "fixture",
-        id: "model",
-        name: "Observed model",
-        nativeRuntime: "native-one",
-      };
-      const failure = new Error("Alternative catalog is unavailable");
-      let current = true;
-      const successfulLoad = vi.fn(async () => [observed]);
-      const failedLoad = vi.fn(async () => {
-        current = !revokeOnFailure;
-        throw failure;
-      });
-      const registry = createEmptyPluginRegistry();
-      for (const [id, loadModelCatalog] of [
-        ["native-one", successfulLoad],
-        ["native-two", failedLoad],
-      ] as const) {
-        registry.agentHarnesses.push({
-          pluginId: id,
-          source: "test",
-          harness: {
-            id,
-            label: id,
-            supports: () => ({ supported: true }),
-            runAttempt: vi.fn(),
-            loadModelCatalog,
-          },
-        });
-      }
-      const onError = vi.fn();
-      const onDiscoveryCompleted = vi.fn();
-      const result = await augmentPreparedModelCatalogWithAgentHarness({
-        input: {
-          config,
-          agentId: "main",
-          agentDir: "/tmp/picker-agent",
-          workspaceDir: "/tmp/picker-workspace",
+      },
+    };
+    const initial: ModelCatalogSnapshot = { entries: [], routeVariants: [] };
+    const observed: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "model",
+      name: "Observed model",
+      nativeRuntime: "native-one",
+    };
+    const failure = new Error("Alternative catalog is unavailable");
+    const successfulLoad = vi.fn(async () => [observed]);
+    const failedLoad = vi.fn(async () => {
+      throw failure;
+    });
+    const registry = createEmptyPluginRegistry();
+    for (const [id, loadModelCatalog] of [
+      ["native-one", successfulLoad],
+      ["native-two", failedLoad],
+    ] as const) {
+      registry.agentHarnesses.push({
+        pluginId: id,
+        source: "test",
+        harness: {
+          id,
+          label: id,
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          loadModelCatalog,
         },
-        snapshot: initial,
-        pluginRegistry: registry,
-        isCurrent: () => current,
-        onError,
-        onDiscoveryCompleted,
       });
-      expect(successfulLoad).toHaveBeenCalledOnce();
-      expect(failedLoad).toHaveBeenCalledOnce();
-      if (revokeOnFailure) {
-        expect(result).toBe(initial);
-        expect(onDiscoveryCompleted).not.toHaveBeenCalled();
-      } else {
-        expect(result.entries).toEqual([observed]);
-        expect(result.routeVariants).toEqual([observed]);
-        expect(onError).toHaveBeenCalledExactlyOnceWith(failure, ["fixture"]);
-        expect(onDiscoveryCompleted).toHaveBeenCalledExactlyOnceWith([observed]);
-      }
-    },
-  );
+    }
+    const onError = vi.fn();
+    const onDiscoveryCompleted = vi.fn();
+    const result = await augmentPreparedModelCatalogWithAgentHarness({
+      input: {
+        config,
+        agentId: "main",
+        agentDir: "/tmp/picker-agent",
+        workspaceDir: "/tmp/picker-workspace",
+      },
+      snapshot: initial,
+      pluginRegistry: registry,
+      onError,
+      onDiscoveryCompleted,
+    });
+    expect(successfulLoad).toHaveBeenCalledOnce();
+    expect(failedLoad).toHaveBeenCalledOnce();
+    expect(result.entries).toEqual([observed]);
+    expect(result.routeVariants).toEqual([observed]);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(failure, ["fixture"]);
+    expect(onDiscoveryCompleted).toHaveBeenCalledExactlyOnceWith([observed]);
+  });
 
   it.each([false, true])(
     "acquires picker runtimes once and preserves their refresh ownership (provider scoped: %s)",
@@ -367,19 +355,6 @@ describe("agent harness model catalog", () => {
       expect(refreshed.routeVariants.some((entry) => entry.id === "retired")).toBe(false);
       expect(refreshed.entries.some((entry) => entry.id === "foreign")).toBe(providerScoped);
       expect(refreshed.entries.find((entry) => entry.id === "shared")).toEqual(host);
-      let current = true;
-      loadOne.mockImplementationOnce(async () => {
-        current = false;
-        return [first];
-      });
-      const revoked = await augmentPreparedModelCatalogWithAgentHarness({
-        ...params,
-        snapshot: refreshed,
-        isCurrent: () => current,
-      });
-      expect(revoked).toBe(refreshed);
-      expect(loadOne).toHaveBeenCalledTimes(3);
-      expect(loadTwo).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -500,65 +475,5 @@ describe("agent harness model catalog", () => {
         { provider: "openai", model: "gpt-5.6-sol" },
       ],
     });
-  });
-
-  it("prepares configured refs for the selected agent without including other agents", async () => {
-    const selectedConfig: OpenClawConfig = {
-      agents: {
-        defaults: cfg.agents?.defaults,
-        entries: {
-          main: {
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
-              "openai/synthetic-configured": {},
-            },
-          },
-          another: { model: { primary: "openai/synthetic-other-agent" } },
-        },
-      },
-    };
-    const loadModelCatalog = vi.fn(async () => []);
-    await augmentModelCatalogWithAgentHarness({
-      cfg: selectedConfig,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
-      defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
-      snapshot,
-      pluginRegistry: registryWithCatalog(loadModelCatalog),
-    });
-
-    expect(loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
-      config: selectedConfig,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
-      configuredModelRefs: [
-        { provider: "openai", model: "gpt-5.6-sol" },
-        { provider: "openai", model: "gpt-5.6-sol" },
-        { provider: "openai", model: "synthetic-configured" },
-      ],
-    });
-  });
-
-  it("keeps prepared rows when harness discovery fails", async () => {
-    const onError = vi.fn();
-    const result = await augmentModelCatalogWithAgentHarness({
-      cfg,
-      agentId: "main",
-      agentDir: "/tmp/main-agent",
-      workspaceDir: "/tmp/workspace",
-      defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
-      snapshot,
-      pluginRegistry: registryWithCatalog(async () => {
-        throw new Error("model/list unavailable");
-      }),
-      onError,
-    });
-
-    expect(result).toBe(snapshot);
-    expect(onError).toHaveBeenCalledOnce();
   });
 });

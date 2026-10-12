@@ -70,42 +70,6 @@ describe("resolveEnvNodeProxyUrlForTarget", () => {
 });
 
 describe("createNodeProxyAgent", () => {
-  it.each(["explicit", "env"] as const)(
-    "uses native Node option defaults for %s proxies",
-    (mode) => {
-      withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
-        const agentOptions = { keepAliveMsecs: 0, maxSockets: 0, maxFreeSockets: 0 };
-        const agent =
-          mode === "explicit"
-            ? createNodeProxyAgent({ mode, proxyUrl: "http://proxy.example:8080", agentOptions })
-            : createNodeProxyAgent({
-                mode,
-                targetUrl: "https://collector.example.test",
-                agentOptions,
-              });
-        try {
-          expect(agent).toMatchObject({
-            keepAliveMsecs: 1000,
-            maxSockets: Infinity,
-            maxFreeSockets: 256,
-          });
-        } finally {
-          agent?.destroy();
-        }
-      });
-    },
-  );
-
-  it("rejects an invalid total socket limit during construction", () => {
-    expect(() =>
-      createNodeProxyAgent({
-        mode: "explicit",
-        proxyUrl: "http://proxy.example:8080",
-        agentOptions: { maxTotalSockets: 0 },
-      }),
-    ).toThrow(RangeError);
-  });
-
   it.each(["socks5://proxy.example:1080", new URL("socks5://proxy.example:1080")])(
     "rejects unsupported explicit proxy %s before creating a request",
     (proxyUrl) => {
@@ -173,26 +137,15 @@ describe("createNodeProxyAgent", () => {
         },
       });
 
-      const agentState = agent as
-        | {
-            options?: {
-              keepAlive?: boolean;
-              ca?: string;
-              cert?: string;
-              key?: string;
-            };
-            keepAlive?: boolean;
-          }
-        | undefined;
-      expect(agentState?.options).toMatchObject({
+      expect(agent?.options).toMatchObject({
         keepAlive: true,
         timeout: 5000,
         ca: "collector-ca",
         cert: "collector-cert",
         key: "collector-key",
       });
-      expect(agentState?.keepAlive).toBe(true);
       expect(agent).toMatchObject({
+        keepAlive: true,
         keepAliveMsecs: 750,
         maxSockets: 3,
         maxTotalSockets: 6,

@@ -220,6 +220,10 @@ export function isConfigSchemaPath(
   schema: JsonSchemaRecord | undefined,
   path: readonly PathSegment[],
 ): boolean {
+  // Editor metadata is valid at the root but deliberately hidden from the UI schema.
+  if (path.length === 1 && path[0] === "$schema") {
+    return true;
+  }
   return schemasAtPath(schema, path).length > 0;
 }
 
@@ -348,24 +352,23 @@ function mergeModelArrays(
     }
   }
   for (const entry of patch) {
-    if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
-      suppliedPaths.push([...path, String(merged.length)]);
-      merged.push(entry);
-      continue;
-    }
-    const id = entry.id.trim();
-    const existingIndex = indexById.get(id);
-    if (existingIndex === undefined) {
+    if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
+      const id = entry.id.trim();
+      const existingIndex = indexById.get(id);
+      if (existingIndex !== undefined) {
+        const existingEntry = merged[existingIndex];
+        merged[existingIndex] = isPlainRecord(existingEntry)
+          ? { ...existingEntry, ...entry }
+          : entry;
+        for (const key of Object.keys(entry)) {
+          suppliedPaths.push([...path, String(existingIndex), key]);
+        }
+        continue;
+      }
       indexById.set(id, merged.length);
-      suppliedPaths.push([...path, String(merged.length)]);
-      merged.push(entry);
-      continue;
     }
-    const existingEntry = merged[existingIndex];
-    merged[existingIndex] = isPlainRecord(existingEntry) ? { ...existingEntry, ...entry } : entry;
-    for (const key of Object.keys(entry)) {
-      suppliedPaths.push([...path, String(existingIndex), key]);
-    }
+    suppliedPaths.push([...path, String(merged.length)]);
+    merged.push(entry);
   }
   return { value: merged, suppliedPaths };
 }

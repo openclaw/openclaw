@@ -20,16 +20,16 @@ export function withGitHubToken(env: NodeJS.ProcessEnv, token: string): NodeJS.P
   };
 }
 
-function normalizeGitHubHost(value: string | undefined): string {
-  const host = value?.trim().toLowerCase() || DEFAULT_GITHUB_HOST;
+export function resolveConfiguredGitHubHost(config?: OpenClawConfig | null): string {
+  const host = config?.gateway?.github?.host?.trim().toLowerCase() || DEFAULT_GITHUB_HOST;
   if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(host) || host.includes("..")) {
     throw new Error("gateway.github.host must be a hostname");
   }
   return host;
 }
 
-function normalizeGitHubApiBaseUrl(value: string | undefined): string {
-  const raw = value?.trim() || DEFAULT_GITHUB_API_BASE_URL;
+export function resolveConfiguredGitHubApiBaseUrl(config?: OpenClawConfig | null): string {
+  const raw = config?.gateway?.github?.apiBaseUrl?.trim() || DEFAULT_GITHUB_API_BASE_URL;
   const parsed = new URL(raw);
   if (
     parsed.protocol !== "https:" ||
@@ -42,14 +42,6 @@ function normalizeGitHubApiBaseUrl(value: string | undefined): string {
     throw new Error("gateway.github.apiBaseUrl must be an HTTPS GitHub API base URL");
   }
   return parsed.origin + (parsed.pathname.startsWith("/api/v3") ? "/api/v3" : "");
-}
-
-export function resolveConfiguredGitHubHost(config?: OpenClawConfig | null): string {
-  return normalizeGitHubHost(config?.gateway?.github?.host);
-}
-
-export function resolveConfiguredGitHubApiBaseUrl(config?: OpenClawConfig | null): string {
-  return normalizeGitHubApiBaseUrl(config?.gateway?.github?.apiBaseUrl);
 }
 
 export function githubRepositoryUrl(

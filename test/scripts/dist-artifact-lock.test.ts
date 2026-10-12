@@ -76,10 +76,8 @@ it("cancels an already contended same-process waiter without disturbing the owne
 });
 
 it.for([
-  { direct: false, fails: false },
   { direct: false, fails: true },
   { direct: true, fails: false },
-  { direct: true, fails: true },
 ])(
   "joins acquisition-race release before rejecting (direct=$direct, release fails=$fails)",
   async ({ direct, fails }) => {

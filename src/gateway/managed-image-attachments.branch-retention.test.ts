@@ -3,13 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   ensureSessionEntrySync,
-  replaceTranscriptEvents,
   rewindSessionToMessage,
   switchSessionBranch,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -67,7 +68,7 @@ afterEach(async () => {
 });
 
 describe("managed attachment branch retention", () => {
-  it.each(["after transcript read", "after cleanup"] as const)(
+  it.each(["after transcript read", "after cleanup", "between hidden-tail pages"] as const)(
     "retains media when the real branch owner restores it %s",
     async (switchAt) => {
       const sessionId = randomUUID();
@@ -88,6 +89,17 @@ describe("managed attachment branch retention", () => {
       fs.writeFileSync(originalPath, body);
       const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
       const messageId = "attached";
+      const branchMessages = Array.from(
+        { length: switchAt === "after transcript read" ? 0 : 128 },
+        (_, index) => ({
+          id: `branch-${index}`,
+          parentId: index === 0 ? "user" : `branch-${index - 1}`,
+          timestamp,
+          ...(switchAt === "between hidden-tail pages"
+            ? { type: "custom", customType: "branch-control", data: {} }
+            : { type: "message", message: { role: "assistant", content: "branch context" } }),
+        }),
+      );
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
         {
@@ -104,13 +116,25 @@ describe("managed attachment branch retention", () => {
           timestamp,
           message: { role: "user", content: "make an image" },
         },
+        ...branchMessages,
         {
           type: "message",
           id: messageId,
-          parentId: "user",
+          parentId: branchMessages.at(-1)?.id ?? "user",
           timestamp,
           message: { role: "assistant", content: [{ type: "image", url, openUrl: url }] },
         },
+        ...Array.from(
+          { length: switchAt === "between hidden-tail pages" ? 130 : 0 },
+          (_, index) => ({
+            type: "custom",
+            id: `active-control-${index}`,
+            parentId: index === 0 ? "user" : `active-control-${index - 1}`,
+            timestamp,
+            customType: "branch-control",
+            data: {},
+          }),
+        ),
       ]);
       await readSessionMessageCountAsync(scope);
       await insertManagedImageRecord(
@@ -141,24 +165,45 @@ describe("managed attachment branch retention", () => {
           stateDir,
           artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
         });
-      expect(await download()).not.toBeNull();
-      expect((await rewindSessionToMessage({ ...scope, entryId: "user" })).status).toBe("created");
+      if (switchAt !== "between hidden-tail pages") {
+        expect(await download()).not.toBeNull();
+        expect((await rewindSessionToMessage({ ...scope, entryId: "user" })).status).toBe(
+          "created",
+        );
+      }
       expect(await download()).toBeNull();
       let switched = false;
       const restoreBranch = async () => {
-        expect((await switchSessionBranch({ ...scope, leafEntryId: messageId })).status).toBe(
-          "created",
-        );
+        if (switchAt === "between hidden-tail pages") {
+          const manager = await SessionManager.openAsync(scope, stateDir);
+          await manager.appendLeafControlAsync({ targetId: messageId, appendParentId: messageId });
+          expect(await readSessionMessageCountAsync(scope)).toBe(3);
+        } else {
+          expect((await switchSessionBranch({ ...scope, leafEntryId: messageId })).status).toBe(
+            "created",
+          );
+        }
         switched = true;
       };
-      if (switchAt === "after transcript read") {
+      if (switchAt !== "after cleanup") {
         ordering.afterRead = restoreBranch;
       }
-      const result = await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey });
-      expect(switched).toBe(switchAt === "after transcript read");
+      const cleanup = cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey });
+      if (switchAt === "between hidden-tail pages") {
+        await expect(cleanup).rejects.toMatchObject({
+          name: "SessionTranscriptProjectionUnavailableError",
+          reason: "window-changed",
+        });
+      } else {
+        expect(await cleanup).toEqual({
+          deletedRecordCount: 0,
+          deletedFileCount: 0,
+          retainedCount: 1,
+        });
+      }
+      expect(switched).toBe(switchAt !== "after cleanup");
       expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();
       expect(fs.readFileSync(originalPath)).toEqual(body);
-      expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
       if (switchAt === "after cleanup") {
         expect(await download()).toBeNull();
         await restoreBranch();

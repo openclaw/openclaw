@@ -9,7 +9,7 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
 import {
@@ -18,8 +18,8 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
-import { createTalkRealtimeRelaySession, flushTalkRealtimeRelayVoiceWrites } from "./index.js";
-import { closeRelaySession } from "./operations.js";
+import { closeRelaySession, flushTalkRealtimeRelayVoiceWrites } from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions, type RelaySession } from "./state.js";
 
 const connId = "relay-adoption-test-client";
@@ -165,44 +165,35 @@ describe("Talk relay keyed consult adoption", () => {
     },
   );
 
-  it.each(["completed", "excluded-completed", "newer-key"] as const)(
-    "does not reopen a %s turn through later Talk speech",
-    async (boundary) => {
-      const { scope, consult, recordSpeech, messages, openManager } = await createConsult();
-      await appendTranscriptMessage(scope, {
-        eventId: "closing-message",
-        message:
-          boundary === "newer-key"
-            ? { ...consult, idempotencyKey: "newer-consult:user" }
-            : {
-                ...assistantMessage("The original task is finished."),
-                ...(boundary === "excluded-completed" ? { excludeFromContext: true } : {}),
-              },
-      });
-      await recordSpeech(["user", "assistant"]);
-      const beforeAdoption = await messages();
-
-      expect(() => openManager().appendMessage(consult)).toThrow(
-        "Session transcript keyed user is outside the current turn",
-      );
-      expect(await messages()).toEqual(beforeAdoption);
-    },
-  );
-
   it.each([
-    { kind: "realtime_voice", sourceChannel: "discord" },
-    { kind: "internal_system", sourceChannel: "talk" },
-    { kind: "realtime_voice" },
-  ])("keeps other provenance terminating: %j", async (provenance) => {
-    const { scope, consult, openManager } = await createConsult();
+    { boundary: "completed" },
+    { boundary: "excluded-completed" },
+    { boundary: "newer-key" },
+    { boundary: "other channel", provenance: { kind: "realtime_voice", sourceChannel: "discord" } },
+    { boundary: "other kind", provenance: { kind: "internal_system", sourceChannel: "talk" } },
+    { boundary: "missing channel", provenance: { kind: "realtime_voice" } },
+  ])("does not reopen a consult after $boundary", async ({ boundary, provenance }) => {
+    const { scope, consult, recordSpeech, messages, openManager } = await createConsult();
     await appendTranscriptMessage(scope, {
-      eventId: "other-transcript",
-      message: { ...assistantMessage("Another answer."), provenance },
+      eventId: "closing-message",
+      message:
+        boundary === "newer-key"
+          ? { ...consult, idempotencyKey: "newer-consult:user" }
+          : {
+              ...assistantMessage("The original task is finished."),
+              ...(boundary === "excluded-completed" ? { excludeFromContext: true } : {}),
+              ...(provenance ? { provenance } : {}),
+            },
     });
+    if (!provenance) {
+      await recordSpeech(["user", "assistant"]);
+    }
+    const beforeAdoption = await messages();
 
     expect(() => openManager().appendMessage(consult)).toThrow(
       "Session transcript keyed user is outside the current turn",
     );
+    expect(await messages()).toEqual(beforeAdoption);
   });
 
   it("rejects a changed payload using the consult key after live speech", async () => {

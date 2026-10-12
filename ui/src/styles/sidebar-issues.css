@@ -302,10 +302,7 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-issues-panel__summary:hover,
-.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
-  background: var(--bg-hover);
-}
-
+.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary,
 .sidebar-issues-panel__details[open] {
   background: var(--bg-hover);
 }
@@ -526,15 +523,19 @@ footer.sidebar-issues-panel__mentions-note {
   gap: 8px;
 }
 
-.sidebar-update-card__compact-reason {
+.sidebar-update-card__compact-reason,
+.sidebar-mention-row__excerpt {
   display: -webkit-box;
   overflow: hidden;
-  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.sidebar-update-card__compact-reason {
+  margin: 0;
 }
 
 .sidebar-update-card__compact-actions {
@@ -572,14 +573,7 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-mention-row__excerpt {
-  display: -webkit-box;
-  overflow: hidden;
   margin: 6px 0 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.4;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
 }
 

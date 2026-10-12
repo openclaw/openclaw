@@ -73,11 +73,12 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       }
       emit();
     },
-    noteTransportActivity(at = Date.now()) {
-      if (status.lastTransportActivityAt === at) {
+    noteTransportActivity(at: number, authAgeMs: number | null) {
+      if (status.lastTransportActivityAt === at && status.authAgeMs === authAgeMs) {
         return;
       }
       Object.assign(status, createTransportActivityStatusPatch(at));
+      status.authAgeMs = authAgeMs;
       emit();
     },
     noteBusy(busy: boolean, at = Date.now()) {

@@ -14,14 +14,22 @@ import {
   stripCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import { HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT } from "../auto-reply/heartbeat.js";
 import { isToolCallBlock, isToolResultBlock, resolveToolUseId } from "../chat/tool-content.js";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
 import {
   getCliSessionBinding,
   normalizeCliSessionReseedReceipt,
 } from "../config/sessions/cli-session-binding.js";
+import {
+  type InputProvenance,
+  readInterSessionPromptEnvelope,
+} from "../sessions/input-provenance.js";
+import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
+import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -193,14 +201,6 @@ function normalizeClaudeCliContent(
   });
 }
 
-function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): TranscriptLikeMessage[] {
-  const coalesced: TranscriptLikeMessage[] = [];
-  for (const message of messages) {
-    appendCoalescedClaudeCliToolMessage(coalesced, message);
-  }
-  return coalesced;
-}
-
 export function appendCoalescedClaudeCliToolMessage(
   messages: TranscriptLikeMessage[],
   message: TranscriptLikeMessage,
@@ -259,6 +259,24 @@ function isClaudeCliTaskNotification(
   );
 }
 
+// Read provenance through generated context, but preserve the raw content for
+// display and literal matching against local transcript rows.
+function readClaudeCliInterSessionProvenance(
+  content: string | unknown[],
+): InputProvenance | undefined {
+  const blockIndex =
+    typeof content === "string"
+      ? -1
+      : content.findIndex((item) => isRecord(item) && item.type === "text");
+  const candidate = blockIndex === -1 ? undefined : content[blockIndex];
+  const block = isRecord(candidate) ? candidate : undefined;
+  const text = typeof content === "string" ? content : block?.text;
+  if (typeof text !== "string") {
+    return undefined;
+  }
+  return readInterSessionPromptEnvelope(stripCliPromptDecorations(text))?.provenance;
+}
+
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
@@ -287,6 +305,105 @@ export function resolveClaudeCliPromptTextCandidates(
       ? [{ text: item.text, blockIndex }]
       : [],
   );
+}
+
+// Queued system events as drainFormattedSystemEvents writes them: the block opens with
+// a timestamped line. A plain `System:` line a person typed does not match.
+// Untimestamped channel-summary lines on a session's first turn are not matched.
+const SYSTEM_EVENT_BLOCK =
+  /System: \[(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]\n]*|unknown-time)\] [^\n]*\n+(?:System: [^\n]*\n+)*/u
+    .source;
+const INTERNAL_PROMPT_PREFIX = new RegExp(
+  `^(?:${SYSTEM_EVENT_BLOCK})?${/(?:Note: The previous agent run was interrupted\. [^\n]*\n\n)?/u.source}`,
+  "u",
+);
+
+/** Removes the resume note and queued system events OpenClaw put in front of a user turn. */
+function stripClaudeCliGeneratedUserPrefixes(text: string): string {
+  return stripCliPromptDecorations(text);
+}
+
+/**
+ * Display copy of an imported user row that survived the history merge. The merge
+ * matches on the original text first, so this must not run before it.
+ */
+export function cleanClaudeCliImportedUserDisplay(message: unknown): unknown {
+  const meta = isRecord(message) ? message["__openclaw"] : undefined;
+  if (
+    !isRecord(message) ||
+    message.role !== "user" ||
+    message.display === false ||
+    !isRecord(meta) ||
+    meta.importedFrom !== CLAUDE_CLI_PROVIDER
+  ) {
+    return message;
+  }
+  const { content } = message;
+  if (typeof content === "string") {
+    return { ...message, content: stripClaudeCliGeneratedUserPrefixes(content) };
+  }
+  if (!Array.isArray(content) || content.some((block) => isToolResultBlock(block))) {
+    return message;
+  }
+  // Generated prefixes belong to the beginning of the whole turn. Later text
+  // blocks may quote the same frame and must retain the sender's evidence.
+  const firstTextIndex = content.findIndex(
+    (block) => isRecord(block) && block.type === "text" && typeof block.text === "string",
+  );
+  return {
+    ...message,
+    content: content.map((block, index) =>
+      index === firstTextIndex && isRecord(block) && typeof block.text === "string"
+        ? Object.assign({}, block, { text: stripClaudeCliGeneratedUserPrefixes(block.text) })
+        : block,
+    ),
+  };
+}
+
+function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
+  // Claude records Gateway SDK input and native commands as ordinary user rows,
+  // without OpenClaw provenance. Recover only complete producer-owned frames at
+  // this adapter; a matching canonical human row still wins during history merge.
+  if (stripCliSessionDriftNote(`${text}\n\n`) === "") {
+    return "cli_session_resume";
+  }
+  // A wake drains queued system events (for example Control UI reactions) and
+  // the interrupted-run hint ahead of its prompt; neither makes it a user turn.
+  const body = stripCliSessionDriftNote(text).replace(INTERNAL_PROMPT_PREFIX, "");
+  if (
+    body.startsWith(
+      "An async command you ran earlier has completed. The command completion details are:\n\n",
+    ) &&
+    body.includes("\n\nTreat this completion as an internal continuation, not a new user request. ")
+  ) {
+    return "exec";
+  }
+  // Default prompts only; a configured heartbeat prompt is not recognized here.
+  if (body.startsWith(HEARTBEAT_PROMPT) || body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
+    return "heartbeat";
+  }
+  // Restart recovery only, by its full opening sentence behind the CLI timestamp envelope;
+  // the bare system-turn tag is too easy for a person to type.
+  if (
+    body
+      .replace(/^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]\n]*\] /u, "")
+      .startsWith(
+        formatSystemTurnPrompt(
+          "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. ",
+        ),
+      )
+  ) {
+    return "restart_recovery";
+  }
+  if (
+    /^<command-name>\/compact<\/command-name>\s*<command-message>compact<\/command-message>\s*<command-args>[\s\S]*<\/command-args>$/u.test(
+      body,
+    ) ||
+    /^<local-command-stdout>Compacted\s*<\/local-command-stdout>$/u.test(body)
+  ) {
+    return "claude_cli_command";
+  }
+  return undefined;
 }
 
 export function parseClaudeCliHistoryEntry(
@@ -384,6 +501,9 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
+    const candidates = resolveClaudeCliPromptTextCandidates(entry, content);
+    const internalSourceTool =
+      candidates.length === 1 ? resolveClaudeCliInternalSourceTool(candidates[0]!.text) : undefined;
     const cliImageTurnKey =
       typeof content === "string" ? readCliImageTurnContext(content) : undefined;
     if (cliImageTurnKey && typeof content === "string") {
@@ -395,12 +515,16 @@ export function parseClaudeCliHistoryEntry(
       ? "claude_cli_task_notification"
       : isClaudeCliVisibleHarnessContext(entry)
         ? "cli_harness_context"
-        : undefined;
+        : internalSourceTool;
+    const provenance = sourceTool
+      ? { kind: "internal_system", sourceTool }
+      : readClaudeCliInterSessionProvenance(content);
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
-        ...(sourceTool ? { provenance: { kind: "internal_system", sourceTool } } : {}),
+        ...(internalSourceTool ? { display: false } : {}),
+        ...(provenance ? { provenance } : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
       { ...baseMeta, ...(cliImageTurnKey ? { cliImageTurnKey } : {}) },
@@ -569,17 +693,16 @@ export function readClaudeCliFallbackSeed(params: {
       },
     );
     if (message) {
-      windowedTurns.push(message);
+      appendCoalescedClaudeCliToolMessage(windowedTurns, message);
     }
   }
 
-  const recentTurns = coalesceClaudeCliToolMessages(windowedTurns);
   const resolvedSummaryText = lastSummary ?? pendingSummary ?? lastBoundaryFallback;
-  if (!resolvedSummaryText && recentTurns.length === 0) {
+  if (!resolvedSummaryText && windowedTurns.length === 0) {
     return undefined;
   }
   return {
     ...(resolvedSummaryText ? { summaryText: resolvedSummaryText } : {}),
-    recentTurns,
+    recentTurns: windowedTurns,
   };
 }

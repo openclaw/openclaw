@@ -1,3 +1,4 @@
+import { ApplicationFlags } from "discord-api-types/v10";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
@@ -38,13 +39,6 @@ export type DiscordApplicationIdProbeResult =
   | { kind: "rejected"; status: 401 | 403; error: unknown }
   | { kind: "unavailable"; status: number | null; error: unknown };
 
-const DISCORD_APP_FLAG_GATEWAY_PRESENCE = 1 << 12;
-const DISCORD_APP_FLAG_GATEWAY_PRESENCE_LIMITED = 1 << 13;
-const DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS = 1 << 14;
-const DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS_LIMITED = 1 << 15;
-const DISCORD_APP_FLAG_GATEWAY_MESSAGE_CONTENT = 1 << 18;
-const DISCORD_APP_FLAG_GATEWAY_MESSAGE_CONTENT_LIMITED = 1 << 19;
-
 export function resolveDiscordPrivilegedIntentsFromFlags(
   flags: number,
 ): DiscordPrivilegedIntentsSummary {
@@ -58,14 +52,14 @@ export function resolveDiscordPrivilegedIntentsFromFlags(
     return "disabled";
   };
   return {
-    presence: resolve(DISCORD_APP_FLAG_GATEWAY_PRESENCE, DISCORD_APP_FLAG_GATEWAY_PRESENCE_LIMITED),
+    presence: resolve(ApplicationFlags.GatewayPresence, ApplicationFlags.GatewayPresenceLimited),
     guildMembers: resolve(
-      DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS,
-      DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS_LIMITED,
+      ApplicationFlags.GatewayGuildMembers,
+      ApplicationFlags.GatewayGuildMembersLimited,
     ),
     messageContent: resolve(
-      DISCORD_APP_FLAG_GATEWAY_MESSAGE_CONTENT,
-      DISCORD_APP_FLAG_GATEWAY_MESSAGE_CONTENT_LIMITED,
+      ApplicationFlags.GatewayMessageContent,
+      ApplicationFlags.GatewayMessageContentLimited,
     ),
   };
 }
@@ -104,14 +98,6 @@ export async function fetchDiscordApplicationSummary(
     intents:
       typeof flags === "number" ? resolveDiscordPrivilegedIntentsFromFlags(flags) : undefined,
   };
-}
-
-function getResolvedFetch(fetcher: typeof fetch): typeof fetch {
-  const fetchImpl = resolveFetch(fetcher);
-  if (!fetchImpl) {
-    throw new Error("fetch is not available");
-  }
-  return fetchImpl;
 }
 
 async function readDiscordProbeGetMeJson(
@@ -163,11 +149,15 @@ export async function probeDiscord(
       try {
         const getMeUrl = `${endpoint?.descriptor.restApiBaseUrl ?? DISCORD_API_BASE}/users/@me`;
         const getMeDeadlineMs = Date.now() + timeoutMs;
+        const fetchImpl = resolveFetch(fetcher);
+        if (!fetchImpl) {
+          throw new Error("fetch is not available");
+        }
         res = await fetchWithTimeout(
           getMeUrl,
           { headers: { Authorization: `Bot ${normalized}` } },
           timeoutMs,
-          getResolvedFetch(fetcher),
+          fetchImpl,
         );
         if (!res.ok) {
           return { ...result, status: res.status, error: `getMe failed (${res.status})` };

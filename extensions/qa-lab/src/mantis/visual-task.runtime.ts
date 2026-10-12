@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -11,7 +12,6 @@ import {
   defaultCommandRunner,
   createMantisCrabboxSession,
   resolveCrabboxBin,
-  resolveMantisCrabboxLeaseOptions,
   type MantisCrabboxLeaseOptions,
 } from "./crabbox-runtime.js";
 import {
@@ -202,12 +202,8 @@ function parseImageDescribeText(stdout: string) {
 }
 
 function parseJsonObjectFromText<T>(text: string, accepts: (value: unknown) => value is T) {
-  const starts = [...text.matchAll(/\{/gu)]
-    .map((match) => match.index)
-    .filter((index) => index !== undefined);
-  const ends = [...text.matchAll(/\}/gu)]
-    .map((match) => match.index)
-    .filter((index) => index !== undefined);
+  const starts = [...text.matchAll(/\{/gu)].map((match) => match.index);
+  const ends = [...text.matchAll(/\}/gu)].map((match) => match.index);
   for (const start of starts) {
     for (const end of ends.toReversed()) {
       if (end < start) {
@@ -226,7 +222,14 @@ function parseJsonObjectFromText<T>(text: string, accepts: (value: unknown) => v
   return undefined;
 }
 
-function parseVisionAssertion(text: string, expectText: string): VisionAssertion {
+function parseVisionAssertion(text: string | undefined, expectText: string): VisionAssertion {
+  if (!text) {
+    return {
+      expectedText: expectText,
+      matched: false,
+      reason: "Image describe did not return text.",
+    };
+  }
   const parsed = parseJsonObjectFromText(text, (value): value is Record<string, unknown> =>
     Boolean(value && typeof value === "object" && "visible" in value),
   );
@@ -261,24 +264,6 @@ function parseVisionAssertion(text: string, expectText: string): VisionAssertion
       : (reason ?? `Visual assertion did not cite the expected text "${expectText}".`),
     visible,
   };
-}
-
-function evaluateVisualExpectation(text: string | undefined, expectText: string | undefined) {
-  if (!expectText) {
-    return { matched: true };
-  }
-  if (!text) {
-    return {
-      assertion: {
-        expectedText: expectText,
-        matched: false,
-        reason: "Image describe did not return text.",
-      },
-      matched: false,
-    };
-  }
-  const assertion = parseVisionAssertion(text, expectText);
-  return { assertion, matched: assertion.matched };
 }
 
 function browserLaunchScript() {
@@ -399,9 +384,7 @@ export async function runMantisVisualDriver(
     );
     const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
     if (settleMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, settleMs);
-      });
+      await sleep(settleMs);
     }
     await runCommandWithExternalOutput({
       command: crabboxBin,
@@ -446,7 +429,8 @@ export async function runMantisVisualDriver(
       });
       visionText = parseImageDescribeText(described.stdout);
     }
-    const { assertion, matched } = evaluateVisualExpectation(visionText, expectText);
+    const assertion = expectText ? parseVisionAssertion(visionText, expectText) : undefined;
+    const matched = assertion?.matched ?? true;
     result.matched = matched;
     result.status = matched ? "pass" : "fail";
     result.vision.assertion = assertion;
@@ -476,32 +460,12 @@ export async function runMantisVisualTask(
   const driverResultPath = path.join(outputDir, "mantis-visual-task-driver-result.json");
   const screenshotPath = path.join(outputDir, "visual-task.png");
   const videoPath = path.join(outputDir, "visual-task.mp4");
-  const crabboxBin = await resolveCrabboxBin({
-    env,
-    explicit: opts.crabboxBin,
-    repoRoot,
-  });
-  const {
-    provider,
-    machineClass,
-    idleTimeout,
-    ttl,
-    leaseId: explicitLeaseId,
-    keepLease,
-  } = resolveMantisCrabboxLeaseOptions(opts, env);
+  const session = await createMantisCrabboxSession(opts, { repoRoot, env });
+  const { bin: crabboxBin, provider, runner } = session;
   const browserUrl = trimToValue(opts.browserUrl) ?? DEFAULT_BROWSER_URL;
   const expectText = trimToValue(opts.expectText);
   const visionMode = normalizeVisionMode(opts.visionMode);
   const visionPrompt = buildVisionPrompt(opts.visionPrompt, expectText);
-  const runner = opts.commandRunner ?? defaultCommandRunner;
-  const session = createMantisCrabboxSession({
-    crabboxBin,
-    cwd: repoRoot,
-    env,
-    leaseId: explicitLeaseId,
-    provider,
-    runner,
-  });
   let inspected: CrabboxInspect = {};
   const summary: MantisVisualTaskSummary = {
     artifacts: {
@@ -524,7 +488,7 @@ export async function runMantisVisualTask(
   };
 
   try {
-    const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
+    const leaseId = await session.acquire();
     inspected = await session.inspect();
     let recordingError: string | undefined;
     const visionModel = trimToValue(opts.visionModel);
@@ -614,8 +578,8 @@ export async function runMantisVisualTask(
     summary.finishedAt = new Date().toISOString();
     await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
     await fs.writeFile(reportPath, renderReport(summary), "utf8");
-    if (summary.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
-      await session.stop();
+    if (summary.status === "pass") {
+      await session.stopIfOwned();
     }
   }
   return {

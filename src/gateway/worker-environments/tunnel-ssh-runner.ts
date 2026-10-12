@@ -59,7 +59,6 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         windowsHide: true,
       });
       const releaseOutput = releaseChildProcessOutputAfterExit(child);
-      let closed = false;
       let exitedSettled = false;
       let readySettled = false;
       let childExited = false;
@@ -109,9 +108,8 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         settleReadyError();
         // "error" also fires for abort/kill-delivery failures on a live child; only a child
         // that never spawned (no pid) gets a synthesized exit, otherwise close/stop() settle it.
-        // The no-pid case is terminal: mark it closed so stop() never signals an unspawned child.
+        // The no-pid case is terminal: settle exit so stop() never signals an unspawned child.
         if (child.pid === undefined) {
-          closed = true;
           settleExited({ code: null, signal: null });
         }
       });
@@ -122,7 +120,6 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         child.stdin.destroy();
       });
       child.once("close", (code, signal) => {
-        closed = true;
         settleReadyError();
         settleExited({ code, signal });
       });
@@ -135,12 +132,12 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         exited,
         stop() {
           return (stopPromise ??= (async () => {
-            if (closed) {
+            if (exitedSettled) {
               return;
             }
             child.kill("SIGTERM");
             await settlesWithin(exited, STOP_GRACE_MS);
-            if (!closed && !exitedSettled) {
+            if (!exitedSettled) {
               // A false return can also mean the child died a moment ago with its "exit"
               // event still queued; always take the bounded wait before judging.
               const killDelivered = child.kill("SIGKILL");

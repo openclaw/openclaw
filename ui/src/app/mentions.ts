@@ -23,13 +23,7 @@ type MentionsSnapshot = {
   error: string | null;
 };
 
-export type MentionsCapability = {
-  readonly snapshot: MentionsSnapshot;
-  refresh: () => Promise<void>;
-  dismiss: (ids: readonly string[]) => Promise<void>;
-  subscribe: (listener: () => void) => () => void;
-  dispose: () => void;
-};
+export type MentionsCapability = ReturnType<typeof createMentionsCapability>;
 
 type MentionConnection = {
   client: GatewayBrowserClient;
@@ -37,8 +31,7 @@ type MentionConnection = {
   connectionRevision: number;
   profileId: string;
   gatewayInstanceId: string;
-  revision: number | null;
-  requiredRevision: number | null;
+  loaded: boolean;
   dismissing: Set<string>;
   refreshRequested: boolean;
   refreshPromise: Promise<void> | null;
@@ -48,7 +41,7 @@ type MentionConnection = {
 export function createMentionsCapability(
   gateway: ApplicationGateway,
   options: { connectionBootstrap?: ConnectionBootstrapCoordinator } = {},
-): MentionsCapability {
+) {
   let snapshot: MentionsSnapshot = {
     phase: "unavailable",
     items: [],
@@ -83,15 +76,10 @@ export function createMentionsCapability(
     }
     try {
       const result = await owner.client.request<MentionsListResult>(method, params);
-      if (
-        !isCurrent(owner) ||
-        result.gatewayInstanceId !== owner.gatewayInstanceId ||
-        (owner.revision !== null && result.revision < owner.revision) ||
-        (owner.requiredRevision !== null && result.revision < owner.requiredRevision)
-      ) {
+      if (!isCurrent(owner) || result.gatewayInstanceId !== owner.gatewayInstanceId) {
         return;
       }
-      owner.revision = result.revision;
+      owner.loaded = true;
       publish({ phase: "ready", items: result.items, error: null });
     } catch (error) {
       if (!isCurrent(owner)) {
@@ -128,14 +116,10 @@ export function createMentionsCapability(
           owner.refreshRequested = false;
           publish({ phase: "loading", error: null });
           await requestSnapshot(owner, "mentions.list", {});
-          // An invalidation during a read gets one more authoritative snapshot;
-          // revisions also fence an older read that finishes after dismissal.
+          // Events during a read request one follow-up snapshot.
         }
       } finally {
         owner.refreshPromise = null;
-        if (isCurrent(owner) && owner.refreshRequested) {
-          await refreshOwner(owner);
-        }
       }
     });
     return owner.refreshPromise;
@@ -149,11 +133,7 @@ export function createMentionsCapability(
       if (owner.refreshPromise) {
         return owner.refreshPromise;
       }
-      if (
-        owner.revision !== null &&
-        (owner.requiredRevision === null || owner.revision >= owner.requiredRevision)
-      ) {
-        owner.refreshRequested = false;
+      if (owner.loaded && !owner.refreshRequested) {
         return Promise.resolve();
       }
       return refreshOwner(owner);
@@ -187,8 +167,7 @@ export function createMentionsCapability(
       connectionRevision: gateway.connectionRevision,
       profileId,
       gatewayInstanceId,
-      revision: null,
-      requiredRevision: null,
+      loaded: false,
       dismissing: new Set(),
       refreshRequested: false,
       refreshPromise: null,
@@ -213,12 +192,10 @@ export function createMentionsCapability(
       payload?.gatewayInstanceId !== owner.gatewayInstanceId ||
       typeof payload.revision !== "number" ||
       !Number.isSafeInteger(payload.revision) ||
-      payload.revision < 0 ||
-      (owner.revision !== null && payload.revision <= owner.revision)
+      payload.revision < 0
     ) {
       return;
     }
-    owner.requiredRevision = Math.max(owner.requiredRevision ?? 0, payload.revision);
     owner.refreshRequested = true;
     void refreshAutomatically(owner);
   });
@@ -235,7 +212,7 @@ export function createMentionsCapability(
       }
       return connection ? refreshOwner(connection) : Promise.resolve();
     },
-    async dismiss(ids) {
+    async dismiss(this: void, ids: readonly string[]) {
       const owner = connection;
       if (
         !owner ||
@@ -266,7 +243,7 @@ export function createMentionsCapability(
         }
       }
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     dispose() {
       disposed = true;
       connection = null;

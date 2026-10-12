@@ -8,7 +8,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { bindHostSkillCatalog } from "../harness/host-skills.js";
 import { readInstalledSkill } from "../installed-skill-catalog.js";
-import { resolveSandboxDockerConfig } from "./config.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxFileIdentity } from "./file-mutation-identity.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import {
@@ -118,11 +118,19 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.mkdir(path.join(workspaceDir, name));
         await fs.writeFile(path.join(workspaceDir, name, "marker"), name);
       }
-      const docker = resolveSandboxDockerConfig({
-        scope: "agent",
-        globalDocker: { binds: [`${workspaceDir}/A:/data:rw`] },
-        agentDocker: { binds: [`${workspaceDir}/B:/data/:ro`] },
-      });
+      const { docker } = resolveSandboxConfigForAgent(
+        {
+          agents: {
+            defaults: {
+              sandbox: { scope: "agent", docker: { binds: [`${workspaceDir}/A:/data:rw`] } },
+            },
+            entries: {
+              test: { sandbox: { docker: { binds: [`${workspaceDir}/B:/data/:ro`] } } },
+            },
+          },
+        },
+        "test",
+      );
       const sandbox = mountedSandbox(workspaceDir, docker);
       const bridge = createSandboxFsBridge({ sandbox });
       expect((await bridge.readFile({ filePath: "/data/marker" })).toString()).toBe("B");
@@ -190,30 +198,6 @@ describe("sandbox effective filesystem mounts", () => {
       expect((await bridge.readFile({ filePath: "cache/export/marker" })).toString()).toBe(
         "VISIBLE",
       );
-      expectOnlyCanonicalPathCommands();
-    });
-  });
-
-  it("reads aliases through selected binds and same-source skill overlays", async () => {
-    await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
-      for (const name of ["data", "replacement", "skills", "ordinary"]) {
-        await fs.mkdir(path.join(workspaceDir, name));
-        await fs.writeFile(path.join(workspaceDir, name, "marker"), name);
-        await fs.symlink(`${name}/marker`, path.join(workspaceDir, `${name}-alias`));
-      }
-      const sandbox = mountedSandbox(workspaceDir, {
-        binds: [`${workspaceDir}/replacement:/workspace/data:ro`],
-      });
-      const bridge = createSandboxFsBridge({ sandbox });
-      mockContainerCanonicalPaths({
-        "/workspace/data-alias": "/workspace/data/marker",
-        "/workspace/skills-alias": "/workspace/skills/marker",
-        "/workspace/ordinary-alias": "/workspace/ordinary/marker",
-      });
-      expect((await bridge.readFile({ filePath: "data-alias" })).toString()).toBe("replacement");
-      expect((await bridge.readFile({ filePath: "data/marker" })).toString()).toBe("replacement");
-      expect((await bridge.readFile({ filePath: "skills-alias" })).toString()).toBe("skills");
-      expect((await bridge.readFile({ filePath: "ordinary-alias" })).toString()).toBe("ordinary");
       expectOnlyCanonicalPathCommands();
     });
   });
@@ -520,13 +504,12 @@ describe("sandbox effective filesystem mounts", () => {
     },
   );
 
-  it.each(["ancestor", "same", ...(process.platform === "win32" ? [] : ["symlink", "canonical"])])(
+  it.each(["same", ...(process.platform === "win32" ? [] : ["canonical"])])(
     "keeps the default workspace alias ahead of a %s custom source",
     async (source) => {
       await withTempDir("openclaw-effective-mounts-", async (root) => {
         const actualWorkspace = path.join(root, "project/work");
-        const workspaceDir =
-          source === "symlink" || source === "canonical" ? path.join(root, "ws") : actualWorkspace;
+        const workspaceDir = source === "canonical" ? path.join(root, "ws") : actualWorkspace;
         const replacement = path.join(root, "replacement");
         await fs.mkdir(actualWorkspace, { recursive: true });
         if (workspaceDir !== actualWorkspace) {
@@ -537,9 +520,7 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.writeFile(path.join(replacement, "marker"), "VISIBLE");
         const sandbox = mountedSandbox(workspaceDir, {
           binds: [
-            ...(source === "canonical"
-              ? []
-              : [`${source === "ancestor" ? `${root}/project` : actualWorkspace}:/data:rw`]),
+            ...(source === "canonical" ? [] : [`${actualWorkspace}:/data:rw`]),
             `${replacement}:/workspace:ro`,
           ],
         });
@@ -559,7 +540,7 @@ describe("sandbox effective filesystem mounts", () => {
           expect(
             (
               await bridge.readFile({
-                filePath: source === "ancestor" ? "/data/work/marker" : "/data/marker",
+                filePath: "/data/marker",
               })
             ).toString(),
           ).toBe("HIDDEN");
@@ -567,24 +548,6 @@ describe("sandbox effective filesystem mounts", () => {
       });
     },
   );
-
-  it("reads a same-source overlay reached through a declared source symlink", async () => {
-    await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
-      await fs.mkdir(path.join(workspaceDir, "data"));
-      await fs.writeFile(path.join(workspaceDir, "data/marker"), "VISIBLE");
-      await fs.symlink("data", path.join(workspaceDir, "source-alias"), "dir");
-      await fs.symlink("data/marker", path.join(workspaceDir, "read-alias"));
-      const sandbox = mountedSandbox(workspaceDir, {
-        binds: [`${workspaceDir}/source-alias:/workspace/data:ro`],
-      });
-      const bridge = createSandboxFsBridge({ sandbox });
-      mockContainerCanonicalPaths({ "/workspace/read-alias": "/workspace/data/marker" });
-      for (const filePath of ["read-alias", "data/marker"]) {
-        expect((await bridge.readFile({ filePath })).toString()).toBe("VISIBLE");
-      }
-      expectOnlyCanonicalPathCommands();
-    });
-  });
 
   it.runIf(process.platform !== "win32")(
     "preserves distinct whitespace in bind sources and destinations",

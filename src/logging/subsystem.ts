@@ -146,10 +146,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (CHANNEL_SUBSYSTEM_PREFIXES.has(normalizeLowercaseStringOrEmpty(first))) {
     return first;
   }
-  if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
-    return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");
-  }
-  return parts.join("/");
+  return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");
 }
 
 function stripRedundantSubsystemPrefixForConsole(
@@ -160,7 +157,6 @@ function stripRedundantSubsystemPrefixForConsole(
     return message;
   }
 
-  // Common duplication when a message manually includes the subsystem tag.
   if (message.startsWith("[")) {
     const closeIdx = message.indexOf("]");
     if (closeIdx > 1) {
@@ -169,11 +165,7 @@ function stripRedundantSubsystemPrefixForConsole(
         normalizeLowercaseStringOrEmpty(bracketTag) ===
         normalizeLowercaseStringOrEmpty(displaySubsystem)
       ) {
-        let i = closeIdx + 1;
-        while (message[i] === " ") {
-          i += 1;
-        }
-        return message.slice(i);
+        return message.slice(closeIdx + 1).replace(/^ */, "");
       }
     }
   }
@@ -190,17 +182,7 @@ function stripRedundantSubsystemPrefixForConsole(
     return message;
   }
 
-  let i = displaySubsystem.length;
-  while (message[i] === " ") {
-    i += 1;
-  }
-  if (message[i] === ":") {
-    i += 1;
-  }
-  while (message[i] === " ") {
-    i += 1;
-  }
-  return message.slice(i);
+  return message.slice(displaySubsystem.length).replace(/^ *:? */, "");
 }
 
 function createConsoleLineFormatter(subsystem: string) {

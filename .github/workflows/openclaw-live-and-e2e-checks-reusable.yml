@@ -722,6 +722,8 @@ jobs:
           sparse-checkout: |
             package.json
             .github/actions/setup-test-bun
+            scripts/stage-openclaw-bun.sh
+            scripts/lib/openclaw-bun.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1261,6 +1263,7 @@ jobs:
           LIVE_MODELS_ONLY: ${{ inputs.live_models_only }}
           RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
           PREPARE_ONLY: ${{ inputs.prepare_only }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
         run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
 
   validate_release_live_cache:
@@ -1268,10 +1271,11 @@ jobs:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       OPENCLAW_LIVE_CACHE_TEST: "1"
       OPENCLAW_LIVE_TEST: "1"
     steps:
@@ -1327,6 +1331,19 @@ jobs:
         run: |
           set -euo pipefail
           timeout --foreground --kill-after=30s 8m pnpm test:live:cache
+
+      - name: Verify live prompt prefix reuse
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 8m node --import ./scripts/tsx.mjs scripts/e2e/anthropic-cache-live.mts
+
+      - name: Verify live agent prompt prefix reuse
+        env:
+          OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL: claude-sonnet-5
+          OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 8m pnpm test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern 'release prompt-prefix gate'
 
   validate_repo_e2e_gateway:
     name: Gateway E2E${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
@@ -1742,7 +1759,8 @@ jobs:
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: ${{ needs.prepare_docker_e2e_image.outputs.package_version }}
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.prepublish_plugin_registry_manifest_sha256 }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.docker_lanes != '' && matrix.published_upgrade_survivor_baselines || needs.validate_selected_ref.outputs.upgrade_baselines }}
+      OPENCLAW_DOCKER_ALL_LANES: ${{ matrix.docker_lanes }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
@@ -2007,8 +2025,6 @@ jobs:
             OPENCLAW_SKIP_DOCKER_BUILD=0 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
 
-          source .release-harness/scripts/lib/frozen-target-compat.sh
-          openclaw_resolve_frozen_update_channel_dry_run_mode "$GITHUB_WORKSPACE"
           node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize Docker E2E chunk
@@ -2027,7 +2043,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: docker-e2e-${{ matrix.chunk_id }}
+          name: docker-e2e-${{ matrix.shard_id || matrix.chunk_id }}
           path: .artifacts/docker-tests/
           if-no-files-found: error
 
@@ -2358,8 +2374,6 @@ jobs:
           fi
           export OPENCLAW_DOCKER_ALL_BUILD=0
 
-          source .release-harness/scripts/lib/frozen-target-compat.sh
-          openclaw_resolve_frozen_update_channel_dry_run_mode "$GITHUB_WORKSPACE"
           node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize targeted Docker E2E lanes
@@ -3411,30 +3425,18 @@ jobs:
     outputs:
       candidate_evidence_json: ${{ steps.candidate_binding.outputs.json }}
     steps:
-      # Start from a statically trusted checkout. The following step validates job context
-      # locally before restoring the exact called-workflow revision.
-      - name: Checkout trusted release harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: openclaw/openclaw
-          ref: main
-          fetch-depth: 1
-          path: .release-harness
-          persist-credentials: false
-
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
-      - name: Restore exact trusted workflow revision
+      - name: Resolve exact trusted workflow identity
         id: workflow
         env:
           EXPECTED_WORKFLOW_PATH: .github/workflows/openclaw-live-and-e2e-checks-reusable.yml
           EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-          HARNESS_PATH: .release-harness
           JOB_CONTEXT: ${{ toJSON(job) }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_ID: ${{ github.run_id }}
@@ -3448,7 +3450,6 @@ jobs:
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
           const expectedWorkflowPath = process.env.EXPECTED_WORKFLOW_PATH ?? "";
           const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
-          const harnessPath = process.env.HARNESS_PATH ?? "";
           const runAttempt = process.env.RUN_ATTEMPT ?? "";
           const runId = process.env.RUN_ID ?? "";
           const jobId = String(job.check_run_id ?? "");
@@ -3470,9 +3471,6 @@ jobs:
           }
           if (!/^[1-9][0-9]*$/u.test(runId) || !/^[1-9][0-9]*$/u.test(runAttempt)) {
             throw new Error("publisher run identity must contain positive decimals");
-          }
-          if (harnessPath !== ".release-harness") {
-            throw new Error("trusted harness path is invalid");
           }
           const currentJob = JSON.parse(
             execFileSync("gh", ["api", `repos/${repository}/actions/jobs/${jobId}`], {
@@ -3496,35 +3494,6 @@ jobs:
           ) {
             throw new Error("candidate publisher job name is invalid");
           }
-          const git = (...args) =>
-            execFileSync("git", ["-C", harnessPath, ...args], {
-              encoding: "utf8",
-              stdio: ["ignore", "pipe", "inherit"],
-            }).trim();
-          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
-          if (remote !== `https://github.com/${repository}`) {
-            throw new Error("trusted harness remote does not match the workflow repository");
-          }
-          execFileSync(
-            "git",
-            [
-              "-C",
-              harnessPath,
-              "fetch",
-              "--no-tags",
-              "--no-recurse-submodules",
-              "--depth=1",
-              "origin",
-              job.workflow_sha,
-            ],
-            { stdio: "inherit" },
-          );
-          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
-            stdio: "inherit",
-          });
-          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
-            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
-          }
           const outputPath = process.env.GITHUB_OUTPUT;
           if (!outputPath) {
             throw new Error("GITHUB_OUTPUT is required");
@@ -3542,6 +3511,59 @@ jobs:
               "",
             ].join("\n"),
           );
+          NODE
+
+      # The caller seed is immutable; only authenticated callee Q may execute below.
+      - name: Checkout trusted release harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Restore exact trusted workflow revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+          HARNESS_PATH: .release-harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { realpathSync } from "node:fs";
+          import { resolve } from "node:path";
+
+          const repository = process.env.WORKFLOW_REPOSITORY ?? "";
+          const workflowSha = process.env.WORKFLOW_SHA ?? "";
+          const harnessPath = process.env.HARNESS_PATH ?? "";
+          if (repository !== "openclaw/openclaw" || !/^[0-9a-f]{40}$/u.test(workflowSha)) {
+            throw new Error("authenticated workflow repository and full SHA are required");
+          }
+          if (harnessPath !== ".release-harness") {
+            throw new Error("trusted harness path is invalid");
+          }
+          const directory = resolve(realpathSync(process.cwd()), harnessPath);
+          if (realpathSync(directory) !== directory) {
+            throw new Error("trusted harness path must not traverse symlinks");
+          }
+          const git = (...args) => execFileSync("git", ["-C", directory, ...args], {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "inherit"],
+            timeout: 120_000,
+          }).trim();
+          if (git("remote", "get-url", "origin").replace(/\.git$/u, "") !== "https://github.com/" + repository) {
+            throw new Error("trusted harness remote does not match the workflow repository");
+          }
+          if (git("rev-parse", "HEAD") !== workflowSha) {
+            git("fetch", "--no-tags", "--no-recurse-submodules", "--depth=1", "origin", workflowSha);
+            git("checkout", "--detach", workflowSha);
+          }
+          if (git("rev-parse", "HEAD") !== workflowSha) {
+            throw new Error("trusted harness checkout did not resolve to the authenticated workflow SHA");
+          }
           NODE
 
       - name: Setup trusted release harness
@@ -4639,7 +4661,9 @@ jobs:
 
       - name: Install Chromium for native live browser tests
         if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
 
       - name: Hydrate live auth/profile inputs
         if: steps.selection.outputs.run == 'true'
@@ -5083,7 +5107,9 @@ jobs:
 
       - name: Install Chromium for A-K live browser tests
         if: contains(matrix.profiles, inputs.release_test_profile) && matrix.suite_id == 'native-live-extensions-a-k' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
-        run: pnpm --dir ui exec playwright install --with-deps chromium
+        uses: ./.release-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
 
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))

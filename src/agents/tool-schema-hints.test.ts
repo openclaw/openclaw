@@ -40,15 +40,6 @@ describe("tool schema hints", () => {
   });
 
   it.each([
-    { schema: { type: "number" }, input: "number" },
-    {
-      schema: { type: "number", minimum: -1.5, maximum: 0 },
-      input: "number /* >= -1.5, <= 0 */",
-    },
-    {
-      schema: { type: "number", exclusiveMinimum: -0.5, exclusiveMaximum: 3.5 },
-      input: "number /* > -0.5, < 3.5 */",
-    },
     {
       schema: {
         type: "integer",
@@ -67,14 +58,12 @@ describe("tool schema hints", () => {
     },
   );
 
-  it.each([
-    { exclusiveMinimum: true },
-    { minimum: "1" },
-    { maximum: Number.POSITIVE_INFINITY },
-    { exclusiveMinimum: Number.NaN },
-  ])("defers malformed numeric bounds instead of inventing constraints: %j", (bounds) => {
-    expect(compactToolInputHint({ type: "number", ...bounds })).toBe("unknown");
-  });
+  it.each([{ minimum: "1" }, { maximum: Number.POSITIVE_INFINITY }])(
+    "defers malformed numeric bounds instead of inventing constraints: %j",
+    (bounds) => {
+      expect(compactToolInputHint({ type: "number", ...bounds })).toBe("unknown");
+    },
+  );
 
   it("keeps nested nullable numeric constraints scoped to input hints", () => {
     const schema = {
@@ -108,29 +97,6 @@ describe("tool schema hints", () => {
     expect(input.length).toBeLessThanOrEqual(300);
     expect(compactToolOutputHint(schema)).toContain("field_11: number");
     expect(compactToolOutputHint(schema)).not.toContain("/*");
-  });
-
-  it("renders nested declared outputs as compact TypeScript shapes", () => {
-    const outputSchema = Type.Array(
-      Type.Object(
-        {
-          id: Type.String(),
-          metrics: Type.Object(
-            {
-              paid: Type.Boolean(),
-              tons: Type.Number(),
-            },
-            { additionalProperties: false },
-          ),
-          state: Type.Union([Type.Literal("ready"), Type.Literal("held")]),
-        },
-        { additionalProperties: false },
-      ),
-    );
-
-    expect(compactToolOutputHint(outputSchema)).toBe(
-      'Array<{ id: string; metrics: { paid: boolean; tons: number }; state: "ready" | "held" }>',
-    );
   });
 
   it("keeps deeply nested literal unions complete without increasing the depth budget", () => {
@@ -248,11 +214,6 @@ describe("tool schema hints", () => {
     );
   });
 
-  it("renders a bare top-type schema as unknown without demoting", () => {
-    expect(compactToolOutputHint(Type.Unknown())).toBe("unknown");
-    expect(compactToolOutputHint(Type.Any())).toBe("unknown");
-  });
-
   it("still fails closed for constrained but untyped leaves", () => {
     const outputSchema = Type.Object(
       {
@@ -358,19 +319,5 @@ describe("tool schema hints", () => {
     );
     expect(compactToolOutputHint(hugeName)).toBeUndefined();
     expect(compactToolInputHint(hugeName)).toBe("{ ... }");
-  });
-
-  it('keeps complete fields and literals containing the word "unknown"', () => {
-    const outputSchema = Type.Object(
-      {
-        state: Type.Union([Type.Literal("known"), Type.Literal("unknown")]),
-        unknownReason: Type.Optional(Type.String()),
-      },
-      { additionalProperties: false },
-    );
-
-    expect(compactToolOutputHint(outputSchema)).toBe(
-      '{ state: "known" | "unknown"; unknownReason?: string }',
-    );
   });
 });

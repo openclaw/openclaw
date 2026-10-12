@@ -31,7 +31,6 @@ export async function readLatestSessionUsageFromTranscriptAsync(
       scope.sessionId,
       concreteStorePath,
       artifactFile,
-      undefined,
     );
   }
   const { usage } = await readSessionTranscriptSummaryAsync(scope, { kind: "usage" });

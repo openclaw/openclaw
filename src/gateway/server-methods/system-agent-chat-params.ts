@@ -11,18 +11,15 @@ export function sanitizeSystemAgentChatParams(params: unknown): unknown {
   if (context === undefined) {
     return params;
   }
-  if (
-    record.delegation !== undefined ||
-    !context ||
-    typeof context !== "object" ||
-    Array.isArray(context)
-  ) {
-    const { context: _droppedContext, ...rest } = record;
-    return rest;
-  }
-  const contextRecord = context as Record<string, unknown>;
-  const page = typeof contextRecord.page === "string" ? contextRecord.page.trim() : "";
-  if (!SYSTEM_AGENT_UI_CONTEXT_PAGE_PATTERN.test(page)) {
+  const contextRecord =
+    record.delegation === undefined &&
+    context &&
+    typeof context === "object" &&
+    !Array.isArray(context)
+      ? (context as Record<string, unknown>)
+      : undefined;
+  const page = typeof contextRecord?.page === "string" ? contextRecord.page.trim() : "";
+  if (!contextRecord || !SYSTEM_AGENT_UI_CONTEXT_PAGE_PATTERN.test(page)) {
     const { context: _droppedContext, ...rest } = record;
     return rest;
   }

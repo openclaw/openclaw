@@ -11,7 +11,12 @@ const mocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(),
   resolveProviderAuthProfileMetadata: vi.fn(),
 }));
+const codexClient = vi.hoisted(() => ({
+  resolveCodexClientVersion: vi.fn(async (): Promise<string | undefined> => undefined),
+}));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => mocks);
+// mock-isolation: the real facade loads the Codex plugin, which probes the host PATH for codex.
+vi.mock("openclaw/plugin-sdk/codex-client-version-runtime", () => codexClient);
 const codexPackage = JSON.parse(
   fs.readFileSync(new URL("../codex/package.json", import.meta.url), "utf8"),
 );
@@ -64,6 +69,29 @@ async function discoverCodexModels(params: {
 describe("OpenAI discovered subscription models", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
   afterEach(() => vi.restoreAllMocks());
+  it("reports the Codex binary version that runs turns as client_version", async () => {
+    codexClient.resolveCodexClientVersion.mockResolvedValueOnce("0.162.1");
+    const requestedUrls: string[] = [];
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => {
+      requestedUrls.push(url);
+      return {
+        response: Response.json({ models: [{ slug: "gpt-5.5", visibility: "list" }] }),
+        finalUrl: url,
+        release: async () => undefined,
+      };
+    });
+
+    await discoverCodexModels({ discoveryApiKey: "oauth-token-installed-codex", fetchGuard });
+
+    expect(requestedUrls).toEqual([
+      "https://chatgpt.com/backend-api/codex/models?client_version=0.162.1",
+    ]);
+    expect(codexClient.resolveCodexClientVersion).toHaveBeenCalledWith({
+      config: { auth: { profiles: {} } },
+      env: undefined,
+      agentDir: "/tmp/openai-agent",
+    });
+  });
   it.each(["gpt-5.4", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])(
     "maps discovered %s into a ChatGPT response model",
     async (modelId) => {

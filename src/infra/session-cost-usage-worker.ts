@@ -3,10 +3,10 @@ import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
@@ -15,6 +15,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readHotSessionTranscriptSnapshot } from "../config/sessions/session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
@@ -57,7 +58,6 @@ import type {
   UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
-import type { WorkerTaskControl } from "./worker-task-native-sections.js";
 import { WorkerTaskError } from "./worker-task-pool.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
 
@@ -312,7 +312,6 @@ export async function executeUsageCostWorker(
                 ...source,
                 ...operation,
                 files: reportFiles.filter((file) => file !== undefined),
-                refreshing: false,
               }),
             }
           : {
@@ -321,7 +320,6 @@ export async function executeUsageCostWorker(
                 ...source,
                 ...operation,
                 files: reportFiles,
-                refreshing: false,
               })),
             };
       control.throwIfCancelled();

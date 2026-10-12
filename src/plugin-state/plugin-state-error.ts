@@ -64,3 +64,36 @@ export class PluginStateStoreError extends Error {
     };
   }
 }
+
+export function createPluginStateError(params: {
+  code: PluginStateStoreErrorCode;
+  operation: PluginStateStoreOperation;
+  message: string;
+  path?: string;
+  cause?: unknown;
+}): PluginStateStoreError {
+  return new PluginStateStoreError(params.message, {
+    code: params.code,
+    operation: params.operation,
+    ...(params.path ? { path: params.path } : {}),
+    cause: params.cause,
+  });
+}
+
+export function parseStoredJson(
+  raw: string,
+  operation: PluginStateStoreOperation,
+  databasePath: string,
+): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_CORRUPT",
+      operation,
+      message: "Plugin state entry contains corrupt JSON.",
+      path: databasePath,
+      cause: error,
+    });
+  }
+}

@@ -370,7 +370,7 @@ final class DashboardManager {
             current,
             configuration: WindowConfiguration(
                 url: Self.failureURL,
-                auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+                auth: .unauthenticated,
                 tlsParams: nil,
                 mode: .unconfigured,
                 displayName: "OpenClaw"),
@@ -563,7 +563,7 @@ final class DashboardManager {
         let controller = self.controller ?? makeController(
             configuration: WindowConfiguration(
                 url: Self.failureURL,
-                auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+                auth: .unauthenticated,
                 tlsParams: nil,
                 mode: .unconfigured,
                 displayName: "OpenClaw"),

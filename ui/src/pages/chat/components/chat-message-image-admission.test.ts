@@ -4,6 +4,7 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
   releaseChatMediaResourceSubscriber,
@@ -69,7 +70,7 @@ const ticketResponse = () =>
   });
 
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
-  render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
+  return render(renderMessageImages(images, { onRequestUpdate, ...options }), container);
 }
 
 async function loadAdmittedImage() {
@@ -102,6 +103,7 @@ it("replaces failed remote images with an unavailable card while preserving loca
   const remoteImage = container.querySelector<HTMLImageElement>('img[alt="Remote image"]')!;
   expect(remoteImage.getAttribute("src")).toBe(remote.url);
   remoteImage.dispatchEvent(new Event("error"));
+  flush();
   expect(container.querySelector('img[alt="Remote image"]')).toBeNull();
   const card = container.querySelector(
     ".chat-image-frame--compact .chat-assistant-attachment-card",
@@ -112,6 +114,7 @@ it("replaces failed remote images with an unavailable card while preserving loca
   const replacement = { ...remote, url: "https://images.example.test/replacement.png" };
   draw([replacement, local]);
   intersections.at(-1)!();
+  flush();
   expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
   expect(container.querySelector('img[alt="Remote image"]')?.getAttribute("src")).toBe(
     replacement.url,
@@ -186,46 +189,35 @@ it("loads an artifact thumbnail for the tile and distinct full bytes for the lig
   opened.release?.();
 });
 
-it.each(["assistant", "managed"] as const)(
-  "remounts a loaded %s image immediately without repeating viewport admission",
-  async (kind) => {
-    const source =
-      kind === "assistant"
-        ? `/tmp/${crypto.randomUUID()}.png`
-        : `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-    const fetch = vi.fn(async () => (kind === "assistant" ? ticketResponse() : imageResponse()));
+it.each(["assistant remount", "managed remount", "assistant reconnect"] as const)(
+  "restores a loaded image without another viewport admission: %s",
+  async (mode) => {
+    const managed = mode === "managed remount";
+    const source = managed
+      ? `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`
+      : `/tmp/${crypto.randomUUID()}.png`;
+    const fetch = vi.fn(async () => (managed ? imageResponse() : ticketResponse()));
     vi.stubGlobal("fetch", fetch);
-    const images = [{ url: source, alt: "Loaded screenshot" }];
-    draw(images);
+    const images = [{ url: source, fileName: "Screenshot.png" }];
+    const root = draw(images);
     const loaded = await loadAdmittedImage();
     const src = loaded.getAttribute("src");
-    render(nothing, container);
-    draw(images);
+    if (mode === "assistant reconnect") {
+      root.setConnected(false);
+      expect(loaded.parentNode).toBeNull();
+      root.setConnected(true);
+    } else {
+      render(nothing, container);
+      draw(images);
+    }
     expect(container.querySelector(".chat-image-skeleton")).toBeNull();
     expect(container.querySelector("img")?.getAttribute("src")).toBe(src);
-    if (kind === "assistant") {
+    if (!managed) {
       expect(container.querySelector("img")).toBe(loaded);
     }
     expect(fetch).toHaveBeenCalledOnce();
   },
 );
-
-it("restores a native image when its retained Lit root reconnects without another render", async () => {
-  const source = `/tmp/${crypto.randomUUID()}.png`;
-  const fetch = vi.fn(async () => ticketResponse());
-  vi.stubGlobal("fetch", fetch);
-  const root = render(
-    renderMessageImages([{ url: source, fileName: "Screenshot.png" }], { onRequestUpdate }),
-    container,
-  );
-  const loaded = await loadAdmittedImage();
-  root.setConnected(false);
-  expect(loaded.parentNode).toBeNull();
-  root.setConnected(true);
-  expect(container.querySelector("img")).toBe(loaded);
-  expect(container.querySelector(".chat-image-skeleton")).toBeNull();
-  expect(fetch).toHaveBeenCalledOnce();
-});
 
 it.each([
   "authToken",
@@ -283,6 +275,7 @@ it("admits on focus without replacing the pending control or opening an empty pr
   expect(fetch).not.toHaveBeenCalled();
 
   button.focus();
+  flush();
   expect(fetch).toHaveBeenCalledOnce();
   button.click();
   expect(onOpenImage).not.toHaveBeenCalled();
@@ -362,6 +355,7 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
   intersections[0]!();
   expect(resolveArtifactDownload).not.toHaveBeenCalled();
   intersections[1]!();
+  flush();
   expect(resolveArtifactDownload).toHaveBeenCalledOnce();
   render(nothing, container);
   artifact.resolve({ url: second });

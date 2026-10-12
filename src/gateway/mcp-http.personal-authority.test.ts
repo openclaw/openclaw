@@ -115,7 +115,7 @@ it.each([false, true])(
             owner: { actor: { type: "agent", id: "main" } },
           })
           .mockClear();
-        resolveTools.mockImplementation((input) => {
+        resolveTools.mockImplementation(async (input) => {
           const capability = input.skillWorkshop?.libraryAuthoring;
           return {
             agentId: "main",

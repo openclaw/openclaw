@@ -1,6 +1,7 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveEnvironmentValue } from "../../infra/process-env.js";
+import { WindowsJob, type WindowsJobChild } from "@openclaw/proc-safe/windows-job";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -9,36 +10,16 @@ import type {
   ServiceChildAnchorPayload,
   ServiceChildStart,
 } from "./service-child-protocol.js";
-import { createWindowsJobBindings } from "./service-child-windows-job-native.js";
-import {
-  buildWindowsJobEnvironmentBlock,
-  isWindowsJobServiceStart,
-} from "./service-child-windows-job-start.js";
+import { isWindowsJobServiceStart } from "./service-child-windows-job-start.js";
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
-type NativeHandle = bigint;
-type WindowsJobBindings = ReturnType<typeof createWindowsJobBindings>;
-type CommandStdio = ReturnType<WindowsJobBindings["createCommandStdio"]>;
 type ClosingReason = Extract<ServiceChildAnchorMessage, { type: "closing" }>["reason"];
 type OutputStream = {
   name: "stdout" | "stderr";
-  handle?: NativeHandle;
   decoder?: ReturnType<typeof createWindowsOutputDecoder>;
   ended: boolean;
 };
 
-const JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1;
-const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9;
-const STARTF_USESTDHANDLES = 0x0000_0100;
-const CREATE_NEW_PROCESS_GROUP = 0x0000_0200;
-const CREATE_UNICODE_ENVIRONMENT = 0x0000_0400;
-const EXTENDED_STARTUPINFO_PRESENT = 0x0008_0000;
-// Keep the noninteractive command console-free even when its anchor is detached.
-const CREATE_NO_WINDOW = 0x0800_0000;
-const WAIT_OBJECT_0 = 0;
-const WAIT_TIMEOUT = 258;
-const WAIT_FAILED = 0xffff_ffff;
-const ERROR_BROKEN_PIPE = 109;
 const IDLE_OBSERVATION_MS = 10;
 const OUTPUT_BUFFER_BYTES = 64 * 1024;
 const OUTPUT_ROUNDS_PER_TURN = 2;
@@ -54,15 +35,14 @@ function sendProcessMessage(message: ServiceChildAnchorMessage): Promise<void> {
 }
 
 export function runServiceChildWindowsJobAnchor(): void {
+  const launchGrant = createDeferredCore();
   let start: ServiceChildStart | undefined;
   let state: AnchorState = "starting";
   let sequence = 0;
   let lastHostSequence = 0;
   let outboundQueue = Promise.resolve();
-  let job: NativeHandle | undefined;
-  let processHandle: NativeHandle | undefined;
-  let bindings: WindowsJobBindings | undefined;
-  let pendingCommandStdio: CommandStdio | undefined;
+  let job: WindowsJob | undefined;
+  let child: WindowsJobChild | undefined;
   let rootObserved = false;
   let extinctionProven = false;
   let terminationRequested = false;
@@ -72,7 +52,6 @@ export function runServiceChildWindowsJobAnchor(): void {
   let lifecycleRunning = false;
   let lifecycleRerun = false;
   const outputStreams: OutputStream[] = [];
-  const outputBuffer = Buffer.allocUnsafe(OUTPUT_BUFFER_BYTES);
   const startupErrorAcknowledged = createDeferredCore();
   const cleanupFinished = createDeferredCore();
   void cleanupFinished.promise.catch(() => {});
@@ -126,36 +105,16 @@ export function runServiceChildWindowsJobAnchor(): void {
     }
   };
 
-  const closeOutputHandle = (stream: OutputStream) => {
-    const handle = stream.handle;
-    if (handle === undefined) {
-      return;
-    }
-    if (!bindings) {
-      throw new Error(`${stream.name} output bindings were not initialized`);
-    }
-    if (!bindings.CloseHandle(handle)) {
-      throw bindings.lastError(`CloseHandle(${stream.name} pipe)`);
-    }
-    stream.handle = undefined;
-  };
-
   const closeNativeHandles = () => {
     let closeError: Error | undefined;
-    for (const stream of outputStreams) {
+    for (const owner of [child, job]) {
       try {
-        closeOutputHandle(stream);
+        owner?.close();
       } catch (error) {
         closeError ??= error instanceof Error ? error : new Error(coerceErrorMessage(error));
       }
     }
-    for (const handle of [processHandle, job]) {
-      if (handle !== undefined && bindings && !bindings.CloseHandle(handle)) {
-        const error = bindings.lastError("CloseHandle");
-        closeError ??= error;
-      }
-    }
-    processHandle = undefined;
+    child = undefined;
     job = undefined;
     if (closeError) {
       throw closeError;
@@ -209,7 +168,6 @@ export function runServiceChildWindowsJobAnchor(): void {
     if (stream.ended) {
       return;
     }
-    closeOutputHandle(stream);
     stream.ended = true;
     const tail = stream.decoder?.flush();
     if (tail) {
@@ -222,53 +180,21 @@ export function runServiceChildWindowsJobAnchor(): void {
     if (stream.ended) {
       return false;
     }
-    if (!bindings || stream.handle === undefined || !stream.decoder) {
+    if (!child || !stream.decoder) {
       throw new Error(`${stream.name} output ownership was not initialized`);
     }
-    const available = [0];
-    if (!bindings.PeekNamedPipe(stream.handle, null, 0, null, available, null)) {
-      const errorCode = bindings.getLastErrorCode();
-      if (errorCode !== ERROR_BROKEN_PIPE) {
-        throw new Error(`PeekNamedPipe(${stream.name}) failed (Win32 error ${errorCode})`);
-      }
+    const bytes =
+      stream.name === "stdout"
+        ? child.readStdout(OUTPUT_BUFFER_BYTES)
+        : child.readStderr(OUTPUT_BUFFER_BYTES);
+    if (bytes === null) {
       await finishOutput(stream);
       return true;
     }
-    const availableBytes = available[0];
-    if (
-      typeof availableBytes !== "number" ||
-      !Number.isSafeInteger(availableBytes) ||
-      availableBytes < 0
-    ) {
-      throw new Error(`PeekNamedPipe(${stream.name}) returned an invalid byte count`);
-    }
-    if (availableBytes === 0) {
+    if (bytes.length === 0) {
       return false;
     }
-    const requestedBytes = Math.min(availableBytes, outputBuffer.length);
-    const bytesRead = [0];
-    // This anchor owns the only read handle, so a read capped at the peeked bytes cannot block.
-    if (!bindings.ReadFile(stream.handle, outputBuffer, requestedBytes, bytesRead, null)) {
-      const errorCode = bindings.getLastErrorCode();
-      if (errorCode !== ERROR_BROKEN_PIPE) {
-        throw new Error(`ReadFile(${stream.name}) failed (Win32 error ${errorCode})`);
-      }
-      await finishOutput(stream);
-      return true;
-    }
-    const count = bytesRead[0];
-    if (
-      typeof count !== "number" ||
-      !Number.isSafeInteger(count) ||
-      count < 0 ||
-      count > requestedBytes
-    ) {
-      throw new Error(`ReadFile(${stream.name}) returned an invalid byte count`);
-    }
-    if (count === 0) {
-      throw new Error(`ReadFile(${stream.name}) returned no available bytes`);
-    }
-    const text = stream.decoder.decode(outputBuffer.subarray(0, count));
+    const text = stream.decoder.decode(bytes);
     if (text) {
       await deliver({ type: "output", stream: stream.name, chunk: text });
     }
@@ -279,26 +205,12 @@ export function runServiceChildWindowsJobAnchor(): void {
     if (rootObserved) {
       return false;
     }
-    if (!bindings || !processHandle) {
+    if (!child) {
       throw new Error("Windows root process ownership was not initialized");
     }
-    const waitResult = bindings.WaitForSingleObject(processHandle, 0);
-    if (waitResult === WAIT_TIMEOUT) {
+    const code = child.exitCode();
+    if (code === null) {
       return false;
-    }
-    if (waitResult === WAIT_FAILED) {
-      throw bindings.lastError("WaitForSingleObject(root)");
-    }
-    if (waitResult !== WAIT_OBJECT_0) {
-      throw new Error(`WaitForSingleObject(root) returned unexpected result ${waitResult}`);
-    }
-    const exitCode = [0];
-    if (!bindings.GetExitCodeProcess(processHandle, exitCode)) {
-      throw bindings.lastError("GetExitCodeProcess");
-    }
-    const code = exitCode[0];
-    if (typeof code !== "number" || !Number.isSafeInteger(code) || code < 0 || code > 0xffff_ffff) {
-      throw new Error("GetExitCodeProcess returned an invalid exit code");
     }
     rootObserved = true;
     await deliver({ type: "root-result", code, signal: null });
@@ -309,31 +221,15 @@ export function runServiceChildWindowsJobAnchor(): void {
     if (extinctionProven) {
       return false;
     }
-    if (!bindings || !job) {
+    if (!job) {
       throw new Error("Windows Job ownership was not initialized");
     }
-    const accounting: { ActiveProcesses?: unknown } = {};
-    if (
-      !bindings.QueryInformationJobObject(
-        job,
-        JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
-        accounting,
-        bindings.basicAccountingSize,
-        null,
-      )
-    ) {
-      throw bindings.lastError("QueryInformationJobObject");
-    }
-    const count = accounting.ActiveProcesses;
-    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
-      throw new Error("QueryInformationJobObject returned an invalid active process count");
-    }
-    extinctionProven = count === 0;
+    extinctionProven = job.accounting().activeProcesses === 0;
     return extinctionProven;
   };
 
   const runLifecycle = async () => {
-    if (lifecycleRunning || state === "closed" || !processHandle) {
+    if (lifecycleRunning || state === "closed" || !child) {
       lifecycleRerun ||= lifecycleRunning;
       return;
     }
@@ -369,7 +265,7 @@ export function runServiceChildWindowsJobAnchor(): void {
   };
 
   const scheduleLifecycle = (immediate: boolean) => {
-    if (state === "closed" || !processHandle) {
+    if (state === "closed" || !child) {
       return;
     }
     if (lifecycleRunning) {
@@ -406,18 +302,18 @@ export function runServiceChildWindowsJobAnchor(): void {
     }
     closeReason ??= reason;
     state = "closing";
-    if (!processHandle) {
+    if (!child) {
       void closeAuthority(reason);
       return cleanupFinished.promise;
     }
     if (!terminationRequested && !extinctionProven) {
       terminationRequested = true;
-      if (!bindings || !job) {
-        void failAuthority(new Error("Windows Job cleanup authority was not initialized"));
-        return cleanupFinished.promise;
-      }
-      if (!bindings.TerminateJobObject(job, 1)) {
-        const error = bindings.lastError("TerminateJobObject");
+      try {
+        if (!job) {
+          throw new Error("Windows Job cleanup authority was not initialized");
+        }
+        job.terminate(1);
+      } catch (error) {
         void failAuthority(error);
         return cleanupFinished.promise;
       }
@@ -442,85 +338,25 @@ export function runServiceChildWindowsJobAnchor(): void {
       return;
     }
     try {
-      const koffi = (await import("koffi")).default;
-      if (state !== "starting") {
-        return;
-      }
-      bindings = createWindowsJobBindings(koffi);
-      bindings.assertLayouts();
-      job = bindings.requireHandle(bindings.CreateJobObjectW(null, null), "CreateJobObjectW");
-      if (
-        !bindings.SetExtendedLimits(
-          job,
-          JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-          bindings.extendedLimits,
-          bindings.extendedLimitsSize,
-        )
-      ) {
-        throw bindings.lastError("SetInformationJobObject(KILL_ON_JOB_CLOSE)");
-      }
-
-      const commandStdio = bindings.createCommandStdio();
-      pendingCommandStdio = commandStdio;
-      let processAttributes:
-        | ReturnType<WindowsJobBindings["createProcessAttributeList"]>
-        | undefined;
-      const processInfo: Record<string, unknown> = {};
-      try {
-        processAttributes = bindings.createProcessAttributeList(commandStdio.inheritedHandles, job);
-        const shell =
-          resolveEnvironmentValue(next.env, "COMSPEC", "win32") || getWindowsCmdExePath(next.env);
-        const commandLine = Buffer.from(
-          `"${shell}" /d /s /c "${next.windowsShellCommand}"\0`,
-          "utf16le",
-        );
-        if (
-          !bindings.CreateProcessW(
-            shell,
-            commandLine,
-            null,
-            null,
-            1,
-            CREATE_NEW_PROCESS_GROUP |
-              CREATE_UNICODE_ENVIRONMENT |
-              EXTENDED_STARTUPINFO_PRESENT |
-              CREATE_NO_WINDOW,
-            // NULL inherits; an explicitly empty environment must remain an empty block.
-            next.env === undefined ? null : buildWindowsJobEnvironmentBlock(next.env),
-            next.cwd ?? null,
-            {
-              StartupInfo: {
-                cb: bindings.startupInfoExSize,
-                dwFlags: STARTF_USESTDHANDLES,
-                hStdInput: commandStdio.stdinHandle,
-                hStdOutput: commandStdio.stdoutWriteHandle,
-                hStdError: commandStdio.stderrWriteHandle,
-              },
-              lpAttributeList: processAttributes.attributeList,
-            },
-            processInfo,
-          )
-        ) {
-          throw bindings.lastError("CreateProcessW(JOB_LIST)");
+      job = WindowsJob.create();
+      if (next.type === "prepare") {
+        await send({ type: "prepared" });
+        await Promise.race([launchGrant.promise, cleanupFinished.promise]);
+        if (state !== "starting") {
+          return;
         }
-        // JOB_LIST makes containment atomic: a successful root never exists outside its Job.
-        processHandle = bindings.requireHandle(processInfo.hProcess, "CreateProcessW process");
-        const threadHandle = bindings.requireHandle(processInfo.hThread, "CreateProcessW thread");
-        if (!bindings.CloseHandle(threadHandle)) {
-          throw bindings.lastError("CloseHandle(command thread)");
-        }
-      } finally {
-        processAttributes?.release();
-        pendingCommandStdio?.closeChildHandles();
       }
-
-      const commandPid = Number(processInfo.dwProcessId);
-      const handles = commandStdio.takeOutputReadHandles();
-      // Admit both transferred HANDLEs before decoder construction can throw.
-      outputStreams.push(
-        { name: "stdout", handle: handles.stdoutReadHandle, ended: false },
-        { name: "stderr", handle: handles.stderrReadHandle, ended: false },
-      );
+      const shell =
+        resolveEnvironmentValue(next.env, "COMSPEC", "win32") || getWindowsCmdExePath(next.env);
+      // Admission and the inherited-handle allowlist are atomic inside the native owner.
+      child = job.spawn({
+        executable: shell,
+        commandLine: `"${shell}" /d /s /c "${next.windowsShellCommand}"`,
+        cwd: next.cwd,
+        env: next.env === undefined ? undefined : mergeProcessEnv([next.env], "win32"),
+      });
+      const commandPid = child.pid;
+      outputStreams.push({ name: "stdout", ended: false }, { name: "stderr", ended: false });
       for (const stream of outputStreams) {
         stream.decoder = createWindowsOutputDecoder();
       }
@@ -538,17 +374,13 @@ export function runServiceChildWindowsJobAnchor(): void {
         await cleanupFinished.promise.catch(() => {});
         return;
       }
-      if (processHandle && outputStreams.some((stream) => !stream.decoder)) {
+      if (child && outputStreams.some((stream) => !stream.decoder)) {
         for (const stream of outputStreams) {
-          closeOutputHandle(stream);
           stream.ended = true;
         }
       }
       await reportStartupError(error);
-      await (processHandle ? requestCleanup("lineage-lost") : closeAuthority("lineage-lost"));
-    } finally {
-      pendingCommandStdio?.close();
-      pendingCommandStdio = undefined;
+      await (child ? requestCleanup("lineage-lost") : closeAuthority("lineage-lost"));
     }
   };
 
@@ -573,7 +405,9 @@ export function runServiceChildWindowsJobAnchor(): void {
       !start ||
       state === "closed" ||
       !message ||
-      (message.type !== "cancel" && message.type !== "startup-error-ack") ||
+      (message.type !== "cancel" &&
+        message.type !== "startup-error-ack" &&
+        message.type !== "launch") ||
       typeof message.generation !== "string" ||
       typeof message.sequence !== "number" ||
       message.generation !== start.generation ||
@@ -585,7 +419,9 @@ export function runServiceChildWindowsJobAnchor(): void {
       return;
     }
     lastHostSequence = message.sequence;
-    if (message.type === "startup-error-ack") {
+    if (message.type === "launch") {
+      launchGrant.resolve();
+    } else if (message.type === "startup-error-ack") {
       startupErrorAcknowledged.resolve();
     } else {
       void requestCleanup("cancel");

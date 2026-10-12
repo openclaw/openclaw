@@ -13,6 +13,7 @@ import {
   type OpenClawConfig,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
+import type { AcpRunTurnInput, WriteManagerSessionMeta } from "./manager.types.js";
 
 describe("AcpSessionManager runtime handles", () => {
   installAcpSessionManagerTestLifecycle();
@@ -233,43 +234,6 @@ describe("AcpSessionManager runtime handles", () => {
     });
   });
 
-  it("recovers a destination-owned named session during failover without carrying source identity", async () => {
-    const cfg = {
-      acp: { ...baseCfg.acp, backend: "source-backend", fallbacks: ["destination-backend"] },
-    } satisfies OpenClawConfig;
-    const f = fixture(sourceMeta(), cfg);
-    f.state.ensureSession.mockImplementation(async ({ sessionKey }) => ({
-      sessionKey,
-      backend: "destination-backend",
-      runtimeSessionName: "destination-runtime",
-      acpxRecordId: "destination-record",
-      backendSessionId: "destination-session",
-    }));
-    hoisted.requireAcpRuntimeBackendMock.mockImplementation((backendId?: string) => {
-      if (backendId === "source-backend") {
-        throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "primary backend unavailable");
-      }
-      if (backendId === "destination-backend") {
-        return { id: backendId, runtime: f.state.runtime };
-      }
-      throw new Error(`unexpected backend ${backendId}`);
-    });
-    await f.run();
-    expect(f.state.prepareFreshSession).not.toHaveBeenCalled();
-    expect(f.state.ensureSession.mock.calls[0]?.[0].resumeSessionId).toBeUndefined();
-    expect(f.state.runTurn.mock.calls[0]?.[0].handle).toMatchObject({
-      acpxRecordId: "destination-record",
-      backendSessionId: "destination-session",
-    });
-    expect(f.state.runTurn.mock.calls[0]?.[0].handle).not.toHaveProperty("agentSessionId");
-    expect(f.persisted.currentMeta).toMatchObject({
-      backend: "destination-backend",
-      runtimeSessionName: "destination-runtime",
-      identity: { acpxRecordId: "destination-record", acpxSessionId: "destination-session" },
-    });
-    expect(f.persisted.currentMeta.identity).not.toHaveProperty("agentSessionId");
-  });
-
   it("does not resurrect source identity when the destination returns no identifiers", async () => {
     const cfg = {
       acp: { ...baseCfg.acp, backend: "destination-backend" },
@@ -293,32 +257,6 @@ describe("AcpSessionManager runtime handles", () => {
       runtimeSessionName: "destination-runtime",
     });
     expect(f.persisted.currentMeta.identity).toBeUndefined();
-  });
-
-  it("preserves the source owner and identity when destination initialization fails", async () => {
-    const cfg = {
-      acp: { ...baseCfg.acp, backend: "destination-backend" },
-    } satisfies OpenClawConfig;
-    const f = fixture(sourceMeta(), cfg);
-    const sourceIdentity = f.persisted.currentMeta.identity;
-    const source = {
-      backend: "source-backend",
-      runtimeSessionName: "source-runtime",
-      identity: sourceIdentity,
-    };
-    f.state.ensureSession.mockImplementation(async () => {
-      expect(f.persisted.currentMeta).toMatchObject(source);
-      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "destination unavailable");
-    });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "destination-backend",
-      runtime: f.state.runtime,
-    });
-    await expect(f.run()).rejects.toMatchObject({ code: "ACP_SESSION_INIT_FAILED" });
-    expect(f.state.prepareFreshSession).not.toHaveBeenCalled();
-    expect(f.state.ensureSession.mock.calls[0]?.[0].resumeSessionId).toBeUndefined();
-    expect(f.persisted.currentMeta).toMatchObject(source);
-    expect(f.persisted.currentMeta.identity).toEqual(sourceIdentity);
   });
 
   it.each([
@@ -416,5 +354,154 @@ describe("AcpSessionManager runtime handles", () => {
     expect(f.state.runTurn.mock.calls[0]?.[0].handle.agentSessionId).toBeUndefined();
     expect(f.persisted.currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
     expect(f.persisted.currentMeta.identity?.agentSessionId).toBeUndefined();
+  });
+});
+
+function failoverFixture(primaryUnavailableError?: Error) {
+  const primary = createRuntime();
+  const fallback = createRuntime();
+  const sessionKey = "agent:codex:acp:failover";
+  let meta = readySessionMeta({ backend: "primary", runtimeSessionName: "primary-runtime" });
+  for (const [backend, runtime] of [
+    ["primary", primary],
+    ["fallback", fallback],
+  ] as const) {
+    runtime.ensureSession.mockImplementation(async () => ({
+      sessionKey,
+      backend,
+      runtimeSessionName: `${backend}-runtime`,
+    }));
+  }
+  hoisted.requireAcpRuntimeBackendMock.mockImplementation((backend?: string) => {
+    if (backend === "primary" && primaryUnavailableError) {
+      throw primaryUnavailableError;
+    }
+    if (backend !== "primary" && backend !== "fallback") {
+      throw new Error(`Unexpected backend ${backend}`);
+    }
+    return { id: backend, runtime: backend === "primary" ? primary.runtime : fallback.runtime };
+  });
+  hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+    sessionKey,
+    storeSessionKey: sessionKey,
+    acp: meta,
+  }));
+  hoisted.upsertAcpSessionMetaMock.mockImplementation(
+    async (input: Parameters<WriteManagerSessionMeta>[0]) => {
+      meta = input.mutate(meta, { acp: meta, sessionId: "failover", updatedAt: 1 }) ?? meta;
+      return { sessionId: "failover", updatedAt: 1, acp: meta };
+    },
+  );
+  const cfg = { acp: { ...baseCfg.acp, backend: "primary", fallbacks: ["fallback"] } };
+  const manager = new AcpSessionManager();
+  return {
+    primary,
+    fallback,
+    turn(requestId: string, observers: Pick<AcpRunTurnInput, "onEvent" | "onLifecycle"> = {}) {
+      return manager.runTurn({
+        cfg,
+        sessionKey,
+        provenance: "system",
+        mode: "prompt",
+        text: requestId,
+        requestId,
+        ...observers,
+      });
+    },
+  };
+}
+
+describe("AcpSessionManager backend failover", () => {
+  installAcpSessionManagerTestLifecycle();
+
+  it("reports both unavailable backends", async () => {
+    const f = failoverFixture(
+      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "primary backend unavailable"),
+    );
+    f.fallback.ensureSession.mockRejectedValue(
+      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "fallback backend unavailable"),
+    );
+    const turn = f.turn("unavailable");
+    await expect(turn).rejects.toMatchObject({
+      code: "ACP_BACKEND_UNAVAILABLE",
+      message: expect.stringMatching(/All ACP backends failed \(2\)/),
+    });
+    expect(f.fallback.runTurn).not.toHaveBeenCalled();
+    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("primary");
+    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("fallback");
+  });
+
+  it("does not fail over after prompt submission even when no output was emitted", async () => {
+    const f = failoverFixture();
+    const startTurn = vi.fn<NonNullable<typeof f.primary.runtime.startTurn>>((input) => ({
+      requestId: input.requestId,
+      promptStarted: Promise.resolve(),
+      events: (async function* () {})(),
+      result: Promise.resolve({
+        status: "failed",
+        error: { code: "ACP_TURN_FAILED", message: "backend unavailable" },
+      }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    f.primary.runtime.startTurn = startTurn;
+    await expect(f.turn("submitted")).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "backend unavailable",
+    });
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(f.fallback.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("fails over only after rejected prompt readiness reaches canonical terminal cleanup", async () => {
+    const f = failoverFixture();
+    const transitions: string[] = [];
+    const promptStarted = Promise.reject(new Error("backend unavailable"));
+    promptStarted.catch(() => {});
+    f.primary.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptStarted,
+      events: (async function* () {})(),
+      result: Promise.resolve().then(() => {
+        transitions.push("primary-cleaned-up");
+        return {
+          status: "failed" as const,
+          error: { code: "ACP_TURN_FAILED", message: "backend unavailable" },
+        };
+      }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    f.fallback.runTurn.mockImplementation(async function* () {
+      transitions.push("fallback-started");
+      yield { type: "done" };
+    });
+    const lifecycleEvents: string[] = [];
+    await f.turn("unsubmitted", {
+      onLifecycle: (event) => {
+        lifecycleEvents.push(event.type);
+      },
+    });
+    expect(transitions).toEqual(["primary-cleaned-up", "fallback-started"]);
+    expect(lifecycleEvents).toEqual(["prompt_submitted"]);
+    expect(f.fallback.runTurn).toHaveBeenCalledOnce();
+  });
+
+  it("does not fail over after a backend has emitted output", async () => {
+    const f = failoverFixture();
+    f.primary.runTurn.mockImplementation(async function* () {
+      yield { type: "text_delta", text: "partial" };
+      throw new AcpRuntimeError("ACP_TURN_FAILED", "backend unavailable");
+    });
+    const events: unknown[] = [];
+    await expect(
+      f.turn("output", {
+        onEvent: (event) => {
+          events.push(event);
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
+    expect(events).toEqual([expect.objectContaining({ type: "text_delta", text: "partial" })]);
+    expect(f.fallback.runTurn).not.toHaveBeenCalled();
   });
 });

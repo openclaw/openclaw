@@ -42,7 +42,6 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
-import { resolveSkillWorkshopApprovalForFinalParams } from "../agent-tools.before-tool-call.approval.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "./gateway-session-spawn-execution-identity.js";
@@ -471,35 +470,6 @@ describe("Gateway tool identity and hosted routing", () => {
         },
       });
     });
-  });
-
-  it.each([
-    ["apply", "allow-once"],
-    ["reject", "deny"],
-  ] as const)("signs Workshop %s approvals (%s)", async (action, decision) => {
-    mocks.callGateway.mockResolvedValueOnce({ id: "workshop-approval", decision });
-    await withCaller(
-      {
-        sessionKey: "agent:ops:telegram:group:-1001234567890",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "-1001234567890",
-        turnSourceAccountId: "default",
-      },
-      async (caller) => {
-        const result = await resolveSkillWorkshopApprovalForFinalParams({
-          toolName: "skill_workshop",
-          params: { action },
-          ctx: { config: { skills: { workshop: { approvalPolicy: "pending" } } } },
-        });
-        expect(result?.blocked).toBe(decision === "deny");
-        expect(capturedGatewayCall().method).toBe("plugin.approval.request");
-        expect(capturedGatewayCall().params).not.toHaveProperty("pluginId");
-        await expect(verifyCallIdentity()).resolves.toMatchObject({
-          ...caller,
-          approvalOwnerPluginId: "workspace-skills",
-        });
-      },
-    );
   });
 
   it("rejects approval registration after permission changes", async (test) => {
