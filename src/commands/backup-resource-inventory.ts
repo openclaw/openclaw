@@ -1,5 +1,5 @@
 /** Frozen backup ownership and resource policy shared by archive traversal and SQLite discovery. */
-import { realpathSync, statSync, type Dirent, type Stats } from "node:fs";
+import { realpathSync, statSync, type BigIntStats, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -34,13 +34,13 @@ type BackupRegenerableRoot = Readonly<{
 export type BackupCoreDatabase = Readonly<
   {
     sourcePath: string;
-    identity?: Stats;
+    identity?: BigIntStats;
   } & ({ role: "global" | "quarantine" } | { role: "agent"; agentId: string })
 >;
 
 /** Ephemeral coverage of a captured canonical image; never part of the archive manifest. */
 export type BackupSqliteSnapshotFact = Readonly<
-  { sourcePath: string; dev: number; ino: number } & (
+  { sourcePath: string; dev: bigint; ino: bigint } & (
     | { role: "global" }
     | { role: "agent"; agentId: string }
   )
@@ -69,7 +69,7 @@ export type BackupResourceInventory = BackupResourcePolicy &
     coreDatabaseSourcePaths: readonly string[];
     resolveSqliteSource: (
       sourcePath: string,
-      identity?: Stats,
+      identity?: BigIntStats,
     ) => BackupCoreDatabase | { role: "plugin" } | { role: "unresolvable-link" } | undefined;
   }>;
 
@@ -369,7 +369,7 @@ export function sealBackupResourceInventory(
     let unresolvableLink = false;
     if (!exact && !current) {
       try {
-        current = statSync(candidate, { throwIfNoEntry: false });
+        current = statSync(candidate, { bigint: true, throwIfNoEntry: false });
       } catch (error) {
         if (!hasErrnoCode(error, "ELOOP")) {
           throw error;

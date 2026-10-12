@@ -90,7 +90,7 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
   await using observed = observation;
   if (
     params.expectedIdentity
-      ? !sameFileIdentity(params.expectedIdentity, observed.stat)
+      ? !sameFileIdentity(params.expectedIdentity, observed.exactIdentity)
       : (await observed.handle.readFile({ encoding: "utf8" })) !== params.expectedContent
   ) {
     return false;
@@ -106,7 +106,7 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
     // The matching marker/content snapshot owns this generated artifact inode for
     // the locked update. A distinct workspace file can take the path only by
     // replacing that inode; direct writes still target the owned export itself.
-    if (!sameFileIdentity(observed.stat, writable.stat)) {
+    if (!sameFileIdentity(observed.exactIdentity, writable.exactIdentity)) {
       return false;
     }
     await writable.handle.writeFile(params.nextContent, { encoding: "utf8" });
@@ -122,7 +122,7 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
   }
   await using verified = verification;
   return (
-    sameFileIdentity(observed.stat, verified.stat) &&
+    sameFileIdentity(observed.exactIdentity, verified.exactIdentity) &&
     (await verified.handle.readFile({ encoding: "utf8" })) === params.nextContent
   );
 }
@@ -140,7 +140,7 @@ export async function isMemoryHostEventArtifactAtIdentity(params: {
     return false;
   }
   await using opened = observation;
-  if (!sameFileIdentity(params.expectedIdentity, opened.stat)) {
+  if (!sameFileIdentity(params.expectedIdentity, opened.exactIdentity)) {
     return false;
   }
   return (
@@ -172,7 +172,7 @@ export async function publishMemoryHostEventArtifact(params: {
   if (!writable.createdForWrite) {
     return undefined;
   }
-  const publishedIdentity = { dev: writable.stat.dev, ino: writable.stat.ino };
+  const publishedIdentity = writable.exactIdentity;
   const isPublishedArtifactCurrent = () =>
     isMemoryHostEventArtifactAtIdentity({
       workspaceRoot: params.workspaceRoot,

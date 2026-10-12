@@ -158,10 +158,7 @@ async function readMemoryHostEventExportOwnership(
     return { kind: "orphan", ownerContent: content };
   }
   let exportContent: string | undefined;
-  const exportIdentity: FileIdentityStat = {
-    dev: openedExport.stat.dev,
-    ino: openedExport.stat.ino,
-  };
+  const exportIdentity = openedExport.exactIdentity;
   const identityOwned =
     storedIdentity !== undefined && sameFileIdentity(storedIdentity, exportIdentity);
   {

@@ -230,7 +230,7 @@ it("retains a verified canonical backup before permitting the normal schema migr
           });
           expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
           expect(verify).toHaveBeenCalledTimes(1);
-          const identity = fs.statSync(f.pathname);
+          const identity = fs.statSync(f.pathname, { bigint: true });
           expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
             expect.objectContaining({
               role: "agent",

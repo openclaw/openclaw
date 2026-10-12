@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, realpathSync, statSync, type Stats } from "node:fs";
+import { lstatSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
@@ -47,8 +47,11 @@ import { isUpdatePackageSwapInProgress } from "./doctor/shared/update-phase.js";
 type DrivingUpdater = NonNullable<Awaited<ReturnType<typeof readDrivingUpdater>>>;
 
 // Unknown file IDs cannot prove that a recovery image covers the pending live mutation.
-function sameSnapshotFile(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">) {
-  return left.dev !== 0 && left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
+function sameSnapshotFile(
+  left: Pick<BigIntStats, "dev" | "ino">,
+  right: Pick<BigIntStats, "dev" | "ino">,
+) {
+  return left.dev !== 0n && left.ino !== 0n && left.dev === right.dev && left.ino === right.ino;
 }
 
 async function readDrivingUpdater(sharedContentUpgrade = false) {
@@ -231,7 +234,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     const capturePending = () =>
       blockedMigrations.map((database) => ({
         database,
-        identity: statSync(database.path),
+        identity: statSync(database.path, { bigint: true }),
       }));
     const coverageRefusal = (uncovered: typeof blockedMigrations, detail: string) =>
       new UpdateSchemaRefusalError(uncovered, updater.version, {
@@ -253,7 +256,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
         authority.assertCurrent();
         maintenance.assertAdmission();
         const changed = pending.filter(({ database, identity }) => {
-          const current = statSync(database.path, { throwIfNoEntry: false });
+          const current = statSync(database.path, { bigint: true, throwIfNoEntry: false });
           return !current?.isFile() || !sameSnapshotFile(identity, current);
         });
         if (changed.length) {
@@ -324,7 +327,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       // versioned-write/commit owner, without fencing ordinary cleanup or rebuilds.
       maintenance.addAgentSchemaMigrationCheck((migration) => {
         authority.assertCurrent();
-        const identity = statSync(migration.path, { throwIfNoEntry: false });
+        const identity = statSync(migration.path, { bigint: true, throwIfNoEntry: false });
         if (
           !identity?.isFile() ||
           !migrationSnapshots.some(
@@ -370,7 +373,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
             if (entry.agentId !== database.agentId) {
               return false;
             }
-            const current = statSync(entry.path, { throwIfNoEntry: false });
+            const current = statSync(entry.path, { bigint: true, throwIfNoEntry: false });
             return current?.isFile() && sameSnapshotFile(identity, current);
           }),
       );
@@ -528,7 +531,7 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   // Capture all producer-owned roots before an awaited inventory can retarget them.
   const cleanupRoots = new Map(
     rehearsal.cleanupDirectories.map((directory) => {
-      const identity = lstatSync(directory);
+      const identity = lstatSync(directory, { bigint: true });
       if (
         !identity.isDirectory() ||
         identity.isSymbolicLink() ||
@@ -541,7 +544,7 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   );
   const assertCleanupDirectory = (directory: string) => {
     const original = cleanupRoots.get(directory);
-    const current = lstatSync(directory);
+    const current = lstatSync(directory, { bigint: true });
     if (
       !original ||
       !sameSnapshotFile(original, current) ||

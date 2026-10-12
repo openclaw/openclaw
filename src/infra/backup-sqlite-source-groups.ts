@@ -1,4 +1,4 @@
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { hasErrnoCode } from "./errno.js";
@@ -6,24 +6,24 @@ import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./fil
 
 export type BackupSqliteSource = {
   path: string;
-  identity: Stats;
+  identity: BigIntStats;
 };
 
 export type BackupSqliteSourceGroup = {
   sources: [BackupSqliteSource, ...BackupSqliteSource[]];
   sourcePath: string;
-  walIdentity: Stats | null;
+  walIdentity: BigIntStats | null;
   databaseFingerprint: FileMutationFingerprint;
 };
 
-function hasKnownIdentity(identity: Stats): boolean {
-  return process.platform !== "win32" || (identity.dev !== 0 && identity.ino !== 0);
+function hasKnownIdentity(identity: BigIntStats): boolean {
+  return process.platform !== "win32" || (identity.dev !== 0n && identity.ino !== 0n);
 }
 
-async function readRegularSidecar(pathname: string): Promise<Stats | null> {
-  let identity: Stats;
+async function readRegularSidecar(pathname: string): Promise<BigIntStats | null> {
+  let identity: BigIntStats;
   try {
-    identity = await fs.lstat(pathname);
+    identity = await fs.lstat(pathname, { bigint: true });
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return null;
@@ -38,7 +38,7 @@ async function readRegularSidecar(pathname: string): Promise<Stats | null> {
 
 async function assertGroupPaths(group: BackupSqliteSourceGroup): Promise<void> {
   for (const source of group.sources) {
-    const current = await fs.lstat(source.path);
+    const current = await fs.lstat(source.path, { bigint: true });
     if (
       !current.isFile() ||
       !sameFileIdentity(source.identity, current) ||
@@ -47,7 +47,7 @@ async function assertGroupPaths(group: BackupSqliteSourceGroup): Promise<void> {
     ) {
       throw new Error(`SQLite backup source identity changed: ${source.path}`);
     }
-    if (current.nlink !== group.sources.length) {
+    if (current.nlink !== BigInt(group.sources.length)) {
       throw new Error(
         `SQLite hardlink journal owner may be outside the backup inventory: ${source.path} has ${current.nlink} links, but ${group.sources.length} paths were admitted. Include every database hardlink before retrying.`,
       );
@@ -57,18 +57,18 @@ async function assertGroupPaths(group: BackupSqliteSourceGroup): Promise<void> {
 
 async function readGroupWalOwners(
   group: BackupSqliteSourceGroup,
-): Promise<Array<{ path: string; identity: Stats }>> {
-  const owners: Array<{ path: string; identity: Stats }> = [];
+): Promise<Array<{ path: string; identity: BigIntStats }>> {
+  const owners: Array<{ path: string; identity: BigIntStats }> = [];
   for (const source of group.sources) {
     const wal = await readRegularSidecar(`${source.path}-wal`);
     const journal = await readRegularSidecar(`${source.path}-journal`);
     await readRegularSidecar(`${source.path}-shm`);
-    if (journal && journal.size > 0) {
+    if (journal && journal.size > 0n) {
       throw new Error(
         `SQLite hardlink journal ownership cannot be established safely while a rollback journal is present: ${source.path}. Close the database cleanly before retrying.`,
       );
     }
-    if (wal && wal.size > 0) {
+    if (wal && wal.size > 0n) {
       if (!hasKnownIdentity(wal)) {
         throw new Error(`SQLite hardlink WAL identity cannot be verified: ${source.path}-wal`);
       }
@@ -118,7 +118,7 @@ export async function planBackupSqliteSourceGroups(
   const groups = new Map<string, BackupSqliteSourceGroup>();
   for (const source of sources) {
     const knownIdentity = hasKnownIdentity(source.identity);
-    if (!knownIdentity && source.identity.nlink > 1) {
+    if (!knownIdentity && source.identity.nlink > 1n) {
       throw new Error(`SQLite hardlink identity cannot be verified: ${source.path}`);
     }
     const key = knownIdentity ? `${source.identity.dev}:${source.identity.ino}` : source.path;

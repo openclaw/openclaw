@@ -219,7 +219,7 @@ describe("owned SQLite snapshot transfer", () => {
     const original = await fs.readFile(sourcePath);
     await publishVerifiedSqliteFile({
       sourcePath,
-      sourceIdentity: await fs.stat(sourcePath),
+      sourceIdentity: await fs.stat(sourcePath, { bigint: true }),
       targetPath,
       expectedContent: {
         sha256: createHash("sha256").update(original).digest("hex"),
