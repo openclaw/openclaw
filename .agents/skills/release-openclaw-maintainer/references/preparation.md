@@ -83,8 +83,12 @@ adjacent improvements. Validate that exact source and its publication bytes.
 
 Use `$openclaw-changelog-update` for source-history inventory, human credit,
 editorial grouping, renderer limits, and verification. Generate the complete
-history manifest and notes during preparation; editorial work may overlap
-Code validation. Refresh them for actual source changes, not tooling retries.
+history manifest and notes once, during preparation; editorial work may overlap
+Code validation. Notes are then frozen through validation recovery: a backport
+that creates a replacement Code SHA does not refresh them, and neither does a
+tooling retry. After the final Code SHA is green, refresh them at most once, as
+a notes-only descendant that credits every admitted backport (see
+[qualify publication bytes](regular-release.md#qualify-publication-bytes)).
 Beta notes use the exact
 `## YYYY.M.PATCH-beta.N` section in `CHANGELOG/YYYY.M.PATCH-beta.N.md` and
 matching `CHANGELOG/records/YYYY.M.PATCH-beta.N.md`. Capture npm's current
