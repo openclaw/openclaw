@@ -5,9 +5,20 @@ import { createAgentHarnessAttemptDeadlineController } from "./attempt-deadlines
 const SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
 
 describe("agent harness attempt deadlines", () => {
+  // Performance.now spy aliased to Date.now in beforeEach so existing wall-clock
+  // assertions hold; the clock-jump regression below restores it. Kept on the
+  // describe scope so `typescript(unbound-method)` does not flag a bare
+  // `performance.now` reference when restoring.
+  let performanceNowSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
+    // Production deadlines measure elapsed budget with performance.now() (monotonic)
+    // while tests drive time with vi.setSystemTime/advanceTimersByTime, which only
+    // advance Date.now(). Alias performance.now to Date.now so the existing assertions
+    // about elapsed budgets hold; the clock-jump regression below decouples them.
+    performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
   });
 
   afterEach(() => {
@@ -15,12 +26,17 @@ describe("agent harness attempt deadlines", () => {
     vi.useRealTimers();
   });
 
-  function createController(timeoutMs = 60_000, startedAtMs = Date.now()) {
+  function createController(
+    timeoutMs = 60_000,
+    startedAtMs = Date.now(),
+    startedAtMonotonicMs = startedAtMs,
+  ) {
     const abort = new AbortController();
     const onTimeout = vi.fn();
     const onDeadlineChanged = vi.fn();
     const controller = createAgentHarnessAttemptDeadlineController({
       startedAtMs,
+      startedAtMonotonicMs,
       timeoutMs,
       settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
       signal: abort.signal,
@@ -96,6 +112,33 @@ describe("agent harness attempt deadlines", () => {
       timeoutMs: SETTLEMENT_TIMEOUT_MS,
     });
     expect(onDeadlineChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the execution timeout bounded when the wall clock rewinds", () => {
+    // Drop the beforeEach alias so performance.now() (driven by advanceTimersByTime)
+    // and Date.now() (driven by setSystemTime) can diverge, modeling a clock jump.
+    performanceNowSpy.mockRestore();
+    // Attempt admitted at fake-time 0: performance.now() reads 0 here.
+    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0, 0);
+    // deadlineAtMs is wall-clock (queue owners compare against Date.now()).
+    expect(onDeadlineChanged).toHaveBeenCalledWith({ kind: "bounded", deadlineAtMs: 60_000 });
+    vi.advanceTimersByTime(30_000);
+    expect(controller.ownsExecutionWait()).toBe(true);
+    // A clock correction rewinds the wall clock by 90s while the monotonic clock
+    // (driven by advanceTimersByTime) keeps running. A wall-clock-based remaining
+    // budget would grow to 120s; the monotonic budget must still expire at 60s
+    // of real elapsed time.
+    vi.setSystemTime(-60_000);
+    vi.advanceTimersByTime(29_999);
+    expect(onTimeout).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
+      kind: "execution",
+      elapsedMs: 60_000,
+      timeoutMs: 60_000,
+    });
+    expect(controller.ownsExecutionWait()).toBe(false);
+    controller.dispose();
   });
 
   it.each(["abort", "dispose"] as const)("cannot revive a deadline after %s", (closure) => {
