@@ -70,6 +70,31 @@ describe("shell completion health mapping", () => {
     });
   });
 
+  it("does not abort status checks when the shell profile is not valid UTF-8", async () => {
+    const homeDir = tempDirs.make("openclaw-zsh-invalid-utf8-home-");
+    const stateDir = tempDirs.make("openclaw-zsh-invalid-utf8-state-");
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/zsh");
+    setTestEnvValue("ZDOTDIR", homeDir);
+
+    const cachePath = path.join(stateDir, "completions", "openclaw.zsh");
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, "# cached completion\n", "utf8");
+    await fs.writeFile(
+      path.join(homeDir, ".zshrc"),
+      Buffer.concat([Buffer.from("export KEEP="), Buffer.from([0xff]), Buffer.from("\n")]),
+    );
+
+    await expect(checkShellCompletionStatus("openclaw", { shell: "zsh" })).resolves.toEqual({
+      shell: "zsh",
+      profileInstalled: false,
+      cacheExists: true,
+      cachePath,
+      usesSlowPattern: false,
+    });
+  });
+
   it("reports slow dynamic shell completion with dry-run effects", () => {
     const current = status({ usesSlowPattern: true, cacheExists: false });
 

@@ -700,4 +700,57 @@ describe("completion-runtime", () => {
       );
     },
   );
+
+  it("rejects malformed UTF-8 profiles before rewriting them", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+      const profilePath = path.join(homeDir, ".zshrc");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(cachePath, "# completion\n", "utf8");
+      const profileBytes = Buffer.concat([
+        Buffer.from("export KEEP=合法-"),
+        Buffer.from([0xff]),
+        Buffer.from("-before\n"),
+      ]);
+      await fs.writeFile(profilePath, profileBytes);
+
+      await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
+        /left untouched[\s\S]*load the prepared cache[\s\S]*backing up the profile/,
+      );
+
+      expect(await fs.readFile(profilePath)).toEqual(profileBytes);
+    });
+  });
+
+  it("keeps malformed-profile status inspection nonfatal", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const profilePath = path.join(homeDir, ".zshrc");
+      const profileBytes = Buffer.concat([
+        Buffer.from("export KEEP=合法-"),
+        Buffer.from([0xff]),
+        Buffer.from("-before\n"),
+      ]);
+      await fs.writeFile(profilePath, profileBytes);
+
+      await expect(isCompletionInstalled("zsh", "openclaw")).resolves.toBe(false);
+      await expect(usesSlowDynamicCompletion("zsh", "openclaw")).resolves.toBe(false);
+      expect(await fs.readFile(profilePath)).toEqual(profileBytes);
+    });
+  });
+
+  it("preserves valid UTF-8 profiles including literal replacement characters", async () => {
+    await withBashCompletionHome(async ({ homeDir }) => {
+      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+      const profilePath = path.join(homeDir, ".zshrc");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(cachePath, "# completion\n", "utf8");
+      await fs.writeFile(profilePath, "export KEEP='合法 � 😀'\n", "utf8");
+
+      await installCompletion("zsh", true, "openclaw");
+
+      const installed = await fs.readFile(profilePath, "utf8");
+      expect(installed).toContain("export KEEP='合法 � 😀'\n");
+      expect(installed).toContain(cachePath);
+    });
+  });
 });

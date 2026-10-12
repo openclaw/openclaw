@@ -1,4 +1,5 @@
 // Shell completion runtime: cache paths, profile installation, and shell detection.
+import { isUtf8 } from "node:buffer";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -21,6 +22,43 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
+class InvalidUtf8CompletionProfileError extends Error {
+  readonly profilePath: string;
+
+  constructor(profilePath: string) {
+    super(`Shell profile must be valid UTF-8: ${profilePath}`);
+    this.name = "InvalidUtf8CompletionProfileError";
+    this.profilePath = profilePath;
+  }
+}
+
+function isInvalidUtf8CompletionProfileError(
+  error: unknown,
+): error is InvalidUtf8CompletionProfileError {
+  return error instanceof InvalidUtf8CompletionProfileError;
+}
+
+function decodeUtf8CompletionProfile(buffer: Buffer, profilePath: string): string {
+  if (!isUtf8(buffer)) {
+    throw new InvalidUtf8CompletionProfileError(profilePath);
+  }
+  return buffer.toString("utf8");
+}
+
+function formatInvalidUtf8InstallMessage(params: {
+  profilePath: string;
+  shell: CompletionShell;
+  cachePath: string;
+}): string {
+  const reload = formatCompletionReloadCommand(params.shell, params.cachePath);
+  return [
+    `Shell profile must be valid UTF-8: ${params.profilePath}.`,
+    "The file was left untouched.",
+    `For this session, load the prepared cache with: ${reload}.`,
+    "Persistent installation requires backing up the profile and correcting its encoding first.",
+  ].join(" ");
+}
+
 async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
   const buffer = await fs.readFile(profilePath);
   let encoding: CompletionProfileEncoding = "utf8";
@@ -35,7 +73,9 @@ async function readCompletionProfile(profilePath: string, shell: CompletionShell
   // Removing an owned first line must not remove the profile's encoding declaration.
   return {
     content:
-      encoding === "utf8" ? buffer.toString("utf8") : decodeWindowsTextFileBuffer({ buffer }),
+      encoding === "utf8"
+        ? decodeUtf8CompletionProfile(buffer, profilePath)
+        : decodeWindowsTextFileBuffer({ buffer }),
     encoding,
   };
 }
@@ -485,15 +525,23 @@ export async function isCompletionInstalled(
   }
   const cachePath = resolveCompletionCachePath(shell, binName);
   const homeDir = process.env.HOME || os.homedir();
-  const { content } = await readCompletionProfile(profilePath, shell);
-  const lines = content.split("\n");
-  // A marker does not install completion; retain missing-cache source lines for doctor repair.
-  // Managed portable hooks for the same cache script count as installed but are never rewritten.
-  return lines.some(
-    (line) =>
-      isCompletionProfileLine(line, binName, cachePath) ||
-      isPortableCompletionSourceLine(line, shell, cachePath, homeDir),
-  );
+  try {
+    const { content } = await readCompletionProfile(profilePath, shell);
+    const lines = content.split("\n");
+    // A marker does not install completion; retain missing-cache source lines for doctor repair.
+    // Managed portable hooks for the same cache script count as installed but are never rewritten.
+    return lines.some(
+      (line) =>
+        isCompletionProfileLine(line, binName, cachePath) ||
+        isPortableCompletionSourceLine(line, shell, cachePath, homeDir),
+    );
+  } catch (error) {
+    // Status inspection must stay nonfatal for Latin-1 or truncated profiles.
+    if (isInvalidUtf8CompletionProfileError(error)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -511,10 +559,17 @@ export async function usesSlowDynamicCompletion(
   }
 
   const cachePath = resolveCompletionCachePath(shell, binName);
-  const { content } = await readCompletionProfile(profilePath, shell);
-  return content
-    .split("\n")
-    .some((line) => isSlowDynamicCompletionLine(line, binName) && !line.includes(cachePath));
+  try {
+    const { content } = await readCompletionProfile(profilePath, shell);
+    return content
+      .split("\n")
+      .some((line) => isSlowDynamicCompletionLine(line, binName) && !line.includes(cachePath));
+  } catch (error) {
+    if (isInvalidUtf8CompletionProfileError(error)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
@@ -548,6 +603,11 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     try {
       ({ content, encoding } = await readCompletionProfile(profilePath, shell));
     } catch (error) {
+      if (isInvalidUtf8CompletionProfileError(error)) {
+        throw new Error(formatInvalidUtf8InstallMessage({ profilePath, shell, cachePath }), {
+          cause: error,
+        });
+      }
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
