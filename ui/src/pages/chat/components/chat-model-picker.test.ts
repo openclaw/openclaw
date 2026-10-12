@@ -2,13 +2,15 @@
 
 import { render } from "lit";
 import { expect, it, vi } from "vitest";
-import { renderChatModelPicker } from "./chat-model-picker.ts";
+import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatModelPicker } from "./chat-model-picker.tsx";
 
 it.each([false, true])(
   "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
   async (inherited) => {
     const container = document.createElement("div");
-    const params: Parameters<typeof renderChatModelPicker>[0] = {
+    const params: Parameters<typeof ChatModelPicker>[0] = {
       disabled: false,
       modelSelectionLocked: false,
       modelOptions: [
@@ -34,7 +36,7 @@ it.each([false, true])(
       open: true,
       onModelSelect: vi.fn(async () => {}),
     };
-    render(renderChatModelPicker(params), container);
+    render(solidTemplate(ChatModelPicker, params), container);
     await Promise.resolve();
     const details = container.querySelector<HTMLDetailsElement>("details")!;
     const selected = container.querySelector<HTMLButtonElement>(
@@ -64,7 +66,7 @@ it.each([false, true])(
 
     // The next selection, including a change while closed, owns the open group.
     render(
-      renderChatModelPicker({ ...params, open: false, selectedModelValue: "other/first" }),
+      solidTemplate(ChatModelPicker, { ...params, open: false, selectedModelValue: "other/first" }),
       container,
     );
     details.dispatchEvent(new Event("toggle"));
@@ -79,7 +81,7 @@ it.each([false, true])(
 it.each([false, true])("keeps current visible with Default=%s", (hasDefault) => {
   const container = document.createElement("div");
   render(
-    renderChatModelPicker({
+    solidTemplate(ChatModelPicker, {
       disabled: false,
       modelSelectionLocked: false,
       modelOptions: Array.from({ length: 300 }, (_, index) => ({
@@ -113,7 +115,7 @@ it.each([false, true])(
     const container = document.createElement("div");
     document.body.append(container);
     render(
-      renderChatModelPicker({
+      solidTemplate(ChatModelPicker, {
         disabled: false,
         modelSelectionLocked: false,
         modelOptions: [
@@ -181,7 +183,7 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
     ...(agentRuntimeId ? { agentRuntimeId } : {}),
   });
   render(
-    renderChatModelPicker({
+    solidTemplate(ChatModelPicker, {
       disabled: false,
       modelSelectionLocked: false,
       modelOptions: [
@@ -194,7 +196,9 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
       sessionKey: "main",
       triggerModelLabel: "claude-opus-4-8",
       onModelSelect: vi.fn(async () => {}),
-      providerAuth: new Map([["anthropic", { kind: "subscription", label: "Claude Max" }]]),
+      providerAuth: new Map<string, ModelProviderAuthLabel>([
+        ["anthropic", { kind: "subscription", label: "Claude Max" }],
+      ]),
     }),
     container,
   );
