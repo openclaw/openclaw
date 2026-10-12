@@ -224,15 +224,15 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     detached.entry!.label = "caller edit";
     Object.assign(detached.target.database, { birthtime: "caller edit" });
     Object.assign(detached.version, { sequence: -1 });
-    detached.participants[0].identity.id = "caller edit";
-    detached.members[0].identityId = "caller edit";
-    detached.pendingInputs[0].input_id = "caller edit";
+    detached.participants[0]!.identity.id = "caller edit";
+    detached.members[0]!.identityId = "caller edit";
+    detached.pendingInputs[0]!.input_id = "caller edit";
     detached.transcript.version.rawSeq = -1;
     detached.transcript.watermark.maxSeq = -1;
-    detached.transcript.anchors[0].entryId = "caller edit";
-    detached.transcript.idempotency[0].eventId = "caller edit";
+    Object.assign(detached.transcript.anchors[0]!, { entryId: "caller edit" });
+    detached.transcript.idempotency[0]!.eventId = "caller edit";
     if (detached.transcript.modelContext.kind === "resident") {
-      detached.transcript.modelContext.entries[0].eventId = "caller edit";
+      detached.transcript.modelContext.entries[0]!.eventId = "caller edit";
     }
     expect(projectionState).toEqual(retained);
     expect(projectSessionActorHotState(projectionState)).toEqual(original);
