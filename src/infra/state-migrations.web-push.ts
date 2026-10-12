@@ -6,7 +6,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { ensureWebPushSubscriptionBindingColumns } from "./push-web-store.kernel.js";
 import {
   webPushSubscriptionFromRow,
   webPushSubscriptionToRow,
@@ -16,6 +15,7 @@ import {
   type WebPushDatabase,
   type WebPushSubscription,
 } from "./push-web-store.records.js";
+import { ensureWebPushSubscriptionBindingColumns } from "./push-web-store.schema.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   claimLegacyMigrationSourceClaims,

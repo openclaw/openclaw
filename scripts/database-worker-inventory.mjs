@@ -676,27 +676,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/infra/push-web-store.kernel.ts",
-    [
-      {
-        tier: "W",
-        operations: [
-          "findBoundWebPushSubscriptionByEndpointInDatabase",
-          "listWebPushSubscriptionsInDatabase",
-          "hasBoundWebPushSubscriptionsInDatabase",
-          "listBoundWebPushSubscriptionsInDatabase",
-          "prepareWebPushApprovalDeliveriesInDatabase",
-          "listWebPushApprovalDeliveryTargetsInDatabase",
-          "deleteWebPushApprovalDeliveryTargetsInDatabase",
-          "listTerminalWebPushApprovalDeliveryIdsInDatabase",
-          "deleteWebPushSubscriptionIfCurrentInDatabase",
-        ],
-        evidence:
-          "Only push-web-store.worker.ts:14,20,22,24,28,32,36,40,62 calls these operations; native preferences/upsert/delete-bound and their shared schema helper stay T1",
-      },
-    ],
-  ],
-  [
     "src/node-host/node-worker-prepared-workspace-store.kernel.ts",
     [
       {
