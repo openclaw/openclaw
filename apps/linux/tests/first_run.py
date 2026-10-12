@@ -5,14 +5,14 @@ Run as a non-root user with python3-gi, gir1.2-atspi-2.0, at-spi2-core,
 libatk-adaptor, xvfb, xauth and dbus-x11 installed:
   xvfb-run -a dbus-run-session -- python3 apps/linux/tests/first_run.py BINARY
 
-Use the unbundled 0.1.0 development build: local setup on a release build
-intentionally starts installation instead of showing the channel chooser.
---local-start-failure uses a fixture CLI to exercise failed local startup.
+Use the unbundled development build; onboarding scenarios stage its verified
+runtime and a synthetic installer without installing a host Gateway service.
+--local-start-failure uses a fixture CLI to exercise automatic startup fallback.
 --inline-browser uses a synthetic saved Gateway to exercise native child WebViews
 and requires xdotool for real pointer input.
 --window-chrome checks dragging, resizing, and window controls with xdotool and Openbox.
 --gateway-switch checks saved connections, native windows and the private credential vault.
---gateway-onboarding checks native authority after local model setup under a Gateway base path.
+--gateway-onboarding checks automatic first run and native authority under a Gateway base path.
 --quick-chat checks real Quick Chat streaming, disclosure, drafts and agent selection
 and requires a private gnome-keyring-daemon.
 --desktop-sharing checks the real native settings bridge and an owned synthetic CLI process tree.
@@ -55,7 +55,7 @@ def role_matches(actual_role, expected_role, attributes=None):
     )
 
 
-def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixture, binary, gateway_switch):
+def exercise(app, Atspi, GLib, *, remote_only, inline_fixture, binary, gateway_switch):
     last_headings = set()
     last_controls = set()
 
@@ -181,26 +181,6 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
         return
 
     wait("Welcome to OpenClaw", "heading")
-    if local_start_failure:
-        for attempt in range(2):
-            click("Get started")
-            wait("Where should your assistant live?", "heading")
-            click("On this computer", "toggle button", prefix=True)
-            click("Continue")
-            wait("OpenClaw needs attention", "heading")
-            wait(START_FAILURE)
-            wait("Try again", "push button")
-            if attempt == 0:
-                click("Try again")
-                wait("Welcome to OpenClaw", "heading")
-        calls = Path("cli-calls.log").read_text().splitlines()
-        if calls.count("gateway install --json") != 2:
-            raise RuntimeError(f"Expected two failed Gateway installs, observed {calls!r}")
-        setup = "browser extension setup --action install --json --wait-ms 1000"
-        if calls.count(setup) != 1:
-            raise RuntimeError(f"Expected one automatic local Chrome setup, observed {calls!r}")
-        print("PASS: failed local startup reports its error and stays retryable", flush=True)
-        return
     click("Get started")
     wait("Where should your assistant live?", "heading")
     click("On another computer", "toggle button", prefix=True)
@@ -256,7 +236,7 @@ def drive(binary, *, remote_only, local_start_failure, inline_browser, window_ch
     def capture(outcome):
         if artifacts_dir is None:
             return
-        if window_chrome or gateway_switch or gateway_onboarding or quick_chat or desktop_sharing:
+        if window_chrome or gateway_switch or gateway_onboarding or local_start_failure or quick_chat or desktop_sharing:
             if outcome == "failed" and inline_fixture is not None:
                 inline_fixture.capture("failed")
             return
@@ -308,10 +288,12 @@ def drive(binary, *, remote_only, local_start_failure, inline_browser, window_ch
 
         inline_fixture = GatewaySwitchFixture(artifacts_dir)
         inline_fixture.start()
-    elif gateway_onboarding:
+    elif gateway_onboarding or local_start_failure:
         from gateway_switch import GatewayOnboardingFixture
 
-        inline_fixture = GatewayOnboardingFixture(artifacts_dir)
+        inline_fixture = GatewayOnboardingFixture(
+            artifacts_dir, install_error=START_FAILURE if local_start_failure else None,
+        )
         inline_fixture.start()
         binary = inline_fixture.stage_binary(binary)
     elif desktop_sharing:
@@ -331,10 +313,9 @@ def drive(binary, *, remote_only, local_start_failure, inline_browser, window_ch
             exercise(
                 app, Atspi, GLib,
                 remote_only=remote_only,
-                local_start_failure=local_start_failure,
                 inline_fixture=inline_fixture,
                 binary=binary,
-                gateway_switch=gateway_switch or gateway_onboarding or desktop_sharing,
+                gateway_switch=gateway_switch or gateway_onboarding or local_start_failure or desktop_sharing,
             )
         except BaseException:
             try:
@@ -374,7 +355,7 @@ def main():
     scenarios.add_argument(
         "--local-start-failure",
         action="store_true",
-        help="Verify failed startup with an installed CLI remains visible and retryable",
+        help="Verify automatic startup falls back to manual choices with a visible, retryable error",
     )
     scenarios.add_argument(
         "--inline-browser",
@@ -392,7 +373,7 @@ def main():
     )
     scenarios.add_argument(
         "--gateway-onboarding", action="store_true",
-        help="Verify native controls survive local onboarding and remain within the Gateway base path",
+        help="Verify automatic local onboarding and native controls within the Gateway base path",
     )
     scenarios.add_argument(
         "--quick-chat", action="store_true",
@@ -415,11 +396,11 @@ def main():
         parser.error("The minimal system PATH must not contain an OpenClaw CLI")
     if args.inline_browser and not os.access("/usr/bin/xdotool", os.X_OK):
         parser.error("Inline browser pointer proof requires xdotool")
-    if args.window_chrome or args.gateway_switch or args.gateway_onboarding or args.quick_chat or args.desktop_sharing:
+    if args.window_chrome or args.gateway_switch or args.gateway_onboarding or args.local_start_failure or args.quick_chat or args.desktop_sharing:
         for tool in ("xdotool", "wmctrl", "xprop", "xwininfo", "openbox"):
             if shutil.which(tool) is None:
                 parser.error(f"Window chrome proof requires {tool}")
-    if (args.gateway_switch or args.gateway_onboarding or args.quick_chat or args.desktop_sharing) and shutil.which("gnome-keyring-daemon") is None:
+    if (args.gateway_switch or args.gateway_onboarding or args.local_start_failure or args.quick_chat or args.desktop_sharing) and shutil.which("gnome-keyring-daemon") is None:
         parser.error("Native Gateway proof requires a private gnome-keyring-daemon")
     if args.artifacts_dir:
         args.artifacts_dir = args.artifacts_dir.resolve()
@@ -474,28 +455,12 @@ def main():
             path = root / relative
             path.mkdir(mode=0o700, parents=True)
             env[variable] = str(path)
-        if args.local_start_failure:
-            cli = root / ".openclaw/bin/openclaw"
-            cli.parent.mkdir(mode=0o700, parents=True)
-            cli.write_text(
-                "#!/usr/bin/python3\n"
-                "import json, sys\n"
-                "from pathlib import Path\n"
-                "command = ' '.join(sys.argv[1:])\n"
-                "with Path('cli-calls.log').open('a') as log: log.write(command + '\\n')\n"
-                "if command == '--version':\n"
-                "    print('OpenClaw fixture')\n"
-                "elif command == 'browser extension setup --action install --json --wait-ms 1000':\n"
-                "    print(json.dumps({'action': 'install', 'target': {'kind': 'local-host', 'platform': 'linux', 'hostname': 'fixture', 'profile': 'chrome', 'relayPort': 18799}, 'phase': 'needs_browser_action', 'reason': 'extension_missing', 'installation': {'nativeHostRegistered': True, 'installRequested': False, 'installedProfiles': 0, 'discoveredProfiles': 0, 'awaitingApproval': False, 'automaticBootstrapSupported': True}, 'connection': {'state': 'not_checked'}, 'nextAction': 'install_from_store'}))\n"
-                "elif command == 'gateway status --json':\n"
-                "    print(json.dumps({'service': {'loaded': False}, 'rpc': {'ok': False}}))\n"
-                "elif command == 'gateway install --json':\n"
-                f"    print({START_FAILURE!r}, file=sys.stderr)\n"
-                "    sys.exit(1)\n"
-                "else:\n"
-                "    raise RuntimeError('Unexpected CLI command: ' + command)\n"
-            )
-            cli.chmod(0o700)
+        if not any((args.local_start_failure, args.inline_browser, args.gateway_switch, args.gateway_onboarding,
+                      args.quick_chat, args.desktop_sharing)):
+            # A saved config preserves manual setup, including the window-chrome scenario.
+            config = root / ".openclaw/openclaw.json"
+            config.parent.mkdir(mode=0o700, parents=True)
+            config.write_text("{}\n")
         # Native AT-SPI calls can block Python signal handlers. Keep the deadline
         # and cleanup outside that process, with its app in the same owned group.
         command = [sys.executable, str(Path(__file__).resolve()), "--driver"]

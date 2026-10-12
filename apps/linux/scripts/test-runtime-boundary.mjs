@@ -23,15 +23,13 @@ function withoutNonLinuxReadiness(text) {
   );
 }
 
-// This is an architecture guard for the actual desktop entry paths. The Rust
-// CLI-recorder test proves status behavior; it cannot catch startup calling a
-// different (mutating) helper before or after that observation.
+// Existing connection and recovery paths stay observational. First-run eligibility
+// and automatic setup are covered at their Rust owner and by the native driver.
 const serviceMutation =
   /runtime_migration|runtime_action::(?:fresh|activate)|gateway::(?:ensure_ready|act|run_service_command)|\.(?:connect_explicit_local|install_cli|runtime_action|submit_runtime|submit_action)\s*\(|GatewayOperation::(?:Install|Runtime|Action)\b|["']gateway["']\s*,\s*["'](?:install|start|stop|restart)["']/;
 
-test("Linux startup and reconnect paths never invoke Gateway service mutations", () => {
+test("existing Linux connections and reconnects never invoke Gateway service mutations", () => {
   for (const name of [
-    "connect",
     "connect_selected",
     "resolve_cli",
     "finish_local_connection",
@@ -63,7 +61,7 @@ test("app updates cannot install, restore, or switch the Gateway service", () =>
   assert.doesNotMatch(updater, /OpenClawCli|run_service_command|runtime_action|bundled_runtime/);
 });
 
-test("bundled-runtime mutations belong only to the two explicit user actions", () => {
+test("bundled-runtime mutations belong only to local setup and confirmed runtime changes", () => {
   const setup = method(main, "install_cli");
   const action = method(main, "runtime_action");
   assert.match(setup, /runtime_action::fresh\(/);

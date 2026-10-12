@@ -18,20 +18,19 @@ installation.
 The OpenClaw Linux companion is a Tauri desktop app for local and remote
 Gateways. It:
 
-- walks new users through choosing a local Gateway, a discovered remote Gateway,
-  a manually entered Gateway URL, or an SSH tunnel
+- automatically sets up a local Gateway for fresh installs, with manual local,
+  discovered remote, direct URL, and SSH choices available if setup fails
 - installs the OpenClaw CLI and runs fresh local installations on the bundled
   OpenClaw Bun fork, without requiring a global CLI install; release builds
-  install their matching stable version, while development builds ask for
-  the channel first
+  install their matching stable version, while development builds use
+  Development for automatic setup
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens Model Setup for an unconfigured local or remote Gateway, discovers
-  available AI access, and waits for your explicit action before selecting,
-  testing, installing, or saving a provider
+- opens custodian onboarding after automatic local setup to prepare AI access
+  and explain the selection; manual setup retains the explicit Model Setup picker
 - continues into guided onboarding after connecting a new model; onboarding can
   import detected Claude Code, Codex, or Hermes memories into the agent workspace
   (the same import stays available later under Settings → Import Memory)
@@ -210,8 +209,19 @@ desktop connection. Closing the window to the tray keeps sharing active.
 
 ### First-run setup
 
-Choose **Get started** on the welcome screen, then choose where your assistant
-should live:
+With no saved OpenClaw configuration or Gateway profiles, the app starts local
+setup automatically and opens custodian onboarding in the Control UI. The
+custodian prepares available AI access and explains the selection and alternatives.
+**Use a different Gateway** opens Manage Gateways, **Review permissions** opens
+this computer's permissions, and **Open AI setup** opens Model Setup.
+
+Automatic setup uses the same bundled runtime, installer, and CLI-managed service
+as manual local setup. It never automatically joins a discovered Gateway. Existing
+configurations and remote setups keep their current behavior. An unreadable saved
+profile store or any automatic setup failure returns to the manual choices with
+the error visible.
+
+In manual setup, choose where your assistant should live:
 
 - **On this computer** installs any missing local prerequisites and starts the
   Gateway as a systemd user service.
@@ -236,7 +246,7 @@ shared-store references must be resolved on their owning Gateway host.
 SSH uses your existing OpenSSH authentication and host-key verification. See
 [Remote access](/gateway/remote) for secure Gateway configuration.
 
-After the connection succeeds, Model Setup discovers AI access available to the
+After a manual connection succeeds, Model Setup discovers AI access available to the
 selected Gateway and shows it as a choice. Discovery does not import or copy an
 account. On a fresh visit, the companion does not select, test, install, or save
 a provider until you choose its action. Provider sign-in or API-key entry is

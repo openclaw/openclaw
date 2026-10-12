@@ -303,7 +303,11 @@ async function connect(action) {
       if (firstRunBuild?.releaseBuild === false) {
         elements.channel.value = "dev";
       }
-      renderWelcome();
+      if (snapshot.setupError) {
+        renderConnectionChoices(snapshot.setupError);
+      } else {
+        renderWelcome();
+      }
     } else if (snapshot.phase === "remoteError") {
       renderRemoteRetry(snapshot.detail);
     }
@@ -324,16 +328,16 @@ function renderWelcome() {
   show(elements.welcomeScreen, true);
 }
 
-function renderConnectionChoices() {
+function renderConnectionChoices(error = null) {
   const freebsd = firstRunBuild?.platform === "freebsd";
   elements.localSubtitle.textContent = freebsd
     ? "Connect to a Gateway you start with the FreeBSD service or in a terminal."
     : "Private to this computer. Installs and starts automatically.";
   render({
-    description: freebsd
+    description: error || (freebsd
       ? "On FreeBSD, install the CLI if needed, then start your Gateway with the openclaw package service or run openclaw gateway run in a terminal. Connect here using the same account you used for onboarding."
-      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
-    dot: "idle",
+      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background."),
+    dot: error ? "error" : "idle",
     eyebrow: "CHOOSE YOUR GATEWAY",
     title: "Where should your assistant live?",
   });
@@ -636,7 +640,7 @@ function renderRetry(message) {
 elements.installButton.addEventListener("click", () => {
   void install();
 });
-elements.welcomeContinue.addEventListener("click", renderConnectionChoices);
+elements.welcomeContinue.addEventListener("click", () => renderConnectionChoices());
 elements.connectionLocal.addEventListener("click", () => selectConnection("local"));
 elements.connectionRemote.addEventListener("click", () => selectConnection("remote"));
 elements.setupBack.addEventListener("click", () =>

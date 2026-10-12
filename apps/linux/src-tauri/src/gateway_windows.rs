@@ -1281,6 +1281,9 @@ fn scoped_script(document: &Document, body: &str) -> String {
 }
 
 impl GatewayWindows {
+    pub(crate) fn has_saved_profiles(&self) -> Result<bool, String> {
+        self.profiles.list().map(|profiles| !profiles.is_empty())
+    }
     pub fn new(profiles: Arc<GatewayProfiles>) -> Self {
         Self {
             profiles,

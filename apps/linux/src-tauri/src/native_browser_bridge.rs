@@ -10,7 +10,7 @@ use tauri_plugin_opener::OpenerExt;
 
 #[derive(Clone)]
 pub(crate) struct DashboardDocument {
-    url: Url,
+    pub(crate) url: Url,
     token: String,
     pub(crate) generation: u64,
     ready: bool,
@@ -201,7 +201,7 @@ fn initialization_script(document: &DashboardDocument) -> String {
     const request = deviceSettingsRequests.then(async () => {{
       await ready;
       const result = await invoke("native_device_settings_request", {{ message, token }});
-      return message.type === "chrome-extension-setup" ? result : acceptDeviceSettings(result);
+      return message.type === "chrome-extension-setup" || message.type === "open" ? result : acceptDeviceSettings(result);
     }});
     deviceSettingsRequests = request.catch(() => {{}});
     return request;
@@ -588,6 +588,15 @@ const snapshot = (revision, state, enabled) => ({
   assert.equal(calls.length, 6, 'settings remain ordered after setup');
   calls[5].resolve(snapshot(7, 'running', true));
   assert.equal((await afterSetup).revision, 7);
+
+  const panel = window.webkit.messageHandlers.openclawDeviceSettings.postMessage({
+    type: 'open', panel: 'gateways',
+  });
+  await flush();
+  assert.equal(calls[6].args.message.panel, 'gateways');
+  calls[6].resolve(null);
+  assert.equal(await panel, null);
+  assert.equal(window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__.revision, 7);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 "#;
         let output = std::process::Command::new("node")

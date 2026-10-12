@@ -4,6 +4,54 @@ use crate::native_browser_bridge::{self, NativeBrowserBridgeState, Publication};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State, Webview};
 
+fn panel_url(base: &tauri::Url, panel: &str) -> Result<Option<tauri::Url>, String> {
+    let path = match panel {
+        "gateways" => return Ok(None),
+        "permissions" => ["settings", "device", "permissions"].as_slice(),
+        "ai-setup" => ["settings", "model-setup"].as_slice(),
+        _ => return Err("This panel is not supported by OpenClaw-Tauri.".into()),
+    };
+    let mut url = base.clone();
+    url.set_query(None);
+    url.set_fragment(None);
+    url.path_segments_mut()
+        .map_err(|_| "The Gateway dashboard URL is invalid.")?
+        .pop_if_empty()
+        .extend(path);
+    Ok(Some(url))
+}
+
+async fn open_panel(app: &AppHandle, panel: &str, token: String) -> Result<Value, String> {
+    let panel = panel.to_string();
+    let current_app = app.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let result = (|| {
+            let view = current_app
+                .get_webview("main")
+                .ok_or("Dashboard unavailable.")?;
+            let document = current_app
+                .state::<NativeBrowserBridgeState>()
+                .authorize(&view, &token)
+                .ok_or("The desktop settings document changed.")?;
+            match panel_url(&document.url, &panel)? {
+                Some(url) => current_app.state::<crate::DesktopState>().navigate_locked(
+                    &current_app,
+                    url,
+                    true,
+                )?,
+                None => crate::gateway_windows::open_settings(&current_app)?,
+            }
+            Ok(Value::Null)
+        })();
+        let _ = sender.send(result);
+    })
+    .map_err(|_| "The desktop event loop is unavailable.")?;
+    receiver
+        .await
+        .map_err(|_| "Opening the panel was interrupted.")?
+}
+
 pub(crate) fn snapshot(app: &AppHandle) -> Option<Value> {
     let node = app.try_state::<DesktopNode>()?;
     let (revision, status) = node.status();
@@ -50,6 +98,25 @@ fn snapshot_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn setup_panels_use_the_selected_gateway_base_and_reject_unknown_actions() {
+        let base = tauri::Url::parse("https://gateway.example/control/?old=1#private").unwrap();
+        assert!(panel_url(&base, "gateways").unwrap().is_none());
+        for (panel, expected) in [
+            (
+                "permissions",
+                "https://gateway.example/control/settings/device/permissions",
+            ),
+            (
+                "ai-setup",
+                "https://gateway.example/control/settings/model-setup",
+            ),
+        ] {
+            assert_eq!(panel_url(&base, panel).unwrap().unwrap().as_str(), expected);
+        }
+        assert!(panel_url(&base, "https://other.example").is_err());
+    }
+
     #[test]
     fn off_snapshot_omits_optional_detail_and_unimplemented_permissions() {
         let value = snapshot_value(
@@ -117,6 +184,13 @@ pub async fn native_device_settings_request(
     let mut setup_result = None;
     match message.get("type").and_then(Value::as_str) {
         Some("status") => {}
+        Some("open") => {
+            let panel = message
+                .get("panel")
+                .and_then(Value::as_str)
+                .ok_or("Missing panel.")?;
+            return open_panel(&app, panel, token).await;
+        }
         Some("chrome-extension-setup") => {
             let action = crate::chrome_setup::parse_request(message)?;
             let current_app = app.clone();
