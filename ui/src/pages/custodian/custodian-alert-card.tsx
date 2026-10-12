@@ -13,7 +13,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 
 export function CustodianAlertCard(props: {
   alert: CustodianAlert;
-  context: ApplicationContext;
+  context: Pick<ApplicationContext, "gateway" | "overlays" | "navigate">;
   onDismiss: () => void;
 }) {
   const gateway = createMemo(() => projectGateway(props.context.gateway));
@@ -51,6 +51,8 @@ export function CustodianAlertCard(props: {
               } else if (canUpdate()) {
                 void confirmAndStartUpdate({
                   isCurrentTarget: context.overlays.captureUpdateTarget(),
+                  canStartNativeUpdate: () =>
+                    canCallGatewayMethod(context.gateway.snapshot, "update.run", "operator.admin"),
                   startGatewayUpdate: () => void context.overlays.runUpdate(),
                   watchUpdateProgress: createUpdateProgressWatcher(context),
                   onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),

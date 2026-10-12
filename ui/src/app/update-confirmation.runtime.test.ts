@@ -75,6 +75,7 @@ function startUpdate(
   const startGatewayUpdate = vi.fn();
   const settled = confirmAndStartUpdateRuntime({
     isCurrentTarget: () => true,
+    canStartNativeUpdate: () => true,
     startGatewayUpdate,
     updateAvailable: UPDATE_AVAILABLE,
     updateSchedule: null,
@@ -98,6 +99,23 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(window, "webkit");
   }
+});
+
+it("refuses a native update without a live authority check", async () => {
+  const postMessage = installNativeBridge();
+  const { settled, startGatewayUpdate } = startUpdate({
+    viaNativeApp: true,
+    canStartNativeUpdate: undefined,
+  });
+  await getRenderedModalDialog(document.body);
+  findButton("Update Mac app and restart").click();
+  expect(postMessage).not.toHaveBeenCalled();
+  expect(startGatewayUpdate).not.toHaveBeenCalled();
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+    "Administrator access is required",
+  );
+  findButton("Cancel").click();
+  await settled;
 });
 
 it.each([false, true])("routes a confirmed Mac update with bridge removed: %s", async (removed) => {

@@ -22,6 +22,7 @@ type SidebarUpdateCardElement = HTMLElement & {
   updateRunAcknowledged: boolean;
   canUpdate: boolean;
   canNativeUpdate: boolean;
+  canStartNativeUpdate: ConfirmAndStartUpdateParams["canStartNativeUpdate"];
   canHoldUpdate: boolean;
   onUpdate: () => void;
   captureUpdateTarget: () => () => boolean;
@@ -52,6 +53,7 @@ async function mount(
   element.canUpdate = canUpdate;
   element.canHoldUpdate = canHoldUpdate;
   element.captureUpdateTarget = () => () => true;
+  element.canStartNativeUpdate = () => element.canNativeUpdate;
   document.body.append(element);
   await element.updateComplete;
   return element;

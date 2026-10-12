@@ -405,12 +405,13 @@ export function createApplicationUpdateOverlays(
     const connected = next.phase === "connected";
     // Disconnects can omit identity. An explicit new auth grant is authoritative
     // even when build-skew fencing delays connection admission.
-    const scopeChanged =
-      nextScope !== updateGatewayScope ||
-      (connected && nextProfile !== profileId) ||
-      (Boolean(next.hello?.auth) && !nextAccess.canAdmin);
-    if (scopeChanged) {
+    const targetChanged =
+      nextScope !== updateGatewayScope || (connected && nextProfile !== profileId);
+    const scopeChanged = targetChanged || (Boolean(next.hello?.auth) && !nextAccess.canAdmin);
+    if (targetChanged) {
       confirmationTargetGeneration++;
+    }
+    if (scopeChanged) {
       connectedEpoch++;
       updateFailureReporter.invalidate();
       updateRunGeneration++;
@@ -563,12 +564,11 @@ export function createApplicationUpdateOverlays(
     captureUpdateTarget(this: void) {
       const generation = confirmationTargetGeneration;
       const revision = gateway.connectionRevision;
-      // Consent survives this Gateway's restart, but never a target or authority change.
+      // Keep target identity across reconnects; each action checks its live authority separately.
       return () =>
+        !disposed &&
         generation === confirmationTargetGeneration &&
-        revision === gateway.connectionRevision &&
-        activeClient !== null &&
-        isCurrentClient(activeClient);
+        revision === gateway.connectionRevision;
     },
     acknowledgeUpdateRun(this: void) {
       const run = snapshot.updateRun;

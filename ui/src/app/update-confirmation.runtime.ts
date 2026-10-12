@@ -327,7 +327,7 @@ export async function confirmAndStartUpdateRuntime(
     }
 
     function checkNativePermission(): boolean {
-      if (params.canStartNativeUpdate?.() === false) {
+      if (params.canStartNativeUpdate?.() !== true) {
         statusCheck = { error: t("updates.adminRequired") };
         draw();
         return false;

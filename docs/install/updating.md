@@ -864,8 +864,9 @@ start an update.
 
 Update confirmation belongs to the Gateway and profile that opened it. Switching
 Gateways or profiles retires the pending confirmation; open it again on the
-intended Gateway. Once an update starts, its progress report remains available
-through that Gateway's restart.
+intended Gateway. Native updates also check current administrator access when you
+confirm and show an access error if it was revoked. Once an update starts, its
+progress report remains available through that Gateway's restart.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's
