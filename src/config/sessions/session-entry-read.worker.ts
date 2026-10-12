@@ -552,33 +552,33 @@ export function readExactSessionEntriesWithLifecycle(
               const entry = selected.value.find(
                 ({ sessionKey }) => sessionKey === request.lifecycleSessionKey,
               )?.entry;
-              const transcriptEntry = request.transcript
-                ? selected.value.find(
-                    ({ sessionKey }) => sessionKey === request.transcript?.sessionKey,
-                  )?.entry
+              const selection = request.transcript;
+              const transcriptEntry = selection
+                ? selected.value.find(({ sessionKey }) => sessionKey === selection.sessionKey)
+                    ?.entry
                 : undefined;
-              const transcript = request.transcript
+              const transcript = selection
                 ? transcriptEntry
                   ? readSessionTranscriptAnchorFactsInDatabase(
                       database,
                       {
-                        agentId: request.transcript.agentId ?? database.agentId,
+                        agentId: selection.agentId ?? database.agentId,
                         sessionId: transcriptEntry.sessionId,
-                        sessionKey: request.transcript.sessionKey,
+                        sessionKey: selection.sessionKey,
                         path: database.path,
                         env: request.env,
                       },
-                      request.transcript,
+                      selection,
                       undefined,
                       undefined,
                       transcriptEntry,
                     )
                   : {
                       anchors: [],
-                      ...(request.transcript.activePathEntryId !== undefined
+                      ...(selection.activePathEntryId !== undefined
                         ? {
                             activePathRelation:
-                              request.transcript.activePathEntryId === null
+                              selection.activePathEntryId === null
                                 ? ("exact" as const)
                                 : ("off-path" as const),
                           }
