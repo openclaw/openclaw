@@ -1,6 +1,4 @@
-import { html, nothing } from "lit";
-import { Directive, directive, type ElementPart } from "lit/directive.js";
-import { revealInScrollRegion, scrollState } from "./scroll-state.ts";
+import { revealInScrollRegion } from "./scroll-state.ts";
 
 export function handleComposerMenuKeydown(
   event: KeyboardEvent,
@@ -39,79 +37,6 @@ export function handleComposerMenuKeydown(
   }
   return true;
 }
-
-export function renderComposerMenu(options: {
-  id: string;
-  label: string;
-  className?: string;
-  trackScroll?: boolean;
-  activeId?: string | null;
-  content: unknown;
-}) {
-  return html`<div
-    id=${options.id}
-    class="slash-menu ${options.className ?? ""}"
-    role="listbox"
-    aria-label=${options.label}
-    ${revealActiveOption(options.activeId)}
-  >
-    <div class="slash-menu__scroll" ${scrollState(false, options.trackScroll)}>
-      ${options.content}
-    </div>
-  </div>`;
-}
-
-export function renderComposerMenuOption(options: {
-  id: string;
-  active: boolean;
-  select: () => void;
-  hover: () => void;
-  preserveFocus?: boolean;
-  icon: unknown;
-  iconHidden?: boolean;
-  name: unknown;
-  description: unknown;
-}) {
-  return html`<div
-    id=${options.id}
-    class="slash-menu-item ${options.active ? "slash-menu-item--active" : ""}"
-    role="option"
-    aria-selected=${options.active}
-    @mousedown=${options.preserveFocus === false ? nothing : (event: MouseEvent) => event.preventDefault()}
-    @click=${options.select}
-    @pointermove=${(event: PointerEvent) => {
-      if (!options.active && event.pointerType !== "touch") {
-        options.hover();
-      }
-    }}
-  >
-    <span class="slash-menu-icon" aria-hidden=${options.iconHidden ? "true" : nothing}
-      >${options.icon}</span
-    >
-    <span class="slash-menu-copy">
-      <span class="slash-menu-name">${options.name}</span>
-      <span class="slash-menu-desc">${options.description}</span>
-    </span>
-  </div>`;
-}
-
-class RevealActiveOptionDirective extends Directive {
-  private activeId?: string | null;
-
-  render(_activeId?: string | null) {
-    return nothing;
-  }
-
-  override update(_part: ElementPart, [activeId]: Parameters<this["render"]>) {
-    if (activeId !== this.activeId) {
-      this.activeId = activeId;
-      scrollActiveOptionIntoView(activeId ?? null);
-    }
-    return nothing;
-  }
-}
-
-const revealActiveOption = directive(RevealActiveOptionDirective);
 
 function scrollActiveOptionIntoView(activeId: string | null): void {
   if (!activeId) {

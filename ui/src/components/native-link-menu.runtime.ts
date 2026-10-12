@@ -1,5 +1,1 @@
-export {
-  NativeLinkMenu,
-  mountNativeLinkMenu,
-  type NativeLinkMenuAction,
-} from "./native-link-menu.runtime.tsx";
+export { NativeLinkMenu, mountNativeLinkMenu } from "./native-link-menu.runtime.tsx";

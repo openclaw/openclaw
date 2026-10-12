@@ -4,7 +4,7 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
-import { renderStreamGroupParts } from "./chat-message-stream.ts";
+import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 
 const text =
@@ -42,13 +42,15 @@ describe("GitHub reference presentation parity", () => {
           { container },
         );
       } else if (surface === "streaming") {
-        render(
-          renderStreamGroupParts(
-            [{ kind: "stream", key: "live", text, isStreaming: true, startedAt: 1 }],
-            context,
-            "standalone",
+        mountSolid(
+          () => (
+            <StreamGroupParts
+              parts={[{ kind: "stream", key: "live", text, isStreaming: true, startedAt: 1 }]}
+              options={context}
+              presentation="standalone"
+            />
           ),
-          container,
+          { container },
         );
       } else {
         render(

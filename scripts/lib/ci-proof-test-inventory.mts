@@ -5371,7 +5371,7 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/pages/chat/chat-composer-emoji.test.ts",
   "ui/src/pages/chat/chat-composer-mentions.test.ts",
   "ui/src/pages/chat/chat-composer-microphone.test.ts",
-  "ui/src/pages/chat/chat-composer-overflow.browser.test.ts",
+  "ui/src/pages/chat/chat-composer-overflow.browser.test.tsx",
   "ui/src/pages/chat/chat-github-publication.test.ts",
   "ui/src/pages/chat/chat-pane-settings-ownership.test.ts",
   "ui/src/pages/chat/chat-pane-settings-publication.test.ts",
