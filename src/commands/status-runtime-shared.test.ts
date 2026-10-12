@@ -15,15 +15,16 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   getDaemonStatusSummary: vi.fn(),
   getNodeDaemonStatusSummary: vi.fn(),
-  resolveModelAuthLabel: vi.fn(),
+  resolveModelAuthLabelAsync: vi.fn(),
 }));
 
 vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
 }));
 
+// mock-isolation: Usage status uses fixture auth labels without loading host profiles or CLI keys.
 vi.mock("../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: mocks.resolveModelAuthLabel,
+  resolveModelAuthLabelAsync: mocks.resolveModelAuthLabelAsync,
 }));
 
 vi.mock("../security/audit.runtime.js", () => ({
@@ -72,7 +73,7 @@ describe("status-runtime-shared", () => {
     mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
     mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
-    mocks.resolveModelAuthLabel.mockReturnValue(undefined);
+    mocks.resolveModelAuthLabelAsync.mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -283,7 +284,7 @@ describe("status-runtime-shared", () => {
   });
 
   it("does not add Codex synthetic usage for API-key-backed OpenAI Codex runtime routes", async () => {
-    mocks.resolveModelAuthLabel.mockReturnValue("api-key (openai:api)");
+    mocks.resolveModelAuthLabelAsync.mockReturnValue("api-key (openai:api)");
 
     await resolveStatusUsageSummary({
       ...createStatusGatewayProbeBudget(3456),
@@ -302,7 +303,7 @@ describe("status-runtime-shared", () => {
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
     expect(requireProviderUsageCall()).not.toHaveProperty("auth");
-    expect(mocks.resolveModelAuthLabel).toHaveBeenCalledWith({
+    expect(mocks.resolveModelAuthLabelAsync).toHaveBeenCalledWith({
       provider: "openai",
       acceptedProviderIds: ["openai"],
       cfg: expect.any(Object),

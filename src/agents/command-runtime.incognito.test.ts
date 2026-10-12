@@ -15,7 +15,7 @@ import {
   withIncognitoSessionActor,
   withIncognitoSessionBinding,
 } from "../config/sessions/session-incognito-binding.js";
-import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import {
   openIncognitoTestActor,

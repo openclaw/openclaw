@@ -2,8 +2,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import type { getSessionEntryAsync, SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  observeHostDataSql,
+  useSessionStoreTempDirs,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLoginResult,
@@ -19,13 +22,12 @@ import {
   createPrivateCommandContext,
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
-import type * as NativeCommandRuntime from "./bot-native-commands.runtime.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "telegram-login-worker-");
 
 const loginSessionMocks = vi.hoisted(() => ({
-  getSessionEntry: vi.fn(),
+  getSessionEntry: vi.fn<typeof getSessionEntryAsync>(),
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn(),
   prepareSessionEntryPatch: vi.fn(),
@@ -35,12 +37,16 @@ const loginSessionMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./bot-native-commands.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof NativeCommandRuntime>()),
+// mock-isolation: Keep session database startup outside the command fixture.
+vi.mock("./bot-native-commands.runtime.js", () => ({
   ensureConfiguredBindingRouteReady: vi.fn(async () => ({ ok: true })),
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
   getAgentScopedMediaLocalRoots: vi.fn(() => []),
-  getSessionEntryAsync: loginSessionMocks.getSessionEntry,
+  getSessionEntryAsync: async (
+    params: Parameters<
+      typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntryAsync
+    >[0],
+  ) => loginSessionMocks.getSessionEntry(params),
   resolveStorePath: loginSessionMocks.resolveStorePath,
   recordDeliveredCommandExchange: loginSessionMocks.recordDeliveredCommandExchange,
   resolveChunkMode: vi.fn(() => "length"),
@@ -63,7 +69,11 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
-    getSessionEntry: loginSessionMocks.getSessionEntry,
+    getSessionEntryAsync: async (
+      params: Parameters<
+        typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntryAsync
+      >[0],
+    ) => loginSessionMocks.getSessionEntry(params),
     resolveStorePath: loginSessionMocks.resolveStorePath,
     prepareSessionEntryPatch: loginSessionMocks.prepareSessionEntryPatch,
   };
@@ -76,7 +86,7 @@ function resetLoginCommandMocks() {
   loginSessionMocks.getSessionEntry
     .mockReset()
     .mockImplementation(
-      ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
+      async ({ storePath, sessionKey }) =>
         loginSessionMocks.loadSessionStore(storePath)[sessionKey],
     );
   loginSessionMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
@@ -586,7 +596,7 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
   it("persists the Telegram login account without caller-thread entry SQL", async () => {
-    const { store, scope, queries } = await prepareTelegramLoginSessionStore(
+    const { store, scope } = await prepareTelegramLoginSessionStore(
       sessionDirs.make(),
       loginSessionMocks,
     );
@@ -595,14 +605,19 @@ describe("registerTelegramNativeCommands /login", () => {
       cfg: createOwnerLoginConfig(),
       loginFlow: vi.fn<TelegramLoginFlow>(async () => createLoginResult("openai:saved")),
     });
-    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    const sql = observeHostDataSql();
+    try {
+      await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    } finally {
+      sql.restore();
+    }
     expect(loginSessionMocks.prepareSessionEntryPatch).toHaveBeenCalledOnce();
     expect(loginSessionMocks.prepareSessionEntryPatch).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: scope.sessionKey, storePath: scope.storePath }),
     );
     expect(store.getSessionEntry(scope)?.authProfileOverride).toBe("openai:saved");
     expect(
-      queries.filter((query) =>
+      sql.queries.filter((query) =>
         /\b(?:session_nodes|session_entry_snapshots|session_windows)\b/i.test(query),
       ),
     ).toEqual([]);

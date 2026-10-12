@@ -22,6 +22,8 @@ import type {
 } from "./session-actor-contract.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import type { SessionEntryPatchReduction } from "./session-entry-patch.types.js";
+import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
@@ -107,6 +109,11 @@ function createFixture() {
         throw new Error("Actor mutation returned a read snapshot");
       }
       return value;
+    },
+    patchEntry(input: SessionEntryPatchReduction) {
+      return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+        commitSessionEntryPatch(input, context),
+      );
     },
     receipt(): unknown {
       return receipts.shift();

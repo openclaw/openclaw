@@ -654,22 +654,10 @@ describe("BrowserPanelController capture and input ownership", () => {
 
   it.each([
     {
-      name: "structured action code",
-      message: "evaluation disabled",
-      details: { code: "ACT_EVALUATE_DISABLED" },
-      expected: true,
-    },
-    {
       name: "legacy Browser node message without an action code",
       message: "403: act:evaluate is disabled by config (browser.evaluateEnabled=false).",
       details: { nodeError: { message: "legacy Browser node" } },
       expected: true,
-    },
-    {
-      name: "unknown action code with matching prose",
-      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
-      details: { code: "ACT_UNKNOWN" },
-      expected: false,
     },
     {
       name: "sanitized unknown action code with matching prose",

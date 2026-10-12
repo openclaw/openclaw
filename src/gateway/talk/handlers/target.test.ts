@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
@@ -10,6 +11,7 @@ import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
@@ -28,7 +30,7 @@ import { talkClientHandlers } from "./client.js";
 import { talkSessionHandlers } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   bootstrap: vi.fn(async () => "Agent context fixture."),
   createRelay: vi.fn(() => ({
     relaySessionId: "test-relay",
@@ -39,8 +41,9 @@ const mocks = vi.hoisted(() => ({
   transcriptionProviders: vi.fn(() => []),
 }));
 
+// mock-isolation: Keep provider registration and credential state outside handler tests.
 vi.mock("../../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
@@ -75,6 +78,7 @@ const browserSession = {
 };
 
 let state: OpenClawTestState;
+let releaseProfileCatalog: (() => void) | undefined;
 let config: OpenClawConfig;
 let client: ReturnType<typeof sharingPolicyClient> & { connId: string };
 const createBrowserSession = vi.fn<
@@ -122,10 +126,12 @@ beforeEach(async () => {
     ...sharingPolicyClient({ user: ensureProfileForEmail("listener@example.test").id }),
     connId: "talk-target-test",
   };
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   config = {
     agents: { ownership: "explicit", entries: { primary: {}, voice: {} } },
     talk: { agentId: "voice" },
   };
+  setRuntimeConfigSnapshot(config);
   vi.clearAllMocks();
   createdCalls.length = 0;
   createBrowserSession.mockReset().mockResolvedValue(browserSession);
@@ -139,7 +145,7 @@ beforeEach(async () => {
   Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
     value: { isBrowserSessionConfigured: () => true, cancelBrowserSession },
   });
-  mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+  mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
     provider,
     providerConfig: {},
     capabilities: provider.capabilities,
@@ -156,6 +162,8 @@ afterEach(async () => {
     vi.restoreAllMocks();
     clientVoiceSessionTesting.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    releaseProfileCatalog?.();
+    releaseProfileCatalog = undefined;
     await state.cleanup();
   }
 });
@@ -198,6 +206,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     },
   ])("uses a valid $name default without authored talk.agentId", async ({ cfg }) => {
     config = cfg;
+    setRuntimeConfigSnapshot(config);
     const respond = await dispatch("talk.client.create", createParams);
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
     expect(createBrowserSession).toHaveBeenCalledWith(
@@ -462,16 +471,22 @@ describe("Talk target preparation through Gateway authorization", () => {
       await started.promise;
       if (change === "removed-agent") {
         config = { ...config, agents: { ownership: "explicit", entries: { primary: {} } } };
+        setRuntimeConfigSnapshot(config);
       } else if (change === "global-main-key") {
         config = { ...config, session: { scope: "global", mainKey: "changed" } };
+        setRuntimeConfigSnapshot(config);
       } else if (change === "owner") {
         config = { ...config, talk: { agentId: "primary" } };
+        setRuntimeConfigSnapshot(config);
       } else if (change === "main-key") {
         config = { ...config, session: { mainKey: "changed" } };
+        setRuntimeConfigSnapshot(config);
       } else if (change === "scope") {
         config = { ...config, session: { scope: "global" } };
+        setRuntimeConfigSnapshot(config);
       } else if (change === "store") {
         config = { ...config, session: { store: state.statePath("changed", "sessions.sqlite") } };
+        setRuntimeConfigSnapshot(config);
       } else {
         await replaceSessionEntry(
           { agentId: "voice", sessionKey: "agent:voice:main" },
@@ -558,6 +573,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     });
     await started.promise;
     config = { ...config, talk: { agentId: "primary" } };
+    setRuntimeConfigSnapshot(config);
     gate.resolve();
     expect(await pending).toHaveBeenCalledWith(
       false,
@@ -643,6 +659,7 @@ describe("Talk target preparation through Gateway authorization", () => {
           expect(sessionId).toBeTruthy();
           if (change === "owner") {
             config = { ...config, talk: { agentId: "primary" } };
+            setRuntimeConfigSnapshot(config);
           } else {
             await replaceSessionEntry(scope, {
               sessionId: change === "replacement" ? "replacement-session" : sessionId!,
@@ -704,6 +721,7 @@ describe("Talk target preparation through Gateway authorization", () => {
     const pending = dispatch("talk.client.create", createParams);
     await started.promise;
     config = { ...config, talk: { agentId: "primary" } };
+    setRuntimeConfigSnapshot(config);
     gate.resolve(undefined);
     expect(await pending).toHaveBeenCalledWith(
       false,

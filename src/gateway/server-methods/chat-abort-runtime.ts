@@ -15,7 +15,6 @@ import {
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { ensureSubagentControllerOwnsRun } from "../../agents/subagents/registry/subagent-control-scope.js";
-import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
 import {
   getCurrentSubagentRunOwner,
   subagentRuns,
@@ -40,6 +39,8 @@ import { resolveSessionStoreKey } from "../session-utils.js";
 import type { WorkerInferenceCancellation } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
+  captureSessionAbortRequestFilter,
+  captureSessionAbortRequestOrigin,
   resolveAuthorizedPreRegisteredRunsForSessionKeys,
   resolveAuthorizedRunsForSessionKeys,
   resolveAuthorizedQueuedTurnsForSession,
@@ -215,7 +216,9 @@ export function abortQueuedCollectorSession(
         {
           assertCurrent,
           preparePublication: publication,
-          beforeSessionKill: () => {
+          beforeSessionKill: async () => {
+            await params.beforeAbort?.();
+            assertCurrent();
             // Resolve Gateway owners under the kill runtime's session fence.
             // Signal them only after this collector's FIFO reservation is held.
             const plan = prepareChatSessionAbort(
@@ -291,11 +294,7 @@ function prepareChatSessionAbort(
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
   };
-  const acceptsRequest: SubagentRequestSessionOrigin["acceptsRequest"] = (identity) =>
-    canRequesterAbortChatRun(identity, params.requester) &&
-    (params.includeProtectedRuns === true ||
-      (identity.controlUiVisible !== false &&
-        !(params.preserveSideRuns && identity.turnKind === "btw")));
+  const acceptsRequest = captureSessionAbortRequestFilter(params);
   const commands = captureExecRequestCancellation(
     {
       sessionKey: params.sessionKey,
@@ -346,22 +345,7 @@ function prepareChatSessionAbort(
     stopReason: params.stopReason,
     assertCurrent: params.assertCurrent,
   });
-  const sessionOrigin: SubagentRequestSessionOrigin | undefined =
-    session?.entry &&
-    (params.requiredSessionId === undefined ||
-      session.entry.sessionId === params.requiredSessionId) &&
-    (params.sessionId === undefined || session.entry.sessionId === params.sessionId)
-      ? {
-          target: {
-            agentId: session.agentId,
-            storePath: session.storePath,
-            sessionKey: session.canonicalKey,
-            sessionId: session.entry.sessionId,
-            lifecycleRevision: session.entry.lifecycleRevision ?? null,
-          },
-          acceptsRequest,
-        }
-      : undefined;
+  const sessionOrigin = captureSessionAbortRequestOrigin(params, acceptsRequest);
   const queuedPlan = resolveAuthorizedQueuedTurnsForSession({
     ...ownerScope,
     context: params.context,
@@ -426,6 +410,7 @@ function prepareChatSessionAbort(
     }
   };
   const cancelWorker = () => {
+    params.assertCurrent?.();
     workerCancellationPersistence = workerCancellation?.cancel({
       assertCurrent: params.assertCurrent,
       onCancelled: recordRun,
@@ -438,8 +423,6 @@ function prepareChatSessionAbort(
     if (!canRunLifecycleCleanup) {
       return;
     }
-    params.assertCurrent?.();
-    result.aborted = params.onAuthorizedBeforeEmbeddedAbort?.() || result.aborted;
     const wasActive = Boolean(persistedSessionId && isEmbeddedAgentRunActive(persistedSessionId));
     params.assertCurrent?.();
     const embeddedAborted = Boolean(
@@ -489,25 +472,10 @@ function prepareChatSessionAbort(
   const abortAuthorizedRuns = () => {
     params.assertCurrent?.();
     params.onControllerTargets?.(authorizedRuns);
-    if (!hasAuthorizedGatewayRuns) {
-      // The injected lifecycle callback must not turn a persisted session id into
-      // a bypass around a matching connection or protected run owner.
-      if (hasUnauthorizedOwner || hasUnauthorizedLifecycleOwner) {
-        result.unauthorized = true;
-        return;
-      }
-      params.assertCurrent?.();
-      if (commands.cancel()) {
-        result.aborted = true;
-      }
-      // With no owned Gateway run, the exact persisted session is the boundary,
-      // matching sessions.steer's operator.write behavior for ownerless work.
-      abortAdditional();
-      if (!hasWorkerRun || !params.requester.isAdmin || !canCancelWorkerSession) {
-        return;
-      }
-      params.assertCurrent?.();
-      cancelWorker();
+    // The injected lifecycle callback must not turn a persisted session id into
+    // a bypass around a matching connection or protected run owner.
+    if (!hasAuthorizedGatewayRuns && (hasUnauthorizedOwner || hasUnauthorizedLifecycleOwner)) {
+      result.unauthorized = true;
       return;
     }
     snapshots = authorizedRuns.flatMap(({ runId, entry }) => {
@@ -551,10 +519,9 @@ function prepareChatSessionAbort(
     }
     // Hidden and preserved side runs must also block broad cleanup: authorization
     // alone must not let the callback abort work intentionally excluded above.
-    abortAdditional();
-    params.assertCurrent?.();
-    if (commands.cancel()) {
-      result.aborted = true;
+    if (canRunLifecycleCleanup) {
+      params.assertCurrent?.();
+      result.aborted = params.onAuthorizedBeforeEmbeddedAbort?.() || result.aborted;
     }
     for (const { runId, sessionKey, sessionId, agentId, entry } of authorizedRuns) {
       params.assertCurrent?.();
@@ -582,6 +549,12 @@ function prepareChatSessionAbort(
         recordRun(runId);
       }
     }
+    // Secondary cancellation must not retire reply abortability before its chat terminal.
+    params.assertCurrent?.();
+    if (commands.cancel()) {
+      result.aborted = true;
+    }
+    abortAdditional();
     const endedAt = Date.now();
     const stopReason = params.stopReason ?? "rpc";
     for (const [kind, plan] of [
@@ -610,8 +583,11 @@ function prepareChatSessionAbort(
         }
       }
     }
-    if (params.requester.isAdmin && canCancelWorkerSession) {
-      params.assertCurrent?.();
+    if (
+      (hasAuthorizedGatewayRuns || hasWorkerRun) &&
+      params.requester.isAdmin &&
+      canCancelWorkerSession
+    ) {
       cancelWorker();
     }
   };
@@ -642,12 +618,11 @@ function prepareChatSessionAbort(
         ...admittedAbortPersistence,
       ]);
       // A captured session failure can also surface through partial persistence.
-      const failures = new Set<unknown>();
-      for (const settled of [worker, partial, exec, embedded, ...admitted]) {
-        if (settled.status === "rejected") {
-          failures.add(settled.reason);
-        }
-      }
+      const failures = new Set<unknown>(
+        [worker, partial, exec, embedded, ...admitted].flatMap((settled) =>
+          settled.status === "rejected" ? [settled.reason] : [],
+        ),
+      );
       if (params.session && !params.session.ok) {
         failures.add(params.session.error);
       }
@@ -689,15 +664,20 @@ export async function abortChatRunsForSessionKeyWithPartials(
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         sessionId: params.sessionId,
+        lifecycleRevision: params.session?.ok
+          ? params.session.value.entry?.lifecycleRevision
+          : undefined,
         execCancellation: plan.commands,
         sessionOrigin: plan.sessionOrigin,
         assertCurrent: params.assertCurrent,
-        beforeKill: () => {
+        beforeKill: async () => {
+          await params.beforeAbort?.();
           plan.abort();
           return true;
         },
       });
     } else {
+      await params.beforeAbort?.();
       plan.abort();
     }
     if (!result.unauthorized && !result.error) {
@@ -724,7 +704,9 @@ export async function abortChatRunsForSessionKeyWithPartials(
   }
   return {
     ...result,
-    aborted: result.aborted || Boolean(descendants?.killed) || Boolean(descendants?.execAborted),
+    aborted:
+      result.aborted ||
+      Boolean(descendants?.killed || descendants?.continuationRetired || descendants?.execAborted),
     descendants,
     ...(warning ? { warning } : {}),
   };

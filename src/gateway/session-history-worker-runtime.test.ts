@@ -2,6 +2,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as sqliteScope from "../config/sessions/session-accessor.sqlite-scope.js";
 import type {
   SessionHistoryWorkerRequest,
@@ -18,7 +22,6 @@ import * as reconcile from "../config/sessions/session-transcript-reconcile.js";
 import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
-import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import * as stateContext from "../state/openclaw-state-worker-context.js";
 import * as storeSources from "./session-utils-store-sources.js";
 
@@ -65,6 +68,7 @@ function waitForReaderAdmission(count: number): Promise<void> {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.spyOn(sqliteScope, "prepareSqliteTranscriptReadScope").mockImplementation(async (scope) => {
     if (!scope.agentId || !scope.storePath) {
       throw new Error("Queue fixture requires an explicit history target");
@@ -96,7 +100,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["timeout", "cancel"] as const)(
   "bounds projection recovery and preserves caller %s",
@@ -250,7 +257,7 @@ it.each([false, true])(
   "keeps exact lookup independent of auxiliary registry churn but retains primary authority (revoke: %s)",
   async (revoke) => {
     vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(
-      new AgentDatabaseRegistryChangedError(),
+      new Error("Auxiliary registry changed during discovery"),
     );
     const capture = stateContext.captureOpenClawStateWorkerContext;
     const revoked = new Error("primary history owner revoked");
@@ -291,7 +298,7 @@ it.each([false, true])(
 it.each(["rpc", "http", "delta", "inline-visibility"] as const)(
   "retains auxiliary registry refusal for %s lineage projection",
   async (kind) => {
-    const failure = new AgentDatabaseRegistryChangedError();
+    const failure = new Error("Auxiliary registry changed during discovery");
     vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(failure);
     const rpc = request();
     const target = {

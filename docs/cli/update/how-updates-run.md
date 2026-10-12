@@ -32,12 +32,24 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+Readiness checks share an overall deadline across native service inspection,
+listener checks, authenticated RPC, and HTTP readiness. A network probe's
+per-request limit does not shorten native inspection. Slow inspection still
+consumes the shared deadline, so it cannot extend the update's overall budget.
+These checks belong to the installed updater; a candidate cannot change an
+older updater's already-running readiness wait.
+
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different
 immediate parent no longer causes a valid candidate to fail with `Candidate
 executor binding does not match its parent`. The update owner must remain live,
 and changed or revoked leases still refuse mutation. This check runs in the
 candidate, so it also accepts valid handoffs from older installed updaters.
+
+If a service refresh refuses before writing its definition, the candidate keeps
+the original refusal in its output. The updater can then revalidate and restart
+the preserved service definition. Actual loss of native service authority still
+leaves recovery pending until ownership and restoration can be verified.
 
 Channel health collection timeouts are warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP

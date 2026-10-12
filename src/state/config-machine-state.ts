@@ -17,10 +17,7 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 type ConfigMachineStateReadCommand = Extract<
   OpenClawStateReadCommand,
@@ -49,7 +46,7 @@ export function isConfigMachineStateReadCommand(
 export function readConfigMachineStateCommandInDatabase(
   database: DatabaseSync,
   command: ConfigMachineStateReadCommand,
-): Extract<OpenClawStateReadResult, { type: ConfigMachineStateReadCommand["type"] }> {
+) {
   return {
     type: command.type,
     // Activation may precede deferred publication; never issue authority before v19.

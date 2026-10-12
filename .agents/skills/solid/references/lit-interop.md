@@ -40,6 +40,14 @@ The bridge is interim. It and its exact-path ratchet exception die with the last
 
 An unported Lit element inside a Solid tree is just a custom element: render its tag, set properties with `prop:`, and listen with camelCase or dashed `on…` handlers. Never let Solid and Lit both own the same DOM children. The Lit element gets its own host node.
 
+Stateless legacy templates use `LitContent` and `solidContent` from
+`ui/src/lit/solid-content.tsx`. That module owns their retained ranges, mounting,
+connection, and cleanup; `mountLitContent` also serves imperative markdown media
+slots. Native views use this boundary and its `emptyLegacyContent` sentinel
+instead of importing Lit. The ratchet exempts this one interop module, not other
+new files in its directory. Delete the module and its exception with the final
+legacy-template cutover.
+
 ## The Lit ratchet
 
 `scripts/check-control-ui-lit-ratchet.mts` (run by `check:changed` and `run-lint`) **reports** Lit metrics for every change. It never blocks growth inside existing Lit files: feature work in unported pages must keep landing. At most it rejects a brand-new Lit production file under `ui/src`, because new UI can be written in Solid and mounted from Lit through the bridge. See [lessons](lessons.md) for why it started advisory.

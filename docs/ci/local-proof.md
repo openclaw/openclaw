@@ -391,15 +391,11 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mts` and
 
 ## Testbox validation
 
-Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
-sessions run trusted development tests, changed gates, typecheck/lint, and
-builds locally by default. They use Crabbox when the environment is part of the
-proof: clean-machine, install/package, Docker, E2E, live, desktop, cross-OS, or
-CI-parity work, or when the operator explicitly requests remote proof. Crabbox
-is not generic compute offload. `.crabbox.yaml` defaults remote proof to
-`blacksmith-testbox`. Its configured workflow hydrates provider and agent
-credentials, so untrusted contributor or fork code must use secretless fork CI
-or sanitized direct AWS Crabbox instead.
+Follow the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+For its remote exceptions, `.crabbox.yaml` defaults to `blacksmith-testbox`.
+That workflow hydrates credentials: untrusted contributor/fork code requires
+secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
 cloud-worker profiles require Crabbox 0.73.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
@@ -476,8 +472,8 @@ cover ARM, musl, or the untrusted bootstrap.
 Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
-Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
-quota issues, or explicit owned-capacity testing.
+Select owned capacity only for its required environment or an explicit operator
+request, under the proof policy above.
 
 For an explicitly authorized admin-only PR landing fallback, set
 `OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
@@ -540,10 +536,8 @@ The Crabbox merge path stores this comparison in
 and reports any intervening main movement after the already-completed merge
 without claiming atomic prevention.
 
-Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
-first environment-sensitive command is ready, reuse the returned `tbx_...` id
-for later remote commands, sync the current checkout on every run, and stop it
-before handoff.
+Acquire only when the exceptional command is ready; reuse task-owned leases,
+sync on each run, and stop before handoff.
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
 one-shot Testboxes. Native Blacksmith owns synchronization; Crabbox's direct
@@ -683,22 +677,9 @@ If Crabbox is the broken layer but Blacksmith itself works, use direct
 Blacksmith only for diagnostics such as `list`, `status`, and cleanup. Fix the
 Crabbox path before treating a direct Blacksmith run as maintainer proof.
 
-If `blacksmith testbox list --all` and `blacksmith testbox status` work but new
-warmups sit `queued` with no IP or Actions run URL after a couple of minutes,
-treat it as Blacksmith provider, queue, billing, or org-limit pressure. Stop the
-queued ids you created, avoid starting more Testboxes, and move the proof to the
-owned Crabbox capacity path below while someone checks the Blacksmith dashboard,
-billing, and org limits.
-
-Escalate to owned Crabbox capacity only when Blacksmith is down, quota-limited, missing the needed environment, or owned capacity is explicitly the goal:
-
-```bash
-CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
-  pnpm crabbox:warmup -- --provider aws --class standard --market on-demand --idle-timeout 90m
-pnpm crabbox:hydrate -- --provider aws --id <cbx_id-or-slug>
-pnpm crabbox:run -- --provider aws --id <cbx_id-or-slug> --timing-json --shell -- "pnpm check:changed"
-pnpm crabbox:stop -- --provider aws <cbx_id-or-slug>
-```
+For admission/queue handling, follow the canonical proof policy above.
+For explicitly selected AWS capacity, use the
+[direct-provider commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/references/operations.md#direct-aws).
 
 Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` defaults to `class: standard`, on-demand market, and `capacity.hints: true` so brokered AWS leases print selected region/market, quota pressure, Spot fallback, and high-pressure class warnings. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 

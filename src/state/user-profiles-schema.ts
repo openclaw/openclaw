@@ -95,7 +95,6 @@ export class UserProfileOwnerError extends Error {
 }
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
-const roleEnsuredDatabases = new WeakSet<DatabaseSync>();
 
 function rememberEnsuredSchema(database: DatabaseSync, cache: WeakSet<DatabaseSync>): void {
   if (cache.has(database)) {
@@ -125,7 +124,6 @@ export function ensureUserProfilesSchema(
   if (ensuredDatabases.has(database.db)) {
     return;
   }
-  let hasRoleColumn = false;
   runUserProfileWriteTransaction(
     ({ db }) => {
       ensureUserProfileTables(db);
@@ -163,27 +161,23 @@ export function ensureUserProfilesSchema(
         });
       }
       options.mutation?.publish(...profiles);
-      hasRoleColumn = tableHasColumn(db, "user_profiles", "role");
     },
     options,
     { operationLabel: "user-profiles.schema.ensure" },
   );
   // A rolled-back ensure must retry rather than caching a missing table/column.
   rememberEnsuredSchema(database.db, ensuredDatabases);
-  if (hasRoleColumn) {
-    rememberEnsuredSchema(database.db, roleEnsuredDatabases);
-  }
 }
 
 export function ensureUserProfileRoleSchema(
   options: OpenClawStateDatabaseOptions,
   database = openOpenClawStateDatabase(options),
 ): void {
-  if (roleEnsuredDatabases.has(database.db)) {
+  if (tableHasColumn(database.db, "user_profiles", "role")) {
     return;
   }
   ensureUserProfilesSchema(options, database);
-  if (roleEnsuredDatabases.has(database.db)) {
+  if (tableHasColumn(database.db, "user_profiles", "role")) {
     return;
   }
   runOpenClawStateWriteTransaction(
@@ -191,10 +185,4 @@ export function ensureUserProfileRoleSchema(
     options,
     { operationLabel: "user-profiles.role.schema.ensure" },
   );
-  // Keep the cache aligned with both nested rollback and the outer commit.
-  rememberEnsuredSchema(database.db, roleEnsuredDatabases);
-}
-
-export function hasEnsuredUserProfileRoleSchema(database: DatabaseSync): boolean {
-  return roleEnsuredDatabases.has(database);
 }

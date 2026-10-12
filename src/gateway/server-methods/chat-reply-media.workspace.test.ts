@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -57,6 +58,7 @@ describe("WebChat reply media workspace ownership", () => {
         },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     return { cfg, workspaceDir };
   }
 
@@ -97,7 +99,7 @@ describe("WebChat reply media workspace ownership", () => {
       updatedAt: 1,
     };
     await replaceSessionEntry(target, entry);
-    const scope = captureWebchatReplyMediaScope({
+    const scope = await captureWebchatReplyMediaScope({
       cfg,
       agentId: "main",
       sessionKey: TEST_SESSION_KEY,

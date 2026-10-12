@@ -80,7 +80,11 @@ export function collectAgentDatabasePreflightTargets(options: {
   const retainedDeletions = deletionJournal.status === "present" ? deletionJournal.entries : [];
   let agentTargets = registeredDatabases;
   let configuredTargets: readonly AgentTarget[] = [];
-  const retainedAgentIds = new Set(retainedDeletions.map((deletion) => deletion.agentId));
+  const retainedAgentIds = new Set(
+    retainedDeletions
+      .filter((deletion) => deletion.cleanupCompleted || deletion.manualClawRemoval)
+      .map((deletion) => deletion.agentId),
+  );
   const retainedPaths = new Set<string>();
   const failures: Array<{ path: string; reason: string }> = [];
   let preparedDiscovery: PreparedAgentDatabaseMigrationDiscovery | undefined;
@@ -105,7 +109,7 @@ export function collectAgentDatabasePreflightTargets(options: {
       registeredAgentDatabases: registeredDatabases,
       discovery,
     };
-    agentTargets = discovery.targets;
+    agentTargets = discovery.schemaTargets;
     for (const retained of [...discovery.retainedTargets, ...discovery.unverifiedTargets]) {
       retainedPaths.add(retained.realPath);
     }

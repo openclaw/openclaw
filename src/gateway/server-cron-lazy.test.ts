@@ -204,7 +204,7 @@ describe("createLazyGatewayCronState", () => {
     const lazy = createLazyGatewayCronState(createParams());
     await lazy.cron.prepareWake?.();
 
-    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
+    expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
     expect(cron["start"]).not.toHaveBeenCalled();
     expect(cron["wake"]).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
   });
@@ -256,13 +256,13 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps synchronous wake non-blocking before the cron service is loaded", async () => {
+  it("keeps wake non-blocking before the cron service is loaded", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
 
     const lazy = createLazyGatewayCronState(createParams());
 
-    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: false });
+    expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: false });
 
     await vi.waitFor(() => {
       expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
@@ -454,6 +454,6 @@ function createCronService(): GatewayCronServiceContract {
     readScratch: vi.fn(async () => ({ currentRevision: 0 })),
     writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),
     getDefaultAgentId: vi.fn(() => "default"),
-    wake: vi.fn(() => ({ ok: true })),
+    wake: vi.fn(async () => ({ ok: true })),
   };
 }

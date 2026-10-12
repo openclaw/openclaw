@@ -35,10 +35,6 @@ import {
   withPreparedModelCatalogOwner,
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
-import {
-  getSubagentSessionListReadSnapshotIdentity,
-  prepareOptionalSubagentSessionListReadCache,
-} from "../agents/subagents/registry/subagent-registry-state.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -52,7 +48,11 @@ import {
 } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  getRuntimeConfig,
+  registerConfigWriteListener,
+} from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import {
@@ -135,6 +135,7 @@ import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js
 import { embeddedSessionStartupMigrationLog, silentRuntime } from "./embedded-runtime.js";
 import {
   createEmbeddedSessionReader,
+  readEmbeddedHistorySession,
   readEmbeddedHistorySessionInfo,
   readEmbeddedPrivateHistorySessionInfo,
 } from "./embedded-session-reader.js";
@@ -211,9 +212,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribeQuestions = this.questionBroker.subscribe((event) => {
       this.emit(event.event, event.payload);
     });
-    const config = getRuntimeConfig();
     // Local mode shares the Gateway's session-store readiness checks.
     this.sessionProjection = (async () => {
+      const config = await captureRuntimeConfigAsyncReader()();
       const { runSessionStartupMigration } =
         await import("../config/sessions/startup-migration.js");
       await runSessionStartupMigration({
@@ -448,14 +449,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
-    if (!getSubagentSessionListReadSnapshotIdentity()) {
-      await prepareOptionalSubagentSessionListReadCache();
-    }
-    const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const selected = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
-      ...loadOptions,
-      includeStoreChildEntries: true,
-    });
+    const selected = await readEmbeddedHistorySession(opts);
     const { cfg, agentId: sessionAgentId, storePath, readSource, entry, canonicalKey } = selected;
     const sessionId = entry?.sessionId;
     const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({

@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig as getCurrentRuntimeConfig } from "../config/io.js";
 import {
   onAgentRuntimeEvent,
@@ -252,11 +253,26 @@ export function registerChatConnectionIdentityTest(harness: {
       const context = createDirectChatContext();
       const send = async (params: ChatConnectionIdentityInput) => {
         const removeCount = (context.removeChatRun as ReturnType<typeof vi.fn>).mock.calls.length;
+        const removed = createDeferred<Parameters<GatewayRequestContext["removeChatRun"]>>();
+        vi.mocked(context.removeChatRun).mockImplementationOnce((...args) => {
+          removed.resolve(args);
+          return undefined;
+        });
+        const respond = vi.fn<RespondFn>();
         await harness.sendControlUiChat({
           context,
           ...params,
-          respond: vi.fn() as RespondFn,
+          respond,
         });
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls)).toBe(true);
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+        expect(await removed.promise).toEqual([
+          params.idempotencyKey,
+          params.idempotencyKey,
+          "agent:main:main",
+        ]);
+        // Removal precedes fallback persistence. Capture this turn's release only
+        // after it reaches cleanup, rather than before pending work acquires custody.
         await harness.waitForSessionWork();
         expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1);
       };

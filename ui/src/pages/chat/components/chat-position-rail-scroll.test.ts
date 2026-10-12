@@ -2,9 +2,10 @@
 
 import { html, LitElement, nothing } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
-import { renderChatPositionRail } from "./chat-position-rail.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   publishTranscriptScroll,
@@ -46,7 +47,6 @@ describe("conversation position rail scroll rendering", () => {
     const host = new RailScrollTestHost();
     const container = host.transcriptRoot;
     const performUpdate = vi.spyOn(host, "performUpdate");
-    const requestUpdate = () => host.requestUpdate();
     const transcript = new ChatTranscriptController(host, () => "rail-notification", {
       canFollowEnd: () => false,
     });
@@ -84,7 +84,7 @@ describe("conversation position rail scroll rendering", () => {
           (row) => (row.kind === "content" ? row.content : nothing),
           null,
           false,
-          renderChatPositionRail({ positions, transcript: session, requestUpdate }),
+          solidContent(ChatPositionRail, { positions, transcript: session }),
         );
       });
     host.renderTranscript = transcriptView;

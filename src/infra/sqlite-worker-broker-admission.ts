@@ -8,7 +8,6 @@ import { serialize } from "node:v8";
 import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
 import type {
@@ -309,12 +308,6 @@ export function assertSqliteWorkerActorReusable(
 export function prepareSqliteWorkerActorContext(actor: Actor | undefined, job: Job): void {
   const { request } = job;
   const stateContext = request.stateContext ?? actor?.stateContext;
-  // A drained actor retains native disposal custody after its caller loses admission.
-  if (actor && !actor.target && request.type !== "close") {
-    assertStateDatabaseAccessAllowed(actor.stateDatabasePath ?? actor.databasePath, {
-      maintenanceScope: job.maintenanceScope,
-    });
-  }
   if (actor && stateContext) {
     assertSqliteWorkerActorStateContext(actor, stateContext);
     request.stateDatabasePath = actor.stateDatabasePath ?? actor.databasePath;

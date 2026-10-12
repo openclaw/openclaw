@@ -14,11 +14,14 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
-  appendSqliteTrajectoryRuntimeEvents,
+  appendSqliteTrajectoryRuntimeEvents as appendSerializedTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEventRowsSync,
   loadSqliteTrajectoryRuntimeEvents,
 } from "./runtime-store.sqlite.js";
-import { createTrajectoryEvent } from "./runtime-store.test-support.js";
+import {
+  appendSqliteTrajectoryRuntimeEvents,
+  createTrajectoryEvent,
+} from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeTestDatabase = Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">;
@@ -42,7 +45,7 @@ describe("SQLite trajectory runtime store", () => {
     vi.useRealTimers();
   });
 
-  it("appends batches in database order without trusting recorder-local seq", async () => {
+  it("appends serialized batches in database order without trusting recorder-local seq", async () => {
     const events = Array.from({ length: 201 }, (_, index) =>
       createTrajectoryEvent({ seq: 1, type: `event-${index}` }),
     );
@@ -57,7 +60,14 @@ describe("SQLite trajectory runtime store", () => {
       /^insert into "trajectory_runtime_events"/i.test(sql) ? "append" : null,
     );
     try {
-      appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, events);
+      appendSerializedTrajectoryRuntimeEvents(
+        { sessionId: "session-1", storePath },
+        events.map((event) => ({
+          runId: event.runId,
+          ts: event.ts,
+          line: JSON.stringify(event),
+        })),
+      );
       expect(counter.counts.append).toBeLessThan(10);
     } finally {
       counter.restore();
@@ -70,11 +80,13 @@ describe("SQLite trajectory runtime store", () => {
       database.db,
       db
         .selectFrom("trajectory_runtime_events")
-        .select(["seq", "run_id"])
+        .select(["seq", "run_id", "event_json"])
         .where("session_id", "=", "session-1")
         .orderBy("seq", "asc"),
     ).rows;
-    expect(rows).toEqual(events.map((_, seq) => ({ run_id: "run-1", seq })));
+    expect(rows).toEqual(
+      events.map((event, seq) => ({ run_id: "run-1", seq, event_json: JSON.stringify(event) })),
+    );
   });
 
   it("reads committed runtime events in its worker after an in-process append", async () => {

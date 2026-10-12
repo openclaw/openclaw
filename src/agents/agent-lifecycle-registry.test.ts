@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import { registerActiveCronTaskRun } from "../cron/service/active-run-cancellation.js";
 import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -16,6 +16,10 @@ import {
 } from "../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
+import {
+  invalidateAgentDeletionJournalStatus,
+  publishAgentDeletionJournalStatus,
+} from "../state/agent-deletion-journal-status.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { recordAgentProvenanceInDatabase } from "../state/agent-provenance.kernel.js";
@@ -262,7 +266,7 @@ describe("agent lifecycle registry", () => {
     });
     const changes: unknown[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => {
-      if ("all" in change && change.scope === "stores") {
+      if (isSessionStoreTopologyChange(change)) {
         changes.push(change);
       }
     });
@@ -401,6 +405,7 @@ describe("agent lifecycle registry", () => {
           await deletion.assertCurrentAsync();
           // A committed external change cannot be hidden by an earlier discovery snapshot.
           db.exec(mutation);
+          invalidateAgentDeletionJournalStatus(db, "main");
           expect(writeEffect).toThrow();
           expect(fs.existsSync(effectPath)).toBe(false);
           await expect(deletion.assertCurrentAsync()).rejects.toThrow();
@@ -735,6 +740,7 @@ describe("agent lifecycle registry", () => {
       assertMatches(recreated, false);
       expect(await matchesAgentLifecycleBindingAsync(() => config, recreated, options)).toBe(false);
       database.db.exec("DELETE FROM agent_deletion_journal WHERE agent_id = 'main'");
+      publishAgentDeletionJournalStatus(database.db, "main", "absent");
       assertMatches(recreated, true);
 
       const capturing = captureAgentLifecycleBinding(() => config, "main", options);
@@ -767,6 +773,9 @@ describe("agent lifecycle registry", () => {
       });
       expect(isAgentDeletionBlocked("main", options)).toBe(true);
       await expect(first.assertCurrentAsync()).rejects.toThrow("no longer owns");
+      await expect(first.retire()).rejects.toThrow("no longer owns");
+      await expect(first.fenceDatabasePaths([])).rejects.toThrow("no longer owns");
+      await expect(first.fenceCleanupPaths([])).rejects.toThrow("no longer owns");
       expect(first.assertCurrentFinal).toThrow("no longer owns");
       expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
       expect(await captureAgentLifecycleBinding(() => config, "main", options)).toBeUndefined();

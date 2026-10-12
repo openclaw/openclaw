@@ -410,7 +410,7 @@ describe("gateway request suspension admission", () => {
           status: "draining",
           suspensionId: expect.any(String),
           expiresAtMs: expect.any(Number),
-          retryAfterMs: 20_000,
+          retryAfterMs: 5_000,
           activeCount: preservingTerminals ? 3 : 2,
           writeCustody: [{ phase: "terminal-persistence", count: 1 }],
           blockers: expect.arrayContaining([
@@ -470,7 +470,7 @@ describe("gateway request suspension admission", () => {
         expect(pending.respond).toHaveBeenCalledWith(true, {
           status: "draining",
           expiresAtMs: result.expiresAtMs,
-          retryAfterMs: 20_000,
+          retryAfterMs: 5_000,
           activeCount: 1,
           blockers: [expect.objectContaining({ kind: "terminal-persistence", count: 1 })],
           writeCustody: [{ phase: "terminal-persistence", count: 1 }],

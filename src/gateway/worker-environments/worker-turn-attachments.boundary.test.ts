@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
@@ -301,6 +302,7 @@ describe("current attachments in an active remote placement", () => {
           return { meta: { durationMs: 1 } };
         },
       );
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       if (executionMode === "remote-exec") {
         const commands = vi.mocked(tunnel.runWorkspaceCommand).mock.calls;
         expect(commands.at(-1)?.[0].input).toBe(JSON.stringify({ op: "discover" }));

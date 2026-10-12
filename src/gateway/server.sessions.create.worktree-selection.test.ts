@@ -12,6 +12,8 @@ import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -109,7 +111,7 @@ test.each([
     },
   },
 ])(
-  "sessions.create shares a title routed through the $name selection with its worktree and first chat send",
+  "sessions.create allocates a checkout independently of its title through the $name selection",
   async ({ request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection }) =>
     await withSessionTestState({ layout: "state-only" }, async (state) => {
       const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
@@ -155,6 +157,17 @@ test.each([
         });
       }
       let sessionKey: string | undefined;
+      const titlePersisted = createDeferredCore();
+      const checkTitle = () => {
+        if (
+          sessionKey &&
+          loadSessionEntry({ agentId: "main", sessionKey, storePath })?.displayName ===
+            "Attachment Repair"
+        ) {
+          titlePersisted.resolve();
+        }
+      };
+      const stopTitleObserver = sessionChanges.subscribe(checkTitle);
       const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
       const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
       const message = "Review this rollout [[reply_to_current]]";
@@ -199,16 +212,21 @@ test.each([
         });
         sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
         expect(await waitForCreatedSessionRun(context, storePath, sessionKey)).toBe(true);
-        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+        checkTitle();
+        await titlePersisted.promise;
+        const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+        expect(entry).toMatchObject({
           displayName: "Attachment Repair",
-          worktree: { branch: "openclaw/attachment-repair" },
         });
+        expect(entry?.worktree?.branch).toMatch(/^openclaw\/[a-z0-9-]+$/u);
+        expect(entry?.worktree?.branch).not.toBe("openclaw/attachment-repair");
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCountBefore + 1);
         expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledWith(
           expect.objectContaining(expectedTitleSelection),
         );
         expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
       } finally {
+        stopTitleObserver();
         await settleWorkspaceRuns(context, storePath, sessionKey, true);
         await removeSessionWorktree(sessionKey);
         setActivePluginRegistry(createEmptyPluginRegistry());

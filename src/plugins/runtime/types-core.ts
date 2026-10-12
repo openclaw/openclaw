@@ -346,7 +346,12 @@ export type PluginRuntimeCore = {
   decisions: import("../../decisions/types.js").DecisionRuntimeV1;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
-    current: () => DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;
+    current: {
+      /** Independent mutable copy retaining the published config's resolution facts. */
+      (options: { clone: true }): import("../../config/types.openclaw.js").OpenClawConfig;
+      /** Keep the default last so ReturnType consumers retain the readonly snapshot. */
+      (): DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;
+    };
     /**
      * Persist a focused config mutation. Callers must choose the post-write
      * behavior explicitly so the gateway can hot-reload, restart, or defer.
@@ -396,7 +401,9 @@ export type PluginRuntimeCore = {
      * registered backend, stored credential mode) so opted-in callers can
      * budget timeouts for the run that will actually execute.
      */
+    /** @deprecated Use resolveCliBackendDispatchEligibilityAsync. Removed at the next Plugin SDK major. */
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
+    resolveCliBackendDispatchEligibilityAsync: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibilityAsync;
     ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
@@ -417,9 +424,12 @@ export type PluginRuntimeCore = {
           orderBy?: "updatedAt";
         },
       ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
+      /** @deprecated Use listSessionEntriesAsync for metadata reads. Removed at the next Plugin SDK major. */
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];
+      /** Read-only metadata listing; saved prompts and other detached snapshots are omitted. */
+      listSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").listSessionEntriesAsync;
       createSessionEntryListReader: (params: {
         agentId: string;
         storePath: string;
@@ -609,10 +619,14 @@ export type PluginRuntimeCore = {
   modelAuth: {
     /** Existing synchronous SDK operations, composed by the native host. */
     resolveProviderIdForAuth: typeof import("../../agents/provider-auth-aliases.js").resolveProviderIdForAuth;
+    /** @deprecated Use ensureAuthProfileStoreAsync. Removed at the next Plugin SDK major. */
     ensureAuthProfileStore: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
+    ensureAuthProfileStoreAsync: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStoreAsync;
     resolveAuthProfileOrder: typeof import("../../agents/auth-profiles/order.js").resolveAuthProfileOrder;
     listProfilesForProvider: typeof import("../../agents/auth-profiles/profile-list.js").listProfilesForProvider;
+    /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
     isProviderApiKeyConfigured: typeof import("../provider-auth-availability.js").isProviderApiKeyConfigured;
+    isProviderApiKeyConfiguredAsync: typeof import("../provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
       model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;

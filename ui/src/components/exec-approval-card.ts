@@ -4,11 +4,6 @@ import type {
   SidebarApprovalRowProps,
 } from "./exec-approval-card-solid.tsx";
 import "./exec-approval-card-solid.tsx";
-export {
-  approvalRemainingLabel,
-  approvalTitle,
-  resolveApprovalDecisions,
-} from "./exec-approval-card-solid.tsx";
 
 /** Stateless adapters for the remaining Lit consumers; Solid owns the card contents. */
 export function renderExecApprovalCard(props: ExecApprovalCardProps) {

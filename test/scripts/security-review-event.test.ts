@@ -227,7 +227,7 @@ describe("automatic security review event resolution", () => {
       const result = evaluate({
         eventName,
         event: {
-          action: "created",
+          action: eventName === "issue_comment" ? "created" : "opened",
           pull_request: { number: 42 },
           issue: { number: 42, pull_request: {} },
           comment: { body: "/allow-dependencies-change" },
@@ -414,6 +414,8 @@ describe("automatic security review event resolution", () => {
       { action: "deleted", body: "Thanks" },
       { action: "created", body: "/allow-dependencies-change-extra" },
       { action: "created", body: "/allow-dependencies-change\nThanks" },
+      { action: "created", body: "> /allow-dependencies-change" },
+      { action: "created", body: "```text\n/allow-security-sensitive-change\n```" },
       { action: "edited", body: "Removed", previousBody: "Please post /allow-dependencies-change" },
       { action: "created", body: "/ALLOW-DEPENDENCIES-CHANGE" },
       { action: "created", body: " \r\n " },
@@ -452,10 +454,13 @@ describe("automatic security review event resolution", () => {
     },
   );
 
-  it("rejects manual dispatch before making any API request", () => {
+  it.each([
+    { id: 1, login: "maintainer", type: "User" },
+    { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+  ])("rejects a dispatch from $login ($type, $id) before any API request", (sender) => {
     const result = evaluate({
       eventName: "workflow_dispatch",
-      event: { inputs: { pr_number: "42" } },
+      event: { inputs: { pull_request: "42" }, sender },
     });
     expect(result).toMatchObject({
       status: 1,

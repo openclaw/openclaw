@@ -13,7 +13,7 @@ import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../auth-profiles/source-check.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
@@ -32,9 +32,10 @@ import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
-  resolveModelAuthMode,
+  resolveModelAuthModeAsync,
 } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
+import { getPreparedModelRuntimeAuthStore } from "../prepared-model-runtime-auth.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
 import {
@@ -287,15 +288,17 @@ export async function buildPreparedCompactionRuntime(
       pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
-    const authProfileStoreSource =
-      toolsEnabled && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    const authProfileStore = toolsEnabled
+      ? (getPreparedModelRuntimeAuthStore(params.preparedModelRuntime) ??
+        (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)))
+      : undefined;
     params.abortSignal?.throwIfAborted();
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
       ? await createOpenClawCodingToolsInternalAsync(
           {
             ...conversationContext,
-            authProfileStoreSource,
+            authProfileStore,
             agentId: sessionAgentId,
             exec: {
               ...execOverrides,
@@ -318,9 +321,14 @@ export async function buildPreparedCompactionRuntime(
             skillInstructionDeliveryCache,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             preparedModelRuntime: params.preparedModelRuntime,
-            modelAuthMode: resolveModelAuthMode(effectiveModel.provider, params.config, undefined, {
-              workspaceDir: effectiveWorkspace,
-            }),
+            modelAuthMode: await resolveModelAuthModeAsync(
+              effectiveModel.provider,
+              params.config,
+              authProfileStore,
+              {
+                workspaceDir: effectiveWorkspace,
+              },
+            ),
           },
           skillReadResources,
         )

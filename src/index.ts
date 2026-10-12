@@ -4,7 +4,17 @@ import { existsSync } from "node:fs";
 // Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  enableOpenClawCompileCache,
+  resolveOpenClawCompileCacheDirectory,
+  resolveOpenClawCompileCacheRespawnEnv,
+} from "../node-compile-cache.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
+import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
+import {
+  isForegroundGmailRunArgv,
+  shouldKeepNativeHookRelayInProcess,
+} from "./cli/respawn-policy.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
@@ -117,13 +127,32 @@ if (!isMain) {
   } = await import("./library.js"));
 }
 
-if (isMain && !handledRootVersion && !handledAdmission) {
+const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
+const compileCacheDirectory = shouldRunCli
+  ? resolveOpenClawCompileCacheDirectory({ installRoot: fileURLToPath(packageRootUrl) })
+  : undefined;
+const compileCacheRespawnEnv =
+  shouldRunCli &&
+  !isForegroundGmailRunArgv(process.argv) &&
+  !shouldKeepNativeHookRelayInProcess(process.argv, process.platform)
+    ? resolveOpenClawCompileCacheRespawnEnv({ directory: compileCacheDirectory })
+    : undefined;
+if (compileCacheRespawnEnv) {
+  const args = [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)];
+  // External supervisors require the serving Gateway to retain its listener PID.
+  if (process.execve && isForegroundGatewayRunArgv(process.argv)) {
+    process.execve(process.execPath, [process.execPath, ...args], compileCacheRespawnEnv);
+  }
+  const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
+  await runRespawnedChild(process.execPath, args, compileCacheRespawnEnv);
+}
+if (shouldRunCli && !compileCacheRespawnEnv) {
+  enableOpenClawCompileCache({ directory: compileCacheDirectory });
   const [
     { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
     { isJsonOutputModeActive },
     { runCliWithExitFinalization },
     { withCliProcessScope },
-    { installDistEsmResolveFastPath },
     { formatUncaughtError },
     { runFatalErrorHooks },
     {
@@ -136,12 +165,10 @@ if (isMain && !handledRootVersion && !handledAdmission) {
     import("./cli/json-output-mode.js"),
     import("./cli/one-shot-exit.js"),
     import("./cli/runtime-cleanup-scope.js"),
-    import("./entry.esm-resolve-fast-path.js"),
     import("./infra/errors.js"),
     import("./infra/fatal-error-hooks.js"),
     import("./infra/unhandled-rejections.js"),
   ]);
-  installDistEsmResolveFastPath(import.meta.url);
 
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
   const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");

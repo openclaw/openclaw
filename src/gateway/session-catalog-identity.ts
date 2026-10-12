@@ -6,17 +6,12 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
-import {
-  hydrateOpenClawStateWorkerError,
-  retainOpenClawStateWorkerErrorPayload,
-} from "../state/openclaw-state-worker-error.js";
 import type {
   UserProfileCatalogIdentityInput,
   UserProfileCatalogIdentityRead,
@@ -51,11 +46,6 @@ async function prepareIdentityFacts(input: UserProfileCatalogIdentityInput) {
     assertCurrent: context.admission.assertCurrent,
     readProfile(id: string) {
       const profile = result.profiles.get(id);
-      if (profile && !profile.ok) {
-        const error = new Error(profile.message);
-        retainOpenClawStateWorkerErrorPayload(error, profile.error);
-        throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
-      }
       return profile?.facts ?? { profileId: id, profile: undefined, github: undefined };
     },
   };
@@ -63,7 +53,7 @@ async function prepareIdentityFacts(input: UserProfileCatalogIdentityInput) {
 
 function sourceLabel(value: string | null | undefined): string | undefined {
   const text = value?.trim();
-  return text ? truncateUtf16Safe(redactToolPayloadText(text), 200) : undefined;
+  return text ? truncateUtf16Safe(text, 200) : undefined;
 }
 
 function verifiedGitHubIdentities(profileIds?: readonly string[]) {

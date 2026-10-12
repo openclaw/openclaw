@@ -23,7 +23,7 @@ export function captureSessionObserverRead(
   agentId: string,
 ): SessionObserverRead {
   const cfg = deps.getConfig();
-  const routing = captureSessionMutationRouting(cfg);
+  const routing = captureSessionMutationRouting(cfg, undefined, [{ sessionKey, agentId }]);
   const inventory = prepareSessionStoreTargetInventory(cfg, [agentId]);
   const identities = captureSessionStoreCandidateIdentities(inventory.candidates);
   let target: GatewaySessionStoreTargetWithStore | undefined;

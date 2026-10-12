@@ -102,6 +102,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   releaseSidebarSnapshot(): void {
     const snapshot = this.sidebarSnapshot;
+    if (snapshot) {
+      this.pinnedSessions.seed(snapshot.pinnedSessions);
+    }
     this.sidebarPluginSnapshot =
       snapshot && this.context?.plugins.registryStatus !== "complete"
         ? { entries: snapshot.entries, plugins: snapshot.plugins }
@@ -123,8 +126,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     if (!this.connected || !context) {
       return false;
     }
-    if (this.navigationView === "pages" && this.navigationCatalog.dashboards?.loading !== false) {
-      return false;
+    if (this.navigationView === "pages") {
+      const pages = this.navigationCatalog.dashboards;
+      return pages?.loading === false && (pages.readSucceeded === true || pages.error !== null);
     }
     const people = sidebarOnlineOrder(this).users;
     if (

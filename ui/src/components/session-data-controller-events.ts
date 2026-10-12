@@ -1,5 +1,6 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -107,14 +108,22 @@ export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
   return owner.sidebarSessionStatusFilter() !== "active" || Boolean(ownerId || involvingMe);
 }
 
-export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
+export function sidebarSessionListQuery(
+  owner: SidebarSessionQueryOwner & {
+    readonly sessionDataContext: Pick<ApplicationContext, "gateway"> | undefined;
+  },
+  agentId: string,
+) {
   const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
+  const selfId = owner.sessionDataContext
+    ? gatewayPresentationScope(owner.sessionDataContext.gateway).displayUser?.id
+    : undefined;
   return {
     source: "sidebar",
     excludeDock: true,
     ownerId: involvingMe ? undefined : ownerId || undefined,
     involvingMe: involvingMe || undefined,
-    agentId,
+    agentId: ownerId && ownerId === selfId ? undefined : agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     rowMode: "compact",
@@ -195,25 +204,35 @@ export function scheduleFilteredSidebarSessions(
 
 export function refreshSidebarSessionList(
   owner: SidebarSessionListOwner,
-  agentId: string | null,
-  append = false,
+  {
+    agentId,
+    append = false,
+    affectedAgentId,
+  }: {
+    agentId?: string | null;
+    append?: boolean;
+    affectedAgentId?: string;
+  },
 ): Promise<void> {
   const result = owner.sessionsResult;
+  const query = owner.sessionListQuery(agentId ?? owner.expandedAgentId());
   // An omitted cursor falls back to accumulated rows; an explicit null is terminal.
   const offset = result?.nextOffset === undefined ? result?.sessions.length : result.nextOffset;
   if (
     !owner.context?.sessions ||
-    !agentId ||
+    (affectedAgentId !== undefined &&
+      query.agentId !== undefined &&
+      normalizeAgentId(affectedAgentId) !== normalizeAgentId(query.agentId)) ||
     (append &&
       (owner.sessionsLoading ||
         !result?.hasMore ||
         typeof offset !== "number" ||
-        normalizeAgentId(agentId) !== normalizeAgentId(owner.expandedAgentId())))
+        query.agentId !== owner.sessionListQuery(owner.expandedAgentId()).agentId))
   ) {
     return Promise.resolve();
   }
   return owner.context.sessions.refreshList({
-    ...owner.sessionListQuery(agentId),
+    ...query,
     ...(append && typeof offset === "number" ? { offset, append: true } : {}),
     force: true,
   });

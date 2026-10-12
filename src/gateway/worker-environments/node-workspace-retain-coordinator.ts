@@ -219,8 +219,6 @@ export function createNodeWorkspaceRetainCoordinator(
         ...(retainCurrentBuild ? [currentBuild.bundleHash] : []),
       ]),
     ].toSorted();
-    const bundleStatusSupported =
-      node.workerHost.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION;
     const baseInput: NodeWorkerWorkspaceRetainInput = {
       version: 1,
       gatewayNamespace: options.gatewayNamespace,
@@ -245,27 +243,32 @@ export function createNodeWorkspaceRetainCoordinator(
       retainedBundleHashes.length <= NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES &&
       Buffer.byteLength(JSON.stringify(retentionInput), "utf8") <=
         NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
-    const bundleStatusTarget = bundleStatusSupported
-      ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
-      : undefined;
+    const bundleStatusTarget =
+      node.workerHost.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION
+        ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
+        : undefined;
+    const previousBundleStatus = currentTransport.getBundleStatus?.(node.nodeId);
+    // Bundles are content-addressed. Tampering while the node runs is detected by
+    // the next node launch/install or explicit inspection, not every retention pass.
     const statusInput =
-      bundleStatusTarget && retainedBundleHashes.includes(bundleStatusTarget.bundleHash)
+      bundleStatusTarget &&
+      retainedBundleHashes.includes(bundleStatusTarget.bundleHash) &&
+      (previousBundleStatus?.bundleHash !== bundleStatusTarget.bundleHash ||
+        previousBundleStatus.status.status !== "installed")
         ? { ...retentionInput, bundleStatusHash: bundleStatusTarget.bundleHash }
         : undefined;
-    const statusInputFits =
-      statusInput !== undefined &&
-      Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
-        NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
     const input =
       bundleRetentionSupported && bundlePreparationError === undefined && bundleHashesFit
-        ? statusInput && statusInputFits
+        ? statusInput &&
+          Buffer.byteLength(JSON.stringify(statusInput), "utf8") <=
+            NODE_WORKER_RETAIN_REQUEST_MAX_BYTES
           ? statusInput
           : retentionInput
         : baseInput;
-    const previousBundleStatus = currentTransport.getBundleStatus?.(node.nodeId);
     if (
-      !input.bundleStatusHash ||
-      (previousBundleStatus && previousBundleStatus.bundleHash !== input.bundleStatusHash)
+      !bundleStatusTarget ||
+      !input.bundleHashes?.includes(bundleStatusTarget.bundleHash) ||
+      (previousBundleStatus && previousBundleStatus.bundleHash !== bundleStatusTarget.bundleHash)
     ) {
       currentTransport.acceptBundleStatus?.(node, undefined);
     }
@@ -296,7 +299,6 @@ export function createNodeWorkspaceRetainCoordinator(
         }
       };
       if (!isDispatchAuthorized()) {
-        currentTransport.acceptBundleStatus?.(node, undefined);
         return;
       }
       const result = await currentTransport.invoke({
@@ -332,19 +334,17 @@ export function createNodeWorkspaceRetainCoordinator(
       }
       if (!retained.applied || !retained.hasMore) {
         const bundleStatus = retained.bundleStatus;
-        const requestedBundleHash = input.bundleStatusHash;
-        const currentStatusTarget = requestedBundleHash ? bundleStatusTarget : undefined;
         if (
           retained.applied &&
-          currentStatusTarget &&
+          bundleStatusTarget &&
           bundleStatus &&
-          bundleStatus.bundleHash === requestedBundleHash
+          bundleStatus.bundleHash === input.bundleStatusHash
         ) {
           currentTransport.acceptBundleStatus?.(node, {
-            bundleHash: currentStatusTarget.bundleHash,
+            bundleHash: bundleStatusTarget.bundleHash,
             status:
               bundleStatus.status === "installed"
-                ? { status: "installed", version: currentStatusTarget.openclawVersion }
+                ? { status: "installed", version: bundleStatusTarget.openclawVersion }
                 : { status: "missing" },
           });
         } else if (input.bundleStatusHash) {

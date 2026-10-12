@@ -1,12 +1,13 @@
 import { ContextProvider } from "@lit/context";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { LitElement, html } from "lit";
-import { createEffect, createSignal, flush, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
 import { ShellLayoutBoundary, ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { defineSolidBridge, LitContent, type SolidBridgeElement } from "./solid-bridge.ts";
@@ -20,7 +21,7 @@ const changed = vi.fn<(host: Host, key: keyof Props) => void>();
 const Bridge = defineSolidBridge<Props, Methods>(
   "openclaw-solid-bridge-test",
   (props, host) => {
-    const local = { id: "owned" };
+    const local = { id: props.label };
     mounted(local);
     onCleanup(() => disposed(local));
     return (
@@ -104,28 +105,37 @@ afterEach(async () => {
   await Promise.resolve();
 });
 
-it("mounts once, mirrors attributes/properties, and preserves synchronous imperative methods", async () => {
-  const host = createHost();
-  host.setAttribute("label", "attribute");
-  host.setAttribute("item-count", "4");
-  host.show();
-  const payload = {};
-  expect(host.setPayload(payload)).toBe(payload);
-  expect(host.enabled).toBe(true);
-  document.body.append(host);
-  await host.updateComplete;
-  expect(host.querySelector("output")?.textContent).toBe("attribute:4:true");
-  expect(host.payload).toBe(payload);
-  expect(host.hasAttribute("payload")).toBe(false);
-  expect(mounted).toHaveBeenCalledTimes(1);
+it.each([false, true])(
+  "mounts once and preserves setup reads with application provider: %s",
+  async (withProvider) => {
+    const host = createHost();
+    host.setAttribute("label", "attribute");
+    host.setAttribute("item-count", "4");
+    host.show();
+    const payload = {};
+    expect(host.setPayload(payload)).toBe(payload);
+    expect(host.enabled).toBe(true);
+    // SAFETY: this bridge test transports context without reading any capabilities.
+    const container = withProvider
+      ? createApplicationContextProvider({} as ApplicationContext)
+      : document.createElement("div");
+    container.append(host);
+    document.body.append(container);
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("attribute:4:true");
+    expect(host.payload).toBe(payload);
+    expect(host.hasAttribute("payload")).toBe(false);
+    expect(mounted).toHaveBeenCalledTimes(1);
 
-  host.label = "property";
-  host.removeAttribute("enabled");
-  host.close();
-  await host.updateComplete;
-  expect(host.querySelector("output")?.textContent).toBe("property:4:false");
-  expect(mounted).toHaveBeenCalledTimes(1);
-});
+    host.label = "property";
+    host.removeAttribute("enabled");
+    host.close();
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("property:4:false");
+    expect(host.querySelector("section")?.getAttribute("data-owned")).toBe("attribute");
+    expect(mounted).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("publishes changed properties synchronously before rendering and suppresses equal assignments", async () => {
   const host = createHost();
@@ -164,6 +174,58 @@ it("commits Solid DOM before a Lit parent updateComplete resumes", async () => {
   parent.label = "next";
   await parent.updateComplete;
   expect(parent.querySelector("output")?.textContent).toBe("next:0:false");
+});
+
+it("batches Lit property bursts without invalidating unrelated Solid computations", async () => {
+  const labels = vi.fn((value: string) => value);
+  const counts = vi.fn((value: number) => value);
+  const mount = vi.fn();
+  let readLabel = () => "";
+  defineSolidBridge<{ label: string; count: number }>(
+    "openclaw-solid-granular-test",
+    (props) => {
+      mount();
+      readLabel = () => props.label;
+      const label = createMemo(() => labels(props.label));
+      const count = createMemo(() => counts(props.count));
+      return (
+        <output>
+          {label()}:{count()}
+          <input />
+        </output>
+      );
+    },
+    { properties: { label: { default: "initial" }, count: { default: 0 } } },
+  );
+  const host = document.createElement("openclaw-solid-granular-test") as SolidBridgeElement<{
+    label: string;
+    count: number;
+  }>;
+  document.body.append(host);
+  await host.updateComplete;
+  const input = host.querySelector("input")!;
+  input.value = "draft";
+  labels.mockClear();
+  counts.mockClear();
+
+  host.label = "intermediate";
+  host.label = "final";
+  expect(host.label).toBe("final");
+  expect(readLabel()).toBe("final");
+  await host.updateComplete;
+  expect(host.textContent).toBe("final:0");
+  expect(labels).toHaveBeenCalledExactlyOnceWith("final");
+  expect(counts).not.toHaveBeenCalled();
+  expect(mount).toHaveBeenCalledTimes(1);
+  expect(host.querySelector("input")).toBe(input);
+  expect(input.value).toBe("draft");
+
+  labels.mockClear();
+  host.count = 2;
+  await host.updateComplete;
+  expect(host.textContent).toBe("final:2");
+  expect(labels).not.toHaveBeenCalled();
+  expect(counts).toHaveBeenCalledExactlyOnceWith(2);
 });
 
 it("keeps the same root across moves and releases/recreates it after a real disconnect", async () => {

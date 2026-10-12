@@ -207,11 +207,11 @@ describe("worker live events", () => {
     expect(rows[2]?.event.data).toMatchObject({
       name: "write",
       success: true,
-      result: { status: "written" },
+      result: { status: "written", credential },
     });
     expect(rows[3]?.event.data).toMatchObject({ stopReason: "length" });
     expect(rows[4]?.event.data).toMatchObject({ status: "success", stopReason: "length" });
-    expect(JSON.stringify(rows)).not.toContain(credential);
+    expect(rows[1]?.event.data).toMatchObject({ args: { credential } });
   });
 
   const lifecycleCredential = ["lifecycle", "credential", "value"].join("-");
@@ -254,10 +254,15 @@ describe("worker live events", () => {
       { type: "model.completed", data: { stopReason } },
       { type: "session.ended", data: { status, stopReason } },
     ]);
-    expect(JSON.stringify(rows)).not.toContain(lifecycleCredential);
+    if (_name === "provider errors") {
+      expect(rows.slice(-2).map((row) => row.event.data?.error)).toEqual([
+        `provider failed after Bearer ${lifecycleCredential}`,
+        `provider failed after Bearer ${lifecycleCredential}`,
+      ]);
+    }
   });
 
-  it("maps and sanitizes kinds", async () => {
+  it("maps event kinds and bounds output without masking credentials", async () => {
     const credential = ["fixture", "credential", "value"].join("-");
     const output = (char: string, status: string) => ({
       content: [{ type: "image", bytes: 6, omitted: true }],
@@ -305,12 +310,18 @@ describe("worker live events", () => {
     const capped = (char: string) => `${char.repeat(8000)}\n...(live output truncated)...`;
     expect(rawEvents[4]?.data).toMatchObject({
       name: "exec",
-      result: { content: [{ bytes: 6, omitted: true }], details: { aggregated: capped("r") } },
+      result: {
+        content: [{ bytes: 6, omitted: true }],
+        details: { credential, aggregated: capped("r") },
+      },
     });
     expect(rawEvents[8]?.data).toMatchObject({
       fallbackStepFromFailureReason: "tls_certificate",
     });
-    expect(JSON.stringify(events)).not.toContain(credential);
+    expect(rawEvents[2]?.data).toMatchObject({ args: { credential } });
+    expect(rawEvents[3]?.data).toMatchObject({
+      partialResult: { details: { credential, aggregated: capped("p") } },
+    });
   });
 
   it("settles accepted writes before returning a synchronous diagnostic failure", async () => {

@@ -12,6 +12,28 @@ export type TranscriptEntryAnchor = Readonly<{
   idempotencyKey?: string;
 }>;
 
+export function sameTranscriptEntryAnchor(
+  left: TranscriptEntryAnchor,
+  right: TranscriptEntryAnchor | undefined,
+): boolean {
+  return (
+    right !== undefined &&
+    (
+      [
+        "agentId",
+        "sessionId",
+        "sessionKey",
+        "storePath",
+        "generation",
+        "entryId",
+        "rawSeq",
+        "effectiveParentId",
+        "activeMessagePosition",
+      ] as const
+    ).every((field) => left[field] === right[field])
+  );
+}
+
 /** Current user row bound to one recorder-owned logical turn. */
 export type TranscriptTurnAdmission = TranscriptEntryAnchor &
   Readonly<{

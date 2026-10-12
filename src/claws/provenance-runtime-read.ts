@@ -43,7 +43,7 @@ type ClawInstallSchemaVersionReadOptions = OpenClawStateDatabaseOptions & {
   artifactPreservingReadOnly?: boolean;
 };
 
-// Refresh on every runtime config snapshot because another process may mutate Claw provenance.
+// Config preparation publishes reads; in-process Claw writes publish their committed changes.
 const snapshotsByPath = new Map<string, ClawInstallSchemaVersionSnapshot>();
 const snapshotListeners = new Set<() => void>();
 const handedOffFacts = resolveGlobalSingleton(
@@ -119,28 +119,18 @@ function failedSchemaVersionSnapshot(
 }
 
 registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind === "failure-cleared") {
+  if (event.kind === "failure-cleared" || event.kind === "opened") {
     return;
   }
-  const previous = snapshotsByPath.get(event.kind === "opened" ? event.database.path : event.path);
-  if (event.kind === "opened") {
-    const snapshot = readSchemaVersions(event.database.db);
-    snapshotsByPath.set(
-      event.database.path,
-      snapshot.kind === "state-error"
-        ? failedSchemaVersionSnapshot(snapshot.error, previous, isOwnershipUnknown(previous))
-        : snapshot,
-    );
-  } else {
-    const error =
-      event.kind === "open-error" || event.kind === "terminal-failure"
-        ? event.error
-        : new Error("OpenClaw state database closed before consent provenance verification.");
-    snapshotsByPath.set(
-      event.path,
-      failedSchemaVersionSnapshot(error, previous, isOwnershipUnknown(previous)),
-    );
-  }
+  const previous = snapshotsByPath.get(event.path);
+  const error =
+    event.kind === "open-error" || event.kind === "terminal-failure"
+      ? event.error
+      : new Error("OpenClaw state database closed before consent provenance verification.");
+  snapshotsByPath.set(
+    event.path,
+    failedSchemaVersionSnapshot(error, previous, isOwnershipUnknown(previous)),
+  );
   notifySnapshotListeners();
 });
 
@@ -230,6 +220,10 @@ export function initializeCachedClawInstallSchemaVersions(
   }
   const path = resolveSnapshotPath(options);
   const previous = snapshotsByPath.get(path);
+  if (previous?.kind === "ready") {
+    notifySnapshotListeners();
+    return;
+  }
   try {
     const read =
       options.artifactPreservingReadOnly === false
@@ -274,22 +268,26 @@ export async function prepareClawInstallSchemaVersions(
   try {
     const context = captureOpenClawStateWorkerContext({ path, env: options.env });
     assertCurrent = context.admission.assertCurrent;
-    const rows = await runOpenClawStateWorkerOperation(
-      context,
-      (scope) =>
-        scope.execute({
-          type: "claws.install-schema-versions",
-          input: {
-            artifactPreservingReadOnly:
-              options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
-          },
-        }),
-      { existingOnly: true },
-    );
-    snapshot = resolveSchemaVersionSnapshot(
-      rows === undefined ? undefined : decodeSchemaVersions(rows),
-      previous,
-    );
+    if (previous?.kind === "ready") {
+      snapshot = previous;
+    } else {
+      const rows = await runOpenClawStateWorkerOperation(
+        context,
+        (scope) =>
+          scope.execute({
+            type: "claws.install-schema-versions",
+            input: {
+              artifactPreservingReadOnly:
+                options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
+            },
+          }),
+        { existingOnly: true },
+      );
+      snapshot = resolveSchemaVersionSnapshot(
+        rows === undefined ? undefined : decodeSchemaVersions(rows),
+        previous,
+      );
+    }
   } catch (error) {
     snapshot = failedSchemaVersionSnapshot(error, previous);
   }

@@ -30,6 +30,7 @@ import {
   readSessionColdTranscript,
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import {
   publishSessionTranscriptAuthority,
   type SessionTranscriptAuthority,
@@ -223,6 +224,7 @@ export function ensureTranscriptSessionRoot(
   options: {
     allowStoredAlias?: boolean;
     onPlaceholderInserted?: (placeholder: { sessionKey: string; sessionId: string }) => void;
+    deferExistingWindowTouch?: boolean;
   } = {},
 ): void {
   return withSqliteDatabaseWriteScope(
@@ -234,6 +236,9 @@ export function ensureTranscriptSessionRoot(
       if (actor?.window) {
         if (actor.window.session_key !== scope.sessionKey) {
           throw new Error("Session actor transcript window belongs to another logical owner");
+        }
+        if (options.deferExistingWindowTouch) {
+          return;
         }
       } else {
         let nodeExists = false;
@@ -328,6 +333,8 @@ export function ensureTranscriptSessionRoot(
                 session_key: scope.sessionKey,
                 current_session_id: scope.sessionId,
                 entry_json: "{}",
+                ...deriveSessionPredicateColumns("{}"),
+                session_started_at: null,
                 entry_valid: -1,
                 updated_at: updatedAt,
               })
@@ -447,7 +454,7 @@ export function advanceTranscriptMutationAtInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   value: number,
-  options: { strictly?: boolean } = {},
+  options: { strictly?: boolean; windowUpdatedAt?: number } = {},
 ): void {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     let transcriptUpdatedAt = Math.floor(value);
@@ -473,6 +480,7 @@ export function advanceTranscriptMutationAtInTransaction(
     const update = db
       .updateTable("session_windows")
       .set((eb) => ({
+        ...(options.windowUpdatedAt !== undefined ? { updated_at: options.windowUpdatedAt } : {}),
         transcript_updated_at:
           options.strictly && !actor?.window
             ? eb.fn<number>("max", [
@@ -489,6 +497,9 @@ export function advanceTranscriptMutationAtInTransaction(
     }
     if (actor?.window) {
       executeSqliteQuerySync(database.db, update);
+      if (options.windowUpdatedAt !== undefined) {
+        actor.window.updated_at = options.windowUpdatedAt;
+      }
       actor.window.transcript_updated_at = transcriptUpdatedAt;
       actor.hot.transcript.version.updatedAt = transcriptUpdatedAt;
       const projection = actor.transcript.projection;
@@ -569,8 +580,12 @@ export function advanceTranscriptMutationAtInTransaction(
 export function touchTranscriptMutationInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
+  windowUpdatedAt?: number,
 ): void {
-  advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), { strictly: true });
+  advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), {
+    strictly: true,
+    windowUpdatedAt,
+  });
 }
 
 export function deleteTranscriptEventsInTransaction(

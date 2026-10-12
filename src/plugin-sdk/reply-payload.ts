@@ -87,6 +87,7 @@ export {
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
+  stripReplyPayloadResponsePrefix,
 } from "../auto-reply/reply-payload.js";
 
 /** Normalized outbound reply payload accepted by channel send helpers. */

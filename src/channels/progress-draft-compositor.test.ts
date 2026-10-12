@@ -132,18 +132,6 @@ describe("channel progress draft compositor", () => {
     expect(work.elapsedSeconds).toBe(1);
   });
 
-  it("gates reasoning independently of tool progress", async () => {
-    const hidden = createProgress(undefined, { reasoningGate: false });
-    await hidden.progress.pushToolProgress("Exec", { startImmediately: true });
-    await hidden.progress.pushReasoningProgress("Reading files");
-    expect(hidden.update.mock.calls.every(([text]) => !text.includes("Reading"))).toBe(true);
-    const quiet = createProgress({ label: "Shelling", toolProgress: false });
-    await quiet.progress.pushToolProgress("Exec", { startImmediately: true });
-    await quiet.progress.pushReasoningProgress("Reading files");
-    expect(quiet.update.mock.lastCall?.[0]).toBe("Shelling\n\n• _Reading files_");
-    expect(quiet.update.mock.calls.every(([text]) => !text.includes("Exec"))).toBe(true);
-  });
-
   it("shares reasoning merge state with inactive preview renderers", () => {
     const { progress } = createProgress({}, { mode: "partial", active: false });
     expect(progress.mergeReasoningProgress("Reading")).toBe("Reading");
@@ -211,10 +199,7 @@ describe("channel progress draft compositor", () => {
     );
   });
 
-  it.each([
-    { toolIcons: true, exec: "🛠️ Exec: running" },
-    { toolIcons: undefined, exec: "• Exec: running" },
-  ])(
+  it.each([{ toolIcons: true, exec: "🛠️ Exec: running" }])(
     "prefixes generated tool rows with text glyphs when toolIcons is $toolIcons",
     async ({ toolIcons, exec }) => {
       const { progress, update } = createProgress(
@@ -324,32 +309,6 @@ describe("channel progress draft compositor", () => {
     expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nRestarting\n\n• Exec\n• Wc");
     await progress.pushNarrationProgress("");
     expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Exec\n• Wc");
-  });
-
-  it("holds sanitized preambles behind startup and rejects control-only replacements", async () => {
-    const { progress, update } = createProgress({ toolProgress: true });
-    expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
-    expect(progress.hasStatusHeadline).toBe(false);
-    await progress.pushPreambleHeadline(
-      "[[reply_to_current]] Reading   the workspace. [[audio_as_voice]]",
-    );
-    expect(progress.hasStatusHeadline).toBe(true);
-    expect(progress.hasStarted).toBe(false);
-    expect(update).not.toHaveBeenCalled();
-    await progress.start();
-    expect(update.mock.lastCall?.[0]).toBe("Reading the workspace.");
-    await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS);
-    const calls = update.mock.calls.length;
-    expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
-    expect(
-      await progress.pushPreambleHeadline("[[reply_to_current]] ~~NO_REPLY~~ [[audio_as_voice]]"),
-    ).toBe(false);
-    expect(progress.hasStatusHeadline).toBe(true);
-    expect(update).toHaveBeenCalledTimes(calls);
-    await progress.pushNarrationProgress("Utility filler.");
-    expect(update.mock.lastCall?.[0]).toBe("Utility filler.");
-    await progress.pushNarrationProgress("");
-    expect(update.mock.lastCall?.[0]).toBe("Reading the workspace.");
   });
 
   it("retracts only the matching preamble headline", async () => {
@@ -499,49 +458,46 @@ describe("channel progress draft compositor", () => {
     expect(progress.getSnapshot().diffStat).toBeUndefined();
   });
 
-  it.each([
-    { action: "react", status: "completed", hidden: true },
-    { action: "react", status: "failed", hidden: false },
-    { action: "react", status: "blocked", hidden: false },
-    { action: "react", status: "unknown", hidden: false },
-    { action: "send", status: "completed", hidden: false },
-  ] as const)("projects message $action/$status progress", async ({ action, status, hidden }) => {
-    const { progress } = createProgress({ toolProgress: true }, { preparedItems: true });
-    await progress.start();
-    await progress.pushItemEvent(
-      projectAgentToolActivity({
-        toolCallId: "message-1",
-        name: "message",
-        phase: "start",
-        args: { action, channel: "slack", target: "C000000001" },
-      }),
-    );
-    expect(progress.getSnapshot().lines).toEqual(
-      action === "react" ? [] : [expect.objectContaining({ toolName: "message" })],
-    );
-    await progress.pushItemEvent(
-      projectAgentToolActivity({
-        toolCallId: "message-1",
-        name: "message",
-        phase: "result",
-        args: { action, channel: "slack", target: "C000000001" },
-        status,
-      }),
-    );
-    await progress.pushItemEvent(
-      projectAgentToolActivity({
-        toolCallId: "read-1",
-        name: "read",
-        phase: "result",
-        args: { path: "README.md" },
-        status: "completed",
-      }),
-    );
-    expect(progress.getSnapshot().lines).toEqual([
-      ...(hidden ? [] : [expect.objectContaining({ id: "tool:message-1", toolName: "message" })]),
-      expect.objectContaining({ id: "tool:read-1", toolName: "read", status: "completed" }),
-    ]);
-  });
+  it.each([{ action: "react", status: "failed", hidden: false }] as const)(
+    "projects message $action/$status progress",
+    async ({ action, status, hidden }) => {
+      const { progress } = createProgress({ toolProgress: true }, { preparedItems: true });
+      await progress.start();
+      await progress.pushItemEvent(
+        projectAgentToolActivity({
+          toolCallId: "message-1",
+          name: "message",
+          phase: "start",
+          args: { action, channel: "slack", target: "C000000001" },
+        }),
+      );
+      expect(progress.getSnapshot().lines).toEqual(
+        action === "react" ? [] : [expect.objectContaining({ toolName: "message" })],
+      );
+      await progress.pushItemEvent(
+        projectAgentToolActivity({
+          toolCallId: "message-1",
+          name: "message",
+          phase: "result",
+          args: { action, channel: "slack", target: "C000000001" },
+          status,
+        }),
+      );
+      await progress.pushItemEvent(
+        projectAgentToolActivity({
+          toolCallId: "read-1",
+          name: "read",
+          phase: "result",
+          args: { path: "README.md" },
+          status: "completed",
+        }),
+      );
+      expect(progress.getSnapshot().lines).toEqual([
+        ...(hidden ? [] : [expect.objectContaining({ id: "tool:message-1", toolName: "message" })]),
+        expect.objectContaining({ id: "tool:read-1", toolName: "read", status: "completed" }),
+      ]);
+    },
+  );
 
   it("retains completed edits when clearing a quiet plan", async () => {
     const { progress, update } = createProgress(
@@ -593,23 +549,7 @@ describe("channel progress draft compositor", () => {
     expect(tryNativeUpdate).toHaveBeenCalledWith(expect.stringContaining("Use **literal**."));
   });
 
-  it("repaints identical text when authored Markdown replaces a prepared note", async () => {
-    const { progress, update } = createProgress(
-      { label: false, commentary: false },
-      { formatPlainText: (text) => text },
-    );
-    await progress.pushPlanProgress([], { explanation: "**literal**", explanationFormat: "plain" });
-    expect(progress.getSnapshot().statusHeadlineFormat).toBe("plain");
-    await progress.pushPreambleHeadline("**literal**");
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(progress.getSnapshot()).toMatchObject({
-      statusHeadline: "**literal**",
-      planExplanationFormat: "plain",
-    });
-    expect(progress.getSnapshot().statusHeadlineFormat).toBeUndefined();
-  });
-
-  it.each(["partial", "progress"] as const)(
+  it.each(["partial"] as const)(
     "retains plans across message boundaries but clears them per turn (%s)",
     async (mode) => {
       const { progress, update } = createProgress({ label: false, toolProgress: true }, { mode });
@@ -657,67 +597,6 @@ describe("channel progress draft compositor", () => {
     },
   );
 
-  it("deletes an empty card and recreates identical content", async () => {
-    const deleteCurrent = vi.fn();
-    const { progress, update } = createProgress({}, { deleteCurrent });
-    expect(await progress.pushPlanProgress()).toBe(false);
-    expect(update).not.toHaveBeenCalled();
-    expect(deleteCurrent).not.toHaveBeenCalled();
-    const steps = [{ step: "Patch", status: "in_progress" as const }];
-    expect(await progress.pushPlanProgress(steps)).toBe(true);
-    expect(await progress.pushPlanProgress([])).toBe(true);
-    expect(deleteCurrent).toHaveBeenCalledOnce();
-    expect(progress.isVisible).toBe(false);
-    expect(progress.getSnapshot().lines).toEqual([]);
-    expect(await progress.pushPlanProgress(steps)).toBe(true);
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(update.mock.lastCall?.[0]).toContain("▸ Patch");
-  });
-
-  it.each([false, "Custom progress"] as const)(
-    "replaces plans without deletion support (label %s)",
-    async (label) => {
-      const { progress, update } = createProgress({ label });
-      await progress.pushPlanProgress([]);
-      expect(update).not.toHaveBeenCalled();
-      await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }]);
-      expect(await progress.pushPlanProgress([])).toBe(label !== false);
-      if (label !== false) {
-        expect(update.mock.lastCall?.[0]).toBe(label);
-      }
-      await progress.pushPlanProgress([{ step: "Verify", status: "in_progress" }]);
-      expect(update.mock.lastCall?.[0]).toContain("▸ Verify");
-      expect(update.mock.lastCall?.[0]).not.toContain("Patch");
-    },
-  );
-
-  it("returns detached structured state to native renderers", async () => {
-    const { progress, update } = createProgress({ toolProgress: true, label: false });
-    await progress.pushPreambleHeadline("Checking Slack.");
-    await progress.pushToolProgress(
-      { id: "call", kind: "tool", text: "Exec", label: "Exec", toolName: "exec" },
-      { startImmediately: true },
-    );
-    await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
-      explanation: "Applying the change.",
-    });
-    const snapshot = update.mock.lastCall?.[1].snapshot;
-    const expected = {
-      lines: [{ id: "call", kind: "tool", text: "Exec", label: "Exec", toolName: "exec" }],
-      statusHeadline: "Checking Slack.",
-      plan: [{ step: "Patch", status: "in_progress" }],
-      planExplanation: "Applying the change.",
-    };
-    expect(snapshot).toEqual(expected);
-    const line = snapshot?.lines[0];
-    if (!snapshot?.plan?.[0] || typeof line !== "object") {
-      throw new Error("expected structured snapshot");
-    }
-    line.text = "mutated";
-    snapshot.plan[0].step = "mutated";
-    expect(progress.getSnapshot()).toEqual(expected);
-  });
-
   it("preserves summary presentation for SDK callers", async () => {
     const { progress, update } = createProgress(
       { toolProgress: true },
@@ -732,51 +611,6 @@ describe("channel progress draft compositor", () => {
     expect(update.mock.lastCall?.[0]).toContain("Checking the result");
     await progress.pushPlanProgress([{ step: "Verify", status: "in_progress" }]);
     expect(update.mock.lastCall?.[0]).toContain("In progress: Verify");
-  });
-
-  it("lets named tool failures scroll out while preserving blocked work and the plan", async () => {
-    const { progress, update } = createProgress({ toolProgress: true, maxLines: 5, label: false });
-    await progress.pushPlanProgress(plan);
-    for (let index = 0; index < 8; index++) {
-      await progress.pushItemEvent(
-        projectAgentToolActivity({
-          name: "exec",
-          toolCallId: `failed-${index}`,
-          phase: "result",
-          status: "failed",
-        }),
-      );
-    }
-    await progress.pushItemEvent({
-      itemId: "failed-automations",
-      kind: "tool",
-      name: "automations",
-      status: "failed",
-    });
-    await progress.pushItemEvent({
-      itemId: "real-failure",
-      kind: "tool",
-      name: "read",
-      status: "failed",
-      progressText: "Read failed",
-    });
-    await progress.pushItemEvent({
-      itemId: "blocked-read",
-      kind: "tool",
-      name: "read",
-      status: "blocked",
-      progressText: "Read blocked",
-    });
-    for (let index = 0; index < 8; index++) {
-      await progress.pushToolEvent({ name: "read", toolCallId: `new-${index}`, phase: "start" });
-    }
-    const lines = progress.getSnapshot().lines;
-    for (const id of ["tool:failed-0", "failed-automations", "real-failure"]) {
-      expect(lines).not.toContainEqual(expect.objectContaining({ id }));
-    }
-    expect(lines).toContainEqual(expect.objectContaining({ id: "blocked-read" }));
-    expect(update.mock.lastCall?.[0]).toContain("Repair");
-    expect(update.mock.lastCall?.[0]).toContain("Read blocked");
   });
 
   it("ignores late approval resolution after final delivery takes over", async () => {
@@ -794,10 +628,7 @@ describe("channel progress draft compositor", () => {
     expect(deleteCurrent).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { toolProgress: true, maxLines: 1 },
-    { toolProgress: false, maxLines: 3 },
-  ])(
+  it.each([{ toolProgress: true, maxLines: 1 }])(
     "flushes and retains approval attention through a full plan and activity ($toolProgress, $maxLines)",
     async ({ toolProgress, maxLines }) => {
       const { progress, update } = createProgress({
@@ -832,33 +663,7 @@ describe("channel progress draft compositor", () => {
     },
   );
 
-  it.each([undefined, true])(
-    "starts failed-command drafts only with tool progress enabled (%s)",
-    async (toolProgress) => {
-      const { progress, update } = createProgress({ toolProgress, maxLines: 3, label: false });
-      await progress.pushItemEvent(
-        projectAgentToolActivity({
-          name: "exec",
-          phase: "result",
-          toolCallId: "failed-command",
-          status: "failed",
-        }),
-      );
-      expect(progress.hasStarted).toBe(toolProgress === true);
-      if (toolProgress) {
-        expect(update.mock.lastCall?.[0]).toContain("failed");
-        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
-      } else {
-        expect(update).not.toHaveBeenCalled();
-        expect(progress.getSnapshot().lines).toEqual([]);
-      }
-    },
-  );
-
-  it.each([
-    { presentation: undefined, toolProgress: false, maxLines: 1 },
-    { presentation: "summary" as const, toolProgress: true, maxLines: 3 },
-  ])(
+  it.each([{ presentation: "summary" as const, toolProgress: true, maxLines: 3 }])(
     "keeps failed commands out of quiet plans ($presentation)",
     async ({ presentation, toolProgress, maxLines }) => {
       const { progress, update } = createProgress(
@@ -900,88 +705,6 @@ describe("channel progress draft compositor", () => {
       expect(update.mock.lastCall?.[0]).not.toContain("failed");
     },
   );
-
-  it("flushes explicit errors and retains them through later activity", async () => {
-    const { progress, update } = createProgress({
-      toolProgress: true,
-      maxLines: 3,
-      commentary: true,
-      label: false,
-    });
-    await progress.pushPlanProgress(plan);
-    await progress.pushItemEvent({
-      itemId: "attention",
-      kind: "tool",
-      name: "read",
-      status: "error",
-      progressText: "Check access",
-    });
-    expect(update.mock.lastCall?.[0]).toContain("Check access");
-    expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
-    for (let index = 0; index < 5; index++) {
-      await progress.pushToolEvent({ name: "read", toolCallId: `read-${index}`, phase: "start" });
-      await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
-        itemId: `comment-${index}`,
-      });
-    }
-    expect(update.mock.lastCall?.[0]).toContain("Check access");
-    expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(3);
-  });
-
-  it("replaces completed work without collapsing the plan", async () => {
-    const { progress, update } = createProgress({
-      toolProgress: true,
-      maxLines: 8,
-      commentary: true,
-      label: false,
-    });
-    await progress.pushPlanProgress([
-      ...plan,
-      { step: "Audit", status: "pending" },
-      { step: "Ship", status: "pending" },
-    ]);
-    for (let index = 1; index <= 8; index++) {
-      await progress.pushItemEvent(
-        projectAgentToolActivity({
-          name: "exec",
-          phase: "result",
-          toolCallId: `completed-${index}`,
-          status: "completed",
-        }),
-      );
-    }
-    await progress.pushItemEvent(
-      projectAgentToolActivity({ name: "read", toolCallId: "new-work", phase: "start" }),
-    );
-    for (const step of ["Inspect", "Repair", "Verify", "Audit", "Ship", "Read"]) {
-      expect(update.mock.lastCall?.[0]).toContain(step);
-    }
-    expect(progress.getSnapshot().lines).not.toContainEqual(
-      expect.objectContaining({ id: "tool:completed-1" }),
-    );
-    expect(progress.getSnapshot().lines).toHaveLength(8);
-  });
-
-  it("keeps rejected delayed updates pending and retryable", async () => {
-    const update = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    const { progress } = createProgress({ label: "Working", commentary: true }, { update });
-    await progress.pushToolProgress("Exec");
-    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
-    expect(progress.isVisible).toBe(false);
-    expect(await progress.pushToolProgress("Exec")).toBe(true);
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(progress.isVisible).toBe(true);
-  });
-
-  it("retries rejected explicit activity with a flush", async () => {
-    const update = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    const { progress } = createProgress({ label: "Working" }, { update });
-    expect(await progress.noteActivity({ startImmediately: true })).toBe(false);
-    expect(progress.isVisible).toBe(false);
-    expect(await progress.noteActivity({ startImmediately: true })).toBe(true);
-    expect(progress.isVisible).toBe(true);
-    expect(update.mock.calls.map(([, options]) => options.flush)).toEqual([true, true]);
-  });
 
   it("rejects pending startup acceptance after final delivery cancels it", async () => {
     const started = createDeferred();

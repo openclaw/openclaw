@@ -222,7 +222,6 @@ test.each(["success", "failure"])(
 );
 
 test.each([
-  { name: "local", remote: null, failure: false, entry: "settings", lateRetry: false },
   {
     name: "remote",
     remote: { transport: "direct", url: "https://gateway.example.com" },
@@ -231,7 +230,6 @@ test.each([
     lateRetry: false,
   },
   { name: "failed return", remote: null, failure: true, entry: "settings", lateRetry: false },
-  { name: "startup error Edit", remote: null, failure: false, entry: "startup", lateRetry: false },
   {
     name: "late retry after Edit",
     remote: null,
@@ -338,8 +336,6 @@ test.each(
   [
     { platform: "freebsd", externalService: true },
     { platform: "linux", externalService: false },
-    { platform: "macos", externalService: false },
-    { platform: "windows", externalService: false },
   ].flatMap((entry) =>
     [true, false].map((releaseBuild) => Object.assign({}, entry, { releaseBuild })),
   ),

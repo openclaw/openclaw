@@ -75,6 +75,12 @@ Plugin stock-quotes is valid.
 static list of tools. Parameter and config types are inferred from the
 TypeBox schemas.
 
+Each tool can declare `workspaceAccess`: `false` for a workspace-independent tool,
+`"execute"` for a pure factory whose tool reads or writes working files, or `true`
+when its factory also reads the workspace. An omitted factory declaration waits
+for complete workspace preparation; an omitted static declaration waits only
+at execution. Explicit declarations preserve early first replies during checkout.
+
 ```typescript
 import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
@@ -118,6 +124,12 @@ export default defineToolPlugin({
 
 Tool names are the stable API. Pick names that are unique, lowercase, and
 specific enough to avoid collisions with core tools or other plugins.
+
+OpenClaw bounds tool input schemas to 128 nested schema levels, including
+expanded local references. Deeper subschemas become permissive `{}` schemas
+so the tool remains callable. A one-time warning names the affected tool;
+validation beyond the cutoff is unavailable. Keep schemas shallow enough to
+describe useful arguments to the model. This applies to MCP tools too.
 
 ## Optional and factory tools
 

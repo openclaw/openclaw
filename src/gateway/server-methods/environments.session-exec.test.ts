@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { ExecAsk, ExecSecurity } from "../../infra/exec-approvals.js";
+import type { ExecAsk, ExecSecurity, ExecApprovalsFile } from "../../infra/exec-approvals.js";
 import type { WorkerWorkspaceCommand } from "../worker-environments/tunnel-contract.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -26,7 +26,28 @@ vi.mock("./environments.session.js", () => ({
 vi.mock("./sessions-shared.js", () => ({
   loadAccessorSessionEntryForGatewayTarget: () => ({ entry: { sessionId: "conversation" } }),
 }));
-vi.mock("../../agents/exec-defaults.js", () => ({ resolveExecDefaults: () => mocks.policy }));
+// mock-isolation: This dispatch fixture injects policy resolution; canonical policy writes are covered by the exec-approval store tests.
+vi.mock("../../agents/exec-defaults.js", () => ({
+  prepareExecDefaults: () => ({
+    kind: "needs-approvals",
+    resolve: (file: ExecApprovalsFile) => ({ ...mocks.policy, ...file.defaults }),
+  }),
+}));
+// mock-isolation: Prepared session classification is unrelated to this fixture's transport and effect checks.
+vi.mock("../../agents/sandbox/runtime-status.js", () => ({
+  resolveSandboxRuntimeStatus: () => ({}),
+}));
+// mock-isolation: The live reader is injected; worker publication and SQL-free reads have their owning store integration proof.
+vi.mock("../../infra/exec-approvals-store.js", () => ({
+  prepareExecApprovalsCurrentRead: async () => () => ({
+    version: 1,
+    defaults: { security: mocks.policy.security, ask: mocks.policy.ask },
+  }),
+}));
+// mock-isolation: No database is opened by the injected policy reader.
+vi.mock("../../state/openclaw-state-worker-context.js", () => ({
+  captureOpenClawStateWorkerContext: () => ({}),
+}));
 vi.mock("./environments.session-exec-approval.js", () => ({
   approveSessionEnvironmentCommand: mocks.approve,
 }));
@@ -167,19 +188,26 @@ describe("conversation environment execution RPC", () => {
     expect(mocks.approve).not.toHaveBeenCalled();
   });
 
-  it("waits for approval and rechecks live authority before dispatch", async () => {
-    mocks.policy = { ...mocks.policy, security: "allowlist", ask: "on-miss" };
-    const decision = createDeferred();
-    mocks.approve.mockReturnValue(decision.promise);
-    const { call, execute } = fixture();
-    const pending = call({ action: "start", argv: ["node", "app.js"], processId: "app" });
-    await vi.waitFor(() => expect(mocks.approve).toHaveBeenCalledOnce());
-    expect(execute).not.toHaveBeenCalled();
-    mocks.current = false;
-    decision.resolve();
-    expect((await pending)?.[0]).toBe(false);
-    expect(execute).not.toHaveBeenCalled();
-  });
+  it.each(["run", "policy"] as const)(
+    "waits for approval and rechecks %s authority before dispatch",
+    async (owner) => {
+      mocks.policy = { ...mocks.policy, security: "allowlist", ask: "on-miss" };
+      const decision = createDeferred();
+      mocks.approve.mockReturnValue(decision.promise);
+      const { call, execute } = fixture();
+      const pending = call({ action: "start", argv: ["node", "app.js"], processId: "app" });
+      await vi.waitFor(() => expect(mocks.approve).toHaveBeenCalledOnce());
+      expect(execute).not.toHaveBeenCalled();
+      if (owner === "run") {
+        mocks.current = false;
+      } else {
+        mocks.policy = { ...mocks.policy, security: "deny" };
+      }
+      decision.resolve();
+      expect((await pending)?.[0]).toBe(false);
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes approved background operations to the owned process lifecycle", async () => {
     mocks.policy = { ...mocks.policy, security: "allowlist", ask: "on-miss" };

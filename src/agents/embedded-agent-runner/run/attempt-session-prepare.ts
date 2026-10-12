@@ -117,6 +117,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     pluginMetadataSnapshot: input.getCurrentAttemptPluginMetadataSnapshot(),
     contextTokenBudget: attempt.contextTokenBudget,
   });
+  // Preserve the actual user setting before the SDK guard transfers ownership.
+  const compactionEnabled = settingsManager.getCompactionEnabled();
   applyAgentAutoCompactionGuard({
     settingsManager,
     contextEngineInfo: input.activeContextEngineInfo,
@@ -259,6 +261,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 
   return {
     activeSession,
+    compactionEnabled,
     allCustomTools,
     ...clientToolRuntime,
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,

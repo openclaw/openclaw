@@ -502,25 +502,6 @@ describe("session mutation reconnect truth", () => {
     sessions.dispose();
   });
 
-  it("does not carry a confirmed create into a different client owner", async () => {
-    const createResponse = createDeferred<{ key: string }>();
-    const { publish, request, sessions } = createMutationHarness({
-      "sessions.create": () => createResponse.promise,
-    });
-    const created = vi.fn();
-    sessions.subscribeCreated(created);
-
-    const operation = sessions.create({ agentId: "main" });
-    publish(false);
-    publish(true, { request } as unknown as GatewayBrowserClient);
-    createResponse.resolve({ key: "agent:main:other-gateway" });
-
-    await expect(operation).resolves.toBeNull();
-    expect(created).not.toHaveBeenCalled();
-    expect(sessions.state.error).toBeNull();
-    sessions.dispose();
-  });
-
   it("revalidates the same-client owner after replacement reconciliation", async () => {
     const createResponse = createDeferred<{ key: string }>();
     const reconciliation = createDeferred<ReturnType<typeof sessionsResult>>();

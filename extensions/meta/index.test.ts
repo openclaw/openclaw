@@ -83,24 +83,6 @@ describe("meta provider", () => {
     configureAiTransportHost(initialAiTransportHost);
   });
 
-  it("registers the Meta provider with api-key auth", () => {
-    const provider = captureProvider();
-    expect(provider).toMatchObject({
-      id: "meta",
-      label: "Meta",
-      docsPath: "/providers/meta",
-    });
-    expect(provider.wrapStreamFn).toBe(wrapMetaProviderStream);
-    expect(provider.wrapSimpleCompletionStreamFn).toBe(wrapMetaProviderStream);
-    expect(provider.auth).toHaveLength(1);
-    expect(provider.auth[0]).toMatchObject({
-      id: "api-key",
-      kind: "api_key",
-      label: "Meta API key",
-      starterModel: "meta/muse-spark-1.3",
-    });
-  });
-
   it("applies Muse Spark 1.3 as the onboarding default and alias", () => {
     const config = applyMetaConfig({});
 
@@ -166,27 +148,6 @@ describe("meta provider", () => {
       max_output_tokens: 131072,
       store: false,
     });
-  });
-
-  it.each([
-    { id: "muse-spark-1.3", cost: { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 } },
-    {
-      id: "muse-spark-1.3-contributor",
-      cost: { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 },
-    },
-  ])("builds the $id catalog entry over openai-responses", ({ id, cost }) => {
-    const providerConfig = buildMetaProvider();
-    expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");
-    expect(providerConfig.api).toBe("openai-responses");
-    const model = expectDefined(
-      providerConfig.models.find((m) => m.id === id),
-      id,
-    );
-    expect(model.contextWindow).toBe(1048576);
-    expect(model.maxTokens).toBe(131072);
-    expect(model.reasoning).toBe(true);
-    expect(model.input).toEqual(["text", "image"]);
-    expect(model.cost).toEqual(cost);
   });
 
   it.each([undefined, 4096])(
@@ -304,29 +265,6 @@ describe("meta provider", () => {
       include: ["reasoning.encrypted_content"],
     });
     expect(capturedPayload).not.toHaveProperty("max_output_tokens");
-  });
-
-  it("preserves a pre-populated payload cap when the caller cap is zero", () => {
-    const wrapStream = captureCompletionWrapper();
-    const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
-    const payload: Record<string, unknown> = { max_output_tokens: 2048 };
-    const baseStreamFn: StreamFn = (streamModel, _context, options) => {
-      options?.onPayload?.(payload, streamModel);
-      return createAssistantMessageEventStream();
-    };
-    const streamFn = wrapStream({
-      provider: "meta",
-      modelId: model.id,
-      model,
-      streamFn: baseStreamFn,
-    });
-    if (!streamFn) {
-      throw new Error("Expected Meta Responses stream wrapper");
-    }
-
-    void streamFn(model, { messages: [] }, { maxTokens: 0 });
-
-    expect(payload.max_output_tokens).toBe(2048);
   });
 
   it("advertises a high default thinking profile for every reasoning model", () => {

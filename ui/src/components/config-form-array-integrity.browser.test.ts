@@ -1,10 +1,8 @@
 // Control UI tests cover array draft recovery and repeated-item constraints.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
-import { renderArray } from "./config-form.node.collection.ts";
+import { renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import type { ConfigFormCollectionDraft } from "./config-form-collection-draft.tsx";
 import type { JsonSchema } from "./config-form.shared.ts";
-import { renderNode } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -12,18 +10,6 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
     throw new Error(`missing ${label}`);
   }
   return element;
-}
-
-type RenderArrayFixtureOptions = Omit<
-  Parameters<typeof renderArray>[0],
-  "disabled" | "hints" | "unsupported"
->;
-
-function renderArrayFixture(container: HTMLElement, options: RenderArrayFixtureOptions): void {
-  render(
-    renderArray({ hints: {}, unsupported: new Set(), disabled: false, ...options }, renderNode),
-    container,
-  );
 }
 
 function findAddButton(container: Element): HTMLButtonElement | undefined {

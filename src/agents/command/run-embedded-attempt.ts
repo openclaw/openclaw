@@ -1,9 +1,14 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
+import { formatThinkingLevelClampNotice } from "../../auto-reply/thinking.shared.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import {
   MODEL_SELECTION_LOCKED_MESSAGE,
   ModelSelectionLockedError,
@@ -270,6 +275,24 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds, sessionAgentId);
       const fallbackResult = await runEmbeddedAgentEntry<AgentAttemptResult>({
         preparedRunAdmission: params.preparedRunAdmission,
+        modelResolve: {
+          prompt: body,
+          images: params.opts.images,
+          cwd,
+          modelSelectionLocked: isModelSelectionLocked(sessionEntry),
+          context: {
+            trigger: "user",
+            ...buildAgentHookContextChannelFields({
+              ...runContext,
+              sessionKey,
+              messageChannel,
+              messageProvider: params.opts.messageProvider ?? messageChannel,
+              messageTo: params.opts.replyTo ?? params.opts.to,
+              agentAccountId: runContext.accountId,
+            }),
+            ...buildAgentHookContextIdentityFields({ ...runContext, trigger: "user" }),
+          },
+        },
         selection: {
           cfg,
           provider,
@@ -439,7 +462,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               }).catalog;
             }
           }
-          const { level: candidateThinkLevel } = resolveThinkingSelection({
+          const { requestedLevel, level: candidateThinkLevel } = resolveThinkingSelection({
             cfg,
             agentId: sessionAgentId,
             provider: providerOverride,
@@ -450,7 +473,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           });
           effectiveTurnThinkLevel = candidateThinkLevel;
           try {
-            return await attemptExecutionRuntime.runAgentAttempt({
+            const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
               ...runOptions,
               preparedRunAdmission: params.preparedRunAdmission,
               providerOverride,
@@ -460,7 +483,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 [providerOverride, modelOverride, candidateRuntime],
               ),
               configuredAuthProfileId,
-              modelFallbacksOverride: effectiveFallbacksOverride,
+              modelFallbacksOverride: runOptions.modelFallbacksOverride,
               originalProvider: provider,
               cfg,
               sessionEntry: attemptSessionEntry,
@@ -529,6 +552,26 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               deferTerminalLifecycle: true,
               deferredLifecycle,
             });
+            const thinking = candidateResult.meta.requestShaping?.thinking ?? candidateThinkLevel;
+            const thinkingClamp = formatThinkingLevelClampNotice({
+              requested: requestedLevel,
+              effective: thinking,
+              provider: candidateResult.meta.agentMeta?.provider ?? providerOverride,
+              model: candidateResult.meta.agentMeta?.model ?? modelOverride,
+            });
+            return thinkingClamp
+              ? {
+                  ...candidateResult,
+                  meta: {
+                    ...candidateResult.meta,
+                    requestShaping: {
+                      ...candidateResult.meta.requestShaping,
+                      thinking,
+                      thinkingClamp,
+                    },
+                  },
+                }
+              : candidateResult;
           } finally {
             await candidateAccounting.finish(sessionEntry);
           }

@@ -11,7 +11,7 @@ import {
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
-import "./chat-sidebar-region.runtime.ts";
+import "./chat-sidebar-region.runtime.tsx";
 
 const shells: HTMLElement[] = [];
 const firstTab: PanelHostedTab = {
@@ -95,6 +95,18 @@ afterEach(() => {
 });
 
 describe("chat sidebar hosted tabs", () => {
+  it("restores an expanded hosted panel only from its active page tab", async () => {
+    const { region, shell } = await mount();
+    region.layout = { ...region.layout, expanded: true, expandedSide: true };
+    await region.updateComplete;
+    shell
+      .querySelector<HTMLElement>('wa-tab[panel="hosted:browser:remote:page:1"]')!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledExactlyOnceWith("browser");
+    shell.querySelector<HTMLElement>('wa-tab[panel="hosted:browser:native:page:2"]')!.click();
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledTimes(1);
+  });
+
   it("drags passive header chrome while keeping changing tabs and controls interactive", async () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
@@ -249,7 +261,7 @@ describe("chat sidebar hosted tabs", () => {
       "favicon-ready.example",
       expect.any(AbortSignal),
     );
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     expect(fetchFavicon).toHaveBeenCalledOnce();
   });

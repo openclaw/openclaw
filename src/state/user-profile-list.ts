@@ -93,6 +93,19 @@ export function readResidentUserProfileId(
   return resolveCatalogProfile(catalog.rows, profileId)?.id;
 }
 
+/** Participant recording consumes the Gateway's prepared aliases without opening storage. */
+export function readResidentUserProfileAliases(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): ReadonlySet<string> {
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  if (!catalog?.valid) {
+    throw new Error("User profile catalog is not ready");
+  }
+  const identity = projectCatalogUserProfileIdentity(catalog.rows, profileId);
+  return new Set([profileId, ...(identity?.aliases ?? [])]);
+}
+
 export function captureResidentUserProfileAccess(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
@@ -491,9 +504,6 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
       { current: true },
     );
     context.admission.assertCurrent();
-    if (reply && (!reply.ok || reply.type !== "userProfiles.catalog")) {
-      throw new Error(reply.ok ? "Unexpected profile catalog reply" : reply.message);
-    }
     if (
       profileRevision !== readUserProfileVersion() ||
       bindingRevision !== readUserProfileEmailBindingRevision()
@@ -623,7 +633,14 @@ export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: stri
     stageSqliteTransactionState(db, {
       stage: () => {},
       rollback: () => {},
-      commit: () => rows.forEach(([id, row]) => catalog.set(id, row)),
+      commit: () => {
+        for (const id of profileIds) {
+          catalog.delete(id);
+        }
+        for (const [id, row] of rows) {
+          catalog.set(id, row);
+        }
+      },
     });
   }
 }

@@ -240,19 +240,19 @@ describe("user turn transcript persistence", () => {
       await expect(readTranscriptMessages(target)).resolves.toEqual([captured, steered?.message]);
     });
 
-    it("uses the persisted target's redaction for capture, dispatch, and reopened replay", async () => {
+    it("preserves capture, dispatch, and replay bytes despite logging patterns", async () => {
       const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const input = { text: "private", timestamp: 123, idempotencyKey: "redaction:user" };
-      const redactedTarget = { ...target, config: { logging: { redactPatterns: ["private"] } } };
+      const input = { text: "private", timestamp: 123, idempotencyKey: "fidelity:user" };
+      const loggingTarget = { ...target, config: { logging: { redactPatterns: ["private"] } } };
       const recorder = createUserTurnTranscriptRecorder({
         input,
         target: { ...target, config: { logging: { redactPatterns: [] } } },
       });
-      await recorder.persistApproved({ target: redactedTarget });
+      await recorder.persistApproved({ target: loggingTarget });
       const rawProjection = "prepend\n\nprivate\n\nappend";
       const captured = await recorder.captureModelPromptProjection!(rawProjection, () => {});
-      const expected = "prepend\n\n***\n\nappend";
-      expect(captured.content).toBe("***");
+      const expected = rawProjection;
+      expect(captured.content).toBe(input.text);
       expect(readModelPromptProjection(captured)).toBe(expected);
       expect(projectRecordedModelPrompt(makeUserMessage(input.text, 123), captured)).toMatchObject({
         content: expected,
@@ -263,9 +263,9 @@ describe("user turn transcript persistence", () => {
       );
       const stored = await readTranscriptMessages(target);
       expect(stored).toEqual([captured]);
-      expect(JSON.stringify(stored)).not.toContain("private");
+      expect(stored[0]?.content).toBe(input.text);
 
-      const reopened = createUserTurnTranscriptRecorder({ input, target: redactedTarget });
+      const reopened = createUserTurnTranscriptRecorder({ input, target: loggingTarget });
       await reopened.persistApproved();
       const replay = await reopened.captureModelPromptProjection!(rawProjection, () => {});
       expect(readModelPromptProjection(replay)).toBe(expected);

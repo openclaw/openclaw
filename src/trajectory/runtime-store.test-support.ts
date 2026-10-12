@@ -1,4 +1,15 @@
+import { appendSqliteTrajectoryRuntimeEvents as appendSerializedTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
+
+export function appendSqliteTrajectoryRuntimeEvents(
+  scope: Parameters<typeof appendSerializedTrajectoryRuntimeEvents>[0],
+  events: readonly TrajectoryEvent[],
+): void {
+  appendSerializedTrajectoryRuntimeEvents(
+    scope,
+    events.map((event) => ({ runId: event.runId, ts: event.ts, line: JSON.stringify(event) })),
+  );
+}
 
 export function createTrajectoryEvent(options: {
   payloadSize?: number;

@@ -7,6 +7,7 @@ import {
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readIncognitoSessionSteeringEntry } from "../../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
@@ -84,6 +85,12 @@ export function prepareSteeringDelivery(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return prepareCurrentSteeringRead(() => {
+      assertEntry(memory.actor.snapshot(memory.authority)?.entry);
+    });
+  }
   const binding = captureIncognitoSessionBinding(scope);
   if (binding) {
     const claim = binding.actor.sessions.captureCurrent(scope.sessionKey);

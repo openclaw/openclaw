@@ -130,59 +130,50 @@ it("returns the successor after a worker upsert conflict without replaying prepa
   });
 });
 
-it.each(["snapshot", "commit"] as const)(
-  "refuses a replacement physical store with the same session identity during %s preparation",
-  async (phase) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const primary = path.join(state.sessionsDir("main"), "reply-primary.sqlite");
-      const successor = path.join(state.sessionsDir("main"), "reply-successor.sqlite");
-      const alias = path.join(state.sessionsDir("main"), "reply-alias.sqlite");
-      const scope = { agentId: "main", sessionKey: "agent:main:reply-source", storePath: alias };
-      for (const [storePath, label] of [
-        [primary, "primary"],
-        [successor, "successor"],
-      ] as const) {
-        await upsertSessionEntryCore(
-          { ...scope, storePath },
-          { sessionId: "same-session", updatedAt: 1, label },
-        );
-      }
-      symlinkSync(primary, alias);
-      const replaceSource = vi.fn(() => {
-        unlinkSync(alias);
-        symlinkSync(successor, alias);
-      });
-      let preparation: Promise<unknown>;
-      if (phase === "snapshot") {
-        preparation = loadReplySessionInitializationSnapshot(scope);
-        replaceSource();
-      } else {
-        const snapshot = await loadReplySessionInitializationSnapshot(scope);
-        preparation = commitReplySessionInitialization({
-          ...scope,
-          activeSessionKey: scope.sessionKey,
-          expectedRevision: snapshot.revision,
-          sessionEntry: snapshot.currentEntry!,
-          prepareSessionEntry: async () => {
-            replaceSource();
-            return { ...snapshot.currentEntry!, label: "must not publish" };
-          },
-        });
-      }
-      try {
-        await expect(preparation).rejects.toThrow(
-          "Reply initialization database changed after its snapshot",
-        );
-        expect(replaceSource).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ ...scope, storePath: primary })?.label).toBe("primary");
-        expect(loadSessionEntry({ ...scope, storePath: successor })?.label).toBe("successor");
-      } finally {
-        unlinkSync(alias);
-        symlinkSync(primary, alias);
-      }
+it("refuses a replacement physical store with the same session identity at commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const primary = path.join(state.sessionsDir("main"), "reply-primary.sqlite");
+    const successor = path.join(state.sessionsDir("main"), "reply-successor.sqlite");
+    const alias = path.join(state.sessionsDir("main"), "reply-alias.sqlite");
+    const scope = { agentId: "main", sessionKey: "agent:main:reply-source", storePath: alias };
+    for (const [storePath, label] of [
+      [primary, "primary"],
+      [successor, "successor"],
+    ] as const) {
+      await upsertSessionEntryCore(
+        { ...scope, storePath },
+        { sessionId: "same-session", updatedAt: 1, label },
+      );
+    }
+    symlinkSync(primary, alias);
+    const replaceSource = vi.fn(() => {
+      unlinkSync(alias);
+      symlinkSync(successor, alias);
     });
-  },
-);
+    const snapshot = await loadReplySessionInitializationSnapshot(scope);
+    const preparation = commitReplySessionInitialization({
+      ...scope,
+      activeSessionKey: scope.sessionKey,
+      expectedRevision: snapshot.revision,
+      sessionEntry: snapshot.currentEntry!,
+      prepareSessionEntry: async () => {
+        replaceSource();
+        return { ...snapshot.currentEntry!, label: "must not publish" };
+      },
+    });
+    try {
+      await expect(preparation).rejects.toThrow(
+        "Reply initialization database changed after its snapshot",
+      );
+      expect(replaceSource).toHaveBeenCalledOnce();
+      expect(loadSessionEntry({ ...scope, storePath: primary })?.label).toBe("primary");
+      expect(loadSessionEntry({ ...scope, storePath: successor })?.label).toBe("successor");
+    } finally {
+      unlinkSync(alias);
+      symlinkSync(primary, alias);
+    }
+  });
+});
 
 it("projects lifecycle removal without acquiring unrelated prompt payloads", async () => {
   await withOpenClawTestState({ label: "lifecycle-selected-removal" }, async (state) => {

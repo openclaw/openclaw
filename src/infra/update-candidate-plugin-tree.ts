@@ -7,7 +7,7 @@ import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { hasNodeErrorCode, isPathInside, isPathStrictlyInside } from "./path-guards.js";
 import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
@@ -250,6 +250,10 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
         // Node skips a redundant node_modules/node_modules lookup.
         if (path.basename(ancestor) !== "node_modules") {
           const modulesDir = path.join(ancestor, "node_modules");
+          if (boundary && !isPathInside(boundary, modulesDir)) {
+            // Installed lookups stay inside the package manager's owning project.
+            break;
+          }
           const dependency = path.join(modulesDir, ...name.split("/"));
           const exists = await fs.stat(dependency).then(
             () => true,
@@ -261,20 +265,31 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
             },
           );
           if (exists) {
-            // Copy the reached module owner, not its repository. Its projected
-            // ancestry preserves both nearest-package shadowing and sibling imports.
             const realModules = await fs.realpath(modulesDir);
             assertUpdateCandidatePluginCopySource(modulesDir, privateRoot);
             assertUpdateCandidatePluginCopySource(realModules, privateRoot);
             moduleOwners.add(realModules);
-            addRoot(realModules);
             if (realModules !== modulesDir) {
               moduleAliases.set(modulesDir, realModules);
+            }
+            if (boundary && isPathInside(modulesDir, boundary)) {
+              // A global module directory is shared with unrelated packages.
+              // Retain only the reached package; its manifest finds its own siblings.
+              const realDependency = await fs.realpath(dependency);
+              assertUpdateCandidatePluginCopySource(realDependency, privateRoot);
+              addRoot(realDependency);
+              if (realDependency !== dependency) {
+                moduleAliases.set(dependency, realDependency);
+              }
+            } else {
+              // Copy the reached module owner, not its repository. Its projected
+              // ancestry preserves both nearest-package shadowing and sibling imports.
+              addRoot(realModules);
             }
             break;
           }
         }
-        if (ancestor === boundary || path.dirname(ancestor) === ancestor) {
+        if (path.dirname(ancestor) === ancestor) {
           // Missing optional dependencies remain absent; validation owns required ones.
           break;
         }
@@ -447,8 +462,18 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     await discoverHoistedDependencies(retainedHostRoot);
   }
   // A locator can itself name a package inside a pnpm store or hoisted tree.
+  // Within a known installation, selected host entries are not locators: their
+  // owner is the host, whose manifest discovery above reaches the dependency
+  // owners it actually uses instead of the whole shared module directory.
+  const installationBoundsHost =
+    retainedHostRoot !== undefined &&
+    params.retainedDependencyRoot !== undefined &&
+    isPathStrictlyInside(params.retainedDependencyRoot, retainedHostRoot);
   for (const source of params.roots.keys()) {
-    if (source.split(path.sep).includes("node_modules")) {
+    if (
+      source.split(path.sep).includes("node_modules") &&
+      !(installationBoundsHost && isPathInside(retainedHostRoot, source))
+    ) {
       addRoot(await dependencyOwner(source));
     }
   }

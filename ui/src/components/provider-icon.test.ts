@@ -11,6 +11,21 @@ import {
   resolveCloudProfileIcon,
 } from "./provider-icon.ts";
 
+function svgGeometry(element: Element | null): unknown {
+  return element
+    ? {
+        tag: element.localName,
+        namespace: element.namespaceURI,
+        attributes: Object.fromEntries(
+          [...element.attributes]
+            .filter((attribute) => attribute.name !== "aria-hidden")
+            .map((attribute) => [attribute.name, attribute.value]),
+        ),
+        children: [...element.children].map(svgGeometry),
+      }
+    : null;
+}
+
 describe("retained Lit icon callers", () => {
   it("keeps reusable registry values and custom stroked keyboard fragments", () => {
     const first = document.createElement("div");
@@ -97,7 +112,10 @@ describe("cloud provider presentation", () => {
       expected = document.createElement("div");
     render(resolveCloudProfileIcon({ providerId }).icon, actual);
     render(expectedIcon, expected);
-    expect(actual.querySelector("svg")?.outerHTML).toBe(expected.querySelector("svg")?.outerHTML);
+    expect(svgGeometry(actual.querySelector("svg"))).toEqual(
+      svgGeometry(expected.querySelector("svg")),
+    );
+    expect(actual.querySelector("svg")?.closest('[aria-hidden="true"]')).not.toBeNull();
     expect(actual.querySelector("[data-provider-icon]")).toBeNull();
   });
 });

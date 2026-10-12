@@ -43,6 +43,7 @@ function resolveUtilityCompletionForAgent(
     model: selection.modelId,
     authProfileId: selection.profileId ?? params.preferredProfile,
     outputTextPolicy: "strict-visible" as const,
+    thinkLevel: "off" as const,
     agentId: params.agentId,
     agentDir: selection.agentDir,
     ...(inheritedRuntime ? { agentHarnessRuntimeOverride: inheritedRuntime } : {}),
@@ -132,7 +133,7 @@ export async function resolveUtilityCompletionRuntimeForAgent(
           delete prepared.agentHarnessRuntimeOverride;
         }
       }
-      const runtime = resolveIsolatedCompletionRuntime({
+      const runtime = await resolveIsolatedCompletionRuntime({
         ...prepared,
         agentDir: params.agentDir ?? prepared.agentDir,
         workspaceDir: params.workspaceDir,

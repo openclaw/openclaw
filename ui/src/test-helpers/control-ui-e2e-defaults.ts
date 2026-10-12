@@ -1,4 +1,7 @@
-import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
+import type {
+  ChannelsStatusResult,
+  UserProfile,
+} from "../../../packages/gateway-protocol/src/index.ts";
 import { BUILTIN_THEMES } from "../../../packages/gateway-protocol/src/theme.js";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
@@ -88,6 +91,14 @@ export function createControlUiDefaultResponses(scenario: {
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
   return {
+    "channels.status": {
+      ts: 0,
+      channelOrder: [],
+      channelLabels: {},
+      channels: {},
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    } satisfies ChannelsStatusResult,
     "users.self": profile
       ? { profile }
       : {

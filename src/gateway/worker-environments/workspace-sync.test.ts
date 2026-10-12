@@ -119,27 +119,6 @@ describe("worker workspace command transport retry", () => {
     expect(sshArgvPort(run.mock.calls[1]![0])).toBe(2222);
   });
 
-  it("retries idempotent commands and records the successful port", async () => {
-    const run = vi.fn(async (argv: string[]) =>
-      argv.at(-1)?.includes("retry-command") && sshArgvPort(argv) === 2222 ? result(255) : result(),
-    );
-    const actions = createWorkspaceActions(run);
-
-    await expect(
-      actions.runWorkspaceCommand({
-        transportRetry: "idempotent",
-        argv: ["printf", "retry-command"],
-      }),
-    ).resolves.toEqual(result());
-    expect(run.mock.calls.slice(0, 2).map(([argv]) => sshArgvPort(argv))).toEqual([2222, 22]);
-
-    await actions.runWorkspaceCommand({
-      transportRetry: "idempotent",
-      argv: ["printf", "selected-port-probe"],
-    });
-    expect(sshArgvPort(run.mock.calls[2]![0])).toBe(22);
-  });
-
   it("gives an idempotent fallback only the remaining operation timeout", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);

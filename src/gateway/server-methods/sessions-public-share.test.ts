@@ -5,6 +5,7 @@ import {
   SessionPublicShareSetResultSchema,
   SessionMembersListEvidenceResultSchema,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -33,6 +34,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
 });
 
+const cfg = {};
 const scope = { agentId: "main", sessionKey: "agent:main:public-example" };
 const sessionId = "public-example-generation";
 
@@ -42,7 +44,7 @@ async function call(
   client: GatewayClient = identifiedClient("owner"),
 ) {
   const responses: Parameters<RespondFn>[] = [];
-  const context = sessionSharingTestContext(vi.fn());
+  const context = sessionSharingTestContext(vi.fn(), cfg);
   await initializeSessionReadContext(context);
   await expectDefined(
     sessionSharingHandlers[method],
@@ -57,6 +59,7 @@ async function call(
 }
 
 async function createSession() {
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(scope, {
     sessionId,
     updatedAt: 1,
@@ -155,6 +158,17 @@ describe("world-readable session publication management", () => {
       const sessionKey = "global";
       const firstStorePath = state.path("public-share-first.sqlite");
       const secondStorePath = state.path("public-share-second.sqlite");
+      const configFor = (store: string) => ({
+        session: { scope: "global" as const, store },
+        agents: {
+          ownership: "explicit" as const,
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {} },
+        },
+      });
+      const firstConfig = configFor(firstStorePath);
+      const secondConfig = configFor(secondStorePath);
+      setRuntimeConfigSnapshot(firstConfig);
       const entry = {
         sessionId,
         updatedAt: 1,
@@ -168,16 +182,6 @@ describe("world-readable session publication management", () => {
         { agentId: "main", sessionKey, storePath: secondStorePath },
         entry,
       );
-      const configFor = (store: string) => ({
-        session: { scope: "global" as const, store },
-        agents: {
-          ownership: "explicit" as const,
-          defaults: { sessionStore: { agentId: "main" } },
-          entries: { main: {} },
-        },
-      });
-      const firstConfig = configFor(firstStorePath);
-      const secondConfig = configFor(secondStorePath);
       let currentConfig = firstConfig;
       const requestContext = sessionSharingTestContext(vi.fn(), firstConfig);
       requestContext.getRuntimeConfig = () => currentConfig;
@@ -325,6 +329,7 @@ describe("world-readable session publication management", () => {
 
   it("rejects an unencodable locator before persisting its publication grant", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(cfg);
       const oversizedScope = {
         agentId: "main",
         sessionKey: `agent:main:${"🙂".repeat(2_000)}`,

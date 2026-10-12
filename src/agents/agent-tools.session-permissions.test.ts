@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import * as logger from "../logger.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
@@ -17,6 +18,8 @@ vi.mock("../infra/shell-env.js", async () => {
 });
 
 const fileTools = ["write", "read", "edit", "apply_patch"] as const;
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 function args(name: (typeof fileTools)[number], target: string) {
   if (name === "apply_patch") {
     return {

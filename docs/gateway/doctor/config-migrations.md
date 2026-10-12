@@ -47,6 +47,14 @@ Localhost, LAN, and custom endpoints stay unchanged, including cloud models
 served through a signed-in local Ollama daemon. Other provider keys also stay
 unchanged. Doctor does not infer hosted routing from a model name.
 
+An explicit `remote.baseUrl` on a provider/model route is checked independently:
+local or custom memory embedding endpoints keep `ollama` even when chat moves
+to `ollama-cloud`. Empty endpoints continue to inherit the chat provider's route.
+Per-agent `agents.entries.<id>.memory.search` overrides resolve provider, model,
+and endpoint independently against `memory.search`. Doctor preserves that
+effective route, adding an explicit per-agent provider or model only when moving
+the shared defaults would otherwise change it.
+
 Both providers use `OLLAMA_API_KEY`, so environment-backed URLs, credentials, and
 SecretRefs keep their authored references without a credential-store migration.
 Doctor leaves saved `ollama` auth profiles untouched; if the key exists only in

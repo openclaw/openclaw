@@ -208,7 +208,7 @@ function observeChatSendCommentaryMedia(params: AssistantCommentaryMediaCustodyP
           const managedMedia = new Map<string, AssistantDisplayContentBlock[]>();
           let committed = false;
           try {
-            const mediaScope = captureWebchatReplyMediaScope({
+            const mediaScope = await captureWebchatReplyMediaScope({
               requesterContext: params.requesterContext,
               cfg: session.cfg,
               sessionKey: scope.sessionKey,

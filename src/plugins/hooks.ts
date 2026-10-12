@@ -50,7 +50,6 @@ import type {
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
   PluginHookHandlerMap,
-  PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookInboundClaimContext,
@@ -336,14 +335,6 @@ export function createHookRunner(
 
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
-  const mergeBeforeModelResolve = (
-    acc: PluginHookBeforeModelResolveResult | undefined,
-    next: PluginHookBeforeModelResolveResult,
-  ): PluginHookBeforeModelResolveResult => ({
-    // Keep the first defined override so higher-priority hooks win.
-    modelOverride: acc?.modelOverride ?? next.modelOverride,
-    providerOverride: acc?.providerOverride ?? next.providerOverride,
-  });
 
   const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
     if (value === undefined) {
@@ -1108,7 +1099,12 @@ export function createHookRunner(
 
   return {
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
-      mergeResults: mergeBeforeModelResolve,
+      mergeResults: (acc, next) => ({
+        // Keep the first defined override so higher-priority hooks win, including [].
+        modelOverride: acc?.modelOverride ?? next.modelOverride,
+        providerOverride: acc?.providerOverride ?? next.providerOverride,
+        fallbacksOverride: acc?.fallbacksOverride ?? next.fallbacksOverride,
+      }),
     }),
     runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
       mergeResults: mergeAgentTurnPrepare,

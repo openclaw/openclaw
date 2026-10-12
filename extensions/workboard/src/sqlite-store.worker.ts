@@ -1,6 +1,11 @@
-import type {
-  SqliteWorkerBackend,
-  SqliteWorkerCommand,
+import {
+  runEngineWorkerWrite,
+  type DatabaseEngineInput,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  requestSqliteWorkerOperationAdmission,
+  type SqliteWorkerBackend,
+  type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type {
   WorkboardSqliteOperations,
@@ -15,10 +20,10 @@ type ConnectionCommand = Exclude<
 >;
 
 export function createSqliteWorkerBackend(
-  _input: undefined,
+  input: DatabaseEngineInput,
   context: { databasePath: string },
 ): SqliteWorkerBackend<WorkboardSqliteWorkerOperations> {
-  const initial = createWorkboardSqliteKernel(context.databasePath);
+  const initial = createWorkboardSqliteKernel(context.databasePath, undefined, input);
   const connections = new Map<number, Connection>();
   // Broker admission opens the native database; the first logical lease adopts it.
   connections.set(0, { kernel: initial, close: initial.close });
@@ -109,9 +114,13 @@ export function createSqliteWorkerBackend(
           connections.delete(0);
           const kernel =
             unclaimed?.kernel ??
-            createWorkboardSqliteKernel(context.databasePath, (close) => {
-              connections.set(connection, { close });
-            });
+            createWorkboardSqliteKernel(
+              context.databasePath,
+              (close) => {
+                connections.set(connection, { close });
+              },
+              input,
+            );
           connections.set(connection, { kernel, close: kernel.close });
           return { ok: true, value: { connection } };
         } catch (error) {
@@ -131,7 +140,41 @@ export function createSqliteWorkerBackend(
         }
       }
       try {
-        return { ok: true, value: execute(command) };
+        const readOnly = [
+          "cards.lookup",
+          "cards.entries",
+          "cards.listCardStatuses",
+          "cards.listBoardAggregates",
+          "cards.listStatsAggregates",
+          "cards.hasCards",
+          "boards.lookup",
+          "boards.entries",
+          "sessionsBoard.get",
+          "sessionsBoard.listPlacements",
+          "subscriptions.lookup",
+          "subscriptions.entries",
+          "attachments.lookup",
+          "attachments.entries",
+          "connection.close",
+        ].includes(command.type);
+        const kernel = connections.get(command.input.connection)?.kernel;
+        const value =
+          !readOnly && kernel
+            ? runEngineWorkerWrite(
+                input,
+                () => execute(command),
+                (operation) => {
+                  requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+                  return kernel.withWriteTransaction(operation, {
+                    withCommit(commit) {
+                      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+                      commit();
+                    },
+                  });
+                },
+              )
+            : execute(command);
+        return { ok: true, value };
       } catch (error) {
         return { ok: false, failure: encodeWorkboardSqliteFailure(error) };
       }

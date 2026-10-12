@@ -75,10 +75,12 @@ it.skipIf(process.platform === "win32").for([
               inspect();
             }),
             closed,
-            `Missing ${text}: ${output}`,
+            `Missing ${text}`,
           ),
           testSignal,
         );
+      } catch (cause) {
+        throw new Error(`Missing ${text}: ${output}`, { cause });
       } finally {
         changes.off("output", inspect);
       }
@@ -93,7 +95,7 @@ it.skipIf(process.platform === "win32").for([
       expect(output).not.toContain("process proof: close-entered");
     }
     child.send("inspect");
-    await waitForOutput("process proof: held:starts=1:pending=true");
+    await waitForOutput("process proof: held:starts=1:connectionPending=false:cronPending=1");
     expect(fs.existsSync(path.join(root, "cleanup.txt"))).toBe(false);
     expect(output).not.toContain("process proof: close-completed");
     expect(output).not.toContain("process proof: ready:2");

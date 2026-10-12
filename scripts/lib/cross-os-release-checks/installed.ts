@@ -370,7 +370,9 @@ export async function resolveInstalledGatewayStopArgs(params: {
     cwd: params.cwd,
     env: params.env,
     logPath: params.logPath,
-    timeoutMs: 15_000,
+    // Help takes about 2s on Windows runners but exceeded 15s on an overloaded one;
+    // share the installed-CLI budget so a capability probe cannot fail the lane.
+    timeoutMs: 2 * 60 * 1000,
   });
   return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
 }

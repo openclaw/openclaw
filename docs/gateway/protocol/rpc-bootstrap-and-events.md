@@ -108,7 +108,9 @@ does not identify an agent. The SDK sends a stable opaque `subscriptionId` for
 each wire observer and includes it in resubscriptions and unsubscribe requests.
 For multiple IDs on one connection and session, full-stream interest takes
 precedence until its last owner releases; approvals remain enabled while any
-owner requests them. Omitting the ID retains the legacy single-observer behavior.
+owner requests them. Unsubscribing an observer resets the connection's text baseline;
+remaining observers receive a complete snapshot before append-only delivery resumes.
+Omitting the ID retains the legacy single-observer behavior.
 Older clients remain compatible with the updated Gateway; the updated SDK's
 ownership fields require an updated Gateway.
 

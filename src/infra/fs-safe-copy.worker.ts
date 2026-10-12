@@ -40,7 +40,11 @@ if (parentPort) {
     try {
       switch (command.type) {
         case "probe":
-          return { type: "probe", backend: probeTreeClone(command.parent) };
+          return {
+            type: "probe",
+            backend: probeTreeClone(command.parent),
+            nativeMode: getFsSafeNativeConfig().mode,
+          };
         case "acl":
           return { type: "acl", acl: inspectDarwinAcl(command.path) };
         case "metadata":

@@ -16,6 +16,7 @@ import { findJobOrThrow } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
+import { refreshCronScheduler } from "./scheduler-actor.js";
 import type { CronServiceState } from "./state.js";
 import {
   captureCronJobMutationSource,
@@ -23,7 +24,6 @@ import {
   runPostPersistCronNotifications,
 } from "./store.js";
 import { emitCronRunFinished } from "./timer-outcome-events.js";
-import { armTimer } from "./timer.js";
 
 type ExternalOutcome = CronRuntimeMutationContracts["cron.mutateExternalState"]["outcome"];
 
@@ -111,10 +111,10 @@ async function mutateExternalState(
         if (change.kind === "failure") {
           for (const notification of committed.notifications) {
             source.assertCurrent();
-            runPostPersistCronNotifications(state, [notification]);
+            await runPostPersistCronNotifications(state, [notification]);
           }
           source.assertCurrent();
-          armTimer(state);
+          refreshCronScheduler(state);
         }
       }
     } catch (error) {

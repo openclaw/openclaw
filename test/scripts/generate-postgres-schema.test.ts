@@ -3,7 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { generatePostgresSchemas } from "../../scripts/generate-postgres-schema.mts";
+import {
+  generatePostgresSchemas,
+  generateWorkboardPostgresSchema,
+} from "../../scripts/generate-postgres-schema.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -29,6 +32,25 @@ function verifiedFixture(sql: string, verify: (db: DatabaseSync) => void) {
 }
 
 describe("PostgreSQL schema generation", () => {
+  it("keeps the complete workboard artifact current and uses the admitted search path", async () => {
+    const { sql, catalog } = await generateWorkboardPostgresSchema();
+    expect(sql).toBe(
+      fs.readFileSync(
+        path.join(root, "extensions/workboard/src/workboard-schema.postgres.sql"),
+        "utf8",
+      ),
+    );
+    expect(catalog.objects.filter((item) => item.sql === null)).toEqual([]);
+    expect(sql).toContain('CREATE TABLE "workboard_cards" (');
+    expect(sql).toContain('"content" bytea NOT NULL');
+    expect(sql).toContain("CHECK ((\"source\" IN ('state', 'model', 'operator')))");
+    expect(sql).toContain(
+      'REFERENCES "workboard_cards" ("id") ON UPDATE NO ACTION ON DELETE CASCADE',
+    );
+    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
+    expect(sql).toMatch(/[^\n]\n$/);
+  });
+
   it("accounts for every canonical SQLite object and generates identical bytes twice", async () => {
     const generated = await generatePostgresSchemas(root);
     expect((await generatePostgresSchemas(root)).files).toEqual(generated.files);

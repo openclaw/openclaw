@@ -15,7 +15,6 @@ import {
   type ProviderAugmentModelCatalogContext,
   type ProviderCatalogContext,
   type ProviderPlugin,
-  type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
@@ -45,6 +44,7 @@ import {
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
+  getUnlistedOllamaConfiguredModelIds,
   isLocalOllamaBaseUrl,
   readOllamaStringValue,
   resolveOllamaDiscoveryResult,
@@ -102,8 +102,6 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
 const ollamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: OLLAMA_PROVIDER_ID,
   capabilities: ["image"],
-  describeImage: undefined,
-  describeImages: undefined,
 };
 
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
@@ -117,15 +115,6 @@ async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<voi
   } catch {
     // Advisory-only startup checks must not break provider registration.
   }
-}
-
-function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
-  return {
-    ...buildOpenAICompatibleReplayPolicy("openai-completions", {
-      sanitizeToolCallIds: false,
-    }),
-    sanitizeToolCallIds: false,
-  };
 }
 
 function matchesOllamaContextOverflowError(errorMessage: string): boolean {
@@ -655,7 +644,13 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
     },
     buildReplayPolicy: ({ modelApi }) =>
       modelApi === "ollama"
-        ? buildNativeOllamaReplayPolicy()
+        ? {
+            ...buildOpenAICompatibleReplayPolicy("openai-completions", {
+              sanitizeToolCallIds: false,
+              dropReasoningFromHistory: false,
+            }),
+            sanitizeToolCallIds: false,
+          }
         : buildOpenAICompatibleReplayPolicy(modelApi),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: resolveOllamaThinkingProfile,
@@ -841,6 +836,7 @@ export default definePluginEntry({
       ],
       catalog: {
         order: "late",
+        getUnlistedConfiguredModelIds: getUnlistedOllamaConfiguredModelIds,
         run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,

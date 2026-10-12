@@ -5,8 +5,9 @@ import { page, userEvent } from "vitest/browser";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
 import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
-import { renderChatModelPicker } from "./chat-model-picker.ts";
+import { ChatModelPicker } from "./chat-model-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
 
 const container = document.createElement("div");
@@ -46,7 +47,7 @@ function mountPicker() {
           @keydown=${(event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(container, event)}
         >
           <div class="agent-chat__composer-combobox"><textarea></textarea></div>
-          ${renderChatModelPicker(params)}
+          ${solidTemplate(ChatModelPicker, params)}
         </div>
       `,
       container,

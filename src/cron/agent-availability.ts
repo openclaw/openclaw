@@ -9,6 +9,19 @@ export type CronAgentAvailability = (
   facts?: CronAgentAvailabilityFacts,
 ) => boolean;
 
+/** Deletion owns this refusal; monitor reconciliation may retry after rollback. */
+export class CronAgentDeletionBlockedError extends Error {
+  constructor(agentId: string) {
+    super(describeUnavailableCronAgent(agentId));
+    this.name = "CronAgentDeletionBlockedError";
+  }
+}
+
+export function isCronAgentDeletionBlockedError(error: unknown): boolean {
+  // The SQLite worker transports the error name without its JavaScript prototype.
+  return error instanceof Error && error.name === "CronAgentDeletionBlockedError";
+}
+
 export function describeUnavailableCronAgent(agentId: string, env?: NodeJS.ProcessEnv): string {
   const refusal = readAgentDatabaseAdmissionRefusal(agentId, { env });
   return refusal

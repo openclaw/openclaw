@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render as renderLit } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -9,8 +9,9 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { loadChatRoute } from "../chat/route-loader.ts";
-import { renderDashboards } from "../dashboards/view.ts";
+import { DashboardsView } from "../dashboards/view.tsx";
 import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
@@ -163,7 +164,7 @@ describe("session activity semantics", () => {
           : { month: "short", day: "numeric" };
       const formatter = new Intl.DateTimeFormat(undefined, options);
       expect(bars[count - 1]?.getAttribute("title")).toBe(
-        `${formatter.format(bucketStart(count - 1))} · ${hourly ? 3 : 1} sessions`,
+        `${formatter.format(bucketStart(count - 1))} · ${hourly ? "3 sessions" : "1 session"}`,
       );
       expect(
         [...pulse.querySelectorAll(".activity-pulse__axis > span > span")].map(
@@ -206,17 +207,36 @@ describe("session activity semantics", () => {
         expect(panel.querySelector('[role="status"]')).toBeNull();
       }
       if (time === "all") {
-        input.result!.activityPulse = {
-          since: since.getTime(),
-          until: bucketStart(count),
-          buckets: buckets.map(() => 0),
-          sessions: 0,
-          running: 0,
-        };
-        show(input);
-        expect(
-          pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
-        ).toBe("0 sessions · 0 running now");
+        const firstPeriod = formatter.format(bucketStart(0));
+        for (const [total, sessions, people, incomplete] of [
+          [0, "0 sessions", "0 people", false],
+          [1, "1 session", "1 person", false],
+          [1, "1 session", "1+ people", true],
+          [2, "2 sessions", "2 people", false],
+        ] as const) {
+          input.result!.peopleIncomplete = incomplete;
+          input.result!.activityPulse = {
+            since: since.getTime(),
+            until: bucketStart(count),
+            buckets: buckets.map((_, index) => (index === 0 ? total : 0)),
+            sessions: total,
+            people: total,
+            running: 0,
+          };
+          show(input);
+          expect(
+            pulse.querySelector(".activity-pulse__stats")?.textContent?.replace(/\s+/g, " ").trim(),
+          ).toBe(`${sessions} · ${people} · 0 running now`);
+          expect(pulse.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+            `All time: ${sessions}; busiest ${firstPeriod}`,
+          );
+          expect(pulse.querySelector(".activity-pulse__bar")?.getAttribute("title")).toBe(
+            `${firstPeriod} · ${sessions}`,
+          );
+          expect(
+            pulse.querySelectorAll(".activity-pulse__stats > span")[1]?.hasAttribute("title"),
+          ).toBe(incomplete);
+        }
         expect(pulse.querySelectorAll(".activity-pulse__bars > span")).toHaveLength(12);
         expect(pulse.querySelector(".activity-pulse__running")).toBeNull();
         show();
@@ -356,22 +376,21 @@ describe("session activity semantics", () => {
       if (surface === "activity") {
         renderSessionActivityViewSolid(input, surfaceContainer);
       } else {
-        renderLit(
-          renderDashboards(
-            {
-              result: input.result!,
-              error: null,
-              basePath: "",
-              fallbackAgentId: "main",
-              mainKey: "main",
-              globalScope,
-            },
-            { query: "", ownerId: "", sort: "updated" },
-            {
-              onFilterChange: vi.fn(),
-            },
-          ),
-          surfaceContainer,
+        mountDashboards(
+          () =>
+            createComponent(DashboardsView, {
+              data: {
+                result: input.result!,
+                error: null,
+                basePath: "",
+                fallbackAgentId: "main",
+                mainKey: "main",
+                globalScope,
+              },
+              filters: { query: "", ownerId: "", sort: "updated" },
+              handlers: { onFilterChange: vi.fn() },
+            }),
+          { container: surfaceContainer },
         );
       }
       const item = surfaceContainer.querySelector<HTMLElement>(

@@ -196,7 +196,7 @@ async function resolveConfiguredProviderApiKey(params: {
   if (!agentDir) {
     return apiKey;
   }
-  const { resolveScopedAuthProfileStore, resolveProviderEntryApiKeyAuth } =
+  const { resolveScopedAuthProfileStoreAsync, resolveProviderEntryApiKeyAuth } =
     await import("../agents/model-auth-provider.js");
   const authParams = {
     provider: params.providerId,
@@ -204,7 +204,7 @@ async function resolveConfiguredProviderApiKey(params: {
     cfg: params.options.config,
     agentDir,
   };
-  const store = resolveScopedAuthProfileStore(authParams);
+  const store = await resolveScopedAuthProfileStoreAsync(authParams);
   // Only explicit profile bindings enter model auth. General discovery would
   // replace literal/runtime-resolved keys with unrelated profile or env credentials.
   const auth = await resolveProviderEntryApiKeyAuth({ ...authParams, store });

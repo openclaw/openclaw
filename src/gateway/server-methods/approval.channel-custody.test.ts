@@ -4,12 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateApprovalGetResult } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -71,6 +76,7 @@ describe("approval authority boundaries", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await cleanupApprovalHandlerFixtures();
+    clearRuntimeConfigSnapshot();
   });
 
   it("hides foreign pending and terminal approvals from roles without foreign-session access", async () => {
@@ -82,6 +88,22 @@ describe("approval authority boundaries", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const profile = ensureProfileForEmail("approval-guest@example.test", databaseOptions);
       setUserProfileRole(profile.id, "guest", databaseOptions);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog(databaseOptions)).release };
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.approvals"],
+              },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
       const ownerKey = "agent:main:approval-owned";
       const foreignKey = "agent:main:approval-foreign";
       for (const [sessionKey, creatorId] of [
@@ -106,20 +128,6 @@ describe("approval authority boundaries", () => {
         id: "approval:foreign",
         request: { sessionKey: foreignKey },
       });
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: "*",
-                scopes: ["operator.approvals"],
-              },
-            },
-          },
-        },
-      };
       const context = {
         ...createContext(),
         getRuntimeConfig: () => cfg,

@@ -473,24 +473,7 @@ export async function listUserProfileAuthLinksAsync(
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userModelAccounts.links")) {
-    throw new Error(reply.ok ? "Unexpected model account links reply" : reply.message);
-  }
   return reply?.links ?? [];
-}
-
-export function resolveUserProfileAuthLink(
-  params: { profileId: string; providers: readonly string[] },
-  options: OpenClawStateDatabaseOptions = {},
-): string | undefined {
-  const links = listUserProfileAuthLinks(params.profileId, options);
-  for (const provider of params.providers) {
-    const link = links.find((candidate) => candidate.provider === provider);
-    if (link) {
-      return link.authProfileId;
-    }
-  }
-  return undefined;
 }
 
 /** Apply Doctor's verified credential renames without changing account selections or ownership. */

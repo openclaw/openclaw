@@ -9,14 +9,24 @@ import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
 } from "../../cron/delivery-channel-validation.js";
+import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import {
+  requiresExternalCronDelivery,
+  resolveDeliveryTarget,
+} from "../../cron/isolated-agent/delivery-target.js";
+import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
-import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
+import {
+  resolveCronDeliverySessionKey,
+  resolveCronSessionTargetSessionKey,
+} from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -212,13 +222,18 @@ export function captureCronCreatorSession(
   callerScope: CronCallerScope | undefined,
   client: GatewayClient | null,
 ) {
-  const isolatedAgentTurn = job.sessionTarget === "isolated" && job.payload.kind === "agentTurn";
-  const sessionKey = callerScope?.sessionKey ?? (isolatedAgentTurn ? job.sessionKey : undefined);
+  const hasConversationResult =
+    job.sessionTarget !== "main" &&
+    (job.payload.kind === "agentTurn" ||
+      job.payload.kind === "script" ||
+      job.payload.kind === "command");
+  const sessionKey =
+    callerScope?.sessionKey ?? (hasConversationResult ? job.sessionKey : undefined);
   const agentId = callerScope?.agentId ?? job.agentId;
   const loaded = sessionKey ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId }) : undefined;
   const creatorSession = loaded?.entry;
   const sourceConversation =
-    isolatedAgentTurn && loaded && creatorSession?.sessionId
+    hasConversationResult && loaded && creatorSession?.sessionId
       ? {
           sessionKey: loaded.canonicalKey,
           sessionId: creatorSession.sessionId,
@@ -253,4 +268,60 @@ export function captureCronCreatorSession(
       }
     },
   };
+}
+
+/** Waiting cannot finish while the caller owns the execution or result conversation lane. */
+export async function cronRunQueuesBehindCaller(params: {
+  job: CronStoredJob;
+  cfg: OpenClawConfig;
+  callerSessionKey?: string;
+  resolveDefaultAgentId: () => string | undefined;
+}): Promise<boolean> {
+  const { job, cfg, callerSessionKey } = params;
+  if (!callerSessionKey) {
+    return false;
+  }
+  if (job.sessionTarget === "main") {
+    return true;
+  }
+  const agentId = normalizeAgentId(job.agentId ?? params.resolveDefaultAgentId());
+  const isCallerSession = (sessionKey: string | undefined) =>
+    sessionKey !== undefined &&
+    resolveCronAgentSessionKey({
+      sessionKey,
+      agentId,
+      mainKey: cfg.session?.mainKey,
+      cfg,
+    }) === callerSessionKey;
+  if (
+    job.payload.kind === "agentTurn" &&
+    isCallerSession(resolveCronSessionTargetSessionKey(job.sessionTarget))
+  ) {
+    return true;
+  }
+  const delivery = resolveCronDeliveryPlan(job);
+  if (!delivery.requested) {
+    return false;
+  }
+  const sourceSessionKey = resolveCronDeliverySessionKey(job);
+  try {
+    const resolved = await resolveDeliveryTarget(
+      cfg,
+      agentId,
+      {
+        ...delivery,
+        sessionTarget: job.sessionTarget,
+        sourceConversation: job.sourceConversation,
+        sessionKey: sourceSessionKey,
+      },
+      { dryRun: true },
+    );
+    if (resolved.ok) {
+      return isCallerSession(resolved.sessionRoute?.sessionKey);
+    }
+    return !requiresExternalCronDelivery(delivery, resolved) && isCallerSession(sourceSessionKey);
+  } catch {
+    // The run is already enqueued; uncertain routing must not hold its caller's lane.
+    return true;
+  }
 }

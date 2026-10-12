@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolvePromptBuildHookResult } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -41,7 +42,14 @@ describe("next-turn injection identity", () => {
       const cfg: OpenClawConfig = {
         agents: { entries: { main: {}, unrelated: {} } },
       };
-      const scope = { agentId: "main", sessionKey };
+      const scope = {
+        agentId: "main",
+        sessionKey,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, {
+          agentId: "main",
+          env: state.env,
+        }),
+      };
       await expect(drainPluginNextTurnInjectionContext({ cfg, ...scope })).resolves.toMatchObject({
         queuedInjections: [],
       });
@@ -61,7 +69,14 @@ describe("next-turn injection identity", () => {
 
   it("validates only the selected injection row beside a noncanonical sibling", async () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const scope = { agentId: "main", sessionKey: "agent:main:healthy" };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:healthy",
+      storePath: resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "main",
+        env: state.env,
+      }),
+    };
     const sibling = "agent:main:matrix:channel:!mixed:example.org";
     await replaceSessionEntry(scope, { sessionId: "healthy", updatedAt: 1 });
     await replaceSessionEntry(

@@ -338,7 +338,7 @@ describe("active-memory plugin", () => {
     runtime: {
       agent: {
         runEmbeddedAgent: runtimeRunEmbeddedAgent,
-        resolveCliBackendDispatchEligibility,
+        resolveCliBackendDispatchEligibilityAsync: resolveCliBackendDispatchEligibility,
         session: {
           resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
           getSessionEntryAsync: vi.fn(

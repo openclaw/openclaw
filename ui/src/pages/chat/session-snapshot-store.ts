@@ -74,6 +74,10 @@ const transcriptMetadataSchema = Type.Pick(SessionRowSchema, [
 
 const snapshotSchema = z
   .object({
+    widgetHeights: z
+      .record(z.string(), z.number().finite().min(48).max(8000))
+      .refine((heights) => Object.keys(heights).length <= 100)
+      .optional(),
     transcriptMetadata: z
       .custom<ChatTranscriptMetadata>((value) => Value.Check(transcriptMetadataSchema, value))
       .optional(),

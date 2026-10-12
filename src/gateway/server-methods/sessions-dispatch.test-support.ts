@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -7,10 +7,15 @@ import {
 import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
+import * as sessionStoreWorker from "../session-utils-store-worker.js";
 import * as sessionStore from "../session-utils-store.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -22,27 +27,38 @@ const dispatchTestMocks = vi.hoisted(() => ({
   resolveTarget: vi.fn(),
 }));
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 export function getDispatchTestMocks() {
   return dispatchTestMocks;
 }
 
 beforeEach(() => {
-  vi.spyOn(sessionStore, "loadGatewaySessionEntryReadOnly").mockImplementation(
-    (key, opts, cfg = getRuntimeConfig()) => {
-      const target = dispatchTestMocks.resolveTarget({
-        cfg,
-        key,
-        ...opts,
-        exactRead: true,
-        readOnly: true,
-      });
-      const match = findCanonicalStoreMatch(target.store, target.storeKeys);
-      return {
-        ...target,
-        cfg,
-        entry: match?.entry,
-        legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
-      };
+  const readFixtureEntry: typeof sessionStore.loadGatewaySessionEntryReadOnly = (
+    key,
+    opts,
+    cfg = getRuntimeConfig(),
+  ) => {
+    const target = dispatchTestMocks.resolveTarget({
+      cfg,
+      key,
+      ...opts,
+      exactRead: true,
+      readOnly: true,
+    });
+    const match = findCanonicalStoreMatch(target.store, target.storeKeys);
+    return {
+      ...target,
+      cfg,
+      entry: match?.entry,
+      legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
+    };
+  };
+  vi.spyOn(sessionStore, "loadGatewaySessionEntryReadOnly").mockImplementation(readFixtureEntry);
+  vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(
+    async (params) => {
+      params.assertActive?.();
+      return readFixtureEntry(params.key, params, params.cfg);
     },
   );
   vi.spyOn(managedWorktrees, "findLiveByOwner").mockImplementation(async (...args) =>
@@ -178,7 +194,7 @@ export function makeDispatchTestContext(
       return { available: true, node };
     });
   }
-  return {
+  const context = {
     getSessionEventSubscriberConnIds: () => new Set(),
     getRuntimeConfig: () => ({
       cloudWorkers: {
@@ -214,6 +230,8 @@ export function makeDispatchTestContext(
     ...overrides,
     workerEnvironmentService: workerEnvironmentService as never,
   } as unknown as GatewayRequestContext;
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
+  return context;
 }
 
 export async function invokeSessionDispatch(

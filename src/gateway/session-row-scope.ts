@@ -1,9 +1,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
-import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { applyGatewaySessionStoreAdmission } from "../config/sessions/combined-store-gateway.js";
+import type { CombinedSessionStoreScopeTargets } from "../config/sessions/combined-store.types.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -21,6 +23,62 @@ type SessionRowScopeQuery = { agentId?: string; storePath?: string };
 type SessionRowScope =
   | Pick<ReturnType<typeof prepareSessionRowScopes>, "physicalPaths">
   | undefined;
+
+/** Discover current keys in SQLite, then prepare every physical competitor before federation. */
+export async function readSessionRowLookup(
+  selection:
+    | { kind: "session-id-or-key"; sessionIdOrKey: string }
+    | { kind: "label"; label: string },
+  owner: {
+    agentId?: string;
+    env: NodeJS.ProcessEnv;
+    stores: ReadonlyMap<string, records.SessionRowStore>;
+    paths: ReadonlyMap<string, number>;
+    matching: (query: { key: string }) => records.Row[];
+  },
+): Promise<records.Lookup[]> {
+  const stores = [...owner.stores.values()].filter((store) =>
+    owner.paths.has(store.target.storePath),
+  );
+  return withSessionHistoryWorkerDatabases(
+    stores.map((store) => ({ ...store.target, path: store.filename, env: owner.env })),
+    async (readers) => {
+      const keys = new Set<string>();
+      for (const [index, store] of stores.entries()) {
+        if (typeof store.identity !== "string") {
+          throw new Error("Session lookup requires an admitted durable store");
+        }
+        const result = await readers[index]!.readExactEntries({
+          selection,
+          projection: "list",
+          env: owner.env,
+          expectedIdentity: {
+            key: `file:${store.identity}`,
+            canonicalPath: store.filename,
+            birthtime: store.birthtime,
+          },
+        });
+        for (const entry of result.entries) {
+          keys.add(entry.sessionKey);
+        }
+      }
+      for (const reader of readers) {
+        reader.assertCurrent();
+      }
+      return [...keys].flatMap((key) =>
+        owner
+          .matching({ key })
+          .flatMap((row) =>
+            owner.paths.has(row.storeTarget.storePath) &&
+            (!owner.agentId || row.agentId === owner.agentId)
+              ? [{ key, agentId: row.agentId, storePath: row.storeTarget.storePath }]
+              : [],
+          ),
+      );
+    },
+    projectionLane,
+  );
+}
 
 /** Keyed publications select resident identities and admit only their named destination. */
 export function visitSessionRowPublicationTargets(
@@ -190,18 +248,27 @@ export function prepareSessionRowScopes(
   cfg: OpenClawConfig,
   agentIds: Iterable<string>,
   residentPaths: ReadonlyMap<string, string>,
-  discovery?: GatewaySessionStoreDiscovery,
+  prepared: CombinedSessionStoreScopeTargets,
 ) {
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const aliases = new Map<string, Map<string, string>>();
   const capture = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
     try {
-      const resolved = resolveGatewaySessionStoreTargets(cfg, {
-        ...options,
-        discovery,
-        includeIncognito: false,
-      });
+      const key = options.agentId
+        ? `agent:${options.agentId}`
+        : options.configuredAgentsOnly
+          ? "configured"
+          : "all";
+      const captured = prepared.get(key);
+      if (captured instanceof Error) {
+        return captured;
+      }
+      const resolved = applyGatewaySessionStoreAdmission(
+        cfg,
+        { ...options, includeIncognito: false },
+        expectDefined(captured, "prepared scope topology"),
+      );
       for (const [identity, physical] of resolved.physicalTargets) {
         const separator = identity.indexOf("\0");
         const agentId = identity.slice(0, separator);

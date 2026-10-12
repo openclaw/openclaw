@@ -22,7 +22,6 @@ import {
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
-  canonicalizeTranscriptEventMedia,
   insertTranscriptRowsWithoutProjectionInTransaction,
   scheduleTranscriptProjectionReconcile,
 } from "./session-accessor.sqlite-transcript-store.js";
@@ -43,6 +42,7 @@ import {
   prepareFullTranscriptSuffixMutation,
   prepareTranscriptIndexProjection,
 } from "./session-transcript-suffix-projection.js";
+import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 import {

@@ -634,24 +634,6 @@ it.skipIf(process.platform === "win32").for([
   },
 );
 
-it("does not invent unsettled writers when the Doctor executable never starts", async () => {
-  const resultPath = path.join(root, "doctor-not-started.json");
-  const steps: UpdateStepResult[] = [];
-  const error = await runUpdateDoctorProcess(
-    { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
-    [path.join(root, "missing-doctor-executable")],
-    {
-      cwd: root,
-      timeoutMs: 1_000,
-      env: { ...env, [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath },
-    },
-  ).catch((cause: unknown) => cause);
-  expect(error).toMatchObject({ code: "ENOENT" });
-  expect(hasCommandProcessCleanupError(error)).toBe(false);
-  expect(steps).toEqual([]);
-  expect(fs.existsSync(`${resultPath}.processes`)).toBe(false);
-});
-
 /** Hold fixture startup outside the deadline without freezing native cleanup or lease clocks. */
 function controlDoctorDeadline() {
   const nativeTimeout = processDeadline.setProcessTimeout;

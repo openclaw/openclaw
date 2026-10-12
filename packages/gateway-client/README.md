@@ -181,6 +181,13 @@ first so its authoritative outcome can settle the run. Other gapped frames and
 subsequent frames from that socket are not delivered. Reconnect restores a fresh live-text baseline; applications should
 also refresh durable state and restore their session subscriptions.
 
+Session subscription requests time out without compensating RPCs. If the Gateway
+applied a subscribe or unsubscribe but its acknowledgment was lost, observation
+may remain stale until a fresh subscription or reconnect. In particular, a
+retained handle may miss updates after an unacknowledged unsubscribe. The caller
+still receives the timeout; ordinary acknowledged leases and release retries
+retain their ownership and ordering.
+
 The canonical defaults table and the server policy fields that can replace
 pre-handshake values are documented in the
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol#client-constants).

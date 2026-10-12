@@ -1,4 +1,5 @@
 // Mattermost tests cover native model-picker interaction dispatch ownership.
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -9,16 +10,22 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   parseContext: vi.fn(),
   runDetachedWebhookWork: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
   runDetachedWebhookWork: mocks.runDetachedWebhookWork,
 }));
 
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: mocks.recordDeliveredCommandExchange,
+}));
+
 vi.mock("./model-picker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./model-picker.js")>()),
   parseMattermostModelPickerContext: mocks.parseContext,
-  resolveMattermostModelPickerCurrentModel: () => "openai/gpt-5.4",
+  resolveMattermostModelPickerCurrentModel: async () => "openai/gpt-5.4",
 }));
 
 vi.mock("./monitor-auth.js", () => ({
@@ -136,6 +143,7 @@ describe("Mattermost model-picker interaction dispatch", () => {
       const updateModelPickerPost = vi.fn<
         MattermostMonitorContext["resources"]["updateModelPickerPost"]
       >(async () => {
+        expect(mocks.recordDeliveredCommandExchange).not.toHaveBeenCalled();
         order.push("update");
         return {};
       });
@@ -167,6 +175,7 @@ describe("Mattermost model-picker interaction dispatch", () => {
           post_id: "picker-post-1",
           team_id: "team-1",
           user_id: "user-1",
+          ...(catalogStatus === "empty" ? {} : { trigger_id: `trigger-${action}` }),
         },
         userName: "tester",
         context: {},
@@ -188,6 +197,24 @@ describe("Mattermost model-picker interaction dispatch", () => {
             ? "Select a model"
             : "Select a provider";
         expect(sent?.message).toContain(visibleText);
+        expect(mocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: "agent:main:mm",
+            commandText:
+              action === "select"
+                ? "/model openai/gpt-5.4"
+                : action === "list"
+                  ? "/models openai"
+                  : "/models",
+            commandId:
+              action === "select"
+                ? '["mattermost","default","channel:channel-1","interaction:picker-post-1:select:openai/gpt-5.4"]'
+                : catalogStatus === "empty"
+                  ? expect.stringMatching(/^mattermost:default:channel-1:picker-post-1:/)
+                  : `mattermost:default:channel-1:trigger-${action}`,
+            replyText: expect.stringContaining(visibleText),
+          }),
+        );
         expect(sent?.message.includes("Some models could not be refreshed.")).toBe(
           refreshWarning !== undefined,
         );
@@ -227,6 +254,15 @@ describe("Mattermost model-picker interaction dispatch", () => {
       expect(JSON.stringify(sent?.buttons)).toContain('"model":"gpt-5.4"');
       expect(updateModelPickerPost).toHaveBeenCalledOnce();
       expect(order).toEqual(["load", "detach", "update"]);
+      expect(mocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:mm",
+          commandText: "/model openai/gpt-5.4",
+          commandId:
+            '["mattermost","default","channel:channel-1","interaction:picker-post-1:select:openai/gpt-5.4"]',
+          replyText: expect.stringContaining("Select a model to switch immediately."),
+        }),
+      );
     },
   );
 });

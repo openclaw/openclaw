@@ -71,10 +71,7 @@ export type EmbeddedAttemptSessionResources = {
 };
 
 /** Keep retained review callbacks outside the attempt's tool-execution closure scope. */
-export function createEmbeddedAttemptSessionResources(
-  config: EmbeddedRunAttemptParams["config"],
-  signal: AbortSignal,
-) {
+export function createEmbeddedAttemptSessionResources(signal: AbortSignal) {
   const resources: EmbeddedAttemptSessionResources = {
     trajectoryRecorder: null,
     buildAbortSettlePromise: () => null,
@@ -87,7 +84,6 @@ export function createEmbeddedAttemptSessionResources(
         return undefined;
       }
       return buildExecAutoReviewTranscript({
-        config,
         messages: live.session.messages,
         userTurnOrigins: new Map(
           live

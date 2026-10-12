@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   MEMORY_EMBEDDING_CACHE_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
   type MemoryProviderStatus,
   type MemorySearchManager,
   type MemorySyncParams,
@@ -51,7 +50,6 @@ import {
   hasTargetedSessionSyncParams,
 } from "./manager-sync-control.js";
 import type { MemorySyncOutcome } from "./manager-sync-outcome.js";
-import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 
 const log = createSubsystemLogger("memory");
@@ -276,16 +274,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.indexIdentityState.status === "mismatched" ||
         (this.indexIdentityState.status === "missing" && this.sources.has("memory"));
       const transient = this.purpose !== "default";
-      const invalidatedSources = new Set(
-        (this.database.hasIndex
-          ? (this.db
-              .prepare("SELECT DISTINCT source FROM memory_index_sources WHERE hash = ''")
-              .all() as Array<{ source?: unknown }>)
-          : []
-        ).flatMap((row) =>
-          row.source === "memory" || row.source === "sessions" ? [row.source] : [],
-        ),
-      );
+      const invalidatedSources = new Set(this.database.facts.invalidatedSources);
       this.memorySourceProvenanceRepairPending =
         this.sources.has("memory") && invalidatedSources.has("memory");
       this.dirty =
@@ -591,14 +580,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         : undefined,
       vector: {
         enabled: this.vector.enabled,
-        index: statusDb
-          ? resolvePersistedMemoryVectorIndexState({
-              db: this.db,
-              vectorTable: MEMORY_INDEX_VECTOR_TABLE,
-              metaVectorDims: this.vector.dims,
-              hasSemanticChunks: this.hasSemanticChunks(),
-            })
-          : { state: "empty" },
+        index: this.database.facts.vectorState,
         storeAvailable: this.vector.available ?? undefined,
         semanticAvailable: this.vector.semanticAvailable,
         available: this.vector.semanticAvailable,

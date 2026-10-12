@@ -341,8 +341,16 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
 vi.mock("../../logging/diagnostic.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/diagnostic.js")>();
   return {
+    ...actual,
     diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
-    logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
+    logMessageDispatchCompleted: (
+      params: Parameters<typeof actual.logMessageDispatchCompleted>[0],
+    ) => {
+      diagnosticMocks.logMessageDispatchCompleted(params);
+      if (diagnosticMocks.forwardToRealPipeline) {
+        actual.logMessageDispatchCompleted(params);
+      }
+    },
     logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
     logMessageQueued: diagnosticMocks.logMessageQueued,
     logMessageProcessed: (params: Parameters<typeof actual.logMessageProcessed>[0]) => {
@@ -383,6 +391,16 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
 vi.mock("../../config/sessions/session-actor-scope.js", () => ({
   withSessionActor: async () => undefined,
 }));
+// mock-isolation: Dispatch uses in-memory session fixtures; the reader owns worker integration tests.
+vi.mock("./session-verbose-level.js", async () => {
+  const { normalizeVerboseLevel } = await import("../thinking.js");
+  return {
+    prepareSessionVerboseLevelReader: async () => () => {
+      const level = sessionStoreMocks.currentEntry?.verboseLevel;
+      return typeof level === "string" ? normalizeVerboseLevel(level) : undefined;
+    },
+  };
+});
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (

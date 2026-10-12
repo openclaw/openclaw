@@ -21,6 +21,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntryPatchCommitted } from "../config/sessions/session-entry-patch.types.js";
+import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
@@ -28,7 +29,6 @@ import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isCronSessionKey,
@@ -102,7 +102,7 @@ class ActivitySummaryCancelledError extends Error {
 }
 
 export type SessionActivitySummaryService = {
-  ensure: (target: ActivitySummaryTarget) => ActivitySummaryView;
+  ensure: (target: ActivitySummaryTarget) => Promise<ActivitySummaryView>;
   handleEvent: (event: SessionObserverEvent) => void;
   handleTranscript: (event: InternalSessionTranscriptUpdate) => void;
   handleLifecycle: (event: SessionLifecycleEvent) => void;
@@ -392,16 +392,17 @@ export function createSessionActivitySummaries(deps: {
               timeoutMs: MODEL_TIMEOUT_MS,
               abortSignal: controller.signal,
               assertCurrent: assertRequestCurrent,
-              streamParams: { maxTokens: 240, temperature: 0.2 },
+              answerTokenBudget: 240,
+              streamParams: { temperature: 0.2 },
             });
             return result.text;
           };
           ownedWork = execute();
           text = truncateUtf16Safe(
-            redactToolPayloadText(
+            (
               await racePromiseWithAbortSignal(ownedWork, controller.signal, (signal) =>
                 toErrorObject(signal.reason, "Activity recap cancelled"),
-              ),
+              )
             )
               .replace(/\s+/gu, " ")
               .trim(),
@@ -609,16 +610,25 @@ export function createSessionActivitySummaries(deps: {
     }
   });
   return {
-    ensure(requested) {
+    async ensure(requested) {
       const target = eventTarget(requested.key, requested.agentId)!;
       if (isCronSessionKey(target.key)) {
         return { state: "unavailable" };
       }
       const state = request(target);
+      const entry = read(target);
+      const watermark =
+        entry && readSessionActivitySummary(entry)
+          ? await readSessionTranscriptWatermarkAsync({
+              ...scope(target),
+              sessionId: entry.sessionId,
+            })
+          : undefined;
       const projected = projectSessionActivitySummary({
         ...target,
         cfg: deps.getConfig(),
-        entry: read(target),
+        entry,
+        watermark,
       });
       if (!state && projected?.state !== "current") {
         return { ...projected, state: "unavailable" };
