@@ -5207,6 +5207,13 @@ guard remains a separate compatibility contract.
 It must cover every supported writer before replacing live authority reads. See
 [retained final-authority guards](#retained-final-authority-guards).
 
+Workshop change notices read source generation metadata through the existing entry
+worker after resolving their delivery route. The existing ordered read keeps its
+writer admission through one generation comparison and synchronous undo-event enqueue,
+so reset sessions remain untouched. Durable delivery and transcript append
+retain their own effect-time generation checks. Delivery errors record a warning
+without rereading the generation solely to classify the log message.
+
 Raw and visible transcript deltas, watermarks, pre-reset Memory capture, and final context
 validation borrow an already-prepared agent executor when one exists for the
 captured physical store. The reader captures its generation before yielding and
