@@ -97,12 +97,34 @@ describe("yielded run settlement", () => {
         startedAt: T0 - 5 * MINUTE_MS,
         endedAt: T0 - 4 * MINUTE_MS,
       });
-      for (const run of [legacyYieldedCollector(outcome), orchestrator, legacyLeaf]) {
+      // Controls: collectors the sweep must never settle, one with a recorded result and one
+      // whose stop is already claimed.
+      const frozenCollector = makeRunRecord({
+        ...legacyYieldedCollector(),
+        runId: "yielded-frozen-collector",
+        childSessionKey: "agent:main:subagent:frozen-collector",
+        outcome: { status: "ok" },
+        collectorCompletion: { status: "done" },
+      });
+      const killClaimedCollector = makeRunRecord({
+        ...legacyYieldedCollector(),
+        runId: "yielded-kill-claimed-collector",
+        childSessionKey: "agent:main:subagent:kill-claimed-collector",
+        killIntent: { requestedAt: T0 - 3 * MINUTE_MS, reason: "operator" },
+      });
+      for (const run of [
+        legacyYieldedCollector(outcome),
+        orchestrator,
+        legacyLeaf,
+        frozenCollector,
+        killClaimedCollector,
+      ]) {
         await addSubagentRunForTests(run);
       }
       expect(persisted("legacy-yielded-collector")?.execution.outcome?.status).toBe(
         outcome?.status,
       );
+      const frozenBefore = persisted("yielded-frozen-collector");
       await restartRegistry();
       expect(
         await waitSurface("legacy-yielded-collector"),
@@ -139,6 +161,16 @@ describe("yielded run settlement", () => {
         });
         expect(persisted(control.runId)?.execution.outcome).toBeUndefined();
       }
+      const frozen = persisted("yielded-frozen-collector");
+      expect(frozen?.execution).toEqual(frozenBefore?.execution);
+      expect(frozen?.collectorCompletion).toEqual({ status: "done" });
+      expect(frozen?.endedReason).toBe(frozenBefore?.endedReason);
+      // The claimed stop owns the row: it completes as a cancellation, not as the sweep's failure.
+      expect(persisted("yielded-kill-claimed-collector")).toMatchObject({
+        endedReason: "subagent-killed",
+        collectorCompletion: { status: "killed" },
+        execution: { outcome: { status: "error", error: "operator" } },
+      });
     },
   );
 
