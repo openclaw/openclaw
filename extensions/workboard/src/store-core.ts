@@ -229,6 +229,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     const boardId = normalizeBoardId(input.boardId);
     const aggregates = await this.store.listStatsAggregates(boardId);
     const byStatus: Partial<Record<WorkboardStatus, number>> = {};
+    const activeByStatus: Partial<Record<WorkboardStatus, number>> = {};
+    const archivedByStatus: Partial<Record<WorkboardStatus, number>> = {};
     const byAgent = Object.create(null) as Record<string, number>;
     let oldestReadyAt: number | undefined;
     let updatedAt: number | undefined;
@@ -236,6 +238,14 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     let total = 0;
     for (const aggregate of aggregates) {
       byStatus[aggregate.status] = (byStatus[aggregate.status] ?? 0) + aggregate.total;
+      const activeCount = aggregate.total - aggregate.archived;
+      if (activeCount > 0) {
+        activeByStatus[aggregate.status] = (activeByStatus[aggregate.status] ?? 0) + activeCount;
+      }
+      if (aggregate.archived > 0) {
+        archivedByStatus[aggregate.status] =
+          (archivedByStatus[aggregate.status] ?? 0) + aggregate.archived;
+      }
       const agentId = aggregate.agentId ?? "(default)";
       byAgent[agentId] = (byAgent[agentId] ?? 0) + aggregate.total;
       total += aggregate.total;
@@ -251,6 +261,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       active: total - archived,
       archived,
       byStatus,
+      activeByStatus,
+      archivedByStatus,
       byAgent,
       ...(oldestReadyAt ? { oldestReadyAgeMs: Math.max(0, now - oldestReadyAt) } : {}),
       ...(updatedAt ? { updatedAt } : {}),

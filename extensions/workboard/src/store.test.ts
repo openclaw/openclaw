@@ -2241,6 +2241,8 @@ describe("WorkboardStore", () => {
       active: 0,
       archived: 0,
       byStatus: {},
+      activeByStatus: {},
+      archivedByStatus: {},
       byAgent: {},
     });
     const ops = await store.create({
@@ -2293,6 +2295,8 @@ describe("WorkboardStore", () => {
       active: 0,
       archived: 0,
       byStatus: {},
+      activeByStatus: {},
+      archivedByStatus: {},
       byAgent: {},
     });
     const metadataBoardFirst = await store.create({
@@ -2343,6 +2347,8 @@ describe("WorkboardStore", () => {
         active: 0,
         archived: 1,
         byStatus: { ready: 1 },
+        activeByStatus: {},
+        archivedByStatus: { ready: 1 },
       });
       await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.not.toHaveProperty(
         "oldestReadyAgeMs",
@@ -2359,6 +2365,8 @@ describe("WorkboardStore", () => {
         active: 1,
         archived: 1,
         byStatus: { ready: 2 },
+        activeByStatus: { ready: 1 },
+        archivedByStatus: { ready: 1 },
         oldestReadyAgeMs: 2_000,
         updatedAt: 3_000,
       });
@@ -2385,11 +2393,43 @@ describe("WorkboardStore", () => {
         active: 1,
         archived: 0,
         byStatus: { ready: 1 },
+        activeByStatus: { ready: 1 },
+        archivedByStatus: {},
         byAgent: { "(default)": 1 },
       });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("splits per-status counts by archive state in the same scope", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const doneOld = await store.create({ title: "Done archived", boardId: "ops", status: "done" });
+    await store.create({ title: "Done visible", boardId: "ops", status: "done" });
+    const todoOld = await store.create({ title: "Todo archived", boardId: "ops" });
+    await store.create({ title: "Todo visible", boardId: "ops" });
+    await store.create({ title: "Running", boardId: "ops", status: "running" });
+    await store.create({ title: "Other board", boardId: "product", status: "done" });
+    await store.archive(doneOld.id, true);
+    await store.archive(todoOld.id, true);
+
+    const stats = await store.stats({ boardId: "ops" });
+    expect(stats).toMatchObject({
+      total: 5,
+      active: 3,
+      archived: 2,
+      byStatus: { done: 2, todo: 2, running: 1 },
+      activeByStatus: { done: 1, todo: 1, running: 1 },
+      archivedByStatus: { done: 1, todo: 1 },
+    });
+    const sum = (counts: Partial<Record<string, number>>) =>
+      Object.values(counts).reduce<number>((total, count) => total + (count ?? 0), 0);
+    expect(sum(stats.activeByStatus)).toBe(stats.active);
+    expect(sum(stats.archivedByStatus)).toBe(stats.archived);
+    await expect(store.stats()).resolves.toMatchObject({
+      activeByStatus: { done: 2, todo: 1, running: 1 },
+      archivedByStatus: { done: 1, todo: 1 },
+    });
   });
 
   it("rejects completed manifests for cards not created from the parent", async () => {
