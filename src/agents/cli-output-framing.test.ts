@@ -459,19 +459,13 @@ describe("createCliJsonlStreamingParser framing", () => {
     expect(growingPartialLineParser.getErrorText()).toContain("JSONL line exceeded");
 
     const oversizedTextParser = createParser();
-    for (const toolCallId of ["first", "second"]) {
+    // Tool-result payloads are not retained (see cli-output-tool-results.test.ts);
+    // assistant snapshots are, so they still spend the turn budget.
+    for (const messageId of ["first", "second"]) {
       oversizedTextParser.push(
         `${JSON.stringify({
-          type: "user",
-          message: {
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: toolCallId,
-                content: [{ type: "text", text: "a".repeat(4_300_000) }],
-              },
-            ],
-          },
+          type: "assistant",
+          message: { id: messageId, content: [{ type: "text", text: "a".repeat(4_300_000) }] },
         })}\n`,
       );
     }

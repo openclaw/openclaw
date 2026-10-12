@@ -50,6 +50,7 @@ import {
   CLI_STREAM_JSON_OUTPUT_LIMITS,
   frameBoundedCliJsonlChunk,
   measureClaudePartialMessage,
+  measureClaudeToolResultMessage,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
@@ -611,13 +612,19 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         parsedRecords.length === 1
           ? measureClaudePartialMessage(parsedRecords[0]!, rawLine)
           : undefined;
+      // Measured before media normalization rewrites the record in place.
+      const toolResultChars =
+        parsedRecords.length === 1
+          ? measureClaudeToolResultMessage(parsedRecords[0]!, rawLine)
+          : undefined;
       const normalized =
         parsedRecords.length === 1
           ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
           : undefined;
-      // Neither media omission nor token-envelope discounts may erase wire whitespace.
+      // Neither media omission nor envelope/payload discounts may erase wire whitespace.
       const retainedChars =
         partialChars ??
+        toolResultChars ??
         (normalized
           ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
           : rawLine.length);
