@@ -24,7 +24,7 @@ export function finalizeSessionMaintenance(
     ...input.plan,
     databaseOptions: { ...input.plan.databaseOptions, ...context.options },
   };
-  const mutate = <Receipt>(
+  const mutate = <Receipt extends object>(
     database: OpenClawAgentDatabase,
     wrapReceipt: (receipt: SessionEntryPatchReceipt) => Receipt,
   ): Receipt => {
