@@ -45,7 +45,6 @@ it("retains resident session facts across usage cache writes and reloads actual 
         usage["usageCache.writeRollup"](
           {
             rollupId: "synthetic-rollup",
-            previousValueJson: null,
             valueJson: new TextEncoder().encode("{}"),
             blob: null,
             updatedAt: 2,

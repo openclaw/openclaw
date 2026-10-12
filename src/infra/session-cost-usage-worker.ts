@@ -12,7 +12,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readHotSessionTranscriptSnapshot } from "../config/sessions/session-cold-storage-read.js";
+import { readSessionTranscriptHotWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark-read.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
@@ -280,6 +280,31 @@ export async function executeUsageCostWorker(
       }),
     );
   const resolveCosts = createUsageCostWorkerPriceResolver((pairs) => host("pricing", pairs));
+  const readGeneration = async (marker: SqliteSessionFileMarker) => {
+    const database = target(marker.agentId, marker.storePath);
+    if (isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })) {
+      return undefined;
+    }
+    const read = () =>
+      readStore(marker.agentId, marker.storePath, () => {
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (opened) =>
+            readSessionTranscriptHotWatermark(opened, marker.sessionId, { requireHot: true })
+              .generation,
+          { ...database, env },
+        );
+        return result.found ? result.value : undefined;
+      });
+    try {
+      return await read();
+    } catch (error) {
+      if (!(error instanceof SessionTranscriptColdError) || error.sessionId !== marker.sessionId) {
+        throw error;
+      }
+      await host("restore", marker);
+      return read();
+    }
+  };
   let readId = 0;
   const readRows = async (
     marker: SqliteSessionFileMarker,
@@ -315,44 +340,35 @@ export async function executeUsageCostWorker(
     const read = async () => {
       const stored = await readStore(marker.agentId, marker.storePath, () => {
         const result = withOpenClawAgentDatabaseReadOnly(
-          (opened) =>
-            readHotSessionTranscriptSnapshot(opened, marker.sessionId, "incremental", () => {
-              const query = getSessionKysely(opened.db)
-                .selectFrom("transcript_events")
-                .select(["seq", transcriptEventJsonSql(opened.db).as("event_json")])
-                .where("session_id", "=", marker.sessionId)
-                .where("seq", ">", afterSeq)
-                .where("seq", "<=", throughSeq)
-                .orderBy("seq", "asc")
-                .limit(1_024);
-              const page: Array<{ seq: number; event_json: string }> = [];
-              let bytes = 0;
-              // Stop before parsing: retain at most 8 MiB plus one lookahead event.
-              for (const row of iterateSqliteQuerySync(opened.db, query)) {
-                const size = Buffer.byteLength(row.event_json);
-                if (page.length > 0 && bytes + size > 8 * 1024 * 1024) {
-                  break;
-                }
-                page.push(row);
-                bytes += size;
+          (opened) => {
+            const query = getSessionKysely(opened.db)
+              .selectFrom("transcript_events")
+              .select(["seq", transcriptEventJsonSql(opened.db).as("event_json")])
+              .where("session_id", "=", marker.sessionId)
+              .where("seq", ">", afterSeq)
+              .where("seq", "<=", throughSeq)
+              .orderBy("seq", "asc")
+              .limit(1_024);
+            const page: Array<{ seq: number; event_json: string }> = [];
+            let bytes = 0;
+            // Stop before parsing: retain at most 8 MiB plus one lookahead event.
+            for (const row of iterateSqliteQuerySync(opened.db, query)) {
+              const size = Buffer.byteLength(row.event_json);
+              if (page.length > 0 && bytes + size > 8 * 1024 * 1024) {
+                break;
               }
-              return page;
-            }),
+              page.push(row);
+              bytes += size;
+            }
+            return page;
+          },
           { ...database, env },
         );
         return result.found ? result.value : [];
       });
       return stored.map((row) => ({ seq: row.seq, event: JSON.parse(row.event_json) as unknown }));
     };
-    try {
-      return await read();
-    } catch (error) {
-      if (!(error instanceof SessionTranscriptColdError) || error.sessionId !== marker.sessionId) {
-        throw error;
-      }
-      await host("restore", marker);
-      return read();
-    }
+    return read();
   };
   if (operation.kind === "summary" || operation.kind === "sessions") {
     const project = async (
@@ -399,8 +415,8 @@ export async function executeUsageCostWorker(
             scan: {
               pricingFingerprint: operation.pricingFingerprint,
               resolveCosts,
+              readGeneration,
               readRows,
-              access,
             },
           }),
         onInvalidBody(key: string) {
@@ -545,7 +561,9 @@ export async function executeUsageCostWorker(
       bytes.buffer,
     ]);
   }
-  await host("prune", {});
+  if (!operation.sessionFiles) {
+    await host("prune", {});
+  }
   const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const stale = [];
@@ -617,8 +635,8 @@ export async function executeUsageCostWorker(
             previous,
             pricingFingerprint: operation.pricingFingerprint,
             resolveCosts,
+            readGeneration,
             readRows,
-            access,
           });
     const { valueJson, blob, partitions } = partitionUsageCostRollup(
       entry,
@@ -636,12 +654,10 @@ export async function executeUsageCostWorker(
     const dates = new Set(partitions.map((partition) => partition.date));
     const removedDates = envelope?.projection?.dates.filter((date) => !dates.has(date)) ?? [];
     const value = new TextEncoder().encode(valueJson);
-    const previousValue = row ? new TextEncoder().encode(row.valueJson) : null;
     const written = await host(
       "write",
       {
         key: file.filePath,
-        previousValue,
         value,
         blob,
         updatedAt: entry.scannedAt,
@@ -653,12 +669,7 @@ export async function executeUsageCostWorker(
             }
           : {}),
       },
-      [
-        value.buffer,
-        blob.buffer,
-        ...changedPartitions.map((partition) => partition.blob.buffer),
-        ...(previousValue ? [previousValue.buffer] : []),
-      ],
+      [value.buffer, blob.buffer, ...changedPartitions.map((partition) => partition.blob.buffer)],
     );
     if (!written) {
       throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);

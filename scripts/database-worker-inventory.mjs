@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { format } from "oxfmt";
 import * as ts from "typescript/unstable/ast";
-import { inspectDatabaseWorkerCompatibility } from "./lib/database-worker-compat.mts";
+import { inspectDatabaseWorkerBoundaries } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
@@ -2321,6 +2321,9 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/gateway/github-personal-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
+  "src/gateway/github-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
+  "src/state/user-github-connections.worker.ts", // openclaw-state-worker-registry installs its operation table; host imports are type-only.
   "src/config/sessions/session-accessor.sqlite-worktree-owner.ts", // Only session-entry-read.worker.ts reads the worktree projection after owner-protection's worker cutover.
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
@@ -2514,6 +2517,39 @@ function classify(file, operation, binding, guards) {
   };
 }
 
+/** Only reviewed entries are proof roots; filename-based CLI/migration leads are not. */
+function classifyKnownEntry(file, operation) {
+  const reviewedOperation = reviewedOperations
+    .get(file)
+    ?.find(
+      (entry) =>
+        entry.operations.includes(operation) &&
+        entry.binding === undefined &&
+        entry.guard === undefined,
+    );
+  if (
+    reviewedOperation?.tier === "T2" ||
+    reviewedOperation?.tier === "T3" ||
+    reviewedOperation?.tier === "W"
+  ) {
+    return reviewedOperation.tier;
+  }
+  if (workerModules.has(file)) {
+    return "W";
+  }
+  if (cliModules.has(file)) {
+    return "T3";
+  }
+  if (
+    exceptionModules.has(file) ||
+    (file === "src/state/openclaw-state-db-schema-runtime.ts" &&
+      operation === "ensureOpenClawStateRuntimeSchema")
+  ) {
+    return "T2";
+  }
+  return undefined;
+}
+
 function ownerOf(file) {
   const parts = file.split("/");
   const depth =
@@ -2687,10 +2723,11 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   const texts = snapshot
     ? loadRatchetSources(root, sourceFiles, ref)
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
-  const compatibility = inspectDatabaseWorkerCompatibility(
+  const compatibility = inspectDatabaseWorkerBoundaries(
     root,
     texts,
     (file, operation) => classify(file, operation).tier !== "T1",
+    classifyKnownEntry,
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(
@@ -2730,6 +2767,16 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
           classification.tier = "T1-compat";
           classification.evidence =
             "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove at the next Plugin SDK major.";
+        }
+        const nonRuntimeTier = compatibility.nonRuntimeOperations.get(file)?.get(call.operation);
+        if (
+          classification.tier === "T1" &&
+          nonRuntimeTier &&
+          compatibility.nonRuntimeCallLocations.get(file)?.has(`${call.line}:${call.column}`)
+        ) {
+          classification.tier = nonRuntimeTier;
+          classification.evidence =
+            "Mechanically proven kernel: every value reference stays within reviewed worker or maintenance entries; no runtime, SDK, or unproven callback escape.";
         }
         const group = groups.get(classification.tier) ?? {
           file,
@@ -2782,11 +2829,11 @@ function render(rows) {
     "",
     `This snapshot contains **${total.files} non-test files and ${total.calls} call expressions** for the five primitives below. The campaign previously reported 404 files; that is a historical estimate, not a fixed target or a count of call expressions. This inventory follows current source and excludes import-only matches, comments, tests, fixtures, and test support. Its scan scope and exclusions are explicit below.`,
     "",
-    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser, compatibility reference graph, and `rg`; it does not load application code or open a database.",
+    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser, entry-point reference graph, and `rg`; it does not load application code or open a database.",
     "",
     "## Scope and interpretation",
     "",
-    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T1-compat is deprecated-only SDK compatibility and named shared kernels whose only main-thread paths originate at mechanically guarded deprecated APIs. Worker/maintenance callers retain their existing classification; escaped callbacks and returned-method families remain live/unproven. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
+    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T1-compat is deprecated-only SDK compatibility and named shared kernels whose only main-thread paths originate at mechanically guarded deprecated APIs. Named worker/maintenance-only kernels are proven through exact reviewed entry points; filename-only leads are not proof roots. Escaped callbacks and returned-method families remain live/unproven. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",

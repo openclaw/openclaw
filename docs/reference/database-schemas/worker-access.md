@@ -257,11 +257,13 @@ Write receipts do not authorize an effect: live-authority checks, current-row
 predicates, FIFO ordering, and accepted-work settlement still apply.
 
 SQLite format, schema-version, integrity, canonical-index, and
-table-existence validation runs once per physical database per process load,
-shared with all workers. The first opener publishes admitted facts through the
-existing worker bootstrap and broker channel. Every later handle, worker isolate,
-scope, and request reuses those facts, including a writer reopened after idle
-close. Identity is the file's volume, inode, and stable birthtime, checked with
+table-existence validation is shared across open handles and workers for each
+physical database. The first opener publishes admitted facts through the
+existing worker bootstrap and broker channel. Later handles, worker isolates,
+scopes, and requests reuse those facts while an admitted connection remains open.
+The final native close or worker exit retires the facts and removes them from
+worker bootstrap snapshots. Reopening after every connection closes validates
+the database again. Identity is the file's volume, inode, and stable birthtime, checked with
 `fstat`; path equality or SQL version probes do not establish physical identity.
 A replaced or restored file requires its own first validation.
 The identity owner retains a descriptor for the process lifetime and checks its
@@ -269,7 +271,10 @@ The identity owner retains a descriptor for the process lifetime and checks its
 change time as birthtime, the existing normalized unknown-birthtime value remains
 in use; retaining the original descriptor prevents that inode from being reused
 for a replacement file. This descriptor holds identity custody; it is separate
-from SQLite's native connection descriptor.
+from SQLite's native connection descriptor. This small identity record survives
+ordinary close; schema and row-write metadata do not. Explicit database removal
+or maintenance can retire the descriptor after joining its native consumers.
+This cleanup changes no persisted data, schema, or update procedure.
 
 Synchronous admission exchanges carry the requested physical database's facts and
 custody, including a retained file whose original pathname now points elsewhere.
