@@ -65,6 +65,9 @@ describe("Ollama balance usage", () => {
       resolveOAuthToken: async () => null,
     });
     expect(auth).toEqual({ token: "endpoint-key" });
+    if (!auth || !("token" in auth)) {
+      throw new Error("Expected configured endpoint usage token");
+    }
     const fetchFn = vi.fn(async () =>
       Response.json({ included: { session: { remaining_percent: 80 } } }),
     );
@@ -72,7 +75,7 @@ describe("Ollama balance usage", () => {
       config,
       env,
       provider: "ollama",
-      token: auth?.token ?? "",
+      token: auth.token,
       timeoutMs: 5000,
       fetchFn,
     });
