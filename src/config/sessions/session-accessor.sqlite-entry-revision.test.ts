@@ -20,6 +20,7 @@ import {
   readSessionEntryCacheValidityToken,
   readSessionNodesGeneration,
 } from "./session-accessor.sqlite-entry-revision.js";
+import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -44,6 +45,47 @@ function fixture(filename = ":memory:") {
 }
 
 describe("session entry revision facts", () => {
+  it("carries participant facts into an unchanged transaction and invalidates them on writes", () => {
+    const filename = path.join(tempDirs.make("participant-revision-"), "agent.sqlite");
+    const { db } = fixture(filename);
+    const sessionKey = "agent:main:revision";
+    db.prepare(
+      `INSERT INTO session_participants
+       (session_key, identity_namespace, actor_id, contribution_count)
+       VALUES (?, ?, 'participant', 1)`,
+    ).run(sessionKey, '{"type":"agent"}');
+    const peer = openNodeSqliteDatabase(filename);
+    databases.push(peer);
+    const read = () =>
+      participantRecordsBySessionKey(db, [sessionKey]).get(sessionKey)?.[0]?.contributionCount;
+    const sql = trackSqliteStatementExecutions(db, ["participants"], (statement) =>
+      /^select\b.*\bfrom "session_participants"/iu.test(statement) ? "participants" : null,
+    );
+    try {
+      expect(read()).toBe(1);
+      runSqliteImmediateTransactionSync(db, () => {
+        expect(read()).toBe(1);
+        expect(sql.counts.participants).toBe(1);
+      });
+
+      peer.exec("UPDATE session_participants SET contribution_count = 2");
+      runSqliteImmediateTransactionSync(db, () => {
+        expect(read()).toBe(2);
+      });
+      expect(read()).toBe(2);
+      expect(() =>
+        runSqliteImmediateTransactionSync(db, () => {
+          db.exec("UPDATE session_participants SET contribution_count = 3");
+          expect(read()).toBe(3);
+          throw new Error("rollback participant change");
+        }),
+      ).toThrow("rollback participant change");
+      expect(read()).toBe(2);
+    } finally {
+      sql.restore();
+    }
+  });
+
   it("reads connection-owned generations without SQL after reads and row writes", () => {
     const { db, read } = fixture();
     // The first read installs TEMP triggers; admit that schema before observing warm reads.

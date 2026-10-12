@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -11,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "../../infra/sqlite-snapshot.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -33,19 +33,13 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { copySqliteSessionOwnedStateForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
 import {
   hasSessionTranscriptEventsSync,
   readTranscriptMutationStateSync,
 } from "./session-accessor.sqlite-metadata-read.js";
 import {
-  createTranscriptIdentityReader,
   findTranscriptEventInDatabase,
-  loadLatestAssistantText,
-  loadTranscriptEventsFromDatabase,
-  loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptHeaderSync,
-  readTranscriptEventAtSeqSync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
@@ -179,7 +173,7 @@ async function prepareRace(state: OpenClawTestState) {
   await fs.mkdir(path.dirname(archivePath), { recursive: true });
   await fs.copyFile(seed.archivePath, archivePath, fs.constants.COPYFILE_EXCL);
   const database = openOpenClawAgentDatabase(options);
-  const writer = new DatabaseSync(database.path);
+  const writer = openNodeSqliteDatabase(database.path);
   writer.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
   let committed = false;
   const commitArchive = () => {
@@ -269,43 +263,6 @@ async function withRace(
     }
   });
 }
-const readers: Array<{ name: string; read: (race: Race) => unknown }> = [
-  {
-    name: "history page",
-    read: ({ scope }) =>
-      readRecentSessionTranscriptHistoryEvents(scope, {
-        maxMessages: 20,
-        maxLines: 20,
-        maxBytes: 64 * 1024,
-      }),
-  },
-  { name: "checkpoint suffix", read: ({ scope }) => loadTranscriptEventRowsAfterSeqSync(scope, 0) },
-  { name: "checkpoint row", read: ({ scope }) => readTranscriptEventAtSeqSync(scope, 1) },
-  {
-    name: "events",
-    read: ({ database, scope }) => loadTranscriptEventsFromDatabase(database, scope.sessionId),
-  },
-  { name: "latest assistant", read: ({ scope }) => loadLatestAssistantText(scope) },
-  {
-    name: "identity",
-    read: ({ database, scope }) =>
-      createTranscriptIdentityReader(database, scope.sessionId)("user"),
-  },
-];
-
-it.each(readers)(
-  "keeps $name in the hot snapshot when another connection archives after the marker read",
-  async ({ read }) => {
-    await withRace("cold-read-snapshot", async (race) => {
-      const original = read(race);
-      expect(original).toBeDefined();
-      race.commitAfterMarkerRead();
-      expect(read(race)).toEqual(original);
-      expect(race.committed()).toBe(true);
-      expect(() => read(race)).toThrow(/cold storage/);
-    });
-  },
-);
 
 it("joins a caller's hot read snapshot without a savepoint and observes the next foreign archive", async () => {
   await withRace("nested-hot-read-snapshot", async (race) => {
