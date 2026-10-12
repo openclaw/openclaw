@@ -6,6 +6,7 @@ import {
   runSqliteImmediateTransactionSync,
   runSqliteReadSnapshotSync,
   runSqliteReservedTransactionSync,
+  runSqliteSingleStatementSync,
   runSqliteWorkerTransactionSync,
 } from "../sqlite-transaction.js";
 import { PostgresSyncConnection } from "./connection.js";
@@ -49,11 +50,11 @@ function postgresFixture() {
 const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
 
 describe("experimental PostgreSQL transaction protocol", () => {
-  it.each(["immediate", "deferred", "reserved", "worker"] as const)(
+  it.each(["immediate", "deferred", "reserved", "worker", "single-statement"] as const)(
     "uses one locked read-committed transaction for %s writes",
     (mode) => {
       const { db, statements } = postgresFixture();
-      const admit = vi.fn();
+      const admit = vi.fn((stage: string) => statements.push(`admit:${stage}`));
       const operation = () => {
         statements.push("body");
         return 7;
@@ -65,12 +66,18 @@ describe("experimental PostgreSQL transaction protocol", () => {
             ? runSqliteDeferredTransactionSync(db, operation)
             : mode === "reserved"
               ? runSqliteReservedTransactionSync(db, operation, {})
-              : runSqliteWorkerTransactionSync(
-                  { database: db, databasePath: "", admit },
-                  operation,
-                );
+              : mode === "single-statement"
+                ? runSqliteSingleStatementSync(db, operation)
+                : runSqliteWorkerTransactionSync(
+                    { database: db, databasePath: "", admit },
+                    operation,
+                  );
       expect(result).toBe(7);
-      expect(statements).toEqual([writeBegin, "body", "COMMIT"]);
+      expect(statements).toEqual(
+        mode === "worker"
+          ? ["admit:transaction", writeBegin, "body", "admit:commit", "COMMIT"]
+          : [writeBegin, "body", "COMMIT"],
+      );
       if (mode === "worker") {
         expect(admit.mock.calls).toEqual([["transaction"], ["commit"]]);
       }

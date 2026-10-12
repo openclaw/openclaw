@@ -56,6 +56,9 @@ describe("PostgreSQL string-set compilation", () => {
     const compiled = sql`(SELECT value FROM json_each(${"[]"}))`.compile(postgres);
     expect(compiled.sql).toBe("(SELECT value FROM json_each($1))");
     expect(compiled.parameters).toEqual(["[]"]);
+    const entries = sql`json_each(${"[]"})`.compile(postgres);
+    expect(entries.sql).toBe("json_each($1)");
+    expect(entries.parameters).toEqual(["[]"]);
   });
 
   it("preserves the SQLite helper SQL byte-for-byte", () => {

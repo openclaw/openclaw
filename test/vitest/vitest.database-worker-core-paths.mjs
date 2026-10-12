@@ -22,6 +22,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
+  "src/infra/postgres-sync/locks.test.ts",
   "src/acp/runtime/session-meta-read.cache.test.ts",
   "src/state/user-profile-catalog-identity.read.test.ts",
   "src/talk/client-voice-session-store.test.ts",

@@ -577,7 +577,18 @@ export function runSqliteImmediateTransactionSync<T>(
  * calling; the callback must not do fallible work after the native statement.
  * Existing transactions retain their savepoint and outer publication owner.
  */
-export function runSqliteSingleStatementSync<T>(db: DatabaseSync, statement: () => T): T {
+export function runSqliteSingleStatementSync<T>(
+  db: DatabaseSync | PostgresSyncConnection,
+  statement: () => T,
+): T;
+export function runSqliteSingleStatementSync<T>(db: DatabaseSync, statement: () => T): T;
+export function runSqliteSingleStatementSync<T>(
+  db: DatabaseSync | PostgresSyncConnection,
+  statement: () => T,
+): T {
+  if (db instanceof PostgresSyncConnection) {
+    return runPostgresTransactionSync(db, statement);
+  }
   assertTransactionUsable(db);
   return withSqlitePostCommitPublications(db, () => {
     if (db.isTransaction) {
@@ -598,12 +609,10 @@ export function runSqliteWorkerTransactionSync<T>(
   options?: SqliteTransactionOptions,
 ): T {
   if (context.database instanceof PostgresSyncConnection) {
+    context.admit("transaction");
     return runPostgresTransactionSync(
       context.database,
-      () => {
-        context.admit("transaction");
-        return operation();
-      },
+      operation,
       {
         ...options,
         withCommit(commit) {

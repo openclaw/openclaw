@@ -31,6 +31,9 @@ export function runPostgresTransactionSync<T>(
   return withSqlitePostCommitPublications(db.anchor, () => {
     const nested = db.isTransaction && !reserved;
     try {
+      if (!nested && !readOnly && admitWorker && currentSqliteWorkerOperationAdmission.getStore()) {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      }
       if (nested) {
         db.exec("SAVEPOINT openclaw_tx_nested");
       } else if (!db.isTransaction) {
@@ -39,9 +42,6 @@ export function runPostgresTransactionSync<T>(
             ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
             : `BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`,
         );
-      }
-      if (!nested && !readOnly && admitWorker && currentSqliteWorkerOperationAdmission.getStore()) {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       }
       const result = operation();
       assertSyncTransactionResult(result);

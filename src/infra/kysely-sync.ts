@@ -17,7 +17,11 @@ import {
   queryErrorHandlerByDatabase,
 } from "./kysely-sync-cache-state.js";
 import { PostgresSyncConnection } from "./postgres-sync/connection.js";
-import { OpenClawPostgresDialect, sqliteStringSetNodes } from "./postgres-sync/query-compiler.js";
+import {
+  OpenClawPostgresDialect,
+  sqliteStringSetEntriesFragments,
+  sqliteStringSetFragments,
+} from "./postgres-sync/query-compiler.js";
 import { captureSqliteReaderOwner, retainSqliteReader } from "./sqlite-reader-lifecycle.js";
 
 // Node 24.20 and 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
@@ -88,18 +92,14 @@ export function encodeSqliteStringSet(values: readonly (string | null)[]): strin
 
 export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
   /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
-  const expression = kyselySql<string>`(SELECT value FROM json_each(${encodeSqliteStringSet(values)}))`;
-  sqliteStringSetNodes.set(expression.toOperationNode(), "values");
-  return expression;
+  return kyselySql<string>(sqliteStringSetFragments, encodeSqliteStringSet(values));
 }
 
 /** Expands encoded string tuples without adding one SQLite parameter per field. */
 export function sqliteStringSetEntries(
   encoded: string | RawBuilder<string>,
 ): RawBuilder<{ key: number; value: string | null }> {
-  const expression = kyselySql<{ key: number; value: string | null }>`json_each(${encoded})`;
-  sqliteStringSetNodes.set(expression.toOperationNode(), "entries");
-  return expression;
+  return kyselySql<{ key: number; value: string | null }>(sqliteStringSetEntriesFragments, encoded);
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
