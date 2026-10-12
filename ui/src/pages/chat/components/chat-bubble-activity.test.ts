@@ -161,10 +161,6 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
 it.each([
   { label: "Starting model", options: { startupLabel: "Starting model" } },
   { label: "Waiting for approval", options: { waitingApproval: true } },
-  {
-    label: "Waiting on subagents",
-    options: { waitingSubagents: { runningCount: 1, startedAt: 1 } },
-  },
 ])("keeps $label visible instead of replacing it with working dots", ({ label, options }) => {
   const container = document.createElement("div");
   render(

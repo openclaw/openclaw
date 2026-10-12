@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -146,7 +147,8 @@ suite.define(() => {
         if (editable) {
           await homeComposer.fill("Home draft");
         }
-        const close = paneB.locator(".chat-pane__close-pane");
+        const layout = await openChatLayoutMenu(paneB);
+        const close = layout.getByRole("menuitem", { name: "Close pane", exact: true });
         await close.focus();
         expect(await close.evaluate((element) => element === document.activeElement)).toBe(true);
         await page.screenshot({ path: path.join(suite.artifactDir, "before-close.png") });

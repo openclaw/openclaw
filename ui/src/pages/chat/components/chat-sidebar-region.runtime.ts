@@ -1,12 +1,7 @@
-import {
-  html,
-  nothing,
-  render as renderTemplate,
-  type PropertyValues,
-  type TemplateResult,
-} from "lit";
+import { html, nothing, render as renderTemplate, type PropertyValues } from "lit";
 import "../../../styles/chat/side-panel.css";
 import "./chat-files-panel.tsx";
+
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
@@ -333,6 +328,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           group: panel.id,
           draggable: false,
           reorderId: panel.id,
+          onActivate:
+            this.layout.expanded &&
+            this.layout.expandedSide &&
+            !this.sideFocusLocked &&
+            column.activePanelId === panel.id &&
+            tab.id === hosted.element.activeHostedTabId
+              ? () => this.callbacks?.togglePanelExpanded(panel.id)
+              : undefined,
         }));
       }
       const type = panelType(this.panelDefinitions, panel.slot);
@@ -346,7 +349,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           contentId,
           label: tab.label,
           labelTooltip:
-            panel.slot === "dashboard"
+            panel.slot === "dashboard" ||
+            (this.layout.expanded &&
+              !this.sideFocusLocked &&
+              this.layout.expandedSide &&
+              column.activePanelId === panel.id)
               ? t(
                   this.layout.expanded &&
                     this.layout.expandedSide &&
@@ -357,7 +364,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                 )
               : tab.label,
           onActivate:
-            panel.slot === "dashboard"
+            panel.slot === "dashboard" ||
+            (this.layout.expanded &&
+              !this.sideFocusLocked &&
+              this.layout.expandedSide &&
+              column.activePanelId === panel.id)
               ? () => this.callbacks?.togglePanelExpanded(panel.id)
               : undefined,
           icon: tab.icon,
@@ -372,10 +383,6 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     )
       ? `hosted:${activeHosted.panel.id}:${activeHosted.element.activeHostedTabId}`
       : (active?.id ?? null);
-    const activePanel = column.panels.find((panel) => panel.id === active?.id);
-    const activeActions =
-      (activePanel ? panelType(this.panelDefinitions, activePanel.slot).headerAction : null) ??
-      null;
     return html`
       <header
         class="rail-header side-panel__header"
@@ -418,58 +425,15 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           })}
           ${this.renderTypeMenu()}
         </div>
-        ${this.renderHeaderActions(activeActions, activeHosted?.element.hostedActions ?? nothing)}
-      </header>
-    `;
-  }
-
-  private renderHeaderActions(
-    panelActions: TemplateResult | typeof nothing | null,
-    hostedActions: TemplateResult | Node | typeof nothing,
-  ) {
-    const active = sidebarActivePanel(this.layout);
-    const expanded = this.layout.expanded === true && this.layout.expandedSide === true;
-    const expandLabel = expanded
-      ? t("chat.sidePanel.restore")
-      : t("chat.sidePanel.expandPanel", {
-          panel: active ? panelType(this.panelDefinitions, active.slot).label : "",
-        });
-    return html`<div class="rail-header__actions side-panel__actions">
-      ${
-        panelActions || hostedActions !== nothing
-          ? html`<span class="side-panel__action-group side-panel__action-group--content">
-              ${hostedActions} ${panelActions}
-            </span>`
-          : nothing
-      }
-      <span class="side-panel__action-group side-panel__action-group--close">
         ${
-          active && !this.sideFocusLocked
-            ? html`<openclaw-tooltip .content=${expandLabel}>
-                <button
-                  class="rail-header__action side-panel__expand"
-                  type="button"
-                  aria-label=${expandLabel}
-                  aria-pressed=${String(expanded)}
-                  @click=${() => this.callbacks?.togglePanelExpanded(active.id)}
-                >
-                  ${expanded ? icons.minimize : icons.maximize}
-                </button>
-              </openclaw-tooltip>`
+          activeHosted?.element.hostedActions && activeHosted.element.hostedActions !== nothing
+            ? html`<div class="rail-header__actions side-panel__actions">
+                ${activeHosted.element.hostedActions}
+              </div>`
             : nothing
         }
-        <openclaw-tooltip .content=${t("common.close")}>
-          <button
-            class="rail-header__action side-panel__minimize"
-            type="button"
-            aria-label=${t("common.close")}
-            @click=${() => this.callbacks?.setOpen(false)}
-          >
-            ${icons.x}
-          </button>
-        </openclaw-tooltip>
-      </span>
-    </div>`;
+      </header>
+    `;
   }
 
   private renderEmpty(panel?: SidebarPanel) {

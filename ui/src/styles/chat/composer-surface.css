@@ -24,6 +24,73 @@
   gap: 6px;
   min-width: 0;
 }
+
+.agent-chat__composer-run-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Waiting is an overlay above the composer, so status changes do not resize the transcript. */
+.agent-chat__composer-run-status--waiting {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 6px);
+  justify-content: center;
+  z-index: 1;
+}
+
+.agent-chat__composer-run-spinner {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.agent-chat__composer-run-status--working {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.agent-chat__composer-run-spinner svg {
+  width: 14px;
+  height: 14px;
+  animation: btn-spinner-spin 1.2s linear infinite;
+}
+
+.agent-chat__composer-wait-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat__composer-wait-elapsed {
+  white-space: nowrap;
+}
+
+.agent-chat__composer-run-status button {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-chat__composer-run-status button:hover {
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__composer-run-spinner svg {
+    animation: none;
+  }
+}
 .agent-chat__composer-notices:not(
   :has(
     > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
@@ -1235,6 +1302,43 @@
     color: var(--muted);
     opacity: var(--chat-mobile-row-mic-opacity);
     stroke-width: var(--chat-mobile-row-mic-stroke);
+  }
+}
+
+/* Context and Working share a stable row without borrowing the picker targets. */
+@container chat-composer (max-width: 480px) {
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-footer {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(44px, auto);
+    column-gap: 8px;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-lead {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-context {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-height: var(--chat-composer-control-size);
+    justify-content: flex-end;
+  }
+
+  .agent-chat__composer-context .agent-chat__composer-run-status--working {
+    margin-inline-end: auto;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
+    grid-column: 2;
+    grid-row: 2;
+    margin-inline-start: 0;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-actions {
+    grid-column: 3;
+    grid-row: 2;
   }
 }
 

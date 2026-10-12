@@ -1,4 +1,9 @@
 import type { Locator, Page } from "playwright";
+import {
+  closeChatLayoutMenu,
+  openChatLayoutMenu,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 
 export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -23,40 +28,53 @@ export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
 }
 
 export async function openChatSidePanelType(page: Page | Locator, label: string): Promise<void> {
-  const panel = page.locator(".sidebar-region__right-runtime .side-panel");
-  if (
-    !(await panel.locator('[data-region-header="side"]').isVisible()) &&
-    !(await panel.locator(".side-panel-empty--selector").isVisible())
-  ) {
-    await page.locator(".chat-side-panel-toggle").click();
-  }
-  // An empty panel offers its type list; a populated one offers the header "+" menu,
-  // and only one of the two ever exists. The toggle above renders asynchronously, so
-  // settle on whichever surface arrives before branching — probing first would read
-  // an unrendered panel as populated and then wait forever for a "+" that never comes.
-  await panel.locator(".side-panel-empty__types, .side-panel__header-tabs").first().waitFor();
-  const emptyChoice = panel.locator(".side-panel-empty__type").filter({ hasText: label });
-  if ((await emptyChoice.count()) > 0) {
-    await emptyChoice.click();
+  const panelActions: Record<string, { slot: string; action: string | RegExp }> = {
+    Browser: { slot: "browser", action: "Toggle browser panel" },
+    browser: { slot: "browser", action: "Toggle browser panel" },
+    Desktop: { slot: "desktop", action: /^(Toggle desktop panel|Desktop)$/ },
+    Files: { slot: "workspace", action: /^(Show session files|Collapse session workspace)$/ },
+    "Side chat": { slot: "companion", action: /^(Show side chat|Collapse side chat)$/ },
+    Subagents: { slot: "subagents", action: "Subagents" },
+    Terminal: { slot: "terminal", action: "Toggle terminal" },
+  };
+  const panel = panelActions[label];
+  const content = panel && page.locator(`[data-panel-slot="${panel.slot}"]:not([hidden])`);
+  if (await content?.isVisible()) {
     return;
   }
-  await panel.getByRole("button", { name: "Add side panel tab" }).click();
-  await panel.locator("wa-dropdown-item").filter({ hasText: label }).click();
+  if (panel?.slot === "subagents" && content) {
+    const menu = await openChatLayoutMenu(page);
+    await menu
+      .getByRole("menuitemcheckbox", { name: panel.action, exact: true })
+      .evaluate((item) => {
+        // Hydration can auto-open Subagents while Playwright waits for a pointer click.
+        // Read and activate together so an open request cannot become a close request.
+        const checkbox = item as HTMLElement & { checked: boolean };
+        const visiblePanel = checkbox
+          .closest("openclaw-chat-pane")
+          ?.querySelector<HTMLElement>('[data-panel-slot="subagents"]:not([hidden])');
+        const visible = visiblePanel && visiblePanel.getClientRects().length > 0;
+        if (!visible && !checkbox.checked) {
+          checkbox.click();
+        }
+      });
+    await closeChatLayoutMenu(page);
+    await content.waitFor({ state: "visible" });
+    return;
+  }
+  await selectChatLayoutAction(page, panel?.action ?? label);
 }
 
 export async function focusChatSidePanel(page: Page): Promise<void> {
-  await page.locator(".chat-panel-swap").click();
-  await page
-    .locator(".chat-pane__header")
-    .getByRole("button", { name: "Focus", exact: true })
-    .click();
-  await page.getByRole("button", { name: "Restore split", exact: true }).waitFor();
+  await selectChatLayoutAction(page, /^Swap /);
+  await selectChatLayoutAction(page, "Focus");
+  await page.locator(".sidebar-region--expanded").waitFor();
 }
 
 export async function restoreChatAsMain(page: Page): Promise<void> {
   const side = page.locator('[data-region-header="side"]');
   await side.locator('wa-tab[panel="conversation"]').click();
-  await page.locator(".chat-panel-swap").click();
+  await selectChatLayoutAction(page, /^Swap /);
   await page.locator('.sidebar-region__primary[data-region="main"]').waitFor();
 }
 
@@ -64,37 +82,10 @@ export async function dockChatSidePanel(
   page: Page,
   dock: "left" | "right" | "bottom",
 ): Promise<void> {
-  const menu = page.locator(".chat-panel-layout-menu");
-  await menu.getByRole("button", { name: "Layout", exact: true }).click();
-  await menu.locator(`wa-dropdown-item[value="${dock}"]`).click();
+  await selectChatLayoutAction(page, `Move side panel ${dock === "bottom" ? "below" : dock}`);
   await page.locator(`.sidebar-region--${dock}`).waitFor();
 }
 
 export async function activateChatHeaderPanelAction(page: Page, label: string): Promise<void> {
-  await page.locator(".chat-header-session-menu__trigger").click();
-  const menu = page.locator("openclaw-chat-header-session-menu");
-  const action = menu
-    .locator('wa-dropdown-item[value^="quick:panels:"]')
-    .filter({ hasText: label });
-  if (!(await action.isVisible())) {
-    const panels = menu.locator(".session-menu__text").filter({ hasText: /^Panels$/ });
-    if ((await menu.locator("wa-dropdown.chat-header-session-menu--compact").count()) > 0) {
-      await panels.click();
-    } else {
-      await panels.hover();
-    }
-  }
-  await action.waitFor({ state: "visible" });
-  await action.click();
-  await page.waitForFunction(() => {
-    const dropdown = document.querySelector("openclaw-chat-header-session-menu wa-dropdown");
-    // Web Awesome clears `open` before its hide animation; reopening while the popup is active
-    // skips showMenu setup and can let the previous close hide the newly opened submenu.
-    const popup = dropdown?.shadowRoot?.querySelector("wa-popup");
-    return (
-      (!dropdown || Reflect.get(dropdown, "open") !== true) &&
-      (!popup || !Reflect.get(popup, "active"))
-    );
-  });
-  await action.waitFor({ state: "hidden" });
+  await selectChatLayoutAction(page, label === "Desktop" ? "Toggle desktop panel" : label);
 }

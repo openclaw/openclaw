@@ -1,7 +1,7 @@
-import { render } from "lit";
+import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { projectSubagentStatus, type ChatSubagentWait } from "./chat-subagent-wait.ts";
+import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { renderSubagentActivity } from "./components/chat-subagent-activity.ts";
 import { renderChatWorkingIndicator } from "./components/chat-working-indicator.ts";
 
@@ -372,7 +372,7 @@ describe("chat waiting on subagents", () => {
     expect(listed([{ ...child, hasActiveRun: false }])).toBe(false);
   });
 
-  it("ends the working line with the running count and leaves the wait line to its own wording", () => {
+  it("ends the working line with the running count", () => {
     const container = document.createElement("div");
     const draw = (options: Parameters<typeof renderChatWorkingIndicator>[1]) =>
       render(
@@ -391,52 +391,48 @@ describe("chat waiting on subagents", () => {
     expect(suffix()).toBe("1 subagent running");
     draw({ runningSubagents: 0 });
     expect(suffix()).toBeUndefined();
-    draw({ runningSubagents: 2, waitingSubagents: { startedAt: 2_000, runningCount: 2 } });
-    expect(suffix()).toBeUndefined();
-    expect(container.textContent).toContain("Waiting on 2 subagents");
   });
 
-  it("renders the wait without parent output usage or rotating phrases and navigates the child", () => {
-    const container = document.createElement("div");
-    const onOpenSubagent = vi.fn();
-    const sole = { key: child.key, label: child.label! };
-    const draw = (waitingSubagents: ChatSubagentWait) =>
+  it.each([false, true])(
+    "keeps a working fallback until child activity replaces it, leaving wait text to the composer (bubble mode: %s)",
+    (bubbleMode) => {
+      const container = document.createElement("div");
+      const onOpenSubagent = vi.fn();
+      const projection = projectSubagentStatus(
+        {
+          selectedSession: parent,
+          messages,
+          subagentSessions: [child],
+          subagentSessionsHydrated: true,
+        },
+        false,
+      );
+      const options = {
+        bubbleMode,
+        waitingSubagents: projection.wait ?? undefined,
+        outputTokens: 4_700,
+        workingPhrases: ["Building"],
+      };
+      const part = { kind: "reading-indicator" as const, key: "parent-wait", startedAt: 1_500 };
+      render(renderChatWorkingIndicator(part, options), container);
+      expect(container.textContent).toContain("Working…");
+      expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
       render(
-        renderChatWorkingIndicator(
-          { kind: "reading-indicator", key: "parent-wait", startedAt: 1_500 },
-          { waitingSubagents, onOpenSubagent, outputTokens: 4_700, workingPhrases: ["Building"] },
-        ),
+        renderChatWorkingIndicator(part, {
+          ...options,
+          subagentActivity: html`${renderSubagentActivity(projection.activity, onOpenSubagent)}`,
+        }),
         container,
       );
-    draw({ startedAt: 2_000, runningCount: 1, child: sole });
-    expect(container.textContent?.replace(/\s+/g, " ")).toContain(
-      "Waiting on Backend implementation",
-    );
-    expect(container.querySelector("openclaw-working-phrase")).toBeNull();
-    expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
-    // The wait counts from the handoff, not from the indicator item.
-    expect(container.querySelector("openclaw-elapsed-time")).toHaveProperty("startMs", 2_000);
-    container.querySelector("button")?.click();
-    expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
-    draw({ startedAt: 2_000, runningCount: 3 });
-    expect(container.textContent).toContain("Waiting on 3 subagents");
-    expect(container.querySelector("button")).toBeNull();
-    draw({ startedAt: null, runningCount: 0 });
-    expect(container.textContent).toContain("Waiting on subagents");
-    expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
-    draw({ startedAt: 2_000, runningCount: 0, sessionCount: 2 });
-    expect(container.textContent).toContain("Waiting on 2 sessions");
-    expect(container.querySelector("button")).toBeNull();
-    draw({ startedAt: 2_000, runningCount: 0, sessionCount: 1 });
-    expect(container.textContent).toContain("Waiting on 1 session");
-    // A subagent still running is what the line names.
-    draw({ startedAt: 2_000, runningCount: 1, sessionCount: 2, child: sole });
-    expect(container.textContent?.replace(/\s+/g, " ")).toContain(
-      "Waiting on Backend implementation",
-    );
-  });
+      expect(container.textContent).toContain("Backend implementation");
+      expect(container.textContent).not.toContain("Waiting on");
+      expect(container.querySelector(".chat-working-indicator")).toBeNull();
+      container.querySelector("button")?.click();
+      expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
+    },
+  );
 
-  it("makes the subagents' count the way to their list, and leaves child sessions as text", () => {
+  it("makes the running count the way to the list when navigation is available", () => {
     const container = document.createElement("div");
     const onOpenSubagents = vi.fn();
     const draw = (options: Parameters<typeof renderChatWorkingIndicator>[1]) =>
@@ -451,14 +447,9 @@ describe("chat waiting on subagents", () => {
     draw({ runningSubagents: 3 });
     expect(control()?.textContent?.trim()).toBe("3 subagents running");
     control()?.click();
-    // Waiting: the whole sentence is the control, wherever a language puts the count.
-    draw({ waitingSubagents: { startedAt: 2_000, runningCount: 3 } });
-    expect(control()?.textContent?.trim()).toBe("Waiting on 3 subagents");
-    control()?.click();
-    expect(onOpenSubagents).toHaveBeenCalledTimes(2);
-    // Child sessions are not subagents, so there is no list of them to open.
-    draw({ waitingSubagents: { startedAt: 2_000, runningCount: 0, sessionCount: 2 } });
-    expect(container.textContent).toContain("Waiting on 2 sessions");
+    expect(onOpenSubagents).toHaveBeenCalledOnce();
+    draw({ runningSubagents: 1, onOpenSubagents: undefined });
+    expect(container.textContent).toContain("1 subagent running");
     expect(control()).toBeNull();
   });
 });

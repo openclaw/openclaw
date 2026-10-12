@@ -45,7 +45,10 @@ describe("model catalog refresh presentation", () => {
         expect(container.querySelector("[role=status]")).toBeNull();
         render(solidTemplate(ChatModelCatalogRefresh, { state }), container);
         expect(container.querySelector(".btn__spinner")?.getAttribute("aria-hidden")).toBe("true");
-        expect(container.querySelector(".sr-only")?.textContent).toBe(label);
+        expect(
+          container.querySelector(".chat-controls__model-refresh-details")?.textContent,
+        ).toContain(label);
+        expect(container.querySelector(".sr-only")).toBeNull();
       } else {
         expect(container.querySelector(".btn__spinner") !== null).toBe(presentation === "loading");
       }

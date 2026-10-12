@@ -761,10 +761,6 @@ describeControlUiE2e("Control UI chat message actions", () => {
         page.locator('[data-navigation-view][aria-pressed="true"]'),
         `Sessions · Collapse sidebar (${sidebarShortcut})`,
       );
-      await expectHoverTooltip(
-        page.getByRole("button", { name: "Open split view" }),
-        "Open split view",
-      );
       await page.evaluate(() => {
         const tooltip = document.createElement("openclaw-tooltip");
         tooltip.setAttribute("content", "First line\nSecond line");

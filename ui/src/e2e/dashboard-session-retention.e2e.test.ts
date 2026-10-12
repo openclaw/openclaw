@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { openSlot, setSidebarOpen } from "../pages/chat/sidebar-layout.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
@@ -71,14 +72,14 @@ suite.define(() => {
       const board = await dashboard.locator("openclaw-board-view").elementHandle();
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await dashboard.waitFor({ state: "hidden" });
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await dashboard.locator('[data-test-id="board-empty"]').waitFor();
         expect(await composer.inputValue()).toBe(draft);
       }
-      await page.locator(".chat-panel-swap").click();
-      await page.getByRole("button", { name: "Focus", exact: true }).click();
+      await selectChatLayoutAction(page, /^Swap /);
+      await selectChatLayoutAction(page, "Focus");
       await composer.waitFor({ state: "hidden" });
       await gateway.setMethodResponse("board.get", dashboardSnapshot(alphaKey, "alpha"));
       await gateway.emitGatewayEvent("board.changed", { sessionKey: alphaKey });
@@ -89,7 +90,7 @@ suite.define(() => {
           .locator("openclaw-board-view")
           .evaluate((element, previous) => element === previous, board),
       ).toBe(true);
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await selectChatLayoutAction(page, "Restore split");
       await composer.waitFor();
       expect(await composer.inputValue()).toBe(draft);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -169,7 +170,7 @@ suite.define(() => {
       );
       expect(await betaPane.locator('[data-region-header="side"]').isVisible()).toBe(false);
       expect(await betaPane.locator("openclaw-board-view").count()).toBe(0);
-      await betaPane.getByRole("button", { name: "Side panel", exact: true }).click();
+      await selectChatLayoutAction(betaPane, "Side panel");
       await betaPane.locator('[data-board-tab-id="beta-main"]').waitFor();
     });
   });

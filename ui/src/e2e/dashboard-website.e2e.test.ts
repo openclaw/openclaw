@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -180,7 +181,7 @@ suite.define(() => {
         await expect.poll(viewportFits).toBe(true);
         await page.screenshot({ path: `${suite.artifactDir}/website-mobile.png` });
         expect(await gateway.getRequests("board.data.read")).toHaveLength(0);
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await content.getByRole("textbox", { name: "Status note" }).waitFor();
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
           "Keep this note",

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
@@ -343,7 +344,7 @@ suite.define(() => {
         expect(await composer().inputValue()).toBe("other retained draft");
         expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(readsBeforeReturn);
 
-        await activePane.getByRole("button", { name: "Open split view" }).click();
+        await selectChatLayoutAction(activePane, "Open split view");
         await navigate("main");
         const visiblePanes = page.locator(
           "openclaw-chat-pane.chat-pane-cache__pane--visible:not([inert])",

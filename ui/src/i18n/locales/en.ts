@@ -2818,6 +2818,7 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
+    waitingOnSubagentCount: "Waiting on {count} subagent",
     waitingOnSubagentsCount: "Waiting on {count} subagents",
     waitingOnSubagent: "Waiting on {name}",
     waitingOnSession: "Waiting on 1 session",
@@ -2975,6 +2976,7 @@ export const en: TranslationMap & {
     },
     sessionSharing: {
       menu: "Session sharing",
+      share: "Share",
       current: "Session visibility: {visibility}",
       visibility: "Visibility",
       shared: "Shared",
@@ -3044,6 +3046,7 @@ export const en: TranslationMap & {
       renameInputAria: "Session title",
       renameInputPlaceholder: "Session title",
       openParent: "Open parent session {title}",
+      subagentsRunning: "Subagents · {count} running",
       panels: "Panels",
       layout: "Layout",
       continueInTerminal: {
@@ -3715,6 +3718,8 @@ export const en: TranslationMap & {
       badge: "Expired",
     },
     composer: {
+      running: "running",
+      viewSubagents: "View",
       composerInput: "Chat composer",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
@@ -3803,6 +3808,7 @@ export const en: TranslationMap & {
         clear: "Clear session overrides",
       },
       contextUsage: {
+        label: "Context",
         title: "Context usage details",
         open: "Open context usage details",
         summary: "Session context usage: {used} of {limit} ({pct}%)",

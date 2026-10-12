@@ -2,6 +2,7 @@ import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
+import { closeChatLayoutMenu, openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -380,10 +381,12 @@ suite.define(() => {
           control: false,
         });
         await panel.locator("[data-test-remote-desktop='true']").waitFor();
-        const popout = page.getByRole("link", { name: "Open desktop in new window" });
+        const layoutMenu = await openChatLayoutMenu(page);
+        const popout = layoutMenu.getByRole("link", { name: "Open desktop in new window" });
         expect(await popout.getAttribute("href")).toBe(
           `/focus/desktop/session/${encodeURIComponent(sessionKey)}`,
         );
+        await closeChatLayoutMenu(page);
         await page.screenshot({
           path: path.join(artifactDirectory, `chat-session-${initialState}-connected.png`),
         });
@@ -417,6 +420,7 @@ suite.define(() => {
           path: path.join(artifactDirectory, `chat-session-${initialState}-manual-selection.png`),
         });
         const focusPath = "/focus/desktop/control/source/node%3Amaintenance";
+        await openChatLayoutMenu(page);
         await expect.poll(() => popout.getAttribute("href")).toBe(focusPath);
 
         const selectedDesktop = await panel

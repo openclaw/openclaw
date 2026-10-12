@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -93,7 +94,7 @@ suite.define(() => {
             .frameLocator("iframe")
             .getByText("All systems ready")
             .waitFor();
-          await page.locator(".chat-panel-swap").click();
+          await selectChatLayoutAction(page, /^Swap /);
           await expect
             .poll(() =>
               page

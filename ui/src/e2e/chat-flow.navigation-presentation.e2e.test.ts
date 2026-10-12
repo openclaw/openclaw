@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
@@ -263,8 +264,8 @@ suite.define(() => {
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-      const splitEntry = page.getByRole("button", { name: "Open split view" });
-      await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      const layout = page.getByRole("button", { name: "Layout", exact: true });
+      await expect.poll(() => layout.isVisible()).toBe(true);
       await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
       const taskHeader = page.locator(".chat-pane__header");
       const regularHeaderPadding = await taskHeader.evaluate(
@@ -314,12 +315,10 @@ suite.define(() => {
         document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
       });
       await page.setViewportSize({ height: 900, width: 1100 });
-      await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      await expect.poll(() => layout.isVisible()).toBe(true);
       await page.setViewportSize({ height: 900, width: 1440 });
       await expect
-        .poll(() =>
-          splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
-        )
+        .poll(() => layout.evaluate((node) => node.closest(".agent-chat__composer-shell") == null))
         .toBe(true);
       await page.locator("openclaw-chat-pane").evaluate((pane) => {
         (
@@ -330,7 +329,7 @@ suite.define(() => {
       });
       const startupRequestsBeforeSplit = (await gateway.getRequests("chat.startup")).length;
       await gateway.deferNext("chat.startup");
-      await splitEntry.click();
+      await selectChatLayoutAction(page, "Open split view");
       await expect
         .poll(async () => (await gateway.getRequests("chat.startup")).length)
         .toBeGreaterThan(startupRequestsBeforeSplit);
@@ -368,24 +367,14 @@ suite.define(() => {
           return visible.every(Boolean);
         })
         .toBe(true);
-      await expect.poll(() => splitEntry.count()).toBe(0);
-      // The pane header owns one side-panel toggle; individual tools live in its tab strip.
-      await expect.poll(() => headers.first().locator(".chat-side-panel-toggle").count()).toBe(1);
+      // Each pane keeps a single Layout menu for its own panels and split actions.
+      await expect.poll(() => headers.first().locator(".chat-pane__layout-menu").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
       const cells = page.locator(".chat-split-view__cell");
       const actionRows = headers.locator(".chat-pane__actions");
       await expect.poll(() => actionRows.first().isVisible()).toBe(false);
       await expect.poll(() => actionRows.last().isVisible()).toBe(true);
-      expect(
-        await headers
-          .first()
-          .locator(".chat-pane__close-pane")
-          .evaluate((button) => {
-            (button as HTMLElement).focus();
-            return document.activeElement === button;
-          }),
-      ).toBe(false);
 
       await panes.first().click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
@@ -653,7 +642,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const trigger = page.locator("summary.context-ring");
       await trigger.waitFor({ timeout: 10_000 });
-      expect((await trigger.textContent())?.trim()).toBe("");
+      expect((await trigger.textContent())?.trim()).toBe("Context");
       expect(await trigger.getAttribute("aria-label")).toBe(
         "Session context usage: ~190k of 200k (~95%)",
       );

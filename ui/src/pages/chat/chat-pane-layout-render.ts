@@ -58,12 +58,6 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
-  private readonly refreshProcesses = () => {
-    void this.querySelector("openclaw-chat-processes-panel")?.refresh();
-  };
-  private readonly refreshSubagents = () => {
-    void this.querySelector("openclaw-chat-subagents-panel")?.refresh();
-  };
   private readonly toolIcons = new ChatToolIconController(
     this,
     () => this.context,
@@ -172,7 +166,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           chatProps.pullRequestsBranch?.branch,
       },
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
-      onOpenSubagents: ownsSubagentsPanel ? () => this.showSubagents(null) : undefined,
+      onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons.icons,
       presented: {
@@ -267,10 +261,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       subagentsInputRegion: this.inputRegion,
       subagentsPresented: slotPresentation("subagents"),
       processesPresented: slotPresentation("processes"),
-      onRefreshProcesses: this.refreshProcesses,
       subagentsAvailable: !catalog,
       subagentsShowRequest: this.subagentsShowRequest,
-      onRefreshSubagents: this.refreshSubagents,
       onSubagentSessionSelect: (sessionKey, options) =>
         this.onPaneSessionChange?.(this.paneId, sessionKey, options),
       panePresentation,
@@ -335,6 +327,15 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       pluginPanels: this.context.plugins.registrations("panels"),
       isPluginPanelPresented: (slot) => slotPresentation(slot, "active"),
     });
+    const callbacks = sidebarRegionCallbacks({
+      state,
+      layout: savedLayout,
+      closePanelSlot,
+      openPanelSlot,
+      forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
+      resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
+      setPanelOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
+    });
     const connectionGeneration = this.connectionGeneration;
     // Main panel actions share the task toolbar. Content roots stay in the
     // sidebar region so changing their presentation never reconnects them.
@@ -354,6 +355,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
                 panelDefinitions,
                 subagentStop,
                 headerDetails,
+                { openPanelSlot: callbacks.openSlot, closePanelSlot: callbacks.closeSlot },
               )}
               <openclaw-plugin-contributions
                 .kind=${"session-header"}
@@ -374,15 +376,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       },
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),
-      callbacks: sidebarRegionCallbacks({
-        state,
-        layout: savedLayout,
-        closePanelSlot,
-        openPanelSlot,
-        forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
-        resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
-        setPanelOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
-      }),
+      callbacks,
       layout: sidebarLayout,
       sideFocusLocked: sidebarLayout !== savedLayout,
       sideFocusOrigin: this.sideFocusOrigin,

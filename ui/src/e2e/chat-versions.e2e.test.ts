@@ -117,7 +117,7 @@ suite.define(() => {
         expect(await menuSurface.isVisible()).toBe(true);
         await info.click();
         await help.waitFor();
-        await page.getByText("Here is a concise draft:", { exact: false }).click();
+        await page.locator(".agent-chat__composer-combobox textarea").click();
         await expect.poll(() => help.isVisible()).toBe(false);
         await expect.poll(() => menuSurface.isVisible()).toBe(false);
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);

@@ -578,18 +578,10 @@
   height: 15px;
 }
 
-/* A full split header measures 793px including insets, so secondary controls
-   shed through 800px of container content; restoration then has 8px+ slack.
-   The close action survives at the 320px pane floor. */
+/* The labelled actions stay available as split panes narrow; only secondary
+   identity and navigation details yield space to the session title. */
 @container (max-width: 800px) {
-  /* Scoped to the actions row so this hide outranks the 0,2,0 icon-button
-     styling rule above; a bare class here silently loses that cascade. */
-  .chat-pane__actions .chat-pane__split-down,
-  .chat-pane__actions .chat-pane__split-right,
-  .chat-pane__header.chat-pane__header--closable .chat-side-panel-toggle,
-  .chat-pane__header.chat-pane__header--closable .chat-pane__sharing-menu,
   .chat-pane__header.chat-pane__header--closable .chat-pane__nav-toggle,
-  .chat-pane__header.chat-pane__header--closable .chat-pane__palette-open,
   .chat-pane__header.chat-pane__header--closable .chat-pane__participants,
   .chat-pane__header.chat-pane__header--closable openclaw-session-owner-chip {
     display: none;

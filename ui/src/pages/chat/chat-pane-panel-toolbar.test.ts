@@ -12,7 +12,7 @@ import {
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
 
-it("keeps main content actions and focus in the task toolbar across plugin panel swaps", () => {
+it("keeps content actions and focus in Layout across plugin panel swaps", () => {
   const { pane, state } = createTestChatPane({
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     sessions: createSessionCapabilityFixture(),
@@ -50,8 +50,15 @@ it("keeps main content actions and focus in the task toolbar across plugin panel
       ),
       container,
     );
-  const action = (label: string) =>
-    container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`);
+  const action = (label: string) => container.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+  const activate = (label: string) => {
+    const item = action(label)!;
+    const menu = container.querySelector(".chat-pane__layout-menu")!;
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: { value: item.getAttribute("value") } } }),
+    );
+    menu.dispatchEvent(new CustomEvent("wa-after-hide"));
+  };
 
   paint();
   expect(container.querySelectorAll(".chat-pane__header")).toHaveLength(1);
@@ -59,26 +66,26 @@ it("keeps main content actions and focus in the task toolbar across plugin panel
   expect(action("Swap Fixture notes and Chat")).not.toBeNull();
   action("Refresh notes")!.click();
   expect(refresh).toHaveBeenCalledOnce();
-  action("Focus")!.click();
+  activate("Focus");
   expect(state.sidebarLayout.expanded).toBe(true);
   state.connected = false;
   paint();
   expect(container.querySelector(".chat-panel-swap")).toBeNull();
   expect(action("Refresh notes")).not.toBeNull();
   expect(action("Restore split")!.matches(":disabled")).toBe(false);
-  action("Restore split")!.click();
+  activate("Restore split");
   expect(state.sidebarLayout.expanded).toBe(false);
   paint();
   expect(action("Swap Fixture notes and Chat")!.matches(":disabled")).toBe(false);
-  action("Swap Fixture notes and Chat")!.click();
+  activate("Swap Fixture notes and Chat");
   paint();
   expect(action("Swap Chat and Fixture notes")).not.toBeNull();
-  expect(action("Refresh notes")).toBeNull();
+  expect(action("Refresh notes")).not.toBeNull();
 
   state.sidebarLayout = setSidebarOpen({ columns: [] }, true);
   paint();
   expect(container.querySelector(".chat-panel-swap")).toBeNull();
   expect(container.querySelectorAll(".chat-side-panel-toggle")).toHaveLength(1);
-  container.querySelector<HTMLButtonElement>(".chat-side-panel-toggle")!.click();
+  activate("Minimize side panel");
   expect(state.sidebarLayout.open).toBe(false);
 });

@@ -57,8 +57,6 @@ export function renderChatWorkingIndicator(
     /** Unfinished subagents to mention while the session itself is still working. */
     runningSubagents?: number;
     subagentActivity?: TemplateResult;
-    /** Shows one subagent; without it a waited-on subagent's name is plain text. */
-    onOpenSubagent?: (key: string) => void;
     /** Shows the session's subagents; without it their count is plain text. */
     onOpenSubagents?: () => void;
     startupLabel?: string;
@@ -66,14 +64,13 @@ export function renderChatWorkingIndicator(
     presentation?: "standalone" | "continuation";
   } = {},
 ) {
+  // Keep the transcript indicator until roster hydration supplies live child activity.
+  // Waiting copy belongs to the composer, including view-only conversations.
+  if (options.waitingSubagents && options.subagentActivity !== undefined) {
+    return options.subagentActivity;
+  }
   const waitingApproval = options.waitingApproval === true;
-  const waitingSubagents = options.waitingSubagents;
-  // The wait already says who is left. Beside the session's own work a count is enough.
-  const runningSubagents = waitingSubagents ? 0 : (options.runningSubagents ?? 0);
-  const child = waitingSubagents?.child;
-  // Child sessions that are not subagents get a count and nothing else.
-  const waitingSessions =
-    waitingSubagents?.runningCount === 0 ? (waitingSubagents.sessionCount ?? 0) : 0;
+  const runningSubagents = options.runningSubagents ?? 0;
   const indicator =
     options.workingIndicator ??
     (options.mascot !== undefined
@@ -83,44 +80,9 @@ export function renderChatWorkingIndicator(
       : currentThemeBranding().workingIndicator);
   const neutral = indicator === "dots";
   const continuation = options.presentation === "continuation";
-  // Without loaded child rows the pane only knows that some are still running.
-  const statusLabel = waitingSubagents
-    ? waitingSubagents.runningCount > 1
-      ? t("chat.waitingOnSubagentsCount", { count: String(waitingSubagents.runningCount) })
-      : waitingSessions > 1
-        ? t("chat.waitingOnSessionsCount", { count: String(waitingSessions) })
-        : waitingSessions === 1
-          ? t("chat.waitingOnSession")
-          : t("chat.waitingOnSubagents")
-    : waitingApproval
-      ? t("chat.waitingForApproval")
-      : options.startupLabel || t("common.working");
-  // The name stands in for the count once one child is left. The translated
-  // sentence decides where it goes; only that placeholder becomes the control,
-  // and a translation without the placeholder still gets the name at its end.
-  const [beforeChild = "", ...afterChild] = child
-    ? t("chat.waitingOnSubagent").split("{name}")
-    : [];
-  const sentencePart = (words: string) =>
-    words.trim() ? html`<span>${words.trim()}</span>` : nothing;
-  const childName = !child
-    ? nothing
-    : options.onOpenSubagent
-      ? html`<button
-          class="chat-working-indicator__child"
-          type="button"
-          title=${child.label}
-          @click=${() => options.onOpenSubagent?.(child.key)}
-        >
-          ${child.label}
-        </button>`
-      : html`<span class="chat-working-indicator__child" title=${child.label}
-          >${child.label}</span
-        >`;
-  // With several left the whole sentence is the control: where a translation
-  // puts the count, and what it puts beside it, differs too much to cut it out.
-  const waitingOnCount =
-    !child && (waitingSubagents?.runningCount ?? 0) > 1 && options.onOpenSubagents !== undefined;
+  const statusLabel = waitingApproval
+    ? t("chat.waitingForApproval")
+    : options.startupLabel || t("common.working");
   const runningLabel =
     runningSubagents === 1
       ? t("chat.subagentsRunningOne")
@@ -132,17 +94,15 @@ export function renderChatWorkingIndicator(
   >
     ${label}
   </button>`;
-  const working = !waitingSubagents && !waitingApproval && !options.startupLabel;
+  const working = !waitingApproval && !options.startupLabel;
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
-  const outputTokens = waitingSubagents ? null : options.outputTokens;
-  // A wait counts from the handoff, which loaded history cannot always place.
-  const startedAt = waitingSubagents ? waitingSubagents.startedAt : part.startedAt;
+  const outputTokens = options.outputTokens;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   const status = html`
     <div
-      class="chat-working-indicator ${continuation ? "chat-working-indicator--continuation" : ""} ${waitingSubagents ? "chat-working-indicator--subagents" : ""}"
+      class="chat-working-indicator ${continuation ? "chat-working-indicator--continuation" : ""}"
       role="status"
       aria-live="off"
     >
@@ -157,7 +117,7 @@ export function renderChatWorkingIndicator(
                     : indicator === "brand"
                       ? "chat-reading-indicator--brand"
                       : selectWorkingClawSurprise(part.key, {
-                          eligible: !waitingApproval && !waitingSubagents,
+                          eligible: !waitingApproval,
                         })
                 }"
                 aria-hidden="true"
@@ -167,23 +127,16 @@ export function renderChatWorkingIndicator(
             `
       }
       <span class="chat-working-indicator__status">
+        <span class=${working && !continuation && indicator !== "none" ? "sr-only" : ""}
+          >${statusLabel}</span
+        >
         ${
-          child
-            ? html`${sentencePart(beforeChild)}${childName}${sentencePart(afterChild.join(""))}`
-            : waitingOnCount
-              ? renderSubagentsButton(statusLabel)
-              : html`<span
-                  class=${working && !continuation && indicator !== "none" ? "sr-only" : ""}
-                  >${statusLabel}</span
-                >`
-        }
-        ${
-          waitingApproval || startedAt === null
+          waitingApproval
             ? nothing
             : html`
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
-                  .startMs=${startedAt}
+                  .startMs=${part.startedAt}
                 ></openclaw-elapsed-time>
               `
         }
@@ -221,9 +174,7 @@ export function renderChatWorkingIndicator(
       </span>
     </div>
   `;
-  // Keep the live activity slot stable when the parent yields or resumes.
-  const content = html`${waitingSubagents && options.subagentActivity ? nothing : status}
-  ${options.subagentActivity ?? nothing}`;
+  const content = html`${status}${options.subagentActivity ?? nothing}`;
   // Human-action and child-wait states keep their existing visible controls.
   return options.bubbleMode && working && runningSubagents === 0
     ? renderChatBubbleActivity(content, t("chat.view.workingDetails"), true)

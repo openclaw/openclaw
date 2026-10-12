@@ -1,6 +1,11 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import {
+  closeChatLayoutMenu,
+  openChatLayoutMenu,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -12,6 +17,7 @@ import {
   activateChatHeaderPanelAction,
   dockChatSidePanel,
   focusChatSidePanel,
+  openChatSidePanelType,
   restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -219,19 +225,7 @@ async function openFromEmpty(page: Page, label: string) {
 }
 
 async function openFromPlus(page: Page, label: string) {
-  const panel = sidePanel(page);
-  const dropdown = panel.locator("wa-dropdown.side-panel-type-menu");
-  await dropdown.getByRole("button", { name: "Add side panel tab" }).click();
-  const item = dropdown.locator("wa-dropdown-item").filter({ hasText: label });
-  const afterHide = dropdown.evaluate(
-    (element) =>
-      new Promise<void>((resolve) => {
-        element.addEventListener("wa-after-hide", () => resolve(), { once: true });
-      }),
-  );
-  await item.click();
-  await afterHide;
-  await expect.poll(() => dropdown.evaluate((element) => Reflect.get(element, "open"))).toBe(false);
+  await openChatSidePanelType(page, label);
 }
 
 async function selectTab(page: Page, label: string) {
@@ -316,7 +310,7 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".chat-group").first().waitFor();
 
-          await page.locator(".chat-browser-panel-toggle").click();
+          await selectChatLayoutAction(page, "Toggle browser panel");
           await sidePanel(page).locator('[data-panel-slot="browser"]:not([hidden])').waitFor();
           await expect
             .poll(() =>
@@ -382,48 +376,7 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".chat-group").first().waitFor();
 
-          const topbarButtons = page.locator(".chat-pane__actions .chat-icon-btn");
-          await expect.poll(() => topbarButtons.count()).toBe(4);
-          await expect
-            .poll(async () => {
-              const buttons = (await topbarButtons.all()).map(async (button) => ({
-                button: await button.boundingBox(),
-                glyph: await button.locator(":scope > svg").boundingBox(),
-              }));
-              const geometry = await Promise.all(buttons);
-              const buttonCenters = geometry.map(
-                ({ button }) => (button?.y ?? 0) + (button?.height ?? 0) / 2,
-              );
-              const glyphCenters = geometry.map(
-                ({ glyph }) => (glyph?.y ?? 0) + (glyph?.height ?? 0) / 2,
-              );
-              const gaps = geometry.slice(1).map(({ button }, index) => {
-                const previous = geometry[index]!.button;
-                return (button?.x ?? 0) - ((previous?.x ?? 0) + (previous?.width ?? 0));
-              });
-              const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
-              return {
-                buttonCenterSpread: spread(buttonCenters),
-                buttonHeights: geometry.map(({ button }) => button?.height),
-                gapSpread: spread(gaps),
-                glyphCenterSpread: spread(glyphCenters),
-                glyphSizes: geometry.map(({ glyph }) => [glyph?.width, glyph?.height]),
-              };
-            })
-            .toEqual({
-              buttonCenterSpread: 0,
-              buttonHeights: [28, 28, 28, 28],
-              gapSpread: 0,
-              glyphCenterSpread: 0,
-              glyphSizes: [
-                [16, 16],
-                [16, 16],
-                [16, 16],
-                [16, 16],
-              ],
-            });
-
-          await page.locator(".chat-side-panel-toggle").click();
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
           await captureRichPanel(page, `rails-tabs-empty-${themeMode}`);
@@ -685,8 +638,8 @@ suite.define(() => {
           await divider.evaluate((element) => element.blur());
           await captureRichPanel(page, `rails-tabs-bottom-${themeMode}`);
 
-          await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
-          await page.locator(".chat-side-panel-toggle").click();
+          await selectChatLayoutAction(page, "Minimize side panel");
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
           await expect
             .poll(() =>
@@ -732,17 +685,14 @@ suite.define(() => {
             .toBe("none");
           await expectExpandedSidePanelFillsRegion(page);
           await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
-          await page
-            .locator(".chat-pane__header")
-            .getByRole("button", { name: "Restore split", exact: true })
-            .click();
+          await selectChatLayoutAction(page, "Restore split");
           await restoreChatAsMain(page);
 
-          await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
+          await selectChatLayoutAction(page, "Minimize side panel");
           await expect
             .poll(() => sidePanel(page).locator('[data-region-header="side"]').isVisible())
             .toBe(false);
-          await page.locator(".chat-side-panel-toggle").click();
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await expect
             .poll(() =>
               sidePanelBody(page).evaluate((element) => element.getBoundingClientRect().width),
@@ -795,7 +745,7 @@ suite.define(() => {
           await expect
             .poll(() => sidePanel(page).locator('[data-region-header="side"]').isVisible())
             .toBe(false);
-          await page.locator(".chat-side-panel-toggle").click();
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
           const emptyDividerBox = await divider.boundingBox();
@@ -962,10 +912,10 @@ suite.define(() => {
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
-        await sidePanel(page)
-          .getByRole("button", { name: "Clear side chat", exact: true })
-          .waitFor();
+        const layoutMenu = await openChatLayoutMenu(page);
+        await layoutMenu.getByRole("button", { name: "Clear side chat", exact: true }).waitFor();
         await captureRichPanel(page, "rails-side-chat-mobile-light");
+        await closeChatLayoutMenu(page);
 
         await focusChatSidePanel(page);
         await expect

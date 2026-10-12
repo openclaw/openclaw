@@ -140,9 +140,16 @@ When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
-Open the parent conversation's side panel and select **Subagents** from its **+**
-menu to inspect child runs, including swarm workers. The panel loads all child
-pages automatically and groups running and finished work,
+The chat header keeps **Share**, **Layout**, and the session menu together.
+**Layout** contains focus, split, swap, panel selection, and dock-position actions,
+with their keyboard shortcuts. Open **Subagents** there or from the side-panel
+**+** menu to inspect child runs, including swarm workers. An empty conversation
+starts with the panel closed. The first running batch adds it automatically,
+preserving another panel you selected; closing it keeps it closed for that batch.
+Finished results stay open until you close them. While the parent waits on
+subagents, a muted line above the composer shows the count, child name and elapsed
+time, with **View** to open the panel. The panel loads all child pages automatically
+and groups running and finished work,
 keeping children waiting on their own descendants under **Running**. It shows
 elapsed time and available tool activity, and opens each child's existing
 view-only transcript beside the parent. Avatar-free child transcripts do not reserve
@@ -152,7 +159,7 @@ The parallel-tasks view also shows aggregate swarm progress. A directly opened c
 offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,
 and `/subagents log <id|#>` commands remain available.
 
-Open **Processes** from the chat header's **Panels** menu or the side-panel **+**
+Open **Processes** from the chat header's **Layout** menu or the side-panel **+**
 menu to inspect the conversation's background exec commands. It is separate from
 **Subagents**. Running and retained finished processes show status and elapsed
 time. **Finished** starts collapsed; click its heading to expand or collapse the

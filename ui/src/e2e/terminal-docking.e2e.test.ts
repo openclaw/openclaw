@@ -229,7 +229,12 @@ suite.define(() => {
             await bottom.locator(".tabstrip-tab").first().click();
             await openChatSidePanelType(activePane, "Terminal");
             await embedded.locator(".tp-host canvas:visible").waitFor();
-            await openChatSidePanelType(activePane, "Terminal");
+            const addTab = activePane.getByRole("button", { name: "Add side panel tab" });
+            await addTab.click();
+            await addTab
+              .locator("..")
+              .getByRole("menuitem", { name: /^Terminal\b/ })
+              .click();
             await expect
               .poll(async () => (await gateway.getRequests("terminal.open")).length)
               .toBe(3);

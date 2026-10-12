@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -41,7 +42,7 @@ suite.define(() => {
           const main = page.locator(".agent-chat__composer-shell textarea").first();
           let foreground = main;
           if (target === "another pane") {
-            await page.getByRole("button", { name: "Open split view", exact: true }).click();
+            await selectChatLayoutAction(page, "Open split view");
             const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
             await expect.poll(() => panes.count()).toBe(2);
             foreground = panes.last().locator(".agent-chat__composer-shell textarea");

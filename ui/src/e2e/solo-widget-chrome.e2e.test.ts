@@ -3,6 +3,7 @@ import type { BoardSnapshot } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -171,7 +172,7 @@ suite.define(() => {
           true,
         );
         expect(await note.inputValue()).toBe("Keep this local draft");
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
@@ -179,10 +180,7 @@ suite.define(() => {
         await splitMenu.locator('[value="board-widget:resize:xl"]').waitFor();
         await page.keyboard.press("Escape");
         await page.screenshot({ path: path.join(suite.artifactDir, "candidate-split.png") });
-        await page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Focus", exact: true })
-          .click();
+        await selectChatLayoutAction(page, "Focus");
         await expect.poll(() => widget.locator(chrome).count()).toBe(0);
         const multiple = {
           ...board,

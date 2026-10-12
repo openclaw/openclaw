@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -95,7 +96,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       await openChatSidePanelType(page, "Dashboard");
-      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       for (const pane of await panes.all()) {
@@ -138,7 +139,7 @@ suite.define(() => {
       }
       for (const pane of await panes.all()) {
         await pane.locator(".agent-chat__composer-combobox textarea").click();
-        await pane.locator(".chat-panel-swap").click();
+        await selectChatLayoutAction(pane, /^Swap /);
         await pane.locator('.sidebar-region__primary[data-region="side"]').waitFor();
       }
       const swapped = await targets();
@@ -154,7 +155,7 @@ suite.define(() => {
       }
       for (const pane of await panes.all()) {
         await pane.locator(".agent-chat__composer-combobox textarea").click();
-        await pane.locator(".chat-panel-swap").click();
+        await selectChatLayoutAction(pane, /^Swap /);
         await pane.locator('.sidebar-region__primary[data-region="main"]').waitFor();
       }
       expect(await targets()).toEqual(original);
@@ -232,8 +233,6 @@ suite.define(() => {
         const dashboard = page.locator('[data-panel-slot="dashboard"]');
         const paneHeader = page.locator(".chat-pane__header");
         const sideHeader = page.locator('[data-region-header="side"]');
-        const swap = page.locator(".chat-panel-swap");
-        const layoutMenu = page.locator(".chat-panel-layout-menu");
         const width = await regionSize(dashboard);
         const expectContinuity = async () => {
           expect(
@@ -244,24 +243,8 @@ suite.define(() => {
           expect(await input.inputValue()).toBe("Keep this unsaved widget input");
           expect(await composer.inputValue()).toBe("Keep this chat draft");
         };
-        const expectSwapLabel = async (label: string) => {
-          await expect.poll(() => swap.getAttribute("aria-label")).toBe(label);
-          await page.mouse.move(0, 0);
-          await swap.hover();
-          const tooltip = swap.locator("..").locator("wa-tooltip .tooltip-content");
-          await tooltip.waitFor();
-          expect(await tooltip.textContent()).toBe(label);
-          await page.mouse.move(0, 0);
-        };
-
-        expect(await paneHeader.count()).toBe(1);
-        expect(await swap.count()).toBe(1);
-        expect(await layoutMenu.count()).toBe(1);
-        expect(await page.getByRole("button", { name: "Layout", exact: true }).count()).toBe(1);
-        await expectSwapLabel("Swap Chat and Dashboard");
         await expectPaneHeaderGeometry(page, "right");
         // Side focus never swaps or reparents either live view.
-        const expand = sideHeader.locator(".side-panel__expand");
         const dashboardTab = sideHeader.locator('wa-tab[panel="dashboard"]');
         await page.screenshot({ path: path.join(suite.artifactDir, "side-before.png") });
         for (const dock of ["right", "left", "bottom"] as const) {
@@ -269,7 +252,6 @@ suite.define(() => {
           const priorSize = await dashboard.boundingBox();
           await dashboardTab.click();
           await chat.waitFor({ state: "hidden" });
-          expect(await expand.getAttribute("aria-label")).toBe("Restore split");
           expect(await sideHeader.isVisible()).toBe(true);
           expect(await dashboard.getAttribute("data-region")).toBe("side");
           expect(await regionSize(dashboard)).toBeCloseTo(
@@ -280,8 +262,7 @@ suite.define(() => {
           if (dock === "right") {
             await page.screenshot({ path: path.join(suite.artifactDir, "side-expanded.png") });
           }
-          await expand.focus();
-          await page.keyboard.press("Enter");
+          await selectChatLayoutAction(paneHeader, "Restore split");
           await chat.waitFor();
           expect(await dashboard.boundingBox()).toEqual(priorSize);
           await expectPaneHeaderGeometry(page, dock);
@@ -289,7 +270,7 @@ suite.define(() => {
           if (dock === "right") {
             await page.screenshot({ path: path.join(suite.artifactDir, "side-restored.png") });
           }
-          await expand.click();
+          await selectChatLayoutAction(paneHeader, "Expand Dashboard");
           await chat.waitFor({ state: "hidden" });
           await dashboardTab.focus();
           await page.keyboard.press("Space");
@@ -298,12 +279,13 @@ suite.define(() => {
         }
         await dockChatSidePanel(page, "right");
         await expectPaneHeaderGeometry(page, "right");
-        await expand.click();
+        await selectChatLayoutAction(paneHeader, "Expand Dashboard");
         await chat.waitFor({ state: "hidden" });
-        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
+        await selectChatLayoutAction(paneHeader, "Restore split");
+        await selectChatLayoutAction(paneHeader, "Minimize side panel");
         await chat.waitFor();
         await dashboard.waitFor({ state: "hidden" });
-        await paneHeader.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(paneHeader, /^(Side panel|Minimize side panel)$/);
         await dashboard.waitFor();
         await expectContinuity();
         await chat.evaluate((element) => {
@@ -318,9 +300,8 @@ suite.define(() => {
             }
           });
         });
-        await swap.click();
+        await selectChatLayoutAction(paneHeader, /^Swap /);
         await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
-        await expectSwapLabel("Swap Dashboard and Chat");
         await expect.poll(() => regionSize(chat)).toBeCloseTo(width, 0);
         expect(await chat.getAttribute("data-swap-width-invalidated")).toBe("true");
         await expectPaneHeaderGeometry(page, "right");
@@ -330,21 +311,19 @@ suite.define(() => {
           if (dock !== "bottom") {
             expect(await regionSize(chat)).toBeCloseTo(width, 0);
           }
-          await swap.click();
+          await selectChatLayoutAction(paneHeader, /^Swap /);
           await expect.poll(() => chat.getAttribute("data-region")).toBe("main");
           await expectPaneHeaderGeometry(page, dock);
           await expectContinuity();
-          await swap.click();
+          await selectChatLayoutAction(paneHeader, /^Swap /);
           await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
           await expectPaneHeaderGeometry(page, dock);
           await expectContinuity();
-          await paneHeader.getByRole("button", { name: "Focus", exact: true }).click();
+          await selectChatLayoutAction(paneHeader, "Focus");
           await chat.waitFor({ state: "hidden" });
-          expect(await swap.isVisible()).toBe(false);
           await expectContinuity();
-          await paneHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+          await selectChatLayoutAction(paneHeader, "Restore split");
           await chat.waitFor();
-          await swap.waitFor();
           await expectContinuity();
         }
         await dockChatSidePanel(page, "left");
@@ -353,13 +332,11 @@ suite.define(() => {
         await page.keyboard.press("ArrowRight");
         await expect.poll(() => regionSize(chat)).toBeGreaterThan(width);
         const resizedWidth = await regionSize(chat);
-        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
+        await selectChatLayoutAction(paneHeader, "Minimize side panel");
         await chat.waitFor({ state: "hidden" });
-        expect(await swap.isVisible()).toBe(false);
         await expectContinuity();
-        await paneHeader.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(paneHeader, /^(Side panel|Minimize side panel)$/);
         await chat.waitFor();
-        await expectSwapLabel("Swap Dashboard and Chat");
         await expectContinuity();
         expect(await regionSize(chat)).toBeCloseTo(resizedWidth, 0);
 
@@ -370,24 +347,18 @@ suite.define(() => {
         await expect.poll(() => regionSize(chat)).toBeCloseTo(resizedWidth, 0);
         await input.waitFor();
         await expectPaneHeaderGeometry(page, "left");
-        await sideHeader.getByRole("button", { name: "Add side panel tab", exact: true }).click();
-        await sideHeader
-          .locator(".side-panel-type-menu wa-dropdown-item")
-          .filter({ hasText: "Terminal" })
-          .click();
+        await openChatSidePanelType(page, "Terminal");
         const terminal = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
         await terminal.locator(".tp-host canvas").waitFor();
         await expect.poll(() => gateway.getRequests("terminal.open")).toHaveLength(1);
-        await expectSwapLabel("Swap Dashboard and Terminal");
-        await sideHeader.getByRole("button", { name: "Expand Terminal", exact: true }).click();
+        await selectChatLayoutAction(page, "Expand Terminal");
         await dashboard.waitFor({ state: "hidden" });
         await terminal.waitFor();
-        await sideHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await dashboard.waitFor();
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-        await swap.click();
+        await selectChatLayoutAction(paneHeader, /^Swap /);
         await page.locator('[data-panel-slot="terminal"][data-region="main"]').waitFor();
-        await expectSwapLabel("Swap Terminal and Dashboard");
         const chatTab = sideHeader.locator('wa-tab[panel="conversation"]');
         await chatTab.click();
         await chat.waitFor();
@@ -395,21 +366,20 @@ suite.define(() => {
         await page.keyboard.press("ArrowLeft");
         await dashboard.waitFor();
         expect(await terminal.isVisible()).toBe(true);
-        expect(await expand.getAttribute("aria-pressed")).toBe("false");
         await page.keyboard.press("Enter");
         await terminal.waitFor({ state: "hidden" });
-        await expand.click();
+        await selectChatLayoutAction(paneHeader, "Restore split");
         await terminal.waitFor();
         await chatTab.click();
         await dashboardTab.click();
         await terminal.waitFor({ state: "hidden" });
         await dashboard.waitFor();
-        await expand.click();
+        await selectChatLayoutAction(paneHeader, "Restore split");
         await terminal.waitFor();
         expect(await terminal.locator(".tp-host canvas").count()).toBe(1);
         await dockChatSidePanel(page, "right");
-        await paneHeader.getByRole("button", { name: "Focus", exact: true }).click();
-        await paneHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(paneHeader, "Focus");
+        await selectChatLayoutAction(paneHeader, "Restore split");
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
         expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
 
@@ -422,36 +392,19 @@ suite.define(() => {
           )
           .toBeGreaterThan(30);
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(400);
-        expect(await layoutMenu.isVisible()).toBe(false);
         await expectPaneHeaderGeometry(page, "bottom");
-        for (const control of [
-          paneHeader.getByRole("button", { name: "Focus", exact: true }),
-          paneHeader.locator(".chat-side-panel-toggle"),
-          swap,
-          sideHeader.getByRole("button", { name: "Close", exact: true }),
-        ]) {
-          await control.click({ trial: true });
-          const box = await control.boundingBox();
-          expect(box?.x).toBeGreaterThanOrEqual(0);
-          expect(box!.x + box!.width).toBeLessThanOrEqual(400);
-        }
-        await swap.click();
+        await selectChatLayoutAction(paneHeader, /^Swap /);
         await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
-        await expect
-          .poll(() => swap.getAttribute("aria-label"))
-          .toBe("Swap Dashboard and Terminal");
         await expectPaneHeaderGeometry(page, "bottom");
-        await paneHeader.getByRole("button", { name: "Focus", exact: true }).click();
-        await paneHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(paneHeader, "Focus");
+        await selectChatLayoutAction(paneHeader, "Restore split");
         await terminal.locator(".tp-host canvas").waitFor();
-        await swap.click();
+        await selectChatLayoutAction(paneHeader, /^Swap /);
         await dashboardTab.waitFor();
         const narrowSize = await dashboard.boundingBox();
         await dashboardTab.click();
         await terminal.waitFor({ state: "hidden" });
-        await expand.click({ trial: true });
-        expect(await expand.getAttribute("aria-label")).toBe("Restore split");
-        await expand.click();
+        await selectChatLayoutAction(paneHeader, "Restore split");
         await terminal.waitFor();
         expect(await dashboard.boundingBox()).toEqual(narrowSize);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);

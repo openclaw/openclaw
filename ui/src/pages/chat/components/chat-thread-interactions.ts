@@ -212,7 +212,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
-    onOpenSubagents?: () => void;
+    onOpenSubagents?: (focus?: boolean) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
   };

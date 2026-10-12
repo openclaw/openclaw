@@ -23,7 +23,7 @@ export type ChatSubagentWait = {
   runningCount: number;
   /** Unfinished child sessions that are not subagents; the wait names none of them. */
   sessionCount?: number;
-  child?: { key: string; label: string };
+  child?: { key: string; label: string; startedAt?: number | null };
 };
 
 export type ChatSubagentActivity = {
@@ -134,6 +134,7 @@ export function projectSubagentStatus(
                 child: {
                   key: child.key,
                   label: resolveSessionDisplayName(child.key, child),
+                  startedAt: child.startedAt,
                 },
               }
             : {}),
@@ -163,6 +164,7 @@ export function projectSubagentStatus(
             wait.sessionCount,
             wait.child?.key,
             wait.child?.label,
+            wait.child?.startedAt,
             listed,
           ]
         : [running, listed],

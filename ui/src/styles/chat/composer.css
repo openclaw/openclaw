@@ -2195,13 +2195,15 @@ html[dir="rtl"] .chat-attachment-loading > span {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  gap: 6px;
   height: 24px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
+  font: inherit;
+  font-size: 12px;
 }
 
 .chat-controls__model-search {
@@ -3284,6 +3286,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
   .agent-chat__input--mobile-toolbar .context-ring {
     color: inherit;
+  }
+
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-context .context-ring {
+    width: auto;
+    gap: 5px;
   }
 
   .agent-chat__input--mobile-toolbar
