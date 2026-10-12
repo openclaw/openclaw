@@ -374,8 +374,19 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     const renderPlan = resolveSlackReplyRenderPlan(payload);
     const plannedBlocks =
       renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
+    const previewThreadTs =
+      state.streamSession?.threadTs ??
+      state.interruptedThreadTs ??
+      state.nativeProgressStreamThreadTs;
+    const finalThreadTs = resolveSlackReplyThreadTs({
+      replyToMode: replyDeliveryMode,
+      replyToId: payload.replyToId,
+      threadId: previewThreadTs,
+      replyToCurrent: payload.replyToCurrent,
+    });
     return (
       !state.streamFailed &&
+      (!previewThreadTs || finalThreadTs === previewThreadTs) &&
       !reply.hasMedia &&
       renderPlan.mode !== "split" &&
       !renderPlan.textIsSlackPlainText &&
@@ -411,7 +422,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return { visibleReplySent: false };
     }
     let session = state.streamSession;
-    const threadTs = session?.threadTs ?? state.interruptedThreadTs ?? replyPlan.nextThreadTs();
+    const threadTs = resolveSlackReplyThreadTs({
+      replyToMode: replyDeliveryMode,
+      replyToId: params.payload.replyToId,
+      threadId: session?.threadTs ?? state.interruptedThreadTs ?? replyPlan.nextThreadTs(),
+      replyToCurrent: params.payload.replyToCurrent,
+    });
     if (state.streamFailed || !threadTs) {
       state.streamFailed = true;
       return await deliverNormally({
