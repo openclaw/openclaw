@@ -137,6 +137,11 @@ sidebarTitle: "Troubleshooting"
     enabled. Execution and session history keep the original tool names; raw
     provider requests may show names such as `openclaw_tool_call`.
 
+    The alias guidance also explains how to call deferred tools. Emitting the
+    original `tool_call` name can make Ollama select `openclaw` from a catalog
+    ID inside the arguments instead, causing repeated argument errors.
+    Update OpenClaw if web-tool discovery succeeds but dispatch fails this way.
+
     This translation covers native Ollama and the Ollama plugin's identified
     OpenAI-compatible chat-completions route. Other providers are unchanged.
     Custom Ollama templates with different markers may need separate diagnosis.

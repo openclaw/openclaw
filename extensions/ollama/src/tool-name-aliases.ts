@@ -160,6 +160,11 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
       .filter(([name]) => activeNames.has(name))
       .map(([name, alias]) => `${name}: use ${alias}`);
     const toolCallAlias = activeNames.has("tool_call") ? toWire.get("tool_call") : undefined;
+    if (toolCallAlias) {
+      instructions.push(
+        `Invoke deferred tools only through ${toolCallAlias} with {"id":"<catalog ID or name>","args":{<tool parameters>}}. Never call a deferred name or tool_call directly.`,
+      );
+    }
     const wireContext: Context = {
       ...context,
       systemPrompt: instructions.length
