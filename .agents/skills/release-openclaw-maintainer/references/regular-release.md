@@ -144,8 +144,10 @@ Its exact npm/OCI descriptors must belong to that SHA and satisfy the selected
 release profile's required gates. No second commit or validation run is needed
 solely to name a Release SHA.
 
-If notes change after Code qualification, use `$openclaw-changelog-update`
-with current main for the canonical PR history and commit the selected
+If notes change after Code qualification, including the single refresh that
+credits validation-recovery backports once the final Code SHA is green, use
+`$openclaw-changelog-update` with current main for the canonical PR history and
+commit the selected
 `CHANGELOG/YYYY.M.PATCH.md`, with any matching record and root index updates.
 The complete Code-to-Release delta must include that entry and only those
 paths, without renames or deletions, to optionally use
@@ -366,14 +368,17 @@ If its summary reports the token unavailable,
 dispatch the sync by hand before the verify runs. For manual work, poll the
 registry yourself before the sync or verification. Run postpublish
 verification from a checkout of the Release SHA (a newer tooling checkout
-reports main-only bundled plugin files as missing), with the tooling identity
-exported, or it fails `SHA-pinned release-publish ref does not match`:
+reports main-only bundled plugin files as missing):
 
 ```bash
-OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
-OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
 node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>
 ```
+
+Without `OPENCLAW_NPM_EXPECTED_WORKFLOW_REF`/`_SHA`, the verifier derives the
+publish tooling from the attested `release-publish/*` tag and accepts it only
+when GitHub still has that exact lightweight tag at the attested commit and the
+commit is reachable from `main` (requires `gh` auth). Set both variables only to
+pin an explicit identity; a partial override is rejected.
 
 If `Complete publish workflows` fails after core publication, inspect the
 original child and registry evidence before recovery. Core and every published

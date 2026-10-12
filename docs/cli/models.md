@@ -361,6 +361,10 @@ restart. Input still comes from a protected terminal prompt or standard input.
 is not supported by the Gateway API: omit it to use the Gateway's API-key profile,
 or stop the Gateway and run the command offline.
 
+Replacing a saved API key here or in **Settings → Models → Set API key** clears
+that profile's previous cooldown and failure counters, so the next request can
+try the replacement immediately. Other profiles and usage history are preserved.
+
 If the running Gateway does not advertise owner-bound API-key writes, update and
 restart it, or stop it and retry offline. The CLI does not send the key to an older
 Gateway that lacks this support.

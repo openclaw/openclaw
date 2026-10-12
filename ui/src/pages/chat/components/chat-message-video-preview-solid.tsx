@@ -38,7 +38,6 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
       URL.revokeObjectURL(currentPoster);
     }
     currentPoster = undefined;
-    setPosterUrl(undefined);
   };
   const requestPoster = () => {
     if (disposed || !presented() || !visible || controller || failed()) {
@@ -71,6 +70,7 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
     });
   };
   createEffect(presented, (active) => {
+    setPosterUrl(undefined);
     if (!active) {
       return undefined;
     }
@@ -85,6 +85,7 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
         () => {
           visible = false;
           release();
+          setPosterUrl(undefined);
         },
       ),
     );
@@ -123,6 +124,7 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
                 onError={() => {
                   if (!disposed && currentPoster === url()) {
                     release();
+                    setPosterUrl(undefined);
                     setFailed(true);
                   }
                 }}

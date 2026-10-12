@@ -43,6 +43,7 @@ function createDispatch(
 ) {
   return coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
+      initialPlacements: placements.list(),
       placements,
       environments,
       runnerAvailability: { read: () => undefined, version: () => 0 },

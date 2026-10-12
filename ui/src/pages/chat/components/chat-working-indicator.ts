@@ -16,7 +16,7 @@ import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
-export function renderChatBubbleDots(working = false) {
+function renderChatBubbleDots(working = false) {
   return html`<span
     class="chat-bubble-dots ${working ? "chat-bubble-dots--working" : ""}"
     aria-hidden="true"
@@ -25,7 +25,7 @@ export function renderChatBubbleDots(working = false) {
 }
 
 /** Local disclosure state stays on the native element while status text streams. */
-export function renderChatBubbleActivity(content: unknown, label: string, working = false) {
+function renderChatBubbleActivity(content: unknown, label: string, working = false) {
   return html`<details class="chat-bubble-activity chat-bubble-activity--working">
     <summary
       class="chat-bubble-activity__summary"

@@ -163,6 +163,7 @@ export class NewSessionDraftController {
       {
         preferenceScope: callbacks.preferenceScope,
         readPalettePreference: callbacks.readPalettePreference,
+        readAgents: () => read().context?.agents,
         requestUpdate,
         updateComplete: () => host.updateComplete,
         onInvalidate: (reset, outcome) => {
