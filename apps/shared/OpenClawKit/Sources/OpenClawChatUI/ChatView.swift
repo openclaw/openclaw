@@ -639,8 +639,11 @@ extension OpenClawChatView {
                     if group.includesLive { self.liveAssistantContent }
                 }
             } else {
-                parts
-                if group.includesLive { self.liveAssistantContent }
+                // Keep each group a single lazy-stack child as live content appears and disappears.
+                VStack(alignment: .leading, spacing: self.isDesktopLayout ? 16 : Layout.messageSpacing) {
+                    parts
+                    if group.includesLive { self.liveAssistantContent }
+                }
             }
         }
         OpenClawQuestionCards(viewModel: self.viewModel)
