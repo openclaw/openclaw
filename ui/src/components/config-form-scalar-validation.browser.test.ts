@@ -33,6 +33,8 @@ describe.skipIf(!hasBrowserLayout)("config scalar validation reason", () => {
     input.value = "0";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")?.split(/\s+/)).toContain(error.id);
+    expect(error.getAttribute("role")).toBe("alert");
     expect(error.textContent).not.toBe("");
     expect(error.textContent).toBe(input.validationMessage);
     const shown = error.getBoundingClientRect();
