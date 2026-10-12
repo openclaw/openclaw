@@ -503,6 +503,7 @@ describe("Telegram admitted model input", () => {
     expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
       OriginatingTo: "telegram:-10042001:topic:99",
       AccountId: "default",
+      MessageSid: String(voice.message_id + 1),
       MessageThreadId: 99,
     });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
@@ -546,12 +547,14 @@ describe("Telegram admitted model input", () => {
       await receive(await createBot(false, true, cfg, threadId !== undefined, "atlas"), {
         ...textMessage("", false),
         text: undefined,
+        message_id: 901,
         message_thread_id: threadId,
         voice: { file_id: "dm-voice", file_unique_id: "dm-voice-u", duration: 1 },
       });
       expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
         OriginatingTo: "telegram:42001",
         AccountId: "atlas",
+        MessageSid: "901",
         MessageThreadId: threadId,
       });
       expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({

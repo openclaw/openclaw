@@ -149,6 +149,86 @@ describe("sendTranscriptEcho", () => {
     });
   });
 
+  it("deduplicates only complete Telegram source-message identities", async () => {
+    const sendAndReadIntent = async (ctx: Partial<MsgContext>): Promise<string | undefined> => {
+      await sendTranscriptEcho({
+        ctx: createCtx({
+          Provider: "telegram",
+          From: undefined,
+          AccountId: "primary",
+          MessageSid: "msg-100",
+          OriginatingTo: "telegram:group:-100123",
+          ...ctx,
+        }),
+        cfg: EMPTY_CONFIG,
+        transcript: "same transcript",
+      });
+      const request = mockDeliverOutboundPayloads.mock.calls.at(-1)?.[0] as
+        | Record<string, unknown>
+        | undefined;
+      return request?.deliveryIntentId as string | undefined;
+    };
+
+    const base = await sendAndReadIntent({
+      OriginatingTo: "telegram:group:-100123:topic:77",
+    });
+    const topicless = await sendAndReadIntent({
+      OriginatingTo: "telegram:-100123",
+    });
+    const directTopic = await sendAndReadIntent({
+      OriginatingTo: "telegram:-100123:direct-topic:77",
+    });
+    const otherAccount = await sendAndReadIntent({
+      AccountId: "secondary",
+      OriginatingTo: "telegram:-100123",
+    });
+    const otherChat = await sendAndReadIntent({
+      OriginatingTo: "telegram:-100124",
+    });
+    const otherMessage = await sendAndReadIntent({
+      MessageSid: "msg-101",
+      OriginatingTo: "telegram:-100123",
+    });
+
+    expect(base).toMatch(/^transcript-echo:v1:[a-f0-9]{64}$/u);
+    expect(topicless).toBe(base);
+    expect(directTopic).toBe(base);
+    expect(new Set([base, otherAccount, otherChat, otherMessage]).size).toBe(4);
+  });
+
+  it("uses required durable delivery for a keyed Telegram echo and keeps failures non-fatal", async () => {
+    mockDeliverOutboundPayloads.mockRejectedValueOnce(new Error("queue unavailable"));
+
+    await expect(
+      sendTranscriptEcho({
+        ctx: createCtx({
+          Provider: "telegram",
+          From: undefined,
+          OriginatingTo: "telegram:group:-100123:topic:77",
+          AccountId: "primary",
+          MessageSid: "msg-100",
+        }),
+        cfg: EMPTY_CONFIG,
+        transcript: "hello world",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bestEffort: false,
+        durability: "required",
+        deliveryIntentId: expect.stringMatching(/^transcript-echo:v1:[a-f0-9]{64}$/u),
+        completionRetention: {
+          idPrefix: "transcript-echo:v1:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+      }),
+    );
+    const request = mockDeliverOutboundPayloads.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(request).not.toHaveProperty("reusePendingDeliveryIntent");
+  });
+
   it("swallows delivery failures", async () => {
     mockDeliverOutboundPayloads.mockRejectedValueOnce(new Error("delivery timeout"));
 

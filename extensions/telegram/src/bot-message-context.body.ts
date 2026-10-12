@@ -244,6 +244,7 @@ export async function resolveTelegramInboundBody(params: {
         OriginatingChannel: "telegram",
         OriginatingTo: originatingTo,
         AccountId: accountId,
+        MessageSid: String(msg.message_id),
         MessageThreadId: replyThreadId,
         media: materializedMedia,
       };
