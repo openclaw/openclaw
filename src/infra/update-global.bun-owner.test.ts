@@ -122,7 +122,12 @@ describe("pnpm isolated global install discovery", () => {
       });
 
       await expect(
-        resolveUpdateInstallSurface({ root: pkgRoot, installKind: "package", runCommand }),
+        resolveUpdateInstallSurface({
+          root: pkgRoot,
+          installKind: "package",
+          runCommand: (argv, options) =>
+            runCommand(argv, { ...options, timeoutMs: options.timeoutMs ?? 1000 }),
+        }),
       ).resolves.toMatchObject({ kind: "global", mode: "pnpm", root: pkgRoot });
       await expect(
         detectGlobalInstallManagerForRoot(runCommand, hashLinkedPkgRoot, 1000),
