@@ -631,6 +631,15 @@
 }
 
 @container (max-width: 480px) {
+  .chat-pane__header-leading:has(.chat-pane__incognito) {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  .chat-pane__header-leading:has(.chat-pane__incognito) .chat-pane__crumbs {
+    flex-basis: 100%;
+  }
+
   .chat-pane__presence {
     display: none;
   }
