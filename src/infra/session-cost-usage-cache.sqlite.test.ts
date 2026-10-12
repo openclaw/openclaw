@@ -615,6 +615,8 @@ describe("session cost usage SQLite cache", () => {
         const { db } = openOpenClawAgentDatabase({ agentId });
         const owner = prepareSessionCostUsageRefreshLock(agentId);
         expect(await owner.acquire()).toBe(true);
+        // Admit the writer before installing the fault-injection trigger.
+        await owner.pruneRows([]);
         const insert = db.prepare(
           "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
         );
@@ -643,9 +645,7 @@ describe("session cost usage SQLite cache", () => {
 
         await owner.pruneRows(rows);
 
-        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(
-          before.filter((row) => row.key === "refresh-lock"),
-        );
+        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual([]);
         await owner.release();
       });
     },
