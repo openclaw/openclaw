@@ -1,10 +1,17 @@
-import { render, type LitElement } from "lit";
+import type { LitElement } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderGatewayCpuVital, type GatewayStatusSnapshot } from "./gateway-vitals.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import type { GatewayStatusSnapshot } from "./gateway-vitals.ts";
+import { GatewayCpuVital } from "./solid/gateway-vitals.tsx";
 
 const root = document.createElement("div");
+let unmount: (() => void) | undefined;
+let update: ((statuses: GatewayStatusSnapshot[]) => void) | undefined;
 afterEach(() => {
-  render(null, root);
+  unmount?.();
+  unmount = undefined;
+  update = undefined;
   root.remove();
 });
 
@@ -23,14 +30,23 @@ const measured: GatewayStatusSnapshot = {
 };
 
 async function show(statuses: GatewayStatusSnapshot[]) {
-  document.body.append(root);
-  render(
-    renderGatewayCpuVital(
-      statuses.at(-1)!,
-      statuses.map((status, at) => ({ status, at })),
-    ),
-    root,
-  );
+  if (!update) {
+    document.body.append(root);
+    const [history, setHistory] = createSignal(statuses);
+    update = setHistory;
+    unmount = mountSolid(
+      () => (
+        <GatewayCpuVital
+          status={history().at(-1)!}
+          history={history().map((status, at) => ({ status, at }))}
+        />
+      ),
+      { container: root },
+    ).unmount;
+  } else {
+    update(statuses);
+  }
+  flush();
   await root.querySelector<LitElement>("openclaw-sparkline")!.updateComplete;
 }
 
