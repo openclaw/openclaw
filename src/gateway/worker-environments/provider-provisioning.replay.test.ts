@@ -70,6 +70,86 @@ describe("worker environment service provision replay", () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
+  it("adopts one committed provision across a service and store restart", async () => {
+    const physicalLeases = new Set<string>();
+    const operationIds: string[] = [];
+    const machineClasses: Array<string | undefined> = [];
+    const operatingSystems: Array<string | undefined> = [];
+    const destroyed: string[] = [];
+    let creates = 0;
+    let loseFirstReply = true;
+    const provider = () =>
+      support.createProvider({
+        provision: async (_profile, operationId, options) => {
+          operationIds.push(operationId);
+          machineClasses.push(options?.machineClass);
+          operatingSystems.push(options?.os);
+          if (!physicalLeases.has("lease-restarted")) {
+            creates += 1;
+            physicalLeases.add("lease-restarted");
+          }
+          if (loseFirstReply) {
+            loseFirstReply = false;
+            throw new Error("provider response was lost after commit");
+          }
+          return { leaseId: "lease-restarted", ssh: support.SSH_ENDPOINT };
+        },
+        destroy: async ({ leaseId }) => {
+          destroyed.push(leaseId);
+          physicalLeases.delete(leaseId);
+        },
+      });
+    const first = support.createService(provider());
+
+    await expect(
+      first.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-restart-replay",
+        machineClass: "large",
+        os: "os-a",
+      }),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const environmentId = expectDefined(
+      support.testState.store.list()[0],
+      "persisted provision intent",
+    ).environmentId;
+    const operationId = expectDefined(
+      support.testState.store.get(environmentId),
+      "persisted provision record",
+    ).provisionOperationId;
+    expect(operationId).toMatch(/^provision:v2:[a-f0-9]{64}$/u);
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
+
+    await support.reopenWorkerEnvironmentStore();
+
+    const restarted = support.createService(provider());
+    restarted.start();
+    await support.waitForFast(() =>
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: "ready",
+        leaseId: "lease-restarted",
+        lastError: null,
+      }),
+    );
+    await restarted.destroy(environmentId);
+
+    expect(creates).toBe(1);
+    expect(operationIds).toEqual([operationId, operationId]);
+    expect(machineClasses).toEqual(["large", "large"]);
+    expect(operatingSystems).toEqual(["os-a", "os-a"]);
+    expect(destroyed).toEqual(["lease-restarted"]);
+    expect(physicalLeases.size).toBe(0);
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "destroyed",
+      leaseId: "lease-restarted",
+    });
+  });
+
   it("replays one node lease once across overlapping reconciliation and activates once", async () => {
     const events: string[] = [];
     const operationIds: string[] = [];

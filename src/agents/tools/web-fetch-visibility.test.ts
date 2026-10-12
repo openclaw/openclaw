@@ -53,14 +53,49 @@ describe("sanitizeHtml", () => {
     }
   });
 
-  it.each(["display:none", "width:0;height:0;overflow:hidden"])(
-    "strips elements hidden by %s",
-    async (style) => {
-      const result = await sanitizeHtml(`<p>Visible</p><div style="${style}">Hidden</div>`);
-      expect(result).toContain("Visible");
+  it.each([
+    "display:none",
+    "visibility:hidden",
+    "opacity:0",
+    "font-size:0px",
+    "text-indent:-9999px",
+    "color:transparent",
+    "color:rgba(0,0,0,0)",
+    "color:rgba(0,0,0,0.0)",
+    "color:hsla(0,0%,0%,0)",
+    "transform:scale(0)",
+    "transform:translateX(-9999px)",
+    "transform:translateY(-9999px)",
+    "width:0;height:0;overflow:hidden",
+    "left:-9999px",
+    "top:-9999px",
+    "clip-path:inset(100%)",
+    "clip-path:inset(50%)",
+  ])("strips elements hidden by %s", async (style) => {
+    const result = await sanitizeHtml(`<p>Visible</p><div style="${style}">Hidden</div>`);
+    expect(result).toContain("Visible");
+    expect(result).not.toContain("Hidden");
+  });
+
+  it("does not strip clip-path:inset(0%) elements", async () => {
+    const html = '<p>Show</p><div style="clip-path:inset(0%)">Visible</div>';
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Visible");
+  });
+
+  it.each(["sr-only", "visually-hidden", "d-none", "hidden"])(
+    "strips elements with the %s class",
+    async (className) => {
+      const result = await sanitizeHtml(`<p>Main</p><span class="${className}">Hidden</span>`);
       expect(result).not.toContain("Hidden");
     },
   );
+
+  it("does not strip elements with hidden as substring of class name", async () => {
+    const html = '<p>Main</p><div class="un-hidden">Should be visible</div>';
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Should be visible");
+  });
 
   it("strips input type=hidden", async () => {
     const html = '<form><input type="hidden" value="csrf-token-secret"/></form>';

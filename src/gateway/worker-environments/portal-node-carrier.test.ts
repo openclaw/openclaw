@@ -186,11 +186,20 @@ describe("worker node portal carrier", () => {
   });
 
   it.each([
+    ["lease", (record: WorkerEnvironmentRecord) => ({ ...record, leaseId: "lease:replacement" })],
+    [
+      "node",
+      (record: WorkerEnvironmentRecord) => ({ ...record, nodeDeviceId: "node:replacement" }),
+    ],
     [
       "epoch",
       (record: WorkerEnvironmentRecord) => ({ ...record, ownerEpoch: record.ownerEpoch + 1 }),
     ],
     ["state", (record: WorkerEnvironmentRecord) => ({ ...record, state: "draining" as const })],
+    [
+      "destroy intent",
+      (record: WorkerEnvironmentRecord) => ({ ...record, destroyRequestedAtMs: 2_000 }),
+    ],
   ] as const)("rejects the attached stream when its durable %s changes", async (_name, mutate) => {
     const record = await support.seedReadyNodeDesktop(`worker-node-portal-stale-${_name}`);
     let current: WorkerEnvironmentRecord | undefined = record;

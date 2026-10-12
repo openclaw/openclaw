@@ -53,6 +53,8 @@ describe("Codex MCP tool approval projection", () => {
       annotations: { destructiveHint: false, openWorldHint: false },
       expected: false,
     },
+    { mode: "auto" as const, annotations: { destructiveHint: false }, expected: true },
+    { mode: "auto" as const, annotations: {}, expected: true },
   ])("resolves $mode with $annotations", ({ mode, annotations, expected }) => {
     expect(requiresMcpCodexToolApproval({ mode, annotations })).toBe(expected);
   });
@@ -70,6 +72,7 @@ describe("Codex MCP tool approval projection", () => {
 
   it.each([
     { mode: undefined, fullPermission: true, expected: false },
+    { mode: undefined, fullPermission: false, expected: true },
     { mode: "auto" as const, fullPermission: true, expected: true },
     { mode: "prompt" as const, fullPermission: true, expected: true },
     { mode: "approve" as const, fullPermission: false, expected: false },

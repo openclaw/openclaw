@@ -461,6 +461,19 @@ describe("voice-call plugin", () => {
     expect(firstRespondCall(respond)[2]?.code).toBe("INVALID_REQUEST");
   });
 
+  it("returns redacted call status", async () => {
+    const call = createPrivateCallRecord();
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () => call);
+    const { methods } = await setupActive({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as TestGatewayHandler | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { callId: "call-1" }, respond });
+    const [ok, payload] = firstRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(payload?.found).toBe(true);
+    expectRedactedVoiceCallStatus(payload?.call);
+  });
+
   it("returns redacted active call status list", async () => {
     const call = createPrivateCallRecord();
     runtimeStub.manager.getActiveCalls = vi.fn(() => [call]);
