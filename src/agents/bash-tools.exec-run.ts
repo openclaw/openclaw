@@ -161,12 +161,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     notifyDeliveryContext,
     notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
-  const backgroundFollowUp =
-    notifyOnExit && notifyOnExitEmptySuccess
-      ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
-      : notifyOnExit
-        ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
-        : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -602,6 +596,12 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }
 
+      const backgroundFollowUp =
+        run.session.notifyOnExit && notifyOnExitEmptySuccess
+          ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
+          : run.session.notifyOnExit
+            ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
+            : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
