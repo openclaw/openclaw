@@ -294,12 +294,13 @@ function syntheticAuthLookup(
 /** A managed process owns auth only when its provider supplies a non-secret credential. */
 export function resolveManagedLocalProviderAuth(
   params: SyntheticProviderAuthParams,
+  resolveFromConfig: ResolveSyntheticProviderAuth = (config) =>
+    resolveProviderSyntheticAuthWithPlugin(syntheticAuthLookup(params, config)),
 ): ResolvedProviderAuth | undefined {
-  const lookup = syntheticAuthLookup(params, params.cfg);
-  if (!lookup.context.providerConfig?.localService) {
+  if (!resolveMergedModelProviderConfig(params.cfg, params.provider)?.localService) {
     return undefined;
   }
-  const auth = resolveProviderSyntheticAuthWithPlugin(lookup);
+  const auth = resolveFromConfig(params.cfg);
   return auth?.mode === "api-key" &&
     !auth.nativeAuth &&
     isNonSecretApiKeyMarker(auth.apiKey, { includeEnvVarName: false }) &&
@@ -313,7 +314,7 @@ function resolveProviderSyntheticRuntimeAuth(
   resolveFromConfig: ResolveSyntheticProviderAuth = (config) =>
     resolveProviderSyntheticAuthWithPlugin(syntheticAuthLookup(params, config)),
 ): SyntheticProviderAuthResolution {
-  const managedLocalAuth = resolveManagedLocalProviderAuth(params);
+  const managedLocalAuth = resolveManagedLocalProviderAuth(params, resolveFromConfig);
   if (managedLocalAuth) {
     return { auth: managedLocalAuth };
   }
