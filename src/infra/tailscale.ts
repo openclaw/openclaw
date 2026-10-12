@@ -390,7 +390,13 @@ async function claimTailscaleRouteOwned(
         maxBuffer: 400_000,
         signal: params.signal,
       }).finally(() => params.signal?.throwIfAborted());
-    await waitForTailscaleBackendReady({ bin, prefix, info, signal: params.signal });
+    await waitForTailscaleBackendReady({
+      bin,
+      prefix,
+      info,
+      signal: params.signal,
+      managedMode: mode,
+    });
     assertCurrent();
     const { stdout } = await exec(["serve", "status", "--json"]);
     const routes =

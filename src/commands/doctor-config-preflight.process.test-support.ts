@@ -113,6 +113,7 @@ export function createSourceRuntime(root: string): string {
     );
   }
   for (const filename of [
+    "worker-heap-flag.mjs",
     "node-host-launcher.mjs",
     "node-compile-cache.mjs",
     "node-version.mjs",

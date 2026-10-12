@@ -1,13 +1,20 @@
-import { symlinkSync } from "node:fs";
+import { readFileSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 // Covers Tailscale whois, Serve, and Funnel helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as processExec from "../process/exec.js";
 import { runExec } from "../process/exec.js";
 import { captureEnv } from "../test-utils/env.js";
-import { waitForTailscaleBackendReady } from "./tailscale-backend-ready.js";
+import {
+  isTailscaleServeAuthenticationRequiredError,
+  TailscaleBackendAuthenticationRequiredError,
+  waitForTailscaleBackendReady,
+  waitForTailscaleBackendRunning,
+} from "./tailscale-backend-ready.js";
+import { TailscaleBackendStoppedError } from "./tailscale-backend-stopped-error.js";
 import * as tailscale from "./tailscale.js";
 
 const {
@@ -20,7 +27,7 @@ const {
 const tailscaleBin = "tailscale";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function useTailscaleSudoFixture(mode: "password" | "conflict") {
+function useTailscaleSudoFixture(mode: "password" | "conflict" | "authentication") {
   const fixture = fileURLToPath(
     new URL("../../test/fixtures/tailscale-sudo-fixture.mjs", import.meta.url),
   );
@@ -60,6 +67,7 @@ describe("tailscale helpers", () => {
       "OPENCLAW_TEST_TAILSCALE_BINARY",
       "OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE",
       "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
+      "OPENCLAW_TEST_TAILSCALE_FIXTURE_COMMAND_LOG",
       "NODE_ENV",
       "PATH",
       "VITEST",
@@ -235,7 +243,13 @@ describe("tailscale helpers", () => {
         .mockResolvedValueOnce(status("Running"));
       const info = vi.fn();
 
-      await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+      await waitForTailscaleBackendReady({
+        bin: tailscaleBin,
+        managedMode: "serve",
+        info,
+        exec,
+        pollMs: 1,
+      });
 
       expect(exec).toHaveBeenCalledTimes(2);
       expect(info).toHaveBeenCalledWith(
@@ -250,6 +264,7 @@ describe("tailscale helpers", () => {
       await waitForTailscaleBackendReady({
         bin: tailscaleBin,
         prefix: ["-n", "sudo"],
+        managedMode: "funnel",
         info,
         exec,
         pollMs: 1,
@@ -260,7 +275,257 @@ describe("tailscale helpers", () => {
       expectExecCall(exec, 1, tailscaleBin, ["-n", "sudo", ...statusArgs], execOptions);
       expect(info).toHaveBeenCalledTimes(1);
     });
+
+    it.each(["NeedsLogin", "NeedsMachineAuth"] as const)(
+      "types the exact %s state for managed Serve without message matching",
+      async (BackendState) => {
+        const exec = vi.fn().mockResolvedValue(status(BackendState));
+
+        await expect(
+          waitForTailscaleBackendReady({
+            bin: tailscaleBin,
+            managedMode: "serve",
+            info: vi.fn(),
+            exec,
+          }),
+        ).rejects.toMatchObject({
+          name: "TailscaleBackendAuthenticationRequiredError",
+          backendState: BackendState,
+          managedMode: "serve",
+        });
+        expect(exec).toHaveBeenCalledOnce();
+      },
+    );
+
+    it.each(["NeedsLogin", "NeedsMachineAuth"] as const)(
+      "types rejected exit-1 %s status output for managed Serve",
+      async (BackendState) => {
+        const exec = vi.fn().mockRejectedValue(
+          Object.assign(new Error("tailscale status exited 1"), {
+            exitCode: 1,
+            stdout: JSON.stringify({ BackendState }),
+            stderr: "",
+          }),
+        );
+
+        await expect(
+          waitForTailscaleBackendReady({
+            bin: tailscaleBin,
+            managedMode: "serve",
+            info: vi.fn(),
+            exec,
+          }),
+        ).rejects.toMatchObject({
+          name: "TailscaleBackendAuthenticationRequiredError",
+          backendState: BackendState,
+          managedMode: "serve",
+        });
+        expect(exec).toHaveBeenCalledOnce();
+      },
+    );
+
+    it("does not classify stopped, unknown, or Funnel login states as Serve prerequisites", async () => {
+      for (const BackendState of ["Stopped", "FutureState", "NeedsLogin"] as const) {
+        const exec = vi.fn().mockResolvedValue(status(BackendState));
+        const mode = BackendState === "NeedsLogin" ? "funnel" : "serve";
+        const error = await waitForTailscaleBackendReady({
+          bin: tailscaleBin,
+          managedMode: mode,
+          info: vi.fn(),
+          exec,
+        }).catch((value: unknown) => value);
+        expect(isTailscaleServeAuthenticationRequiredError(error)).toBe(false);
+        if (BackendState === "Stopped") {
+          expect(error).toBeInstanceOf(TailscaleBackendStoppedError);
+        } else if (BackendState !== "NeedsLogin") {
+          expect(error).toBeUndefined();
+        } else {
+          expect(error).toBeInstanceOf(TailscaleBackendAuthenticationRequiredError);
+        }
+      }
+    });
   });
+
+  describe("waitForTailscaleBackendRunning", () => {
+    const status = (BackendState: string) => ({
+      stdout: JSON.stringify({ BackendState }),
+      stderr: "",
+    });
+
+    it("waits through human-action states and admits only once Tailscale reports Running", async () => {
+      vi.useFakeTimers();
+      const signal = new AbortController().signal;
+      const exec = vi
+        .spyOn(processExec, "runExec")
+        .mockRejectedValueOnce(
+          Object.assign(new Error("tailscale status exited 1"), {
+            exitCode: 1,
+            stdout: JSON.stringify({ BackendState: "NeedsLogin" }),
+            stderr: "",
+          }),
+        )
+        .mockResolvedValueOnce(status("Running"));
+      const info = vi.fn();
+      try {
+        const recovery = waitForTailscaleBackendRunning({
+          bin: tailscaleBin,
+          info,
+          signal,
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(recovery).resolves.toBe(true);
+        expect(exec).toHaveBeenCalledTimes(2);
+        expect(info).toHaveBeenCalledWith(
+          "waiting for Tailscale operator action or backend recovery (NeedsLogin)",
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not automatically resume a Serve startup when Tailscale is deliberately stopped", async () => {
+      const exec = vi.spyOn(processExec, "runExec").mockResolvedValue(status("Stopped"));
+      const info = vi.fn();
+      await expect(
+        waitForTailscaleBackendRunning({
+          bin: tailscaleBin,
+          info,
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toBe(false);
+      expect(exec).toHaveBeenCalledOnce();
+      expect(info).toHaveBeenCalledWith(
+        "Tailscale is stopped; automatic Gateway startup recovery is not enabled for this state",
+      );
+    });
+
+    it("fails closed when a successful status response omits BackendState", async () => {
+      const exec = vi
+        .spyOn(processExec, "runExec")
+        .mockResolvedValue({ stdout: JSON.stringify({ Self: {} }), stderr: "" });
+      await expect(
+        waitForTailscaleBackendRunning({
+          bin: tailscaleBin,
+          info: vi.fn(),
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow("Tailscale status did not include a backend state");
+      expect(exec).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      {
+        name: "malformed JSON",
+        error: Object.assign(new Error("status output was malformed"), {
+          exitCode: 1,
+          stdout: "{ BackendState: NeedsLogin",
+        }),
+      },
+      {
+        name: "permission denial",
+        error: Object.assign(new Error("permission denied"), {
+          exitCode: 1,
+          stdout: JSON.stringify({ BackendState: "NeedsLogin" }),
+          stderr: "permission denied",
+        }),
+      },
+    ])("preserves rejected status errors with $name", async ({ error }) => {
+      const exec = vi.spyOn(processExec, "runExec").mockRejectedValue(error);
+      await expect(
+        waitForTailscaleBackendRunning({
+          bin: tailscaleBin,
+          info: vi.fn(),
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toBe(error);
+      expect(exec).toHaveBeenCalledOnce();
+    });
+
+    it("does not classify timed-out status output as an authentication state", async () => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const timeout = Object.assign(new Error("status command timed out"), {
+        exitCode: 1,
+        stdout: JSON.stringify({ BackendState: "NeedsLogin" }),
+        timedOut: true,
+      });
+      const abort = new DOMException("test stopped wait", "AbortError");
+      const exec = vi
+        .spyOn(processExec, "runExec")
+        .mockRejectedValueOnce(timeout)
+        .mockRejectedValueOnce(abort);
+      const info = vi.fn();
+      const waiting = waitForTailscaleBackendRunning({
+        bin: tailscaleBin,
+        info,
+        signal: controller.signal,
+      });
+      const rejected = expect(waiting).rejects.toBe(abort);
+      try {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await rejected;
+        expect(info).toHaveBeenCalledWith(
+          "waiting for Tailscale operator action or backend recovery (daemon not reachable)",
+        );
+        expect(exec).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves the sudo status command while parking managed Serve recovery",
+    async () => {
+      useTailscaleSudoFixture("authentication");
+      const fixture = process.env.OPENCLAW_TEST_TAILSCALE_BINARY;
+      if (!fixture) {
+        throw new Error("expected synthetic Tailscale binary");
+      }
+      const tempDir = tempDirs.make("openclaw-tailscale-auth-recovery-");
+      const commandLog = path.join(tempDir, "commands.jsonl");
+      const pollMarker = path.join(tempDir, "recovery-poll");
+      process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_COMMAND_LOG = commandLog;
+      process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER = pollMarker;
+
+      const error = await claimTailscaleRoute("serve", 18791, 18791, vi.fn()).catch(
+        (value: unknown) => value,
+      );
+      expect(error).toBeInstanceOf(TailscaleBackendAuthenticationRequiredError);
+      expect(error).toMatchObject({
+        backendState: "NeedsLogin",
+        statusCommand: { bin: "sudo", prefix: ["-n", fixture] },
+      });
+      if (!(error instanceof TailscaleBackendAuthenticationRequiredError)) {
+        throw new Error("expected typed Tailscale authentication prerequisite");
+      }
+
+      const controller = new AbortController();
+      const waiting = waitForTailscaleBackendRunning({
+        bin: error.statusCommand.bin,
+        prefix: [...error.statusCommand.prefix],
+        signal: controller.signal,
+        info: vi.fn(),
+      });
+      try {
+        await waitForFixtureFile(pollMarker, waiting, "recovery-poll");
+      } finally {
+        controller.abort();
+      }
+      await expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+
+      const commands = readFileSync(commandLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { args: string[] });
+      expect(commands.map(({ args }) => args)).toEqual([
+        ["status", "--json"],
+        ["serve", "status", "--json"],
+        ["-n", fixture, "status", "--json"],
+        ["-n", fixture, "status", "--json"],
+      ]);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "names the operator fix when the sudo fallback cannot run without a TTY",

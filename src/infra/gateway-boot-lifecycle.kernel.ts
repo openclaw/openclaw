@@ -4,6 +4,7 @@ import type { WorkerOperationHandlers } from "../state/worker-operation-registry
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
+import { TAILSCALE_BACKEND_AUTH_REQUIRED_REASON } from "./tailscale-backend-auth-required-error.js";
 import { TAILSCALE_BACKEND_STOPPED_REASON } from "./tailscale-backend-stopped-error.js";
 
 type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle">;
@@ -77,6 +78,10 @@ export function inspectGatewayCrashLoopBreakerInDatabase(db: DatabaseSync, nowMs
               eb("startup_reason", "!=", TAILSCALE_BACKEND_STOPPED_REASON),
             ]),
             eb("completed_at_ms", ">=", windowStartMs),
+            eb.or([
+              eb("startup_reason", "is", null),
+              eb("startup_reason", "!=", TAILSCALE_BACKEND_AUTH_REQUIRED_REASON),
+            ]),
           ]),
         ]),
       ),

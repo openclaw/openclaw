@@ -11,6 +11,8 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
+import { TAILSCALE_BACKEND_AUTH_REQUIRED_REASON } from "../../infra/tailscale-backend-auth-required-error.js";
+import { isTailscaleServeAuthenticationRequiredError } from "../../infra/tailscale-backend-ready.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { formatCliCommand } from "../command-format.js";
@@ -1050,13 +1052,13 @@ export async function runGatewayLoop(params: {
       request("stop", "host lifeline closed");
     });
     let isFirstIteration = true;
-    let retryAfterTriage = false;
+    let retryAfterStartupRecovery = false;
     for (;;) {
       if (terminalExitCode !== undefined) {
         break;
       }
-      const isTriageRetry = retryAfterTriage;
-      retryAfterTriage = false;
+      const isStartupRecoveryRetry = retryAfterStartupRecovery;
+      retryAfterStartupRecovery = false;
       const iterationStartupOperations = isFirstIteration
         ? startupOperations
         : createGatewayStartupOperations();
@@ -1178,11 +1180,31 @@ export async function runGatewayLoop(params: {
         const failedServer = server;
         server = null;
         const maintenanceRequired = findStartupMaintenanceRequiredError(err);
-        completeBoot(loopCompletion.formatStartupFailureCompletion(err, maintenanceRequired?.code));
+        let canWaitForTailscaleServe =
+          !maintenanceRequired &&
+          !installationReplacement &&
+          !isStartupRecoveryRetry &&
+          !shuttingDown &&
+          terminalExitCode === undefined &&
+          Boolean(supervisorMode) &&
+          Boolean(params.onRestartStartupFailure) &&
+          isTailscaleServeAuthenticationRequiredError(err);
+        let bootFailureCompleted = false;
+        const completeStartupFailure = (startupReason?: string) => {
+          if (bootFailureCompleted) {
+            return;
+          }
+          completeBoot(loopCompletion.formatStartupFailureCompletion(err, startupReason));
+          bootFailureCompleted = true;
+        };
+        if (!canWaitForTailscaleServe) {
+          completeStartupFailure(maintenanceRequired?.code);
+        }
         try {
           await signals.settle();
           await failedServer?.close({ reason: "gateway startup failed" });
         } catch (closeError) {
+          completeStartupFailure(maintenanceRequired?.code);
           throw new GatewayStartupCleanupError(err, closeError);
         } finally {
           signals.openStore();
@@ -1194,19 +1216,23 @@ export async function runGatewayLoop(params: {
             (error) => error instanceof GatewayStartupCleanupError,
           )
         ) {
+          completeStartupFailure(maintenanceRequired?.code);
           throw err;
         }
         if (installationReplacement) {
+          completeStartupFailure(maintenanceRequired?.code);
           await exitReplacedInstallation(installationReplacement);
           break;
         }
         // Keep TCC recovery after clean restart failures (#35862), but never reuse a
-        // generation whose startup cleanup failed. The outer CLI exits nonzero.
+        // generation whose startup cleanup failed. The outer CLI exits nonzero except
+        // for a supervised Serve prerequisite wait, which only starts after clean cleanup.
         if (
           terminalExitCode !== undefined ||
           maintenanceRequired ||
-          !isRestartIteration ||
-          (isTriageRetry && supervisorMode)
+          (!isRestartIteration && !canWaitForTailscaleServe) ||
+          (isStartupRecoveryRetry && supervisorMode) ||
+          err instanceof GatewayStartupCleanupError
         ) {
           await cleanup.waitForCleanup();
           if (!cleanup.failed && !cleanup.drained) {
@@ -1231,14 +1257,78 @@ export async function runGatewayLoop(params: {
         startupFailedBeforeServerHandle = true;
         if (!pendingStartupRequest) {
           // A failed listener must release its lock for daemon restart/stop (#35862).
-          await releaseLockIfHeld();
+          // A supervised Tailscale Serve prerequisite wait keeps process custody; releasing
+          // it here would admit a second Gateway while this one is parked without a listener.
+          if (!canWaitForTailscaleServe) {
+            await releaseLockIfHeld();
+          }
+        }
+        if (canWaitForTailscaleServe) {
+          let additionalStartupFailure: unknown;
+          let hasAdditionalStartupFailure = false;
+          try {
+            await cleanup.waitForCleanup();
+            if (cleanup.failed) {
+              throw new Error("gateway cleanup failed before Tailscale Serve recovery wait", {
+                cause: err,
+              });
+            }
+            try {
+              await iterationStartupOperations.drain();
+            } catch (startupError) {
+              // Join all admitted startup work; the exact refusal is expected, others are not.
+              if (startupError !== err) {
+                additionalStartupFailure = startupError;
+                hasAdditionalStartupFailure = true;
+              }
+            }
+            await cleanup.drainProcessResources();
+            await cleanup.waitForCleanup();
+            if (cleanup.failed) {
+              throw new Error(
+                "gateway process cleanup failed before Tailscale Serve recovery wait",
+                {
+                  cause: err,
+                },
+              );
+            }
+          } catch (cleanupError) {
+            canWaitForTailscaleServe = false;
+            completeStartupFailure();
+            throw new GatewayStartupCleanupError(err, cleanupError);
+          }
+          if (hasAdditionalStartupFailure) {
+            throw additionalStartupFailure;
+          }
+          iterationStartupOperations.acknowledgeHandledFailure(err);
+          // A second or later startup failure remains fatal after the handled refusal.
+          await iterationStartupOperations.drain();
+          if (installationReplacement) {
+            canWaitForTailscaleServe = false;
+            completeStartupFailure();
+            await exitReplacedInstallation(installationReplacement);
+            break;
+          }
+          const stopCompletion = iterationStartupOperations.getStopCompletion();
+          if (stopCompletion) {
+            canWaitForTailscaleServe = false;
+            completeStartupFailure();
+            await stopCompletion;
+            break;
+          }
+          if (terminalExitCode !== undefined || shuttingDown) {
+            canWaitForTailscaleServe = false;
+            completeStartupFailure();
+            throw err;
+          }
+          completeStartupFailure(TAILSCALE_BACKEND_AUTH_REQUIRED_REASON);
         }
         writeStabilityBundle("gateway.restart_startup_failed", err);
-        restartRecovery.reportStartupFailure(err, isTriageRetry);
-        if (!shuttingDown && !isTriageRetry) {
-          retryAfterTriage = (await restartRecovery.attempt(err)) && !shuttingDown;
+        restartRecovery.reportStartupFailure(err, isStartupRecoveryRetry);
+        if (!shuttingDown && !isStartupRecoveryRetry) {
+          retryAfterStartupRecovery = (await restartRecovery.attempt(err)) && !shuttingDown;
         }
-        if (!retryAfterTriage && !shuttingDown) {
+        if (!retryAfterStartupRecovery && !shuttingDown) {
           restartRecovery.reportManualRecovery();
         }
       }
@@ -1249,8 +1339,8 @@ export async function runGatewayLoop(params: {
             resolve();
           };
           flushPendingStartupRequest({ allowMissingServer: true });
-          if (retryAfterTriage && !shuttingDown) {
-            request("restart", "SIGUSR2", "gateway.triage_completed");
+          if (retryAfterStartupRecovery && !shuttingDown) {
+            request("restart", "SIGUSR2", "gateway.startup_recovery_completed");
           }
         });
       }

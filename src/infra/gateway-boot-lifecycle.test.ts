@@ -22,6 +22,7 @@ import {
   repairGatewayMaintenanceStartupFailures,
 } from "./gateway-boot-lifecycle.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { TAILSCALE_BACKEND_AUTH_REQUIRED_REASON } from "./tailscale-backend-auth-required-error.js";
 
 type GatewayBootLifecycleTestDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_boot_lifecycle">;
 type GatewayBootLifecycleOutcome = Parameters<typeof completeGatewayBootLifecycle>[1]["outcome"];
@@ -233,6 +234,106 @@ describe("gateway crash-loop breaker", () => {
 
     expect(decision.tripped).toBe(false);
     expect(decision.uncleanBoots).toBe(1);
+  });
+
+  it("keeps a completed Tailscale authentication prerequisite visible without counting it as a crash", () => {
+    const db = createLifecycleDb();
+    const nowMs = 1_000_000;
+    const recordCompletedFailure = (params: {
+      startedAtMs: number;
+      completedAtMs: number;
+      startupReason?: string;
+      reason: string;
+    }) => {
+      const bootId = recordGatewayBootStart(db.env, params.startedAtMs);
+      if (!bootId) {
+        throw new Error("expected Gateway boot to be recorded");
+      }
+      completeGatewayBootLifecycle(
+        bootId,
+        {
+          outcome: "startup_failed",
+          reason: params.reason,
+          ...(params.startupReason ? { startupReason: params.startupReason } : {}),
+        },
+        db.env,
+        params.completedAtMs,
+      );
+      return bootId;
+    };
+    const prerequisiteBootId = recordCompletedFailure({
+      startedAtMs: nowMs - 3,
+      completedAtMs: nowMs - 2,
+      startupReason: TAILSCALE_BACKEND_AUTH_REQUIRED_REASON,
+      reason: "gateway.tailscale_authentication_required: NeedsLogin",
+    });
+    recordCompletedFailure({
+      startedAtMs: nowMs - 1,
+      completedAtMs: nowMs,
+      reason: "EADDRINUSE",
+    });
+    recordCompletedFailure({
+      startedAtMs: nowMs,
+      completedAtMs: nowMs + 1,
+      reason: "gateway startup cleanup failed",
+    });
+
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 2)).toMatchObject({
+      tripped: false,
+      uncleanBoots: 2,
+    });
+    const rows = executeSqliteQuerySync(
+      db.db,
+      db.kysely
+        .selectFrom("gateway_boot_lifecycle")
+        .select(["boot_id", "completed_at_ms", "outcome", "startup_reason", "reason"])
+        .orderBy("boot_id"),
+    ).rows;
+    expect(rows).toContainEqual({
+      boot_id: prerequisiteBootId,
+      completed_at_ms: nowMs - 2,
+      outcome: "startup_failed",
+      startup_reason: TAILSCALE_BACKEND_AUTH_REQUIRED_REASON,
+      reason: "gateway.tailscale_authentication_required: NeedsLogin",
+    });
+
+    recordCompletedFailure({
+      startedAtMs: nowMs + 2,
+      completedAtMs: nowMs + 3,
+      reason: "unknown startup error",
+    });
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 4)).toMatchObject({
+      tripped: true,
+      uncleanBoots: GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD,
+    });
+  });
+
+  it("keeps an unfinished boot in breaker accounting even when its startup reason is known", () => {
+    const db = createLifecycleDb();
+    const nowMs = 1_000_000;
+    expect(
+      recordGatewayBootStart(db.env, nowMs - 3, TAILSCALE_BACKEND_AUTH_REQUIRED_REASON),
+    ).toBeDefined();
+    for (const [startedAtMs, completedAtMs, reason] of [
+      [nowMs - 2, nowMs - 1, "EADDRINUSE"],
+      [nowMs - 1, nowMs, "gateway startup cleanup failed"],
+    ] as const) {
+      const recordedBootId = recordGatewayBootStart(db.env, startedAtMs);
+      if (!recordedBootId) {
+        throw new Error("expected Gateway boot to be recorded");
+      }
+      completeGatewayBootLifecycle(
+        recordedBootId,
+        { outcome: "startup_failed", reason },
+        db.env,
+        completedAtMs,
+      );
+    }
+
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 1)).toMatchObject({
+      tripped: true,
+      uncleanBoots: GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD,
+    });
   });
 
   it("does not count maintenance refusals toward channel suppression", () => {
