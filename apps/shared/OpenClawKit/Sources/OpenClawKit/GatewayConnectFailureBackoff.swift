@@ -50,7 +50,6 @@ struct GatewayConnectFailureBackoff {
 
 extension GatewayChannelActor {
     public func clearConnectFailureBackoff() {
-        self.backoffMs = 500
         self.connectFailureBackoff.reset()
         self.connectFailureBackoffWaitTask?.cancel()
     }
