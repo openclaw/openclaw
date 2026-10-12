@@ -11,6 +11,10 @@ import {
   createTerminalToolPresentationTracker,
   resolveSettledTurnFinalizationRequest,
 } from "./terminal-resolution.js";
+import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
+
+type SettledTurnRequestParams = Parameters<typeof resolveSettledTurnFinalizationRequest>[0];
+type SettledTurnPayloads = NonNullable<SettledTurnRequestParams["payloadsWithToolMedia"]>;
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
@@ -312,17 +316,18 @@ describe("resolveSettledTurnFinalizationRequest", () => {
   const settledTurnPayloadRequest = (
     attempt: ReturnType<typeof makeEmbeddedRunnerAttempt>,
     terminalState: ReturnType<typeof resolveEmbeddedRunAttemptTerminalState>,
-    payloadsWithToolMedia: Parameters<
-      typeof resolveSettledTurnFinalizationRequest
-    >[0]["payloadsWithToolMedia"],
+    payloadsWithToolMedia: SettledTurnPayloads,
   ) =>
     resolveSettledTurnFinalizationRequest({
       runParams: {
         sessionId: "session:settled-empty-payload",
         runId: "run:settled-empty-payload",
+        workspaceDir: "/synthetic",
+        prompt: "produce the final user-visible answer",
+        timeoutMs: 60_000,
         trigger: "user",
         terminalReplyExpectation: "required",
-      } as never,
+      },
       attempt,
       activeErrorContext: { provider: "ollama-cloud", model: "glm-5.3-flash" },
       modelApi: "ollama",
@@ -360,31 +365,54 @@ describe("resolveSettledTurnFinalizationRequest", () => {
   // Every tool settled successfully and the model produced no reply. A payload that
   // carries neither text nor content is not delivery evidence and must leave the
   // settled-tool continuation retry available (#169501).
-  it.each([
+  const emptyContentCases: Array<[string, SettledTurnPayloads]> = [
     ["no payload entries", []],
     ["empty text", [{ text: "" }]],
     ["whitespace-only text", [{ text: "   " }]],
     ["bare reasoning flag", [{ text: "", isReasoning: true }]],
     ["empty media list", [{ text: "", mediaUrls: [] }]],
     ["empty structured container", [{ text: "", channelData: {} }]],
-  ] as const)(
+  ];
+  it.each(emptyContentCases)(
     "keeps the settled-tool continuation without payload content: %s",
-    (_name, payloads) => {
+    (_name: string, payloads: SettledTurnPayloads) => {
       const { attempt, terminalState } = settledToolAttempt();
-      expect(settledTurnPayloadRequest(attempt, terminalState, payloads as never)).toBe(
+      expect(settledTurnPayloadRequest(attempt, terminalState, payloads)).toBe(
         SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
       );
     },
   );
 
   // Legal controls: content the turn actually produced stays delivery evidence.
-  it.each([
+  const deliveryContentCases: Array<[string, SettledTurnPayloads]> = [
     ["visible answer text", [{ text: "Edited note.txt." }]],
     ["non-empty media", [{ text: "", mediaUrls: ["file:///tmp/note.txt"] }]],
     ["non-empty structured content", [{ text: "", channelData: { kind: "progress" } }]],
-  ] as const)("treats payload content as delivery evidence: %s", (_name, payloads) => {
+  ];
+  it.each(deliveryContentCases)(
+    "treats payload content as delivery evidence: %s",
+    (_name: string, payloads: SettledTurnPayloads) => {
+      const { attempt, terminalState } = settledToolAttempt();
+      expect(settledTurnPayloadRequest(attempt, terminalState, payloads)).toBeNull();
+    },
+  );
+
+  // The shipped producer that can hand the classifier a content-less payload: a tool asks
+  // for voice delivery but returns no media, so the tool-media projection appends a payload
+  // whose only non-text values are delivery booleans (#169501). A payload with nothing to
+  // deliver must not consume the settled-tool continuation.
+  it("keeps the continuation when the tool-media projection appends a payload without media", () => {
+    const projected = mergeAttemptToolMediaPayloads({ payloads: [], toolAudioAsVoice: true });
+    expect(projected).toHaveLength(1);
+    expect(projected?.[0]?.text).toBeUndefined();
+    expect(projected?.[0]?.mediaUrls ?? []).toEqual([]);
+    expect(projected?.[0]?.mediaUrl).toBeUndefined();
+    expect(projected?.[0]?.audioAsVoice).toBe(true);
+
     const { attempt, terminalState } = settledToolAttempt();
-    expect(settledTurnPayloadRequest(attempt, terminalState, payloads as never)).toBeNull();
+    expect(settledTurnPayloadRequest(attempt, terminalState, projected ?? [])).toBe(
+      SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    );
   });
 });
 
