@@ -75,9 +75,6 @@ export async function findSessionRepositoryWorkspaces(
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "sessionRepositoryWorkspaces.find") {
-    throw new Error("Unexpected session repository workspace lookup result");
-  }
   return reply.workspaces;
 }
 

@@ -26,13 +26,10 @@ export function createSqliteAuditRecordReader<T>(
     context.admission.assertCurrent();
     options.assertCurrent?.();
   };
-  const read = async (command: OpenClawStateReadCommand) => {
+  const read = async <Command extends OpenClawStateReadCommand>(command: Command) => {
     assertCurrent();
     const result = await executeExistingOpenClawStateRead(source, command, { context });
     assertCurrent();
-    if (result && !result.ok) {
-      throw new Error(result.message);
-    }
     return result;
   };
   return {
@@ -44,9 +41,6 @@ export function createSqliteAuditRecordReader<T>(
       });
       if (!result) {
         return { auditSequence: 0, recentExternalEdit: false };
-      }
-      if (result.type !== "diagnostic.configAuditFacts") {
-        throw new Error("Unexpected config audit facts result");
       }
       const { auditSequence, recentExternalEdit } = result;
       return { auditSequence, recentExternalEdit };
@@ -66,9 +60,6 @@ export function createSqliteAuditRecordReader<T>(
       });
       if (!result) {
         return [];
-      }
-      if (result.type !== "diagnostic.latest") {
-        throw new Error("Unexpected audit record read result");
       }
       // SAFETY: This scope retains the native store's generic JSON payload contract.
       return result.entries as SequencedSqliteAuditRecordEntry<T>[];

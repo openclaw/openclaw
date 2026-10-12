@@ -22,7 +22,7 @@ export type UpdateRunPatch = Partial<
 
 export type UpdateRunPhasePatch = UpdateRunPatch & { step?: UpdateRunStep };
 
-type UpdateRunWriteInput = {
+export type UpdateRunWriteInput = {
   runId: string;
   redactionFacts: UpdateRunRedactionFacts;
   requireNoRecovery?: true;
