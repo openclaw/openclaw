@@ -227,7 +227,9 @@ export async function acquireMatrixCryptoStoreOwnership(
     // Inspect only under custody: a live owner intentionally keeps its guard ahead of the seal.
     if (await isMatrixCryptoStoreUnsafe(snapshotPath, stateRuntime)) {
       throw new Error(
-        "Matrix crypto state has an unresolved unsafe final state (discarded, failed, or lost save); refusing another owner",
+        "Matrix crypto state has an unresolved unsafe final state (discarded, failed, or lost save); refusing another owner. " +
+          'Preserve the account state and run "openclaw matrix doctor inspect". ' +
+          "Recovery guidance: https://docs.openclaw.ai/channels/matrix/encryption",
       );
     }
     previousGuard = await readOwnerGuard(snapshotPath);
