@@ -5,11 +5,11 @@ import { pathForRoute } from "../../../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { registerMcpEnglish } from "../../../i18n/locales/en-mcp.ts";
+import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import {
   countSessionToolOverrides,
@@ -40,7 +40,7 @@ import {
   menuDivider,
 } from "./chat-composer-menu-rows.tsx";
 
-registerMcpEnglish();
+registerEnglishCatalog(registerMcpEnglish);
 
 export type ChatComposerPlusMenuView =
   | "root"

@@ -1,6 +1,5 @@
 import { For, createMemo, createRenderEffect, onCleanup } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
@@ -12,6 +11,7 @@ import {
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";

@@ -2,9 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createEffect, onCleanup, onSettled, untrack } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -13,7 +13,7 @@ import {
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
 
-registerChatGoalsEnglish();
+registerEnglishCatalog(registerChatGoalsEnglish);
 
 const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
 function GoalIcon() {
