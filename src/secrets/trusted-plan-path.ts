@@ -126,7 +126,7 @@ async function assertTrustedPath(
     const resolvedInterpreter = await assertTrustedPath(interpreter, validatedScripts);
     // The kernel launches the literal shebang path, so aliases cannot use an unverified link.
     if (resolvedInterpreter !== interpreter) {
-      throw new Error(`script interpreter path must be canonical: ${interpreter}`);
+      throw new Error(`script interpreter path must be fully resolved: ${interpreter}`);
     }
   }
   return resolvedPath;

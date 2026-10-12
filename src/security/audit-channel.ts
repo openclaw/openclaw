@@ -231,7 +231,7 @@ export async function collectChannelSecurityFindingsCore(params: {
         severity: "critical",
         title: `${input.label} DMs are open`,
         detail: `${policyPath}="open" allows anyone to DM the bot.`,
-        remediation: `Use pairing/allowlist; if you really need open DMs, ensure ${allowFromKey} includes "*".`,
+        remediation: `Use pairing/allowlist; if you really need open DMs, check that ${allowFromKey} includes "*".`,
       });
       if (!hasWildcard) {
         findings.push({
@@ -294,7 +294,7 @@ export async function collectChannelSecurityFindingsCore(params: {
           title: `[secrets] ${plugin.meta.label ?? plugin.id} account could not be fully resolved`,
           detail: diagnostic,
           remediation:
-            "Ensure referenced secrets are available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
+            "Make the referenced secrets available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
         });
       }
       if (!enabled || !configured) {

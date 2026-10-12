@@ -72,7 +72,9 @@ describe("1Password CLI owner trust", () => {
         const alias = path.join(tempDir, "node-alias");
         await fs.symlink(canonicalInterpreter, alias);
         await fs.writeFile(executable, `#!${alias}\nprocess.exit(0);\n`, { mode: 0o700 });
-        await expect(resolveTrustedExecutablePath(executable)).rejects.toThrow(/must be canonical/);
+        await expect(resolveTrustedExecutablePath(executable)).rejects.toThrow(
+          /must be fully resolved/,
+        );
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }

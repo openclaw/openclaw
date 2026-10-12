@@ -136,7 +136,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     {
       checkId: "summary.attack_surface",
       severity: "info",
-      title: "Attack surface summary",
+      title: "Exposure summary",
       detail,
     },
   ];

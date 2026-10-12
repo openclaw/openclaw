@@ -747,7 +747,7 @@ describe("worker environment service provision replay", () => {
     [
       "malformed SSH endpoint",
       { leaseId: "lease-invalid", ssh: { ...support.SSH_ENDPOINT, keyRef: "not-a-secret-ref" } },
-      "SSH key must be a canonical SecretRef",
+      "SSH key must be a valid SecretRef",
     ],
     [
       "invalid shared-host declaration",

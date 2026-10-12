@@ -31,7 +31,7 @@ Use the verified stable release with exact pins:
 npm install --save-exact @openclaw/gateway-client@2026.8.1 @openclaw/gateway-protocol@2026.8.1
 ```
 
-See the canonical [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
+See the [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
 for package/wire-version rules and recovery from reserved `0.0.0` artifacts.
 Test it with the Gateway version you deploy; the root `openclaw` CLI has its own
 package versions and dist-tags.
@@ -181,7 +181,7 @@ first so its authoritative outcome can settle the run. Other gapped frames and
 subsequent frames from that socket are not delivered. Reconnect restores a fresh live-text baseline; applications should
 also refresh durable state and restore their session subscriptions.
 
-The canonical defaults table and the server policy fields that can replace
+The defaults table and the server policy fields that can replace
 pre-handshake values are documented in the
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol#client-constants).
 

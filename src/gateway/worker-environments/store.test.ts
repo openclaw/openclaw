@@ -591,7 +591,7 @@ describe("worker environment store", () => {
           to: "bootstrapping",
           patch: { leaseId: "lease-1", sshEndpoint },
         }),
-      ).rejects.toThrow("SSH key must be a canonical SecretRef");
+      ).rejects.toThrow("SSH key must be a valid SecretRef");
     }
   });
 

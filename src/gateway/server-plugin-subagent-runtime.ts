@@ -103,7 +103,7 @@ function resolveFallbackModelOverridePolicy(params: {
   }
   if (!params.model?.trim() || (!params.provider && !params.model.includes("/"))) {
     throw new Error(
-      "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
+      "fallback provider/model overrides that use an allowlist must resolve to a full provider/model target.",
     );
   }
   return policy;
