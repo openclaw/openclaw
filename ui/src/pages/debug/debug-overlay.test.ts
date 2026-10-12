@@ -246,9 +246,10 @@ describe("DebugOverlay", () => {
       // One sample: tiles show current values, charts wait for a second point.
       expect(overlay.querySelectorAll(".gateway-vital")).toHaveLength(5);
       expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("Host —");
-      expect(normalizedText(overlay.querySelector(".gateway-cpu-detail"))).toContain(
-        "Event loop busy 42%",
+      const cpuReadings = [...overlay.querySelectorAll(".gateway-cpu-detail dl > div")].map(
+        (row) => [normalizedText(row.querySelector("dt")), normalizedText(row.querySelector("dd"))],
       );
+      expect(cpuReadings).toContainEqual(["Event loop busy", "42%"]);
       expect(overlay.querySelector(".sparkline-tile__chart")).toBeNull();
       expect(normalizedText(overlay.querySelector(".debug-overlay__vitals-footer"))).toBe(
         "Uptime 1m",
