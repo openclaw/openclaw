@@ -80,6 +80,12 @@ does not redirect that operation to the replacement file; the next admission or
 open detects it through the database lifecycle owner. Commit authority checks and
 Doctor's explicit verification remain in place.
 
+Chat input actors reuse their native owner’s admitted physical identity and
+canonical location, without queuing another writer reservation just to acquire
+the actor. Cold owners still prepare their database identity first. Captured
+session reads constrain the same physical file; actual input writes retain FIFO
+admission and current authority checks.
+
 Managed writes publish committed facts before their public observers. Private
 receipts distinguish explicit absence from incomplete coverage and preserve known
 commits independently of reply delivery. See
