@@ -106,7 +106,7 @@ function safePreview(event: TrajectoryEvent): string {
       return `prompt skipped${reason ? `: ${reason}` : ""}`;
     }
     case "tool.call":
-      return `${toolName(data)} ${JSON.stringify(data?.arguments ?? {})}`;
+      return `${toolName(data)} ${JSON.stringify(data?.arguments ?? data?.args ?? {})}`;
     case "tool.timeout":
       return `${toolName(data)} timeout`;
     case "tool.result":

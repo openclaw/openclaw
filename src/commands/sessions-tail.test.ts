@@ -123,6 +123,11 @@ describe("sessionsTailCommand", () => {
         data: { name: "bash", arguments: { command: "echo SECRET" } },
       }),
       makeEvent({
+        type: "tool.call",
+        ts: "2026-05-18T12:04:19.000Z",
+        data: { name: "read", args: { path: ".env", expression: "API_TOKEN = computeToken()" } },
+      }),
+      makeEvent({
         type: "tool.result",
         ts: "2026-05-18T12:04:21.000Z",
         data: { name: "bash", success: true, output: "SECRET" },
@@ -141,6 +146,7 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("12:04:18Z");
     expect(output).toContain("tool.call");
     expect(output).toContain('bash {"command":"echo SECRET"}');
+    expect(output).toContain('read {"path":".env","expression":"API_TOKEN = computeToken()"}');
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
     expect(output).toContain("model.completed");
