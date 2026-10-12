@@ -20,12 +20,14 @@ import {
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
-const readProcessAncestry = vi.hoisted(() =>
-  vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
-);
+const { readProcessAncestry, readProcessIdentity } = vi.hoisted(() => ({
+  readProcessAncestry: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
+  readProcessIdentity: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessIdentity>(),
+}));
 vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
   readProcessAncestry,
+  readProcessIdentity,
 }));
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -38,6 +40,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 beforeEach(() => {
   readProcessAncestry.mockReset().mockReturnValue(null);
+  // Simulated platforms exercise diagnostic fallback, never the host kernel
+  // identity of a coincidentally live fixture PID. Real children remain native.
+  readProcessIdentity.mockReset().mockImplementation(() => {
+    throw new ProcSafeError("helper-unavailable", "synthetic diagnostic fallback");
+  });
   spawnSyncMock.mockReset();
   vi.useFakeTimers();
 });
