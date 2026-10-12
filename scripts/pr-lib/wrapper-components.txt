@@ -2278,3 +2278,5 @@ src/shared/text/text-projection.ts
 src/shared/text/xml-tag-at.ts
 src/shared/widget-theme.ts
 packages/markdown-core/package.json
+src/config/sessions/transcript-recent-text.ts
+src/config/sessions/transcript-recent-window.ts
