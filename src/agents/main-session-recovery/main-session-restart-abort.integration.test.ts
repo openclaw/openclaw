@@ -196,7 +196,11 @@ it.each([
           sessionId,
           lifecycleGeneration,
           ts: 200,
-          data: terminalData,
+          // Shutdown may publish the embedded owner's restart after caller cleanup.
+          data:
+            order === "automation drain"
+              ? { ...terminalData, aborted: true, stopReason: "restart" }
+              : terminalData,
         },
       });
       if (order === "after settlement" || order === "automation drain") {
