@@ -65,12 +65,10 @@ async function applyAbortTarget(
   })
     ? resolveAbortCutoffFromContext(params.ctx)
     : undefined;
-  const assertCurrent = () => {
-    if (isCurrent?.() === false) {
-      throw new Error("The selected session changed before it could be stopped.");
-    }
-  };
-  assertCurrent();
+  const current = isCurrent?.();
+  if ((typeof current === "boolean" || current === undefined ? current : await current) === false) {
+    throw new Error("The selected session changed before it could be stopped.");
+  }
   if (clearQueues) {
     const cleared = clearQueues();
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
@@ -105,6 +103,10 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/stop", match: (body) => (body === "/stop" ? true : null) },
   async (params) => {
     const assertCurrent = () => {
+      if (params.opts?.isCommandTargetCurrent?.sessionSource?.assertScopeCurrent) {
+        params.opts.isCommandTargetCurrent.sessionSource.assertScopeCurrent();
+        return;
+      }
       if (params.opts?.isCommandTargetCurrent?.() === false) {
         throw new Error("The selected session changed before it could be stopped.");
       }

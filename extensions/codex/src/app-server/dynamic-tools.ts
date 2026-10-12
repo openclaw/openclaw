@@ -194,6 +194,7 @@ export function createCodexDynamicToolBridge(params: {
   registeredSpecs?: readonly CodexDynamicToolSpec[];
   signal: AbortSignal;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   computerContextEpoch?: CodexComputerContextEpoch;
   hookContext?: CodexDynamicToolHookContext;
   loading?: CodexDynamicToolsLoading;
@@ -425,7 +426,8 @@ export function createCodexDynamicToolBridge(params: {
           }
           return toolArgsRecord;
         },
-        beforeExecute: () => {
+        beforeExecute: async () => {
+          await params.assertCurrentAsync?.();
           messagingContext = {
             config: params.hookContext?.config,
             currentChannelId: params.hookContext?.currentChannelId,

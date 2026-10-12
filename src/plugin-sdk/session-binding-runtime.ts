@@ -1,17 +1,37 @@
-import { captureSessionEntryCurrentCheckInternal } from "../config/sessions/session-entry-current-check.js";
+import {
+  captureSessionEntryCurrentCheckInternal,
+  captureSessionEntryCurrentCheckAsyncInternal,
+} from "../config/sessions/session-entry-current-check.js";
 // Bundled runtime authority for selected sessions and conversation bindings.
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
   type PreparedSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { projectPluginSessionEntry } from "./session-store-runtime-internal.js";
 
-/** Prepare public metadata together with its original source and exact live policy guard. */
+/** @deprecated Use captureSessionEntryCurrentCheckAsync; removed in the next Plugin SDK major. */
 export async function captureSessionEntryCurrentCheck(
   params: Parameters<typeof captureSessionEntryCurrentCheckInternal>[0],
 ) {
+  warnPluginSdkDeprecation({
+    family: "session-currentness",
+    method: "captureSessionEntryCurrentCheck",
+    replacement: "captureSessionEntryCurrentCheckAsync",
+  });
   const prepared = await captureSessionEntryCurrentCheckInternal(params);
+  return {
+    ...prepared,
+    entry: prepared.entry ? projectPluginSessionEntry(prepared.entry) : undefined,
+  };
+}
+
+/** Read current policy in the worker at effects; pass source to worker-backed mutations. */
+export async function captureSessionEntryCurrentCheckAsync(
+  params: Parameters<typeof captureSessionEntryCurrentCheckAsyncInternal>[0],
+) {
+  const prepared = await captureSessionEntryCurrentCheckAsyncInternal(params);
   return {
     ...prepared,
     entry: prepared.entry ? projectPluginSessionEntry(prepared.entry) : undefined,

@@ -466,7 +466,13 @@ export function createSlackCommandHandler(params: {
       });
       const routingTeamId = (eventScope?.teamId ?? ctx.teamId) || undefined;
       let resolvedSlashRoute: ResolvedAgentRoute | undefined;
-      let isCurrentSession = p.isSessionTargetCurrent;
+      let isCurrentSession:
+        | typeof p.isSessionTargetCurrent
+        | Awaited<ReturnType<typeof captureSlackSessionTargetGuard>>["isCurrent"] =
+        p.isSessionTargetCurrent;
+      let sessionSource:
+        | Awaited<ReturnType<typeof captureSlackSessionTargetGuard>>["source"]
+        | undefined;
       const resolveSlashRoute = async () => {
         if (resolvedSlashRoute) {
           return resolvedSlashRoute;
@@ -474,11 +480,13 @@ export function createSlackCommandHandler(params: {
         if (p.threadTs) {
           if (p.sessionTarget) {
             resolvedSlashRoute = p.sessionTarget;
-            isCurrentSession = await captureSlackSessionTargetGuard(
+            const current = await captureSlackSessionTargetGuard(
               ctx,
               p.sessionTarget,
               p.isSessionTargetCurrent,
             );
+            isCurrentSession = current.isCurrent;
+            sessionSource = current.source;
             return resolvedSlashRoute;
           }
           const routing = await resolveSlackSessionEventRoutingContext({
@@ -498,6 +506,7 @@ export function createSlackCommandHandler(params: {
           });
           resolvedSlashRoute = routing.route;
           isCurrentSession = routing.isCurrentSession;
+          sessionSource = routing.sessionSource;
           return resolvedSlashRoute;
         }
         const { resolveAgentRoute } = await loadSlashDispatchRuntime();
@@ -580,7 +589,7 @@ export function createSlackCommandHandler(params: {
               config: cfg,
               agentId: route.agentId,
               sessionKey: route.sessionKey,
-              assertCurrent: isCurrentSession,
+              assertCurrent: sessionSource,
               commandText: prompt,
               commandId: `slack:${account.accountId}:${routeTarget.peerId}:${commandId}`,
               replyId: "argument-menu",
@@ -718,7 +727,7 @@ export function createSlackCommandHandler(params: {
           }
         : undefined;
       if (commandAuthorized) {
-        if (isCurrentSession?.() === false || p.onAdmitted?.() === false) {
+        if ((await isCurrentSession?.()) === false || p.onAdmitted?.() === false) {
           await respondEphemeral("The selected run has already finished.");
           return false;
         }

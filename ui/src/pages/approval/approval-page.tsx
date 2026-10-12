@@ -17,7 +17,7 @@ import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { renderApprovalPresentation } from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
@@ -123,7 +123,6 @@ function approvalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): st
 }
 
 type ApprovalPageProps = { approvalId: string };
-export type ApprovalPage = SolidBridgeElement<ApprovalPageProps>;
 
 /** Request admission remains synchronous; Solid observes the published revision. */
 class ApprovalPageController {
@@ -719,7 +718,7 @@ function ApprovalContent(props: {
   );
 }
 
-export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
+defineSolidBridge<ApprovalPageProps>(
   "openclaw-approval-page",
   (props, host) => <ApprovalPageContent approvalId={props.approvalId} host={host} />,
   {

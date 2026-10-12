@@ -18,6 +18,15 @@ Physical integrity admission remains valid independently of canonical readiness.
 The schema 25 migration seeds every existing node before admission; see
 [canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
 
+Inbound session metadata and last-route changes use closed entry operations. The
+Gateway prepares plugin-owned group and origin facts once; the writer merges
+those facts with its current entry, preserving concurrent metadata, routing
+fallbacks, creation provenance, and activity timestamps without a detached
+callback comparison. Skill snapshot persistence uses the same fixed-field path.
+Generic callbacks retain their prepare-and-compare contract, and source and
+conversation authority still apply at the mutation boundary. These operations
+change no schemas, stored formats, retention, or update behavior.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -205,22 +214,27 @@ its existing owner. Unknown local writes still invalidate
 the sweep; rollback publishes no acknowledgment.
 The v2026.9.8 `plugin-sdk/session-store-runtime` entry and last-route contracts
 retain their opaque `assertCommitAllowed` callbacks inside the native transaction.
-Released model-selection validators and Stop currentness callbacks likewise keep
-their native adapter; bundled controls carry prepared source checks instead. Cross-store sources
+Released model-selection validators and synchronous Stop currentness callbacks keep
+their native adapter; bundled controls await worker-backed currentness checks and
+carry prepared source checks into mutations. Cross-store sources
 also retain native atomicity while the released synchronous transcript SDK can
 bypass async queues; revisit that compatibility path at the next SDK major.
 Schemas, retained bytes, durability, and update behavior are unchanged.
 
 Bundled plugins obtain prepared currentness checks and compose entry commit guards
-through the existing private `session-binding-runtime` facade. Its async capture
+through the `session-binding-runtime` facade. `captureSessionEntryCurrentCheckAsync`
 retains the selected session generation and optional conversation alternatives;
-the writer checks all alternatives in one batched conversation read and publishes
-the matching branches through its existing transaction grant. Host callbacks
-recheck live channel/run facts among those matches through commit, so a finishing
-publisher can yield to a recorded parent without losing a valid title update.
-Ordinary wrappers preserve that source carrier. Public SDK callbacks keep their
-released synchronous contract and existing incognito callback route without new
-public exports.
+its awaited effect check reads both in one existing reader-worker snapshot. Typed
+mutations carry the prepared source so the writer checks all alternatives in one
+batched conversation read and publishes matching branches through its transaction
+grant. Entry-only binding mutations carry `entryCurrent` through existing writer
+admission. Host callbacks check live channel/run facts among those matches, so a
+finishing publisher can yield to a recorded parent without losing a valid title
+update. `source.assertScopeCurrent()` checks only host lifetime and physical source
+custody; it does not replace an awaited effect check. The deprecated
+`captureSessionEntryCurrentCheck` keeps its released synchronous callbacks, warns
+on use, and is scheduled for removal at the next Plugin SDK major. Incognito uses
+its existing native callback route.
 
 History readers can borrow existing physical and canonical admission without an
 open host reader. The receiving scope checks its actual file and the live receipt;
@@ -5611,6 +5625,13 @@ still read their logical agent namespaces. Recorded quarantine remains authorita
 Canonical validation receipts share that same physical admission; their certifying
 and offline repair writers publish committed replacements. Ordinary session writes
 do not expire the receipt, and rollback cannot publish an uncommitted one.
+
+Lifecycle mutations return the resulting entry count from their committed
+inserts and removals. Finalization subtracts only acknowledged retention removals;
+it does not query the count again after archive publication. A later lifecycle
+operation reads its own starting count, so unrelated writes after the earlier
+commit belong to that later operation. Doctor callbacks that can change arbitrary
+rows still count inside their transaction.
 
 Warm maintenance reads use the current age hint and one count statement without
 an explicit transaction. Capacity pressure still requests full planning, whose

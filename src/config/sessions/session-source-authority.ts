@@ -88,6 +88,11 @@ export type PreparedSessionSourceAssertion = SessionSourceAssertion & {
 /** Public boolean callbacks stay callable; bundled owners also carry their prepared writer source. */
 export type SessionSourceCheck = (() => boolean) & { sessionSource?: SessionSourceAssertion };
 
+/** Async effect checks also expose worker predicates and a storage-free host assertion. */
+export type AsyncSessionSourceCheck = (() => Promise<boolean>) & {
+  sessionSource: PreparedSessionSourceAssertion & { assertScopeCurrent: () => void };
+};
+
 export function sessionEntryCommitGuardOptions(source: SessionSourceAssertion | undefined) {
   return source?.nativeSource ? { assertCommitAllowed: source } : { workerGuard: { source } };
 }

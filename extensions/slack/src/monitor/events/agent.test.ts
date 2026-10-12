@@ -701,7 +701,7 @@ describe("registerSlackAgentEvents", () => {
       slashMocks.dispatchMock.mockImplementation(async (params) => {
         releaseMove.resolve();
         await move;
-        currentAfterDispatch = params.replyOptions?.isCommandTargetCurrent?.();
+        currentAfterDispatch = await params.replyOptions?.isCommandTargetCurrent?.();
         throw new Error("The selected session changed before it could be stopped.");
       });
       try {
@@ -869,7 +869,7 @@ describe("registerSlackAgentEvents", () => {
     });
     const currentOwners: Array<boolean | undefined> = [];
     slashMocks.dispatchMock.mockImplementation(async (params) => {
-      currentOwners.push(params.replyOptions?.isCommandTargetCurrent?.());
+      currentOwners.push(await params.replyOptions?.isCommandTargetCurrent?.());
       expect(harness.postMessage).not.toHaveBeenCalled();
       const index = keys.indexOf(params.ctx.CommandTargetSessionKey);
       expect(index).toBeGreaterThanOrEqual(0);

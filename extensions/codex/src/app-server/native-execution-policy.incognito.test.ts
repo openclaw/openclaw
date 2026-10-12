@@ -59,7 +59,7 @@ it("keeps actor execution policy and rejects a retained tool after policy or gen
           node: "synthetic-node",
         });
         await patchSessionEntry({ ...target, update: () => ({ execHost: "gateway" }) });
-        expect(node.assertCurrent).toThrow("execution policy changed");
+        await expect(node.assertCurrent()).rejects.toThrow("execution policy changed");
 
         const gateway = await prepareCodexNativeExecutionPolicy({
           ...params,
@@ -81,7 +81,7 @@ it("keeps actor execution policy and rejects a retained tool after policy or gen
             },
           ],
           signal: new AbortController().signal,
-          assertCurrent: gateway.assertCurrent,
+          assertCurrentAsync: gateway.assertCurrent,
           loading: "direct",
         });
         await patchSessionEntry({
@@ -98,7 +98,7 @@ it("keeps actor execution policy and rejects a retained tool after policy or gen
         });
         expect(response.success).toBe(false);
         expect(execute).not.toHaveBeenCalled();
-        expect(gateway.assertCurrent).toThrow();
+        await expect(gateway.assertCurrent()).rejects.toThrow();
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
@@ -144,12 +144,12 @@ it("guards an explicit private sandbox policy while preserving the catalog key's
         });
         expect(native.block).toBeUndefined();
         expect(request.block).toBeUndefined();
-        native.assertCurrent();
-        request.assertCurrent();
+        await native.assertCurrent();
+        await request.assertCurrent();
 
         await patchSessionEntry({ ...target, update: () => ({ sandboxMode: undefined }) });
-        expect(native.assertCurrent).toThrow("execution policy changed");
-        expect(request.assertCurrent).toThrow("execution policy changed");
+        await expect(native.assertCurrent()).rejects.toThrow("execution policy changed");
+        await expect(request.assertCurrent()).rejects.toThrow("execution policy changed");
         const blockedNative = await prepareCodexNativeExecutionBlock(params);
         const blockedRequest = await prepareCodexAppServerDirectSandboxBypassBlock({
           ...params,

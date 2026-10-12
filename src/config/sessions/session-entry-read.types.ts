@@ -20,6 +20,7 @@ import type { SessionMember } from "./session-membership-facts.types.js";
 import type {
   SessionSourcePredicate,
   SessionSourcePredicateFacts,
+  SessionSourceValidation,
 } from "./session-source-authority.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
@@ -95,6 +96,8 @@ export type SessionExactEntriesWorkerSelection =
     };
 
 export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
+  /** Validate current entry and conversation predicates in one reader snapshot. */
+  sourceChecks?: SessionSourcePredicate[];
   manualCompact?: { sessionId: string; sources: SessionSourcePredicate[] };
   expectedIdentity?: SessionEntryListWorkerInput["expectedIdentity"];
   /** Omitted retains the complete entry; an empty selection reads metadata only. */
@@ -145,6 +148,7 @@ export type SessionExactEntriesWorkerResult = {
   source?: SessionEntryListWorkerResult["source"];
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
+  sourceValidation?: SessionSourceValidation;
   manualCompact?: {
     archive?: Omit<SessionColdArchive, "archive_blob">;
     refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
