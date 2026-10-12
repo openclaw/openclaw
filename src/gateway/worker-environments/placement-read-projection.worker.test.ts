@@ -312,7 +312,7 @@ describe("worker placement read projection", () => {
       if (kind !== "local") {
         await activePlacement(database, session.sessionId, kind);
       }
-      const current = store.get(session.sessionId);
+      const current = await store.getAsync(session.sessionId);
       await store.claimTurn({
         ...session,
         owner: current?.state === "active" ? placementTurnOwner(current) : { kind: "local" },
@@ -428,7 +428,7 @@ describe("worker placement read projection", () => {
     const sql = observeHostDataSql();
     try {
       expect(store.get(first.placement.sessionId)?.state).toBe("active");
-      expect(sql.queries.length).toBeGreaterThan(0);
+      expect(sql.queries).toEqual([]);
       const beforeSweep = sql.queries.length;
       let discoverySql: string[] | undefined;
       const requestedEnvironments: string[] = [];

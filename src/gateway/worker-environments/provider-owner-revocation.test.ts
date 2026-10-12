@@ -78,7 +78,7 @@ describe("worker environment owner revocation", () => {
       });
       await createWorkerSessionPlacementGate(placements).updateAckCursors({ claim, liveSeq: 1 });
       const placementStore = createWorkerSessionPlacementGate(placements, {
-        rejectExistingWorkerClaims: owner === "recovery-only",
+        recoveryPlacements: owner === "recovery-only" ? await placements.listAsync() : [],
       });
       const tunnelManager = {
         status: () => "connected" as const,

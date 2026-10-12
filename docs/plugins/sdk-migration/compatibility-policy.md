@@ -156,8 +156,8 @@ and caller authority remain required at the effect. Custom released service obje
 retain their own explicitly selected compatibility contracts; the built-in Gateway
 never falls back to native SQL. See [placement preparation](/plugins/sdk-migration/how-to-migrate#await-placement-preparation).
 
-`githubPublicationService.deferOrphanedRequests()` retains its owner-specific
-compatibility behavior; migrate to `deferOrphanedRequestsAsync()`. These changes
+`githubPublicationService.deferOrphanedRequests()` now warns and throws with
+migration guidance; await `deferOrphanedRequestsAsync()` instead. These changes
 preserve schemas, stored data, retention, durability, and update behavior.
 
 GitHub publication's opaque requester and synchronous lifecycle methods, plus

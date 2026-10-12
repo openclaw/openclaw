@@ -138,9 +138,9 @@ describe("worker environment runtime upgrades", () => {
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => {}),
     };
-    const bindService = (store: typeof placements, restarting = false) => {
+    const bindService = async (store: typeof placements, restarting = false) => {
       const gate = createWorkerSessionPlacementGate(store, {
-        rejectExistingWorkerClaims: restarting,
+        recoveryPlacements: restarting ? await store.listAsync() : [],
       });
       const service = support.createService(
         support.createProvider({
@@ -157,7 +157,7 @@ describe("worker environment runtime upgrades", () => {
       );
       return { gate, service };
     };
-    const { service } = bindService(placements);
+    const { service } = await bindService(placements);
     return {
       environment,
       placement,
@@ -180,7 +180,7 @@ describe("worker environment runtime upgrades", () => {
         });
         await restarted.recoverWorkerSessionToolOperationsAfterRestart();
         await restarted.clearLocalTurnClaimsAfterRestartAsync();
-        return { placements: restarted, ...bindService(restarted, true) };
+        return { placements: restarted, ...(await bindService(restarted, true)) };
       },
     };
   }

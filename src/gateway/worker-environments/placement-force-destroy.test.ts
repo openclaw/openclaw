@@ -197,7 +197,7 @@ describe("forced destruction across Gateway restart", () => {
         new Error(`provider deletion refused: ${"detail ".repeat(300)}quota blocked`),
       )
       .mockRejectedValueOnce(new Error("provider deletion still blocked"));
-    const createService = () =>
+    const createService = async () =>
       support.createService(
         support.createProvider({
           supportedExecutionModes: ["worker-turn"],
@@ -206,12 +206,12 @@ describe("forced destruction across Gateway restart", () => {
         }),
         {
           placementStore: createWorkerSessionPlacementGate(placements, {
-            rejectExistingWorkerClaims: true,
+            recoveryPlacements: await placements.listAsync(),
           }),
         },
       );
     const harness = createHarness(support.testState.stateDb, placements, {
-      environmentService: createService(),
+      environmentService: await createService(),
       workspacePath: support.testState.root,
     });
 
@@ -226,7 +226,7 @@ describe("forced destruction across Gateway restart", () => {
 
     await support.reopenWorkerEnvironmentStore();
     placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const service = createService();
+    const service = await createService();
     const pending = service.get(environmentId);
     if (!pending) {
       throw new Error("forced teardown lost its dedicated environment");
@@ -297,13 +297,13 @@ describe("forced destruction across Gateway restart", () => {
         await support.testState.store.requestDestroy({ environmentId, state: "attached" });
       }
       const destroy = vi.fn(async () => {});
-      const createService = () =>
+      const createService = async () =>
         support.createService(support.createProvider({ destroy }), {
           placementStore: createWorkerSessionPlacementGate(placements, {
-            rejectExistingWorkerClaims: true,
+            recoveryPlacements: await placements.listAsync(),
           }),
         });
-      const service = createService();
+      const service = await createService();
       const harness = createHarness(support.testState.stateDb, placements, {
         environmentService: service,
         workspacePath: support.testState.root,
@@ -337,7 +337,7 @@ describe("forced destruction across Gateway restart", () => {
       await support.reopenWorkerEnvironmentStore();
       placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
-      const restartedService = createService();
+      const restartedService = await createService();
       const tunnel = vi.spyOn(restartedService, "startTunnel");
       const restarted = createHarness(support.testState.stateDb, placements, {
         environmentService: restartedService,

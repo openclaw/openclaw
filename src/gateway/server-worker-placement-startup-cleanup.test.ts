@@ -69,7 +69,7 @@ describe("worker placement startup cleanup ownership", () => {
         recoveryError: "worker admission deadline exceeded",
       });
     }
-    const before = placements.list();
+    const before = await placements.listAsync();
     const environments = workerEnvironmentSupport.createService(
       workerEnvironmentSupport.createProvider(),
     );
@@ -111,7 +111,7 @@ describe("worker placement startup cleanup ownership", () => {
       expect(resolveWorkspace).toHaveBeenCalledTimes(50);
       await recovery.reconcileActive();
       expect(resolveWorkspace).toHaveBeenCalledTimes(50);
-      expect(placements.list()).toEqual(before);
+      expect(await placements.listAsync()).toEqual(before);
     } finally {
       releaseCleanup.resolve();
       await starting;

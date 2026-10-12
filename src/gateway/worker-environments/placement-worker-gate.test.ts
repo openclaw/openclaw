@@ -164,7 +164,7 @@ describe("worker session placement gate", () => {
 
     const restartedStore = createWorkerSessionPlacementStore({ database });
     const gate = createWorkerSessionPlacementGate(restartedStore, {
-      rejectExistingWorkerClaims: true,
+      recoveryPlacements: await restartedStore.listAsync(),
     });
     const binding = {
       sessionId: claim.sessionId,
@@ -195,7 +195,7 @@ describe("worker session placement gate", () => {
     async (reused) => {
       const first = await preclaim("run-inherited");
       const gate = createWorkerSessionPlacementGate(store, {
-        rejectExistingWorkerClaims: reused === "claim",
+        recoveryPlacements: reused === "claim" ? await store.listAsync() : [],
       });
       if (reused === "claim") {
         expect(gate.validateWorkerTurn(first)).toBe(false);

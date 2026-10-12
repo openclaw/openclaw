@@ -16,7 +16,7 @@ function assertReconciled(
 ): void {
   const placement = facts.placements.get(identity.sessionId);
   const pending = facts.pendingResults.has(identity.sessionId);
-  const reconciling = facts.workspaceJournalOwnerSessionIds.has(identity.sessionId);
+  const reconciling = facts.workspaceRecoveryPendingSessionIds.has(identity.sessionId);
   if (
     placement &&
     (placement.agentId !== identity.agentId || placement.sessionKey !== identity.sessionKey)

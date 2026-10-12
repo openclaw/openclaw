@@ -63,12 +63,18 @@ function activePlacementExecutionError(
 
 export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const { environments, failure, placements } = deps;
-  const interruptedClaims = new Set(
-    placements.list().flatMap((placement) => {
-      const claim = projectWorkerSessionTurnClaim(placement);
-      return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
-    }),
+  // Enqueue before accepting new work so the writer captures the inherited claims first.
+  const interruptedClaims = placements.listAsync().then(
+    (records) =>
+      new Set(
+        records.flatMap((placement) => {
+          const claim = projectWorkerSessionTurnClaim(placement);
+          return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
+        }),
+      ),
   );
+  // Construction need not await recovery; the recovery operation still reports read failures.
+  void interruptedClaims.catch(() => {});
   // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
   // Completed roots belong to this startup pass; settlement removes new refs itself.
   let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
@@ -83,7 +89,8 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     // Retire the old turn, not its machine. The node stop acknowledgement fences the
     // physical worker; the replacement turn receives a fresh claim on the same workspace.
     const claim = projectWorkerSessionTurnClaim(placement);
-    const interrupted = claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim));
+    const interrupted =
+      claim && (await interruptedClaims).has(serializeWorkerSessionTurnClaim(claim));
     if ((mode === "restart" || interrupted) && placement.turnClaim) {
       if (
         claim &&
@@ -129,7 +136,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           ) {
             return;
           }
-          interruptedClaims.delete(serializeWorkerSessionTurnClaim(claim));
+          (await interruptedClaims).delete(serializeWorkerSessionTurnClaim(claim));
           placement = recovered;
           environment = environments.get(placement.environmentId);
         } catch (error) {
@@ -295,6 +302,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     mode?: "startup",
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,
   ): Promise<void> => {
+    await interruptedClaims;
     // Environment reconciliation can resume provisioning through session admission.
     // It must finish outside admission, before any recoverSession unit enters it.
     if (mode === "startup") {
@@ -397,6 +405,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     environmentId?: string,
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,
   ): Promise<void> => {
+    await interruptedClaims;
     await environments.reconcileOnce(environmentId);
     for (const candidate of await placements.readRecoveryCandidates()) {
       if (

@@ -69,15 +69,13 @@ function claimForOwnerRevocation(
 
 export function createWorkerSessionPlacementGate(
   store: WorkerSessionPlacementStore,
-  options: { rejectExistingWorkerClaims?: boolean } = {},
+  options: { recoveryPlacements?: readonly WorkerSessionPlacementRecord[] } = {},
 ): WorkerSessionPlacementGate {
   const recoveryOnlyClaims = new Set(
-    options.rejectExistingWorkerClaims
-      ? store.list().flatMap((record) => {
-          const claim = projectWorkerSessionTurnClaim(record);
-          return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
-        })
-      : [],
+    (options.recoveryPlacements ?? []).flatMap((record) => {
+      const claim = projectWorkerSessionTurnClaim(record);
+      return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
+    }),
   );
   const validateWorkerTurn = (claim: WorkerSessionTurnClaim) =>
     !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)) &&

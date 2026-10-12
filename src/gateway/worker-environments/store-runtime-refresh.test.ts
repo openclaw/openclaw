@@ -267,7 +267,7 @@ describe("worker environment runtime refresh", () => {
     const liveGate = createWorkerSessionPlacementGate(placements);
     await expect(liveGate.prepareWorkerRuntimeRefresh(binding)).rejects.toThrow("current turn");
     const recoveryGate = createWorkerSessionPlacementGate(placements, {
-      rejectExistingWorkerClaims: true,
+      recoveryPlacements: await placements.listAsync(),
     });
     const refresh = await recoveryGate.prepareWorkerRuntimeRefresh(binding);
     try {

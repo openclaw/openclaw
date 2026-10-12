@@ -211,7 +211,9 @@ it.each(["cached", "fresh"] as const)(
       } finally {
         vi.restoreAllMocks();
       }
-      await store.retireSessionPlacementAsync({
+      const mutationStore =
+        mode === "fresh" ? createWorkerSessionPlacementStore({ database }) : store;
+      await mutationStore.retireSessionPlacementAsync({
         sessionId: "a",
         expectedState: "failed",
         expectedGeneration: failed.generation,
