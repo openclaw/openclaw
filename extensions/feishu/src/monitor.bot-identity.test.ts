@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { RuntimeEnv } from "../runtime-api.js";
@@ -46,6 +47,33 @@ afterEach(() => {
 });
 
 describe("Feishu bot identity recovery", () => {
+  it("discards a provider identity returned after recovery is aborted", async () => {
+    const result = createDeferred<{ botOpenId: string; source: "provider" }>();
+    fetchBotIdentityForMonitorMock.mockReturnValue(result.promise);
+    const runtime = createRuntimeSpies() satisfies RuntimeEnv;
+    const controller = new AbortController();
+
+    startBotIdentityRecovery({
+      account,
+      accountId: "person-2",
+      runtime,
+      abortSignal: controller.signal,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchBotIdentityForMonitorMock).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+    result.resolve({ botOpenId: "ou_stale", source: "provider" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(setFeishuBotIdentityStateMock).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("recovered via background retry"),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("bypasses cache and stops only after a provider-verified refresh", async () => {
     fetchBotIdentityForMonitorMock
       .mockResolvedValueOnce({ botOpenId: "ou_cached", source: "cache" })
