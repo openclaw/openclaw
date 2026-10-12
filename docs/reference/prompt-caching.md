@@ -62,6 +62,11 @@ and disambiguates repeated IDs deterministically. Changing result text or IDs
 between turns can invalidate an otherwise reusable provider prefix. Stable
 request inputs support cache reuse; actual hits still depend on the provider.
 
+Responses replay derives synthetic assistant message IDs from recorded source-turn
+identity when available. Retiring earlier history therefore preserves the IDs of
+retained failed-turn markers. Error diagnostics remain transcript metadata and do
+not enter the provider request.
+
 Internal browser conversations reuse their opaque session cache key for private
 subagent completions, so the completion does not switch to a different affinity
 key between chat turns. The key remains scoped to the agent, provider, model,
