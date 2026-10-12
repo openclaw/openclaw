@@ -113,10 +113,7 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   if (process.platform !== "win32" || !params.serviceEnv) {
     return undefined;
   }
-  const recovery = createWindowsTaskAutoStartRecovery({
-    ...params,
-    serviceEnv: params.serviceEnv,
-  });
+  const recovery = createWindowsTaskAutoStartRecovery({ ...params, serviceEnv: params.serviceEnv });
   let suspended: boolean;
   try {
     suspended = await recovery.suspended;
@@ -163,8 +160,8 @@ type ManagedServiceStopParams = {
   handoffRoot?: string;
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<
-    PreManagedServiceStop,
-    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
+    Partial<PreManagedServiceStop>,
+    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid" | "stopped"
   >;
   allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
@@ -292,7 +289,9 @@ async function stopManagedServiceBeforeMutableUpdate(
   // Re-reading through process.env can select a different raw systemd route
   // (for example after the service snapshot fills in an explicit unit/profile),
   // which invalidates the retained native binding before activation.
-  const serviceEnv = params.expectedService?.serviceEnv ?? process.env;
+  const expected = params.expectedService;
+  const serviceEnv = expected?.serviceEnv ?? process.env;
+  const inspecting = params.phase === "inspect";
   const serviceMutationSkipMessage =
     resolveGatewayServiceManagementBlockMessageForUpdate(serviceEnv);
   if (serviceMutationSkipMessage) {
@@ -303,6 +302,17 @@ async function stopManagedServiceBeforeMutableUpdate(
   try {
     const inspectedService = resolveGatewayService();
     service = inspectedService;
+    // Stable 2026.9.2/2026.9.3 handoffs predate serviceManagerUid. Their stopped
+    // native unit can already be collected when candidate validation reinspects it,
+    // so retain the installed updater's account as the native manager boundary.
+    const managerUid =
+      process.platform === "linux" &&
+      expected?.stopped === true &&
+      expected.serviceManagerUid === undefined &&
+      expected.serviceEnv &&
+      typeof process.geteuid === "function"
+        ? process.geteuid()
+        : (expected?.serviceManagerUid ?? undefined);
     for (let attempt = 0; ; attempt++) {
       const retryTimeout = process.platform === "win32" && attempt === 0;
       try {
@@ -311,9 +321,7 @@ async function stopManagedServiceBeforeMutableUpdate(
             inspectedService,
             serviceEnv,
             params.timeoutMs,
-            params.phase === "inspect"
-              ? undefined
-              : { managerUid: params.expectedService?.serviceManagerUid, assertCurrent },
+            inspecting && !params.assertCurrent ? undefined : { managerUid, assertCurrent },
           ),
         );
       } catch (error) {

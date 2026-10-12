@@ -9,6 +9,7 @@ import {
 import { resolveExecutablePath } from "./executable-path.js";
 import {
   openPackageActivationJournal,
+  packageActivationIdentity,
   assertPackageActivationOperation,
   assertPackageActivationLayout,
   resolvePackageActivationControl,
@@ -90,6 +91,72 @@ export function assertNoPendingPackageActivation(
   const record = openPackageActivationJournal(anchor).read();
   throw new Error(
     `Package publication recovery is pending. With an external Node, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+  );
+}
+
+/** Explicit repair retires untouched preparation under its original installation authority. */
+export async function settlePendingPackageActivation(installKey: string) {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (!fs.lstatSync(resolvePackageActivationJournalPath(anchor), { throwIfNoEntry: false })) {
+    readPackageActivationContinuation(installKey);
+    return undefined;
+  }
+  const journal = openPackageActivationJournal(anchor);
+  const admission = await journal.readForRecovery();
+  const initial = admission.record;
+  const publicationNotStarted =
+    initial.descriptor.authority.installKey === installKey &&
+    packageActivationIdentity(installKey, true) === initial.descriptor.previous.identity &&
+    ((initial.phase === "prepared" &&
+      initial.intent === null &&
+      initial.publications.length === 0) ||
+      initial.phase === "aborted");
+  if (!publicationNotStarted) {
+    // Preserve the shipped pending-publication refusal and completed-operation behavior.
+    assertNoPendingPackageActivation(installKey);
+    return undefined;
+  }
+  const assertPrevious = () => {
+    assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+    if (packageActivationIdentity(installKey, true) !== initial.descriptor.previous.identity) {
+      throw new Error("The installed package changed before preparation retirement.");
+    }
+  };
+  // Read-only admission rejects altered closure before acquiring the original writer.
+  await createPublicationOwner(
+    anchor,
+    journal,
+    assertPrevious,
+    initial,
+    admission.assertUnchanged,
+  ).preflight(initial.phase === "prepared" ? "repair" : "retire");
+  return withUpdateCommandExecutor(
+    randomUUID(),
+    async (executor) => {
+      const fence = await executor.enter(initial.descriptor.authority.installKey);
+      assertPrevious();
+      admission.admit(fence.assertCurrent);
+      journal.assertCurrent(initial);
+      const owner = createPublicationOwner(
+        anchor,
+        journal,
+        () => {
+          fence.assertCurrent();
+          assertPrevious();
+        },
+        initial,
+      );
+      if (initial.phase === "prepared") {
+        await owner.preflight("repair");
+        await owner.disarmRollback();
+      }
+      await owner.retire();
+      return {
+        operationId: initial.descriptor.operationId,
+        reason: "publication-not-started",
+      };
+    },
+    { existingAuthority: initial.descriptor.authority },
   );
 }
 

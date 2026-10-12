@@ -4,6 +4,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
@@ -12,6 +13,7 @@ import {
 import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   inspectUpdateRepairDriverAdmission,
   inspectNewerRecoveryHistory,
@@ -66,6 +68,16 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   const admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
+  }
+  if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
+    const settled = await settlePendingPackageActivation(
+      resolveUpdateInstallRoot(await resolveUpdateRoot()),
+    );
+    if (settled) {
+      defaultRuntime.error(
+        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. The original package and launchers remain unchanged.`,
+      );
+    }
   }
   // Capture Doctor-visible history before finalization admits its own newer run.
   // Terminal age limits the shortcut below, not successful repair acknowledgment.
