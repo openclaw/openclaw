@@ -1,5 +1,5 @@
 import {
-  loadTranscriptEventsSync,
+  loadTranscriptEvents,
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1112,7 +1112,7 @@ async function loadRuntimeParityCaptureSources(params: {
     }
     let transcriptBytes = "";
     try {
-      const events = loadTranscriptEventsSync({
+      const events = await loadTranscriptEvents({
         agentId: params.agentId,
         env,
         sessionId,

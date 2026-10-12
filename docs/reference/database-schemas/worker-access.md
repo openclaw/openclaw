@@ -26,6 +26,21 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Parent forks use the existing session-entry worker for both transcript copying
+and child-row commits. Internal fork transformations are data patches, not native
+callbacks. The writer reads the current parent and child once and merges the
+patch into the current child, preserving in-process updates made during backend
+preparation. A parent reset to an unrestored cold transcript may require a retry;
+it does not overwrite a newer child row.
+
+Accepted-input completion writes use the async pending-input owner. Public receipt
+reads, catalog pages and titles, terminal fallback-model reads, and durable
+post-lifecycle counts use the existing read workers. Catalog pages retain raw
+event identity and payload byte bounds. Released synchronous SDK readers remain
+deprecated compatibility paths; native incognito access and lifecycle rollback
+participants remain explicitly counted until their owning cutovers. These changes
+add no schema, retention, durability, or update migration.
+
 Cold session creation uses the existing session-entry worker for requested-key
 and parent lookups. Personal default selection reads profile links and its selected
 credential through the existing shared-state and auth-store readers; credential

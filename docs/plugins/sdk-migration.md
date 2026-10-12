@@ -93,11 +93,26 @@ their existing native in-memory owner until that owner's worker migration.
 ### Session and command preparation
 
 Use `getSessionEntryAsync`, `readSessionUpdatedAtAsync`,
-`getConversationSessionAsync`, and `readAmbientTranscriptWatermarkAsync` from
+`getConversationSessionAsync`, `readAmbientTranscriptWatermarkAsync`,
+`loadTranscriptEvents`, and `readTranscriptStatsAsync` from
 `openclaw/plugin-sdk/session-store-runtime` for ordinary session reads. The
 runtime equivalent is `api.runtime.agent.session.getSessionEntryAsync`. These
 operations read through the existing session worker and observe committed
 in-process writes. Missing entries remain `undefined`; read failures propagate.
+`loadTranscriptEventsSync` and `readTranscriptStatsSync` are deprecated; their
+awaited replacements preserve ordered events and transcript statistics while
+keeping durable reads off the Gateway thread.
+
+Await `UserTurnTranscriptRecorder.completeProcessingAsync(outcome)` to settle an
+accepted input through its session owner. The deprecated `completeProcessing`
+method returns an already settled result but refuses a new synchronous write
+with a warning and migration guidance. Recorders without an accepted input keep
+their existing no-op behavior.
+
+Use `readSessionTranscriptCatalogTitleAsync` from
+`openclaw/plugin-sdk/session-transcript-runtime` for catalog titles. The
+synchronous `readSessionTranscriptCatalogTitle` remains deprecated until the
+next Plugin SDK major.
 
 Use `resolveStoredModelOverrideAsync` and `resolveCommandArgMenuAsync` from
 `openclaw/plugin-sdk/command-auth-native` when preparing native commands.

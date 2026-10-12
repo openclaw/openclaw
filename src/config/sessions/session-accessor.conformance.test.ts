@@ -1425,7 +1425,6 @@ describe("sqlite session normalization", () => {
       parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
       sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
       storePath: paths.sqlitePath,
-      decisionSkipPatch: () => ({ forkedFromParent: true, updatedAt: 11 }),
     });
 
     expect(result).toMatchObject({
@@ -1435,11 +1434,7 @@ describe("sqlite session normalization", () => {
         status: "skip",
         reason: "parent-too-large",
       },
-      sessionEntry: {
-        forkedFromParent: true,
-        sessionId: "",
-        updatedAt: expect.any(Number),
-      },
+      sessionEntry: { sessionId: "", updatedAt: 1 },
     });
     if (result.status !== "skipped" || result.reason !== "decision-skip") {
       throw new Error(`expected decision-skip, got ${result.status}`);

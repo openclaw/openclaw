@@ -55,7 +55,7 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { readSessionFallbackModel } from "./session-fallback-model.js";
+import { readSessionFallbackModelAsync } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
 import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
@@ -237,7 +237,7 @@ export async function buildStatusReplyParts(
       sessionId: sessionEntry?.sessionId,
       sessionKeys: sessionKey ? [sessionKey] : [],
     }) === undefined
-      ? readSessionFallbackModel({
+      ? await readSessionFallbackModelAsync({
           ...modelParams,
           config: cfg,
           sessionScope: { agentId: statusAgentId, sessionKey, storePath },

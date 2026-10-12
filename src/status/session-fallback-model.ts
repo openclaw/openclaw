@@ -19,6 +19,43 @@ type SessionFallbackSource = {
   sessionScope?: Pick<SessionTranscriptReadScope, "agentId" | "sessionKey" | "storePath">;
 };
 
+/** Runtime callers prepare transcript facts through the history owner. */
+export async function readSessionFallbackModelAsync(
+  params: Parameters<typeof readSessionFallbackModel>[0],
+): Promise<SessionTerminalModel | undefined> {
+  const entry = params.sessionEntry;
+  if (
+    params.terminalModel !== undefined ||
+    !params.sessionScope?.sessionKey ||
+    !entry?.sessionId ||
+    entry.status !== "done" ||
+    !entry.lastRunId ||
+    !entry.fallbackNotice ||
+    normalizeOptionalString(entry.fallbackNotice.selectedModel) !==
+      resolveSelectedAndActiveModel(params).selected.label
+  ) {
+    return readSessionFallbackModel({ ...params, terminalModel: params.terminalModel ?? null });
+  }
+  let terminalModel: SessionTerminalModel | undefined;
+  try {
+    const { readSessionTranscriptBoundedMessageTailPageAsync } =
+      await import("../gateway/session-transcript-readers.js");
+    const page = await readSessionTranscriptBoundedMessageTailPageAsync(
+      { ...params.sessionScope, sessionId: entry.sessionId },
+      { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
+    );
+    terminalModel = selectSessionTerminalFallbackModel(entry, page.events[0]?.event);
+  } catch (error) {
+    if (
+      !isSessionTranscriptProjectionUnavailableError(error) &&
+      !(error instanceof SessionTranscriptStorageUnavailableError)
+    ) {
+      throw error;
+    }
+  }
+  return readSessionFallbackModel({ ...params, terminalModel: terminalModel ?? null });
+}
+
 /** Reads a terminal fallback model only when the run, selection, and notice agree. */
 export function readSessionFallbackModel(
   params: SessionFallbackSource & {

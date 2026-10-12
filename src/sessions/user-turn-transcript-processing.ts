@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-accessor.pending-inputs.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 /** Adapt the released synchronous callback only when no async companion is provided. */
@@ -39,25 +40,24 @@ export function createUserTurnProcessingCompletion(
     },
     getProcessingCompletion: () =>
       processingCompletion?.ok ? processingCompletion.value : readPendingInput()?.completion,
-    completeProcessing: (outcome: AgentRunTerminalOutcome) => {
-      const pendingInput = readPendingInput();
-      if (!pendingInput?.complete) {
+    completeProcessing: () => {
+      if (!readPendingInput()?.completeAsync) {
         return undefined;
       }
-      if (!processingCompletion) {
-        if (processingCompletionPromise) {
-          throw new Error("Input completion is pending; await completeProcessingAsync");
-        }
-        try {
-          processingCompletion = { ok: true, value: pendingInput.complete(outcome) };
-        } catch (error) {
-          processingCompletion = { ok: false, error };
-        }
+      warnPluginSdkDeprecation({
+        family: "session-input-completion",
+        method: "UserTurnTranscriptRecorder.completeProcessing",
+        replacement: "await UserTurnTranscriptRecorder.completeProcessingAsync(outcome)",
+        compatibility: "Completion writes require the asynchronous session owner.",
+        code: "DEP_SESSION_INPUT_COMPLETION",
+      });
+      if (processingCompletion?.ok) {
+        return processingCompletion.value;
       }
-      if (!processingCompletion.ok) {
+      if (processingCompletion && !processingCompletion.ok) {
         throw processingCompletion.error;
       }
-      return processingCompletion.value;
+      throw new Error("Input completion requires await completeProcessingAsync(outcome)");
     },
     completeProcessingAsync: (outcome: AgentRunTerminalOutcome) => {
       const pendingInput = readPendingInput();

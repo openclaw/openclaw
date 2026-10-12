@@ -139,9 +139,11 @@ export function assignSessionOwner(
       params.assertCurrent?.();
       if (
         params.expectedSessionId !== undefined &&
-        (isIncognitoOpenClawAgentSqlitePath(database.path, options)
-          ? readIncognitoSessionEntryCurrent(database.db, resolved.sessionKey)?.sessionId
-          : readSessionEntryInstanceId(database, resolved.sessionKey)) !== params.expectedSessionId
+        (params.expectedEntry
+          ? params.expectedEntry.sessionId
+          : isIncognitoOpenClawAgentSqlitePath(database.path, options)
+            ? readIncognitoSessionEntryCurrent(database.db, resolved.sessionKey)?.sessionId
+            : readSessionEntryInstanceId(database, resolved.sessionKey)) !== params.expectedSessionId
       ) {
         throw new Error("session changed before owner assignment");
       }

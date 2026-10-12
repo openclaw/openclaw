@@ -223,6 +223,15 @@ it("stages and settles an agent user-turn recorder without caller-thread SQL", a
         true,
       );
       expect(sql.queries).toEqual([]);
+      const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+      try {
+        expect(() =>
+          recorder.completeProcessing?.(buildAgentRunTerminalOutcome({ status: "ok" })),
+        ).toThrow("await completeProcessingAsync");
+      } finally {
+        warning.mockRestore();
+      }
+      expect(sql.queries).toEqual([]);
       const cancelledReceipt = await fixture.stage("cancelled");
       cancelled = cancelledReceipt;
       const outcome = buildAgentRunTerminalOutcome({ status: "ok" });

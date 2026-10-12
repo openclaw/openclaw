@@ -8,7 +8,7 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as transcriptTail from "../config/sessions/session-accessor.sqlite-active-events.js";
+import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
@@ -415,7 +415,7 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it("skips terminal transcript access for a stale selected notice", async () => {
-    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage");
+    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync");
     const parts = await renderTerminalFallback({
       entry: {
         fallbackNotice: {
@@ -594,10 +594,8 @@ describe("buildStatusText prepared context windows", () => {
     { error: new Error("unexpected reader failure"), unavailable: false },
   ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
     const readTail = vi
-      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
-      .mockImplementation(() => {
-        throw error;
-      });
+      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync")
+      .mockRejectedValue(error);
     const sessionEntry: InternalSessionEntry = {
       sessionId: "projection",
       updatedAt: 1,

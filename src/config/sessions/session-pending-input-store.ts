@@ -9,7 +9,6 @@ import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identi
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   openOpenClawAgentDatabase,
@@ -177,9 +176,6 @@ export async function preparePendingInputStore(
     guard: (stage: "transaction" | "commit", facts?: PendingInputCustodyGrant) => void,
   ) => {
     assertOpen();
-    if (actor) {
-      throw new IncognitoSessionSyncAccessError("complete", "completeAsync");
-    }
     return mutatePendingInput(
       input,
       {
@@ -300,8 +296,6 @@ export async function preparePendingInputStore(
         })(),
       );
     },
-    // Released synchronous recorder completion keeps its native visibility contract.
-    nativeMutation,
     mutate(
       input: PendingInputMutation,
       guard: (stage: "transaction" | "commit", facts?: PendingInputCustodyGrant) => void,

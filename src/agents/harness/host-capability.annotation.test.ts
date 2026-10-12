@@ -251,7 +251,7 @@ describe("host-owned current admission annotation", () => {
           });
           const persisted = expectDefined(await recorder.persistApproved(), "promoted input");
           const original = structuredClone(persisted.admission);
-          const consumptions = listSessionPendingInputReceipts(f.target, {
+          const consumptions = await listSessionPendingInputReceipts(f.target, {
             runIds: accepted.items.map((input) => input.runId),
           });
           expect(consumptions).toEqual(
@@ -289,7 +289,7 @@ describe("host-owned current admission annotation", () => {
             accepted.items.map((input) => input.message),
           );
           expect(
-            listSessionPendingInputReceipts(f.target, {
+            await listSessionPendingInputReceipts(f.target, {
               runIds: accepted.items.map((input) => input.runId),
             }),
           ).toEqual(consumptions);
