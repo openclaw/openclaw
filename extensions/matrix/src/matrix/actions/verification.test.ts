@@ -45,7 +45,7 @@ function expectResolvedActionClientReadinessNone(): void {
   expect(withResolvedActionClientMock.mock.calls[0]).toEqual([
     expect.objectContaining({ readiness: "none" }),
     expect.any(Function),
-    "discard",
+    "persist",
   ]);
 }
 

@@ -107,7 +107,7 @@ export function registerDatabaseCommand(program: Command): void {
     .command("preflight-agent")
     .description("Compare one copied agent SQLite file with this release's agent schema and owner")
     .argument("<path>", "explicit copied agent SQLite database path")
-    .requiredOption("--agent-id <id>", "exact canonical agent owner ID")
+    .requiredOption("--agent-id <id>", "exact agent owner ID")
     .option("--json", "emit machine-readable JSON", false)
     .action(runDatabasePreflight);
 

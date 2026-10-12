@@ -1,3 +1,5 @@
+import { inheritToolSchemaTruncation, wasToolSchemaTruncated } from "./tool-schema-depth.js";
+
 export type PreparedToolSchemaNormalization = {
   readonly source: object;
   readonly inputJson: string;
@@ -44,30 +46,44 @@ function createBoundedSchemaCache<T>(maxEntries: number) {
 /** Prepared variants cannot evict direct callers' identity-preserving cache entries. */
 export function createToolSchemaNormalizationCache<T>(maxEntries: number) {
   const directCache = createBoundedSchemaCache<T>(maxEntries);
-  const preparedCache = createBoundedSchemaCache<{ inputJson: string; outputJson: string }>(
-    maxEntries,
-  );
+  const preparedCache = createBoundedSchemaCache<{
+    inputJson: string;
+    inputTruncated: boolean;
+    outputJson: string;
+    truncated: boolean;
+  }>(maxEntries);
   return {
     get(source: object, key: string): T | undefined {
       const prepared = preparedSchemas?.get(source);
       if (!prepared) {
-        return directCache.get(source, key);
+        return inheritToolSchemaTruncation(source, directCache.get(source, key));
       }
       const entry = preparedCache.get(prepared.source, key);
-      return entry?.inputJson === prepared.inputJson
-        ? (JSON.parse(entry.outputJson) as T) // SAFETY: This pool stores only this normalizer's JSON schema output.
+      return entry?.inputJson === prepared.inputJson &&
+        entry.inputTruncated === wasToolSchemaTruncated(source)
+        ? inheritToolSchemaTruncation(
+            source,
+            JSON.parse(entry.outputJson) as T, // SAFETY: This pool stores only this normalizer's JSON schema output.
+            entry.truncated,
+          )
         : undefined;
     },
     remember(source: object, key: string, value: T): T {
+      const result = inheritToolSchemaTruncation(source, value);
       const prepared = preparedSchemas?.get(source);
       if (!prepared) {
-        return directCache.remember(source, key, value);
+        return directCache.remember(source, key, result);
       }
-      const outputJson = JSON.stringify(value);
+      const outputJson = JSON.stringify(result);
       if (outputJson !== undefined) {
-        preparedCache.remember(prepared.source, key, { inputJson: prepared.inputJson, outputJson });
+        preparedCache.remember(prepared.source, key, {
+          inputJson: prepared.inputJson,
+          inputTruncated: wasToolSchemaTruncated(source),
+          outputJson,
+          truncated: wasToolSchemaTruncated(result),
+        });
       }
-      return value;
+      return result;
     },
   };
 }

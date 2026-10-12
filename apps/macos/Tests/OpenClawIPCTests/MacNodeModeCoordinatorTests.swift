@@ -800,7 +800,9 @@ struct MacNodeModeCoordinatorTests {
             defaults: defaults,
             isExistingInstallation: false) == .primary)
     }
+}
 
+extension MacNodeModeCoordinatorTests {
     @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             cameraEnabled: false,
@@ -852,16 +854,12 @@ struct MacNodeModeCoordinatorTests {
             computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .local,
-            codexThreadCatalogEnabled: true,
-            claudeSessionCatalogEnabled: true)
+            codexThreadCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(!caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(!commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
         #expect(!commands.contains(MacNodeCodexThreadCatalogContract.turnsCommand))
-        #expect(!caps.contains(MacNodeClaudeSessionCatalogContract.capability))
-        #expect(!commands.contains(MacNodeClaudeSessionCatalogContract.listCommand))
-        #expect(!commands.contains(MacNodeClaudeSessionCatalogContract.readCommand))
     }
 
     @Test func `remote mode advertises native session catalogs`() {
@@ -870,8 +868,7 @@ struct MacNodeModeCoordinatorTests {
             computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .remote,
-            codexThreadCatalogEnabled: true,
-            claudeSessionCatalogEnabled: true)
+            codexThreadCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
@@ -889,9 +886,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: OpenClawSystemCommand.notify.rawValue,
             catalogAdvertised: false))
-        #expect(caps.contains(MacNodeClaudeSessionCatalogContract.capability))
-        #expect(commands.contains(MacNodeClaudeSessionCatalogContract.listCommand))
-        #expect(commands.contains(MacNodeClaudeSessionCatalogContract.readCommand))
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsClaudeCatalogInvoke(
             command: MacNodeClaudeSessionCatalogContract.listCommand,
             catalogAdvertised: true))
@@ -1054,7 +1048,9 @@ struct MacNodeModeCoordinatorTests {
             "codex",
             root: omittedByAllowlist))
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: omittedByAllowlist))
+    }
 
+    @Test func `Codex catalog activation normalizes plugin identifiers`() {
         let paddedIds: [String: Any] = [
             "plugins": [
                 "allow": [" codex "],

@@ -18,10 +18,7 @@ import type { ManagedServiceRootRedirect } from "./update-command-service-contex
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 
 type CapturedWriteOptions = Required<
-  Pick<
-    UpdateRunWriteOptions,
-    "env" | "context" | "assertCurrent" | "assertAccepting" | "retainSettlement"
-  >
+  Pick<UpdateRunWriteOptions, "env" | "context" | "assertAccepting" | "retainSettlement">
 > &
   Pick<UpdateRunWriteOptions, "requireNoRecovery" | "busyTimeoutMs">;
 

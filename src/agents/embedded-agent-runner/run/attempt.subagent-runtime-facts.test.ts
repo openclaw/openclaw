@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -107,6 +108,7 @@ describe("subagent facts through full attempt history preparation", () => {
     } satisfies SubagentRunRecord;
     registry.seedSubagentRunForReadTest(run);
     const queued = await captureAttempt(codeModeOverride, sessionStore);
+    expect(existsSync(storePath)).toBe(false);
     registry.seedSubagentRunForReadTest({
       ...run,
       execution: { status: "running", startedAt: Date.now() },

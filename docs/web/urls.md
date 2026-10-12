@@ -81,8 +81,9 @@ Incognito sessions always use the literal-key form, even when their keys end
 in a UUID. For example, an Incognito link looks like
 `/chat/main/dashboard/incognito-12345678-90ab-cdef-1234-567890abcdef`.
 Incognito sessions are excluded from short-id and display-name discovery;
-their exact links still require administrator access and work only while the
-session exists. Reopen an existing session from the sidebar to replace an old
+their exact links still require administrator access and can be reloaded while the
+session exists in the running Gateway. Reloading the browser does not end the
+session; restarting the Gateway does. Reopen an existing session from the sidebar to replace an old
 short-id link that reports **Session not found**.
 
 Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
@@ -234,7 +235,7 @@ access from this feature.
 A thread has one normal `/chat/<agentId>/<sessionRef>` URL for signed-in people
 and anonymous readers. Session creators and Gateway admins can open **Session
 sharing → Public access → Enable public access** to publish its existing and
-future conversation text. **Copy public link** copies the normal thread URL,
+future conversation, including images and tool-call summaries. **Copy public link** copies the normal thread URL,
 not a separate viewer address. The chat header shows **Public** while access is enabled.
 
 A signed-out visitor sees the public conversation with a **Log in** button.
@@ -250,7 +251,9 @@ was denied. Without JavaScript, the generic unavailable page remains readable.
 Token/password operators with a saved credential for this Gateway automatically
 continue into the Control UI when reopening, reloading, or following a chat link.
 The browser uses its session token or paired-device credential; passwords remain
-in memory only. This also works on loopback HTTP, which permits public readers.
+in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
+reloadable during Gateway updates; the temporary recovery marker is removed when
+the app starts.
 In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
 protected session-entry app document directly when reopening a chat deep link,
 without first loading the public reader or probing access. Registration is only
@@ -270,20 +273,19 @@ and you are its creator or a Gateway admin. See
 
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
-roster, send messages, invoke tools, or open private dashboards. It shows user
-messages and assistant final answers with Markdown formatting in the Control UI's
-chat layout and typeface, offers a copy control on code blocks, and closes with a
-short OpenClaw introduction for readers who are new to it. Tool output,
-reasoning, files, images, executable widgets, internal metadata, and hidden
-messages are omitted. Credential-pattern redaction is best effort, not a
-guarantee that sensitive prose is detected. Review the conversation before
-publishing and remember that future messages become public too.
+roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Reasoning, executable widgets, internal metadata, and hidden messages are omitted. Included text is not secret-masked. Review the conversation for credentials and other sensitive content before publishing; future messages become public too.
 
 The latest public view checks for updates approximately every 15 seconds while
 visible. **Older messages** opens earlier pages without automatic refresh;
-**Back to latest** returns to the live view. Pages and long messages are bounded,
-with visible omission notices. The initial conversation and social metadata
+**Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
+
+Public session links include a 1200 × 630 preview card with the session title and
+opening public request. When recorded worktree changes are already available,
+the card shows a work receipt with change counts and recorded PR/check details.
+Cards preserve included text without secret masking and never fetch Git or GitHub
+data; missing facts are omitted. Unavailable sessions use the generic OpenClaw card.
+Preview images may remain cached by a recipient for five minutes after revocation.
 
 Public reads wait for current sharing facts when a session changes during the
 request. If the page changes while it is being prepared, the reader can return a
@@ -581,7 +583,10 @@ The retired General route and its `/config` alias are replaced once with
 Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
 with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
 `?section=memory` are replaced once with the corresponding path while keeping
-any setting anchor.
+any setting anchor and other query parameters. Memory settings search adds
+`?advanced=1` when a matching field is advanced, opening the advanced group without changing
+the browser's saved advanced-settings preference. The same reveal survives a
+reload or an older Memory link that includes `advanced=1`.
 
 Plugin catalog tabs also use paths instead of `?tab=`. Older links with
 `?tab=discover|installed` are replaced once with the corresponding path while

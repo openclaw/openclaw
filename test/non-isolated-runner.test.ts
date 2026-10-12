@@ -600,7 +600,6 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
     await fs.writeFile(
       path.join(root, "vitest.config.ts"),
       `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};
-import { controlUiSolidPlugin } from ${JSON.stringify(path.join(repoRoot, "ui/vite.config.ts"))};
 import { defineConfig } from "vitest/config";
 import { BaseSequencer } from "vitest/node";
 class AlphabeticalSequencer extends BaseSequencer {
@@ -610,7 +609,7 @@ class AlphabeticalSequencer extends BaseSequencer {
 }
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
-  plugins: [...sharedVitestConfig.plugins, ...controlUiSolidPlugin()],
+  plugins: sharedVitestConfig.plugins,
   resolve: sharedVitestConfig.resolve,
   test: {
     name: "non-isolated-runner",

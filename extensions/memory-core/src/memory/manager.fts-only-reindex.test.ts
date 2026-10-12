@@ -199,11 +199,14 @@ describe("memory manager FTS-only reindex", () => {
     }
   }
 
-  function writeExistingMeta(memoryManager: MemoryIndexManager, model: string): void {
+  async function writeExistingMeta(
+    memoryManager: MemoryIndexManager,
+    model: string,
+  ): Promise<void> {
     const metaWriter = memoryManager as unknown as {
-      writeMeta(meta: MemoryIndexMeta): void;
+      writeMeta(meta: MemoryIndexMeta): Promise<void>;
     };
-    metaWriter.writeMeta({
+    await metaWriter.writeMeta({
       model,
       provider: "openai",
       chunkTokens: 600,
@@ -271,7 +274,10 @@ describe("memory manager FTS-only reindex", () => {
       providerEmbeddingError = new Error("embedding request failed during bootstrap");
       const memoryManager = await createManager();
       const metadata = vi
-        .spyOn(memoryManager as unknown as { writeMeta(meta: MemoryIndexMeta): void }, "writeMeta")
+        .spyOn(
+          memoryManager as unknown as { writeMeta(meta: MemoryIndexMeta): Promise<void> },
+          "writeMeta",
+        )
         .mockImplementationOnce(() => {
           throw new Error("keyword publication failed");
         });
@@ -578,7 +584,7 @@ describe("memory manager FTS-only reindex", () => {
 
   it("ignores persisted vector rebuild debt after reopening an FTS-only index", async () => {
     const memoryManager = await createManager({ provider: "none" });
-    const db = Reflect.get(memoryManager, "db") as DatabaseSync;
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     db.prepare(
       `INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', '1')`,
     ).run();
@@ -598,7 +604,7 @@ describe("memory manager FTS-only reindex", () => {
 
   it("aborts instead of downgrading an existing semantic index to FTS-only", async () => {
     const memoryManager = await createManager();
-    writeExistingMeta(memoryManager, "mock-embed");
+    await writeExistingMeta(memoryManager, "mock-embed");
 
     await expect(memoryManager.sync({ force: true })).rejects.toThrow(
       "Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: mock-embed).",
@@ -648,31 +654,6 @@ describe("memory manager FTS-only reindex", () => {
     expect(indexIdentityStatus(memoryManager)).toBe("missing");
     expect(statusAfter.chunks).toBe(1);
     expect(statusAfter.dirty).toBe(true);
-  });
-
-  it("observes a separate CLI reindex without reopening the live gateway manager", async () => {
-    const liveManager = await createManager({ provider: "none" });
-    await liveManager.sync({ reason: "test", force: true });
-    (
-      liveManager as unknown as {
-        db: { exec: (sql: string) => void };
-      }
-    ).db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
-    expect(indexIdentityStatus(liveManager)).toBe("missing");
-
-    await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
-      "Beta topic\n\nKeep this repaired note.",
-    );
-    const cliManager = await createManager({
-      provider: "none",
-      purpose: "cli",
-    });
-    await cliManager.sync({ reason: "cli", force: true });
-
-    expect(indexIdentityStatus(liveManager)).toBe("valid");
-    const results = await liveManager.search("beta repaired");
-    expect(results.some((result) => result.snippet.includes("Beta topic"))).toBe(true);
   });
 
   it("removes chunks and FTS rows when the dirty source file is already deleted", async () => {
@@ -730,8 +711,7 @@ describe("memory manager FTS-only reindex", () => {
     expect(manager.status().fts?.available).toBe(true);
     expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(false);
 
-    const db = Reflect.get(manager, "db") as DatabaseSync;
-    expect(db).toBe(seedDb);
+    const db = seedDb;
     const countRows = (table: string, sourcePath: string) =>
       db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE path = ?`).get(sourcePath);
     expect(

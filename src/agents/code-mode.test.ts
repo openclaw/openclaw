@@ -42,7 +42,7 @@ import { createReadTool, type ToolDefinition } from "./sessions/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
-import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
+import { addClientToolsToToolCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { createToolSurfacePresentationForTest } from "./tool-surface-plan.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -75,6 +75,22 @@ function indexOf(description: string) {
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
+  it("refreshes guest metadata after catalog replacement and restriction", async () => {
+    const { ctx, tools, exec } = catalog([fakeTool("lookup", "Original metadata")]);
+    const read = () => exec.execute("metadata", { code: "return catalog.all();" });
+    for (let i = 0; i < 2; i++) {
+      expect(resultDetails(await read()).value).toEqual([
+        expect.objectContaining({ callableName: "lookup", description: "Original metadata" }),
+      ]);
+    }
+    applyCodeModeCatalog({ ...ctx, tools: [...tools, fakeTool("lookup", "Updated metadata")] });
+    expect(resultDetails(await read()).value).toEqual([
+      expect.objectContaining({ callableName: "lookup", description: "Updated metadata" }),
+    ]);
+    restrictToolSearchCatalog({ ...ctx, allowedToolNames: new Set() });
+    expect(resultDetails(await read()).value).toEqual([]);
+  });
+
   it("removes shell-computation guidance when a client shadows the shell tool", () => {
     const { ctx, exec } = catalog([fakeTool("exec", "Run shell command")]);
     expect(exec.description).toContain("Use the shell tool `exec` for heavier computation");

@@ -36,6 +36,27 @@ function createNotifyUserRun() {
 }
 
 describe("executeAgentTurn: compaction events", () => {
+  it("warns about degraded compaction even when ordinary notices are disabled", async () => {
+    const onCompactionNoticePayload = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true, qualityDegraded: true },
+      });
+      return { payloads: [{ text: "continued" }], meta: {} };
+    });
+    const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
+    expect(result.kind).toBe("success");
+    expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: expect.stringContaining("Older details, exact identifiers, or pending requests"),
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: expect.stringContaining("/new or a larger model"),
+    });
+  });
   it("logs Codex app-server compaction completion while notices stay silent by default", async () => {
     const onBlockReply = vi.fn();
     const consoleLog = vi.fn();

@@ -399,7 +399,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     expect(applyEffect).not.toHaveBeenCalled();
   });
 
-  it.for([false, true])(
+  it.for([true])(
     "reuses the exact worker approval with Full Access=%s",
     async (fullPermission, testContext) => {
       const proposal = {

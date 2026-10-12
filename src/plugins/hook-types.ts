@@ -405,7 +405,9 @@ export type PluginHookReplyDispatchContext = {
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
   onReplyStart?: () => Promise<void> | void;
+  /** @deprecated Use onPreparedAgentRunStart. */
   onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+  onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
   userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
   /** Host-owned display facts applied before the assistant transcript is published. */
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;

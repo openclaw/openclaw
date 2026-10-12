@@ -524,7 +524,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         rowHeights.reduce((sum, height) => sum + height, 0) + gap * (rowHeights.length - 1);
       expect(gallery.getBoundingClientRect().height).toBeCloseTo(compactHeight, 1);
       if (withDocument) {
-        const parentGap = Number.parseFloat(getComputedStyle(gallery.parentElement!).rowGap);
+        const parentGap = Number.parseFloat(
+          getComputedStyle(gallery.closest(".chat-group-messages")!).rowGap,
+        );
         expect(
           file.getBoundingClientRect().top - gallery.getBoundingClientRect().bottom,
         ).toBeCloseTo(parentGap, 1);

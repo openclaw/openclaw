@@ -11,7 +11,6 @@ import {
   openThreadBindingsStoreAsync,
   removeBindingRecord,
   setBindingRecord,
-  type ThreadBindingPersistence,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
@@ -94,18 +93,12 @@ export async function commitBindingRecord(params: {
   minIntervalMs?: number;
   assertCurrent?: () => void;
 }): Promise<void> {
-  const revision = THREAD_BINDINGS_STATE.revision;
   let authorityRefused = false;
   let targetCommitted = false;
+  let committedWrites = 0;
   const assertCurrent = () => {
     try {
       params.assertCurrent?.();
-      if (
-        THREAD_BINDINGS_STATE.revision !== revision ||
-        BINDINGS_BY_THREAD_ID.get(params.bindingKey) !== params.previous
-      ) {
-        throw new Error("Discord thread binding changed during persistence");
-      }
     } catch (error) {
       authorityRefused = true;
       throw error;
@@ -128,27 +121,14 @@ export async function commitBindingRecord(params: {
     } else {
       records.delete(params.bindingKey);
     }
-    const active: ThreadBindingPersistence = {
-      targetKey: params.bindingKey,
-      deletingTarget: params.next === null,
-      nextRecord: params.next,
-      writingKey: undefined,
-      committedKeys: new Set<string>(),
-    };
-    THREAD_BINDINGS_STATE.activePersistence = active;
     try {
       const store = openThreadBindingsStoreAsync();
       // Preserve the namespace's registration order and bounded eviction recency.
       for (const [key, record] of records) {
         assertCurrent();
         const persisted = toPersistedBindingRecord(record);
-        if (key === params.bindingKey) {
-          active.nextRecord = persisted;
-        }
-        active.writingKey = key;
         await store.register(key, persisted, { assertCurrent });
-        active.writingKey = undefined;
-        active.committedKeys.add(key);
+        committedWrites += 1;
         targetCommitted ||= key === params.bindingKey;
       }
       assertCurrent();
@@ -156,10 +136,8 @@ export async function commitBindingRecord(params: {
       assertCurrent();
       for (const entry of entries) {
         if (!records.has(entry.key)) {
-          active.writingKey = entry.key;
           await store.delete(entry.key, { assertCurrent });
-          active.writingKey = undefined;
-          active.committedKeys.add(entry.key);
+          committedWrites += 1;
           targetCommitted ||= entry.key === params.bindingKey;
         }
       }
@@ -170,7 +148,6 @@ export async function commitBindingRecord(params: {
       THREAD_BINDINGS_STATE.loadedPersistentBindings = records.size > 0;
       THREAD_BINDINGS_STATE.lastPersistedAtMs = now;
     } catch (error) {
-      const committedWrites = active.committedKeys.size;
       let failure = error;
       if (!authorityRefused) {
         try {
@@ -200,14 +177,12 @@ export async function commitBindingRecord(params: {
         THREAD_BINDINGS_STATE.persistenceAvailable = false;
         logVerbose("discord thread binding persistence unavailable; keeping bindings in memory");
       }
-    } finally {
-      delete THREAD_BINDINGS_STATE.activePersistence;
     }
   }
   if (!targetCommitted) {
     assertCurrent();
   }
-  // A synchronous compatibility mutation may have consumed this committed result already.
+  // Deprecated synchronous calls overlapping worker writes are best effort.
   if (BINDINGS_BY_THREAD_ID.get(params.bindingKey) !== params.previous) {
     return;
   }
@@ -218,60 +193,22 @@ export async function commitBindingRecord(params: {
   }
 }
 
-function persistBindingsSync(
-  update?: {
-    bindingKey: string;
-    transform: (record: ThreadBindingRecord) => ThreadBindingRecord;
-    observe?: (record: ThreadBindingRecord | undefined) => void;
-  },
-  removedKey?: string,
-): ThreadBindingRecord | undefined {
+function persistBindingsSync(update?: {
+  bindingKey: string;
+  transform: (record: ThreadBindingRecord) => ThreadBindingRecord;
+}): ThreadBindingRecord | undefined {
   const store = openThreadBindingsStore();
-  const active = THREAD_BINDINGS_STATE.activePersistence;
   let updatedRecord: ThreadBindingRecord | undefined;
   for (const [key, record] of BINDINGS_BY_THREAD_ID) {
-    if (
-      key === update?.bindingKey ||
-      (active?.targetKey === key && active.deletingTarget) ||
-      active?.writingKey === key ||
-      active?.committedKeys.has(key)
-    ) {
+    if (key === update?.bindingKey) {
       if (!store.update) {
         throw new Error("Discord synchronous compatibility requires atomic state update");
       }
-      let next: ThreadBindingRecord | undefined;
-      store.update(key, (current) => {
-        let base: ThreadBindingRecord | undefined = record;
-        if (active?.targetKey === key) {
-          if (!current && active.deletingTarget) {
-            base = undefined;
-          } else if (
-            current &&
-            active.nextRecord &&
-            (active.writingKey === key || active.committedKeys.has(key)) &&
-            JSON.stringify(toPersistedBindingRecord(current)) ===
-              JSON.stringify(toPersistedBindingRecord(active.nextRecord))
-          ) {
-            // Native interop can observe a committed target before its worker reply arrives.
-            base = normalizePersistedBinding(key, current) ?? record;
-          }
-        }
-        if (key === update?.bindingKey) {
-          update.observe?.(current && normalizePersistedBinding(key, current) ? base : undefined);
-        }
-        next = base ? (key === update?.bindingKey ? update.transform(base) : base) : undefined;
-        return next ? toPersistedBindingRecord(next) : undefined;
-      });
-      if (key === update?.bindingKey) {
-        updatedRecord = next;
-      }
-      // No-op reconciliation must not revoke the admitted mutation's settlement authority.
-      if (next) {
-        if (next !== record) {
-          setBindingRecord(next);
-        }
-      } else if (!(active?.targetKey === key && active.deletingTarget)) {
-        removeBindingRecord(key);
+      const next = update.transform(record);
+      store.update(key, () => toPersistedBindingRecord(next));
+      updatedRecord = next;
+      if (next !== record) {
+        setBindingRecord(next);
       }
     } else {
       store.register(key, toPersistedBindingRecord(record));
@@ -279,13 +216,6 @@ function persistBindingsSync(
   }
   for (const entry of store.entries()) {
     if (!BINDINGS_BY_THREAD_ID.has(entry.key)) {
-      if (entry.key !== removedKey && active?.targetKey === entry.key && !active.deletingTarget) {
-        const committed = normalizePersistedBinding(entry.key, entry.value);
-        if (committed) {
-          setBindingRecord(committed);
-          continue;
-        }
-      }
       store.delete(entry.key);
     }
   }
@@ -309,18 +239,11 @@ export function updateBindingRecordSync(params: {
   const persist =
     params.persist &&
     THREAD_BINDINGS_STATE.persistenceAvailable &&
-    (THREAD_BINDINGS_STATE.activePersistence ||
-      !params.minIntervalMs ||
+    (!params.minIntervalMs ||
       now - THREAD_BINDINGS_STATE.lastPersistedAtMs >= params.minIntervalMs);
-  let observed: ThreadBindingRecord | undefined;
   if (persist) {
     try {
-      const updated = persistBindingsSync({
-        ...params,
-        observe: (current) => {
-          observed = current;
-        },
-      });
+      const updated = persistBindingsSync(params);
       return updated ?? null;
     } catch {
       THREAD_BINDINGS_STATE.persistenceAvailable = false;
@@ -331,11 +254,7 @@ export function updateBindingRecordSync(params: {
   if (current !== record) {
     return current ?? null;
   }
-  if (THREAD_BINDINGS_STATE.activePersistence?.targetKey === params.bindingKey && !observed) {
-    logVerbose("discord synchronous binding update skipped: pending target read unavailable");
-    return null;
-  }
-  const next = params.transform(observed ?? record);
+  const next = params.transform(record);
   setBindingRecord(next);
   return next;
 }
@@ -347,63 +266,17 @@ export function removeBindingRecordSync(bindingKey: string): ThreadBindingRecord
     return null;
   }
   if (!shouldPersistBindingMutations() || !THREAD_BINDINGS_STATE.persistenceAvailable) {
-    return THREAD_BINDINGS_STATE.activePersistence?.targetKey === bindingKey
-      ? null
-      : removeBindingRecord(bindingKey);
+    return removeBindingRecord(bindingKey);
   }
   let removed: ThreadBindingRecord | null = null;
-  let observed: ThreadBindingRecord | null = null;
-  let replacement: ThreadBindingRecord | undefined;
   try {
     const store = openThreadBindingsStore();
-    if (!store.deleteIf) {
-      throw new Error("Discord synchronous compatibility requires atomic state deletion");
-    }
-    const deleted = store.deleteIf(bindingKey, (current) => {
-      const normalized = normalizePersistedBinding(bindingKey, current);
-      observed = normalized;
-      const pending = THREAD_BINDINGS_STATE.activePersistence;
-      if (
-        normalized &&
-        pending?.targetKey === bindingKey &&
-        pending.nextRecord &&
-        (pending.writingKey === bindingKey || pending.committedKeys.has(bindingKey)) &&
-        JSON.stringify(toPersistedBindingRecord(normalized)) ===
-          JSON.stringify(toPersistedBindingRecord(pending.nextRecord)) &&
-        (normalized.targetSessionKey !== record.targetSessionKey ||
-          normalized.targetKind !== record.targetKind)
-      ) {
-        replacement = normalized;
-        return false;
-      }
-      return true;
-    });
-    if (replacement) {
-      setBindingRecord(replacement);
-      return null;
-    }
-    const pending = THREAD_BINDINGS_STATE.activePersistence;
-    if (!deleted && pending?.targetKey === bindingKey && pending.deletingTarget) {
-      // The admitted worker deletion owns settlement and its farewell, including a held reply.
-      return null;
-    }
+    store.delete(bindingKey);
     removed = removeBindingRecord(bindingKey);
-    persistBindingsSync(undefined, bindingKey);
+    persistBindingsSync();
     return removed;
   } catch {
     THREAD_BINDINGS_STATE.persistenceAvailable = false;
-    if (replacement) {
-      setBindingRecord(replacement);
-      return null;
-    }
-    if (
-      THREAD_BINDINGS_STATE.activePersistence?.targetKey === bindingKey &&
-      !observed &&
-      !removed
-    ) {
-      logVerbose("discord synchronous binding removal skipped: pending target read unavailable");
-      return null;
-    }
     return removed ?? removeBindingRecord(bindingKey);
   }
 }

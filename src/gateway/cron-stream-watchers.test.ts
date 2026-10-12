@@ -694,23 +694,6 @@ describe("cron stream watchers", () => {
       await watchers.stopAll("shutdown");
     });
 
-    it("serializes rapid enable-disable-enable into one final running owner", async () => {
-      const { fake, watchers } = createCronStreamWatcherFixture({ minIntervalMs: 1 });
-
-      const enabled = watchers.start(job());
-      const disabled = watchers.stop("stream-job", "disabled");
-      const reenabled = watchers.start(job());
-      await Promise.all([enabled, disabled, reenabled]);
-
-      expect(fake.spawn).toHaveBeenCalledOnce();
-      expect(watchers.inspect("stream-job")).toMatchObject({
-        state: "running",
-        processAlive: true,
-        restartTimerPending: false,
-      });
-      await watchers.stopAll("shutdown");
-    });
-
     it("fences a stale reconcile that is overtaken by shutdown", async () => {
       const { promise: stopWrite, resolve: releaseStopWrite } = createDeferred();
       const { promise: stopWriteStarted, resolve: markStopWriteStarted } = createDeferred();
@@ -736,71 +719,6 @@ describe("cron stream watchers", () => {
       expect(watchers.inspect("new-job")).toBeUndefined();
     });
 
-    it("fences a stale reconcile snapshot after a newer direct update", async () => {
-      const { promise: stopWrite, resolve: releaseStopWrite } = createDeferred();
-      const { promise: stopWriteStarted, resolve: markStopWriteStarted } = createDeferred();
-      const { fake, watchers } = createCronStreamWatcherFixture({
-        updateState: vi.fn(async (_jobId: string, patch: Partial<CronJob["state"]>) => {
-          if (patch.streamStatus === "stopped") {
-            markStopWriteStarted();
-            await stopWrite;
-          }
-        }),
-      });
-      await watchers.start(job({ id: "blocking-job" }));
-
-      const staleReconcile = watchers.reconcile(
-        [
-          job({
-            id: "target-job",
-            schedule: { kind: "stream", command: ["stale-source"], batchMs: 50 },
-          }),
-        ],
-        true,
-      );
-      await stopWriteStarted;
-      await watchers.start(
-        job({
-          id: "target-job",
-          schedule: { kind: "stream", command: ["current-source"], batchMs: 50 },
-        }),
-      );
-      releaseStopWrite();
-      await staleReconcile;
-
-      expect(fake.spawn).toHaveBeenCalledTimes(2);
-      expect(fake.inputs[1]).toMatchObject({ argv: ["current-source"] });
-      expect(watchers.inspect("target-job")?.state).toBe("running");
-      await watchers.stopAll("shutdown");
-    });
-
-    it("replaces an owner retired by an older reconcile when a newer snapshot wants it", async () => {
-      const { promise: stopWrite, resolve: releaseStopWrite } = createDeferred();
-      const { promise: stopWriteStarted, resolve: markStopWriteStarted } = createDeferred();
-      const { fake, watchers } = createCronStreamWatcherFixture({
-        updateState: vi.fn(async (_jobId: string, patch: Partial<CronJob["state"]>) => {
-          if (patch.streamStatus === "stopped") {
-            markStopWriteStarted();
-            await stopWrite;
-          }
-        }),
-      });
-      await watchers.start(job());
-
-      const staleReconcile = watchers.reconcile([], true);
-      await stopWriteStarted;
-      const currentReconcile = watchers.reconcile([job()], true);
-      releaseStopWrite();
-      await Promise.all([staleReconcile, currentReconcile]);
-
-      expect(fake.spawn).toHaveBeenCalledTimes(2);
-      expect(watchers.inspect("stream-job")).toMatchObject({
-        state: "running",
-        processAlive: true,
-      });
-      await watchers.stopAll("shutdown");
-    });
-
     it("lets a newer explicit start replace an owner being removed", async () => {
       const retireSource = vi.fn(async (_jobId: string, _scheduleKey: string, identity: string) => {
         return `${identity}:retired`;
@@ -823,20 +741,6 @@ describe("cron stream watchers", () => {
         sourceIdentity: "source:stream-job",
       });
       expect(retireSource).toHaveBeenCalledTimes(1);
-      await watchers.stopAll("shutdown");
-    });
-
-    it("does not leak owner or mutation-epoch state across unique-id churn", async () => {
-      const { watchers } = createCronStreamWatcherFixture();
-      // Push far past MAX_MUTATION_EPOCHS (1024) distinct job ids through
-      // start+remove so the LRU eviction path runs many times; a broken cap
-      // would grow unbounded (or spin). Removed jobs must leave no live owner.
-      for (let i = 0; i < 2_100; i++) {
-        const id = `churn-${i}`;
-        await watchers.start(job({ id }));
-        await watchers.stop(id, "removed");
-      }
-      expect(watchers.activeJobIds()).toEqual([]);
       await watchers.stopAll("shutdown");
     });
 

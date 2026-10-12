@@ -29,11 +29,11 @@ function placement(page: Page, label: string): Locator {
     .filter({
       has: page.locator(".settings-row__title", { hasText: label }),
     })
-    .locator("wa-switch");
+    .getByRole("switch");
 }
 
 async function checked(toggle: Locator): Promise<boolean> {
-  return toggle.evaluate((element) => "checked" in element && element.checked === true);
+  return toggle.isChecked();
 }
 
 async function openAppearance(page: Page) {
@@ -104,10 +104,13 @@ async function changePreference(
   await gateway.setMethodResponse("users.prefs.set", {
     cases: [{ match: params, response: { status: "ok" } }, { response: { status: "conflict" } }],
   });
+  await gateway.deferNext("users.prefs.set", params, { exactParams: true });
   await action();
   const request = await gateway.waitForRequest("users.prefs.set", { after });
   expect(request.params).toEqual(params);
   await updateSnapshot(gateway, preference, asset, mode);
+  // Successful writes are readable before the Gateway acknowledges the commit.
+  await gateway.resolveDeferred("users.prefs.set");
   await expect.poll(() => page.locator("[data-background-upload]").isEnabled()).toBe(true);
 }
 

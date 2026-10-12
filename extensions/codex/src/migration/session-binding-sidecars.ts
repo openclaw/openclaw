@@ -392,7 +392,7 @@ async function migrateSource(
       ]);
       const agentId =
         owner?.agentId ?? (source.agentIds.size === 1 ? [...source.agentIds][0] : undefined);
-      const baseStored = createStoredCodexAppServerBinding(raw, {
+      const baseStored = await createStoredCodexAppServerBinding(raw, {
         now: stat.mtime.toISOString(),
         lookup: {
           config: params.config,

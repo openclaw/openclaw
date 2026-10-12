@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -94,6 +95,41 @@ afterEach(() => {
 });
 
 describe("maintenance lease heartbeat", () => {
+  it.for([0, 1])("shares renewal without closing sibling lease %s", async (closing, { signal }) => {
+    await withOpenClawTestState({ label: "shared-lease-heartbeat" }, async (state) => {
+      const workers: Worker[] = [];
+      heartbeatWorkers.onCreate = (worker) => workers.push(worker);
+      const entered = [createDeferredCore(), createDeferredCore()];
+      const release = [createDeferredCore(), createDeferredCore()];
+      const leases: OpenClawStateLeaseContext[] = [];
+      const operations = [0, 1].map((index) =>
+        withOpenClawStateLease(
+          { ...options(state.env), key: `lease-${index}`, leaseMs: 10_000 },
+          async (lease) => {
+            leases[index] = lease;
+            entered[index]!.resolve();
+            await release[index]!.promise;
+          },
+        ),
+      );
+      void Promise.allSettled(operations);
+      try {
+        await withinTest(Promise.all(entered.map((entry) => entry.promise)), signal);
+        expect(workers).toHaveLength(1);
+        release[closing]!.resolve();
+        await withinTest(operations[closing]!, signal);
+        const sibling = leases[1 - closing]!;
+        sibling.renew?.();
+        expect(() => sibling.assertOwned()).not.toThrow();
+        expect(sibling.signal.aborted).toBe(false);
+      } finally {
+        release.forEach((entry) => entry.resolve());
+        await Promise.allSettled(operations);
+      }
+      expect(workers[0]?.threadId).toBe(-1);
+    });
+  });
+
   it("preserves a native renewal error through the real worker and lease rejection", async () => {
     await withOpenClawTestState({ label: "maintenance-renewal-error" }, async (state) => {
       const { db } = openOpenClawStateDatabase({ env: state.env });

@@ -1,11 +1,15 @@
 // Tests direct runtime config overrides passed into agent runner execution.
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -387,9 +391,8 @@ describe("runReplyAgent runtime config", () => {
           }),
         );
         const onBlockReply = vi.fn();
-        replyParams.opts = { onBlockReply };
-        const replyOperation = createReplyOperation();
-        replyParams.replyOperation = replyOperation;
+        const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => void>();
+        replyParams.opts = { onBlockReply, onReplyOperationOwned };
         executeAgentTurnMock.mockImplementation(async () => {
           expect(SessionManager.open(scope).buildSessionContext().messages).toEqual(
             messages.map((message) => expect.objectContaining(message)),
@@ -404,7 +407,7 @@ describe("runReplyAgent runtime config", () => {
 
         expect(result).toEqual({ text: "main reply" });
         expect(followupRun.run.sessionId).toBe(sessionEntry.sessionId);
-        expect(replyOperation.sessionId).toBe(sessionEntry.sessionId);
+        expect(onReplyOperationOwned.mock.calls[0]?.[0].sessionId).toBe(sessionEntry.sessionId);
         expect(loadSessionEntry(scope)).toMatchObject({
           sessionId: sessionEntry.sessionId,
           lifecycleRevision: sessionEntry.lifecycleRevision,
@@ -453,7 +456,7 @@ describe("runReplyAgent runtime config", () => {
         followupRun.run.provider = "anthropic";
         followupRun.run.model = "claude-sonnet-4-6";
         const abort = new AbortController();
-        const operationAbort = new AbortController();
+        const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => void>();
         const lifecycle = {
           admission: "exclusive" as const,
           abortSignal: abort.signal,
@@ -464,16 +467,11 @@ describe("runReplyAgent runtime config", () => {
           onAbandoned: vi.fn(),
         };
         followupRun.turnAdoptionLifecycle = lifecycle;
-        replyParams.opts = { turnAdoptionLifecycle: lifecycle };
+        replyParams.opts = { turnAdoptionLifecycle: lifecycle, onReplyOperationOwned };
         replyParams.sessionKey = sessionKey;
         replyParams.sessionEntry = sessionEntry;
         replyParams.sessionStore = { [sessionKey]: sessionEntry };
         replyParams.storePath = storePath;
-        replyParams.replyOperation = createMockReplyOperation({
-          key: "test",
-          sessionId: "session-1",
-          abortSignal: operationAbort.signal,
-        }).replyOperation;
         resolveQueuedReplyExecutionConfigMock.mockResolvedValue(
           withTestModelContextTokens({
             cfg: {},
@@ -501,7 +499,11 @@ describe("runReplyAgent runtime config", () => {
           expect(lifecycle.onAdopted).not.toHaveBeenCalled();
           expect(lifecycle.onDeferredHeartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
           if (outcome === "abort" || outcome === "operation abort") {
-            (outcome === "abort" ? abort : operationAbort).abort();
+            if (outcome === "abort") {
+              abort.abort();
+            } else {
+              expect(onReplyOperationOwned.mock.calls[0]?.[0].abortByUser()).toBe(true);
+            }
             lifecycle.onDeferredHeartbeat.mockClear();
             await vi.advanceTimersByTimeAsync(500);
             expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
@@ -573,15 +575,15 @@ describe("runReplyAgent runtime config", () => {
           replyParams.sessionEntry = sessionEntry;
           replyParams.sessionStore = { [sessionKey]: sessionEntry };
           replyParams.storePath = storePath;
-          replyParams.replyOperation = createReplyOperation();
-          resolveQueuedReplyExecutionConfigMock.mockResolvedValue(
-            withTestModelContextTokens({
-              cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-              followupRun,
-              defaultModel: replyParams.defaultModel,
-              contextTokens: 100_000,
-            }),
-          );
+          const cfg = withTestModelContextTokens({
+            cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+            followupRun,
+            defaultModel: replyParams.defaultModel,
+            contextTokens: 100_000,
+          });
+          resolveQueuedReplyExecutionConfigMock.mockResolvedValue(cfg);
+          setRuntimeConfigSnapshot(cfg);
+          onTestFinished(() => clearRuntimeConfigSnapshot());
           const entered = createDeferred();
           const release = createDeferred();
           runEmbeddedAgentMock.mockImplementationOnce(async () => {

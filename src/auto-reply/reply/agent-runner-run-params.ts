@@ -102,6 +102,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
   const { turn } = params;
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
+    awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),
@@ -111,6 +112,8 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoProgressState: params.fastModeAutoProgressState,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+    resolvedModelSelection: params.resolvedModelSelection,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     prompt: turn.commandBody,
     transcriptPrompt: turn.transcriptCommandBody,
     media: turn.followupRun.media,
@@ -121,8 +124,9 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     currentInboundContext: turn.followupRun.currentInboundContext,
     extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
     sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
-    // Omit false so heartbeat routes require explicit recipients without changing subagent defaults.
-    ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true as const } : {}),
+    ...(turn.isHeartbeat
+      ? { requireExplicitMessageTarget: turn.opts?.requireExplicitMessageTarget ?? true }
+      : {}),
     cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
     silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
     suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,

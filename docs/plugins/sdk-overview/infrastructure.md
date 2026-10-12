@@ -122,6 +122,13 @@ update warning; callers using only the existing synchronous guard remain support
 
 ### SQLite write admission
 
+For runtime storage, use the owning domain's awaited operations or
+`openOpenClawAgentSqliteWorkerStoreV2`; see
+[native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+The following `sqlite-runtime` callback helper is deprecated compatibility until
+the next Plugin SDK major. Awaiting admission does not move its SQL off the
+caller's thread.
+
 `runSqliteImmediateTransaction(db, prepare, options?)` from
 `openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
 the event loop. Its asynchronous `prepare` function may run more than once when
@@ -141,11 +148,43 @@ same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
 The callback and SQLite calls still run synchronously on the caller's thread.
 
-For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Inside a worker backend, `prepareSqliteQuerySync(db, build)` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` compiles a repeated fixed query's
 Kysely shape once and binds fresh parameters on each call. It uses the normal
 synchronous executor and the connection's bounded statement cache when enabled.
 Keep the prepared function with its database owner and discard it when closing
 the connection; transaction callbacks must remain synchronous.
+
+### Database engine adapters (experimental)
+
+Engine-aware stores use two narrow SDK entrypoints. Keep them on their owning
+side of the host/worker boundary:
+
+- `openclaw/plugin-sdk/database-engine-runtime` is host-only. Await
+  `resolveDatabaseEngineInput(config)` to resolve the configured connection secret,
+  then carry the resulting `DatabaseEngineInput` through the existing worker
+  input transport. `openEngineWorkerStore` opens the worker store and observes
+  its connection open, execute, and close requests. `runEngineStoreOperation`
+  wraps host-side store operations, preserving write admission,
+  current-authority checks, and worker-request observation without making the
+  store facade branch on the engine. This
+  entrypoint does not load the synchronous PostgreSQL bridge.
+- `openclaw/plugin-sdk/database-engine-worker-runtime` is worker/admission-only.
+  Call `openEngineStore` with the physical SQLite handle, `StoreSchema`, resolved
+  input, and the store's existing SQLite open and anchor-preparation callbacks.
+  `StoreSchema` declares the store ID, version, canonical SQLite DDL, and optional
+  generated PostgreSQL DDL. The owner selects the adapter, admits the physical
+  store once, and returns an `EngineConnection`. Use `runEngineStoreReadSnapshot`
+  for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
+  envelope using the kernel's transaction callback; SQLite executes the operation
+  directly. Keep the kernel's own write-transaction API atomic on both engines.
+
+The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
+`DatabaseEngineAdapter` types; it does not export a PostgreSQL connection
+constructor. Open physical connections through `openEngineStore`. A store
+without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store that
+fails admission never falls back. See [Database engines](/reference/database-engines)
+for configuration, supported stores, durability, anchors, and observation events.
 
 ### Worker task admission
 
@@ -240,6 +279,14 @@ it cannot safely interrupt a stuck native call. Native sections must therefore
 have bounded inputs and must not wait for network, user input, or unbounded work.
 
 ### SQLite worker stores
+
+For canonical agent databases, use `openOpenClawAgentSqliteWorkerStoreV2` with
+`{ version: 2, assertCurrent }`. It retains the existing agent execution owner,
+provides explicit worker-owned `prepare()` for creation, and checks live
+authority at transaction and commit admission. `executeExisting` leaves missing
+storage absent. See the [migration example](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+Released raw native callbacks retain their ordering and warn on use until their
+removal in the next Plugin SDK major.
 
 Use `openSqliteWorkerStore<Operations>` from
 `openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the

@@ -137,6 +137,9 @@ it.each(["creation", "fork"] as const)(
           );
         }
       }
+      if (operation === "fork") {
+        writeSessionEntry(original, childSessionKey, { sessionId: "original-child", updatedAt: 1 });
+      }
       const alias = state.statePath("selected");
       const heldAlias = state.statePath("selected-before");
       const linkType = process.platform === "win32" ? "junction" : "dir";

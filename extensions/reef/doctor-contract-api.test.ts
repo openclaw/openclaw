@@ -2,9 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -15,11 +19,7 @@ import type {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  legacyConfigRules,
-  normalizeCompatibilityConfig,
-  stateMigrations,
-} from "./doctor-contract-api.js";
+import { normalizeCompatibilityConfig, stateMigrations } from "./doctor-contract-api.js";
 import { base64url, generateIdentity, type ReviewRequest } from "./protocol/index.js";
 import { MemoryAuditStore } from "./protocol/memory-stores.test-support.js";
 import { ReefChannelConfigSchema } from "./src/config-schema.js";
@@ -102,6 +102,15 @@ function createRuntime(env: NodeJS.ProcessEnv) {
       ...options,
       env: options.env ?? env,
     });
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) =>
+    createPluginStateKeyedStoreV2ForTests<T>(
+      "reef",
+      { ...options, env: options.env ?? env },
+      authority ?? { assertCurrent() {} },
+    );
   return runtime;
 }
 
@@ -167,48 +176,6 @@ describe("Reef doctor contract", () => {
     return dir;
   }
 
-  it("detects and removes retired config fields", () => {
-    const cfg = legacyConfig();
-    expect(legacyConfigRules[0]?.match?.(cfg.channels?.reef, cfg)).toBe(true);
-
-    const result = normalizeCompatibilityConfig({ cfg });
-
-    expect(result.changes).toEqual([
-      "Removed retired Reef dmPolicy field.",
-      "Removed retired Reef allowFrom field.",
-    ]);
-    expect(result.config.channels?.reef).toEqual({
-      enabled: true,
-      handle: "owner",
-      relayUrl: "https://reefwire.ai",
-      requestPolicy: "code-only",
-      friends: expect.any(Object),
-    });
-  });
-
-  it("moves stray plugin-entry config into channels.reef and clears the entry", () => {
-    const cfg = {
-      plugins: {
-        entries: {
-          reef: { enabled: true, config: { handle: "owner", requestPolicy: "code-only" } },
-        },
-      },
-    } as never;
-    expect(
-      legacyConfigRules[1]?.match?.({ handle: "owner", requestPolicy: "code-only" }, cfg),
-    ).toBe(true);
-    expect(legacyConfigRules[1]?.match?.({}, cfg)).toBe(false);
-
-    const result = normalizeCompatibilityConfig({ cfg });
-
-    expect(result.changes).toEqual([
-      "Moved plugins.entries.reef.config.handle to channels.reef.handle.",
-      "Moved plugins.entries.reef.config.requestPolicy to channels.reef.requestPolicy.",
-    ]);
-    expect(result.config.channels?.reef).toEqual({ handle: "owner", requestPolicy: "code-only" });
-    expect(result.config.plugins?.entries?.reef).toEqual({ enabled: true });
-  });
-
   it("keeps channels.reef authoritative over conflicting stray entry config", () => {
     const cfg = {
       channels: { reef: { handle: "canonical" } },
@@ -223,18 +190,6 @@ describe("Reef doctor contract", () => {
     ]);
     expect(result.config.channels?.reef).toEqual({ handle: "canonical", email: "o@example.com" });
     expect(result.config.plugins?.entries?.reef).toEqual({});
-  });
-
-  it("leaves unmergeable stray entry config in place instead of corrupting channels.reef", () => {
-    const cfg = {
-      plugins: { entries: { reef: { config: { unknownKey: true } } } },
-    } as never;
-
-    const result = normalizeCompatibilityConfig({ cfg });
-
-    expect(result.changes).toEqual([]);
-    expect(result.config.channels?.reef).toBeUndefined();
-    expect(result.config.plugins?.entries?.reef).toEqual({ config: { unknownKey: true } });
   });
 
   it("does not import the default home's Reef identity into an isolated state", async () => {

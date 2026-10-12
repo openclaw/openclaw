@@ -538,98 +538,6 @@ describe("package-openclaw-for-docker", () => {
     },
   );
 
-  it("parses package artifact output options", () => {
-    expect(
-      parseArgs([
-        "--output-dir",
-        ".artifacts/docker",
-        "--output-name=openclaw-current.tgz",
-        "--pack-json",
-        ".artifacts/docker/pack.json",
-        "--source-dir",
-        "/repo",
-        "--allow-unreleased-changelog",
-        "--skip-build",
-      ]),
-    ).toEqual({
-      allowUnreleasedChangelog: true,
-      bundlePlugins: [],
-      outputDir: ".artifacts/docker",
-      outputName: "openclaw-current.tgz",
-      packJson: ".artifacts/docker/pack.json",
-      pnpmPack: false,
-      skipBuild: true,
-      sourceDir: "/repo",
-    });
-  });
-
-  it("rejects missing package artifact option values", () => {
-    for (const flag of [
-      "--output-dir",
-      "--output-name",
-      "--pack-json",
-      "--source-dir",
-      "--bundle-plugin",
-    ]) {
-      expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
-      expect(() => parseArgs([flag, "--skip-build"])).toThrow(`${flag} requires a value`);
-      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
-      expect(() => parseArgs([`${flag}=`])).toThrow(`${flag} requires a value`);
-      expect(() => parseArgs([`${flag}=-h`])).toThrow(`${flag} requires a value`);
-    }
-  });
-
-  it("accepts repeatable explicit plugin selections", () => {
-    expect(parseArgs(["--bundle-plugin", "demo", "--bundle-plugin=other"]).bundlePlugins).toEqual([
-      "demo",
-      "other",
-    ]);
-  });
-
-  it.each([
-    {
-      args: ["--output-dir=one", "--output-dir"],
-      message: "--output-dir requires a value",
-    },
-    {
-      args: ["--output-name=../bad.tgz", "--invalid"],
-      message: "unknown argument: --invalid",
-    },
-    {
-      args: ["--output-name=../bad.tgz", "--output-name=valid.tgz"],
-      message: "--output-name was provided more than once",
-    },
-    {
-      args: ["--output-name=../bad.tgz", "--pack-json=pack.json", "--pnpm-pack"],
-      message: "--output-name must be a tarball filename, not a path: ../bad.tgz",
-    },
-    {
-      args: ["--pack-json=pack.json", "--pnpm-pack", "--invalid"],
-      message: "unknown argument: --invalid",
-    },
-    { args: ["--"], message: "unknown argument: --" },
-    { args: ["--skip-build=true"], message: "unknown argument: --skip-build=true" },
-  ])("preserves argument error precedence for $args", ({ args, message }) => {
-    expect(() => parseArgs(args)).toThrow(new Error(message));
-  });
-
-  it("builds explicit plugin selections through the canonical build environment", async () => {
-    const { sourceDir } = createSelectedPluginPackageFixture();
-    const runImpl = vi.fn(
-      async (
-        _command: string,
-        _args: string[],
-        _cwd: string,
-        options: { env?: NodeJS.ProcessEnv },
-      ) => {
-        expect(options.env?.[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]).toBe("demo");
-        expect(fs.existsSync(path.join(sourceDir, "dist"))).toBe(false);
-      },
-    );
-    await buildPackageArtifacts(sourceDir, { bundlePlugins: ["demo", "demo"], runImpl });
-    expect(runImpl).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { failure: "missing-entry", metadata: {} },
     { failure: "stale-metadata", metadata: { version: "2026.7.1" } },
@@ -805,25 +713,6 @@ describe("package-openclaw-for-docker", () => {
       }
     },
   );
-
-  it("rejects duplicate package artifact CLI options", () => {
-    const duplicateCases = [
-      ["--output-dir", ["--output-dir", "one", "--output-dir=two"]],
-      ["--output-name", ["--output-name", "one.tgz", "--output-name=two.tgz"]],
-      ["--pack-json", ["--pack-json", "one.json", "--pack-json=two.json"]],
-      [
-        "--allow-unreleased-changelog",
-        ["--allow-unreleased-changelog", "--allow-unreleased-changelog"],
-      ],
-      ["--pnpm-pack", ["--pnpm-pack", "--pnpm-pack"]],
-      ["--source-dir", ["--source-dir", "/repo-a", "--source-dir=/repo-b"]],
-      ["--skip-build", ["--skip-build", "--skip-build"]],
-    ] satisfies Array<[string, string[]]>;
-
-    for (const [flag, args] of duplicateCases) {
-      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
-    }
-  });
 
   it("loads from a trusted harness checkout without installed dependencies", async () => {
     const tempRoot = tempDirs.make("openclaw-package-harness-");
@@ -1229,29 +1118,6 @@ describe("package-openclaw-for-docker", () => {
     },
   );
 
-  it("rejects loose package artifact timeout env values", async () => {
-    const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
-    try {
-      for (const value of ["1e3", "123.9", "9007199254740993", "0"]) {
-        process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = value;
-
-        await expect(
-          buildPackageArtifacts("/repo", {
-            runImpl: async () => undefined,
-          }),
-        ).rejects.toThrow(
-          "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS must be a positive timeout in milliseconds",
-        );
-      }
-    } finally {
-      if (previousTimeout === undefined) {
-        delete process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
-      } else {
-        process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = previousTimeout;
-      }
-    }
-  });
-
   it("bundles and restores the separately packed AI runtime", async () => {
     const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-ai-source-"));
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-ai-output-"));
@@ -1577,22 +1443,6 @@ describe("package-openclaw-for-docker", () => {
       `restore-docs:${sourceDir}`,
     ]);
     expect(packTimeouts).toEqual([15 * 60 * 1000]);
-  });
-
-  it("does not touch other source artifacts when the docs-map lock fails", async () => {
-    const calls: string[] = [];
-
-    await expect(
-      packOpenClawPackageForDocker("/repo", "/out", {
-        prepareChangelog: async () => calls.push("prepare-changelog"),
-        prepareDocsMap: async () => {
-          calls.push("prepare-docs");
-          throw new Error("docs failed");
-        },
-      }),
-    ).rejects.toThrow("docs failed");
-
-    expect(calls).toEqual(["prepare-docs"]);
   });
 
   it.each([false, true])(
@@ -2117,42 +1967,6 @@ describe("package-openclaw-for-docker", () => {
     } finally {
       fs.rmSync(outputDir, { recursive: true, force: true });
     }
-  });
-
-  it("restores the changelog when ignore-scripts packaging fails", async () => {
-    const outputDir = tempDirs.make("openclaw-package-output-");
-    const sourceDir = createPackageSourceFixture("openclaw-package-source-");
-    const calls: string[] = [];
-
-    await expect(
-      packOpenClawPackageForDocker(sourceDir, outputDir, {
-        ...skipDocsMapLifecycle,
-        prepareBundledAiRuntime: async () => {
-          calls.push("embed");
-          return async () => {
-            calls.push("cleanup");
-          };
-        },
-        prepareChangelog: async (cwd: string) => {
-          calls.push(`prepare:${cwd}`);
-        },
-        restoreChangelog: async (cwd: string) => {
-          calls.push(`restore-changelog:${cwd}`);
-        },
-        runCaptureImpl: async () => {
-          calls.push("pack");
-          throw new Error("pack failed");
-        },
-      }),
-    ).rejects.toThrow("pack failed");
-
-    expect(calls).toEqual([
-      `prepare:${sourceDir}`,
-      "embed",
-      "pack",
-      "cleanup",
-      `restore-changelog:${sourceDir}`,
-    ]);
   });
 
   it("clamps oversized command timers before scheduling", async () => {

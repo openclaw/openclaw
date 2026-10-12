@@ -20,10 +20,12 @@ import {
   saveSkillLibrary,
   mutateSkillLibrary,
 } from "../skills/library/service.js";
-import { resolveSkillLibraryActor } from "../skills/library/store.js";
+import { resolveSkillLibraryActorFromProfile } from "../skills/library/store.js";
 import { SkillLibraryError } from "../skills/skill-library-error.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { selectResolvedUserProfileMetadataById } from "../state/user-profiles-internal.js";
+import {
+  captureResidentUserProfileAccess,
+  readResidentUserProfileId,
+} from "../state/user-profile-list.js";
 import {
   activateLibrarySelection,
   libraryAuthority,
@@ -39,12 +41,8 @@ export function invalidateSkillAuthoringForOtherRequester(
 ): void {
   for (const grant of active.get(sessionKey) ?? []) {
     if (grant.profileId !== profileId) {
-      const db = openOpenClawStateDatabase().db;
-      if (
-        !profileId ||
-        selectResolvedUserProfileMetadataById(db, grant.profileId)?.id !==
-          selectResolvedUserProfileMetadataById(db, profileId)?.id
-      ) {
+      const canonical = readResidentUserProfileId(grant.profileId);
+      if (!profileId || !canonical || canonical !== readResidentUserProfileId(profileId)) {
         grant.revoke();
       }
     }
@@ -193,7 +191,14 @@ export async function prepareGatewaySkillAuthoring(
     },
     assertWorkspaceCurrent() {
       assertCurrent();
-      if (!resolveSkillLibraryActor(openOpenClawStateDatabase().db, authority).admin) {
+      const profile = captureResidentUserProfileAccess(profileId).readCurrentFacts();
+      if (
+        !resolveSkillLibraryActorFromProfile(authority, authority.getConfig(), {
+          id: profile.profileId,
+          role: profile.assignedRole,
+          githubLogin: profile.githubLogin,
+        }).admin
+      ) {
         throw new SkillLibraryError(
           "FORBIDDEN",
           "Workspace authoring requires current administrator authority.",

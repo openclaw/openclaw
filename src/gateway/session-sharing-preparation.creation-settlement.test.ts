@@ -1,4 +1,8 @@
+import { rmSync } from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { readAgentDeleteDatabaseRegistry } from "../agents/agent-delete-databases.js";
+import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   createSessionEntryWithTranscript,
@@ -10,6 +14,7 @@ import {
   writeSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   isSqliteWorkerError,
   type SqliteWorkerOperations,
@@ -30,6 +35,82 @@ import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 const unavailableMessage =
   "Session access facts are unavailable; retry after session storage is ready.";
+
+it.each(["planning", "settlement"] as const)(
+  "creates an unchanged agent session during another agent's creation and deletion %s",
+  async (phase) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = { agents: { entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const temporary = openOpenClawAgentDatabase({ agentId: "temporary-before" });
+      const sessionKey = "agent:main:unchanged-reload";
+      const scope = { agentId: "main", storePath: database.path, sessionKey };
+      await using storagePreparation = prepareSessionEntryMutationDatabases(
+        [{ scope, assertCurrent: () => {} }],
+        Promise.resolve(),
+      );
+      const storage = await storagePreparation.preparations[0]!;
+      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      let overlapped = false;
+      const discovery = vi
+        .spyOn(targetDiscoveryLane.pool, "run")
+        .mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          if (!overlapped) {
+            overlapped = true;
+            openOpenClawAgentDatabase({ agentId: "temporary-after" });
+            if (phase === "planning") {
+              await readAgentDeleteDatabaseRegistry({ env: state.env });
+            } else {
+              await withAgentDeletion(
+                temporary.agentId,
+                async (begin) => {
+                  const deletion = await begin({
+                    agentId: temporary.agentId,
+                    agentDir: path.dirname(temporary.path),
+                    workspaceDir: state.statePath("temporary-workspace"),
+                    sessionsDir: state.statePath("agents", temporary.agentId, "sessions"),
+                  });
+                  await closeOpenClawAgentDatabaseByPathAsync(temporary.path, temporary.agentId);
+                  rmSync(temporary.path);
+                  await deletion.finish({ unregisterDatabases: true });
+                },
+                { env: state.env },
+              );
+            }
+          }
+          return reply;
+        });
+      let releasePrepared: (() => void) | undefined;
+      try {
+        const prepared = await prepareSessionMutationFacts({
+          cfg,
+          sessionKey,
+          agentId: "main",
+          allowMissing: true,
+        });
+        releasePrepared = prepared.release;
+        expect(overlapped).toBe(true);
+        expect(prepared.readCurrent(cfg).target).toBeNull();
+        const created = await createSessionEntryWithTranscript(
+          scope,
+          () => ({ ok: true, entry: { sessionId: "unchanged-reload-session", updatedAt: 1 } }),
+          { bindCreation: prepared.bindCreation, commitGuard: () => storage.assertCurrent() },
+        );
+        expect(created).toMatchObject({ ok: true });
+        expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
+          "unchanged-reload-session",
+        );
+        expect(readTranscriptStorageRows(database, "unchanged-reload-session")).toHaveLength(1);
+      } finally {
+        releasePrepared?.();
+        discovery.mockRestore();
+      }
+    });
+  },
+);
 
 it.each([
   { native: "completed", broker: "unknown" },

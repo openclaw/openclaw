@@ -22,7 +22,6 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
 
 function captureStore() {
   const context = captureOpenClawStateWorkerContext();
-  context.admission.assertCurrent();
   const key = context.admission.coordinationKey;
   let store = stores.get(key);
   if (!store) {
@@ -71,7 +70,6 @@ export async function listWorkshopChanges(
     }
     throw error;
   }
-  context.admission.assertCurrent();
   return structuredClone(
     changes
       .filter(

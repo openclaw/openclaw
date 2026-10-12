@@ -12,7 +12,6 @@ import type {
   SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
-import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type {
   createSqliteWorkerTransferOwner,
@@ -24,7 +23,11 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
     ? Omit<Request, "id">
     : never
   : never;
-type DispatchState = { dispatched: boolean; openNotEntered?: boolean };
+type DispatchState = {
+  dispatched: boolean;
+  openNotEntered?: boolean;
+  openRefused?: boolean;
+};
 export type Job = {
   observation: WorkerRequestObservation;
   signal?: AbortSignal;
@@ -139,7 +142,6 @@ export type PreparedSqliteWorkerOpen = {
   onNativeLost?: (reason: Error) => void;
   signal?: AbortSignal;
   preparation?: Buffer;
-  runtimePreparation?: SqliteWorkerRuntimePreparation;
   runtimeGeneration?: RuntimeWorkerGeneration;
   carrierUrl: URL;
   expectedIdentity?: string;
@@ -149,6 +151,7 @@ export type PreparedSqliteWorkerOpen = {
   onNativeStopped?: (
     stopped: Promise<void>,
     readCloseReceipt: () => SqliteWorkerCloseReceipt | undefined,
+    readOpenRefused: () => boolean,
   ) => void;
   stateDatabasePath?: string;
   createAdmission?: SqliteWorkerAdmissionFactory;
@@ -175,7 +178,6 @@ export type SqliteWorkerOpenCustody = Pick<
   | "onNativeStopped"
   | "onNativeLost"
   | "signal"
-  | "runtimePreparation"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

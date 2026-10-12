@@ -414,6 +414,7 @@ export async function executeQueuedContextEngineCompaction(input: {
           result: {
             tokensBefore: committedCompaction.tokensBefore,
             tokensAfter: committedCompaction.tokensAfter,
+            details: committedCompaction.details,
           },
         };
       }

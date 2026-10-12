@@ -201,7 +201,7 @@ export async function setupChannels(
     if (existing && !forceReload) {
       return existing;
     }
-    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
+    const snapshot = await loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg: next,
       runtime,
       channel,

@@ -43,8 +43,8 @@ import {
 } from "./shared-client.js";
 import { createInferenceReadyClientHarness } from "./test-support.js";
 
-vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: () => false,
+vi.mock("./desktop-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./desktop-generation.js")>()),
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 

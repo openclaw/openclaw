@@ -10,10 +10,12 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
 import { clearRuntimeConfigSnapshot } from "../../config/io.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -166,6 +168,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     label: "worker-turn",
     layout: "state-only",
   });
+  await captureRuntimeConfigAsyncReader()();
   root = testState.root;
   database = openOpenClawStateDatabase({ env: testState.env });
   placements = createWorkerSessionPlacementStore({ database });
@@ -195,6 +198,7 @@ export function cleanupWorkerTurnLauncherTest(options: {
 export async function cleanupWorkerTurnLauncherTest(
   options: { reuseReadWorkers?: boolean } = {},
 ): Promise<void> {
+  await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
   clearRuntimeConfigSnapshot();

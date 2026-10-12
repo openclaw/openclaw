@@ -603,7 +603,9 @@ export async function runManagedCommand({
       }
       return signalExitCode(receivedSignal ?? error.signal);
     }
-    if (receivedSignal && hasProcessErrorCode(error, "ABORT_ERR")) {
+    // A caller can abort in its own OS signal handler. Preserve its cancellation
+    // result instead of treating the same signal as an unhandled interruption.
+    if (receivedSignal && !command.signal?.aborted && hasProcessErrorCode(error, "ABORT_ERR")) {
       return signalExitCode(receivedSignal);
     }
     throw error;

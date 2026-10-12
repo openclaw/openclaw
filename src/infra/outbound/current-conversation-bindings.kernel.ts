@@ -18,7 +18,6 @@ import {
   getSqliteReadOperationRevision,
   type SqliteReadOperationRevision,
 } from "../sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../sqlite-transaction.js";
 import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
 import type {
   CurrentConversationBindingBind,
@@ -87,6 +86,39 @@ function createCurrentConversationBindingQueries(db: DatabaseSync) {
       ? select.where("binding_id", "like", `${CURRENT_BINDINGS_ID_PREFIX}%`)
       : select;
     return {
+      bySessions: prepareSqliteQuerySync<
+        { targetSessionKeys: readonly string[]; scope?: CurrentConversationBindingScope },
+        CurrentConversationBindingRow
+      >(db, (parameter) => {
+        const keys = sqliteStringSetEntries(
+          parameter((params) => encodeSqliteStringSet(params.targetSessionKeys)),
+        ).as("requested");
+        return query
+          .where("target_session_key", "in", (eb) => eb.selectFrom(keys).select("requested.value"))
+          .where((eb) =>
+            eb.or([
+              eb(
+                parameter((params) => params.scope?.channel ?? null),
+                "is",
+                null,
+              ),
+              eb.and([
+                eb(
+                  parameter((params) => params.scope?.channel ?? null),
+                  "=",
+                  eb.ref("channel"),
+                ),
+                eb(
+                  parameter((params) => params.scope?.accountId ?? null),
+                  "=",
+                  eb.ref("account_id"),
+                ),
+              ]),
+            ]),
+          )
+          .orderBy("target_session_key", "asc")
+          .orderBy("binding_id", "asc");
+      }),
       bySession: prepareSqliteQuerySync<string, CurrentConversationBindingRow>(db, (parameter) =>
         query
           .where(
@@ -408,14 +440,12 @@ export function inspectCurrentConversationBindingRecordInDatabase(
   return inspectCurrentConversationBindingRecordsInDatabase(db, [conversation], now)[0] ?? null;
 }
 
-/** Higher-priority absences and later fallback rows must come from the same snapshot. */
+/** One statement selects higher-priority absences and fallback rows from the same snapshot. */
 export function readCurrentConversationBindingSelectionInDatabase(
   db: DatabaseSync,
   conversations: readonly ConversationRef[],
 ): Array<SessionBindingRecord | null> {
-  return runSqliteDeferredTransactionSync(db, () =>
-    inspectCurrentConversationBindingRecordsInDatabase(db, conversations),
-  );
+  return inspectCurrentConversationBindingRecordsInDatabase(db, conversations);
 }
 
 export function readCurrentConversationBindingResolutionInDatabase(
@@ -465,6 +495,40 @@ export function readCurrentConversationBindingListInDatabase(
     .map(bindingRowToRecord)
     .filter((record) => record !== null);
   return { records, requiresPrune: records.some((record) => isBindingExpired(record)) };
+}
+
+/** Read every requested target from one SQLite statement, preserving request order and duplicates. */
+export function readCurrentConversationBindingListsInDatabase(
+  db: DatabaseSync,
+  targetSessionKeys: readonly string[],
+  scope?: CurrentConversationBindingScope,
+): Array<{ records: SessionBindingRecord[]; requiresPrune: boolean }> {
+  if (targetSessionKeys.length === 0) {
+    return [];
+  }
+  const normalizedScope = scope
+    ? normalizeConversationRef({ ...scope, conversationId: "binding-scope" })
+    : undefined;
+  const queries = getCurrentConversationBindingQueries(db);
+  const rows = (scope ? queries.all : queries.generic).bySessions({
+    targetSessionKeys,
+    scope: normalizedScope,
+  }).rows;
+  const bySession = new Map<string, CurrentConversationBindingRow[]>();
+  for (const row of rows) {
+    let group = bySession.get(row.target_session_key);
+    if (!group) {
+      group = [];
+      bySession.set(row.target_session_key, group);
+    }
+    group.push(row);
+  }
+  return targetSessionKeys.map((key) => {
+    const records = (bySession.get(key) ?? [])
+      .map(bindingRowToRecord)
+      .filter((record) => record !== null);
+    return { records, requiresPrune: records.some((record) => isBindingExpired(record)) };
+  });
 }
 
 /** Reread after writer admission; malformed rows keep the same expiry-triggered repair contract. */

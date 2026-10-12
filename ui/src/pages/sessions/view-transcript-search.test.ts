@@ -1,9 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import { buildMultiResult, buildProps } from "./view.test-support.ts";
-import { renderSessions } from "./view.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  disposeSessionViews,
+  renderSessionsView,
+  buildMultiResult,
+  buildProps,
+} from "./view.test-support.tsx";
+
+afterEach(disposeSessionViews);
 
 describe("sessions transcript search view", () => {
   it.each([true, false])(
@@ -12,15 +17,15 @@ describe("sessions transcript search view", () => {
       const container = document.createElement("div");
       const onTranscriptSearchChange = vi.fn();
       const onTranscriptSearch = vi.fn();
-      render(
-        renderSessions({
+      renderSessionsView(
+        {
           ...buildProps(buildMultiResult([])),
           searchQuery: "agent label",
           transcriptSearchAvailable: available,
           transcriptSearchQuery: available ? "  exact phrase  " : "hidden",
           onTranscriptSearchChange,
           onTranscriptSearch,
-        }),
+        },
         container,
       );
       await Promise.resolve();
@@ -54,8 +59,8 @@ describe("sessions transcript search view", () => {
   it("renders transcript provenance and opens the matching session", async () => {
     const container = document.createElement("div");
     const onNavigateToChat = vi.fn();
-    render(
-      renderSessions({
+    renderSessionsView(
+      {
         ...buildProps(
           buildMultiResult([
             {
@@ -86,7 +91,7 @@ describe("sessions transcript search view", () => {
           archivedTranscriptsExcluded: 0,
         },
         onNavigateToChat,
-      }),
+      },
       container,
     );
     await Promise.resolve();
@@ -126,10 +131,10 @@ describe("Sessions query clearing", () => {
       };
       const onSearchChange = vi.fn((query: string) => {
         props.searchQuery = query;
-        render(renderSessions({ ...props, onSearchChange }), container);
+        renderSessionsView({ ...props, onSearchChange }, container);
       });
       try {
-        render(renderSessions({ ...props, onSearchChange }), container);
+        renderSessionsView({ ...props, onSearchChange }, container);
         const input = container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
         expect(input.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
         const clear = container.querySelector<HTMLButtonElement>(
@@ -197,7 +202,7 @@ describe("Sessions query clearing", () => {
     const props = { ...buildProps(buildMultiResult([])), searchQuery: "keep me", onSearchChange };
     let overlay: HTMLElement | undefined;
     try {
-      render(renderSessions(props), container);
+      renderSessionsView(props, container);
       const input = container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
       if (owner !== "unfocused") {
         input.focus();

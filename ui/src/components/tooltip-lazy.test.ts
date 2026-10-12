@@ -19,6 +19,40 @@ describe("lazy tooltip materialization", () => {
     vi.restoreAllMocks();
   });
 
+  it("waits for the nested popup to render before opening", async () => {
+    await import("@awesome.me/webawesome/dist/components/tooltip/tooltip.js");
+    const popupReady = createDeferred();
+    const scheduled = createDeferred();
+    const popupPrototype = customElements.get("wa-popup")!.prototype as {
+      scheduleUpdate: () => void | Promise<unknown>;
+    };
+    const scheduleUpdate = popupPrototype.scheduleUpdate;
+    vi.spyOn(popupPrototype, "scheduleUpdate").mockImplementation(async function (
+      this: typeof popupPrototype,
+    ) {
+      scheduled.resolve();
+      await popupReady.promise;
+      return scheduleUpdate.call(this);
+    });
+    const { tooltip, trigger } = createTooltip("Delayed popup details");
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(150);
+    await scheduled.promise;
+    await tooltip.updateComplete;
+    await webAwesomeTooltip(tooltip)?.updateComplete;
+    const popup = webAwesomeTooltip(tooltip)!;
+    try {
+      expect(popup.open).toBe(false);
+    } finally {
+      popupReady.resolve();
+      await popup.popup.updateComplete;
+      await settleTooltip(tooltip);
+    }
+    expect(popup.open).toBe(true);
+  });
+
   it("materializes on first hover intent and reuses the popup while preserving descriptions", async () => {
     const { tooltip, trigger } = createTooltip("Hover details");
     const untouched = createTooltip("Untouched details");

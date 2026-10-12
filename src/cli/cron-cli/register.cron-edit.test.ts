@@ -73,6 +73,15 @@ describe("cron edit", () => {
     ],
     [["--trigger-script", "", "--clear-trigger"], "--trigger-script must not be blank"],
     [["--script", " ", "--pacing-min", "30m"], "--script must not be blank"],
+    [["--session", "main", "--message", "resume"], 'sessionTarget "main" requires'],
+    [
+      ["--session", "current", "--system-event", "resume"],
+      'sessionTarget "current" cannot run systemEvent: systemEvent only runs in the main session',
+    ],
+    [
+      ["--session", "session:agent:main:conversation", "--script", "missing.js"],
+      'sessionTarget "session:agent:main:conversation" cannot run script payloads',
+    ],
     [["--tools", "", "--clear-tools", "--pacing-min", "30m"], "Use --tools or --clear-tools"],
     [["--agent", "main", "--clear-agent"], "Use --agent or --clear-agent"],
     [
@@ -104,17 +113,28 @@ describe("cron edit", () => {
     [["--on-exit-cwd", "/repo"], "--on-exit-cwd requires --on-exit"],
     [["--on-exit", "./watch.sh", "--every", "5m"], "Choose at most one schedule change"],
     [["--pacing-min", "30m", "--thread-id", "topic-42"], "--thread-id must be a positive integer"],
+    [["--cron", "9am standup with the team today"], "Invalid cron expression"],
   ] as const)("rejects %j before Gateway access", async (args, message) => {
     await reject(["edit", "job-1", ...args], message);
   });
 
-  it("rethrows contradictory options in JSON mode before RPC", async () => {
+  it.each([
+    [["--enable", "--disable"], "Choose --enable or --disable, not both"],
+    [
+      ["--session", "main", "--message", "resume"],
+      'cron sessionTarget "main" requires payload.kind="systemEvent" or "script"; agent turns use "isolated", "current", or "session:<key>"',
+    ],
+  ])("keeps edit guidance for %j in JSON mode before RPC", async (args, message) => {
     const argv = process.argv;
-    process.argv = ["node", "openclaw", "cron", "edit", "job-1", "--json"];
+    const commandArgs = ["edit", "job-1", ...args, "--json"];
+    process.argv = [...argv.slice(0, 2), "cron", ...commandArgs];
     try {
-      await expect(edit(["--enable", "--disable", "--json"])).rejects.toThrow(
-        "Choose --enable or --disable, not both",
-      );
+      const failure = await run(commandArgs).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ExpectedCliError);
+      expect(formatCliJsonFailure(failure)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message },
+      });
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       process.argv = argv;
@@ -322,6 +342,21 @@ describe("cron edit", () => {
 });
 
 describe("automation mutation options", () => {
+  it("uses target-specific guidance when adding a system event to a conversation", async () => {
+    await reject(
+      [
+        ...addArgs,
+        "--at",
+        "+3m",
+        "--session",
+        "session:agent:main:conversation",
+        "--system-event",
+        "resume",
+      ],
+      'sessionTarget "session:agent:main:conversation" cannot run systemEvent: systemEvent only runs in the main session',
+    );
+  });
+
   it.each([
     ["add", ["--at", "2030-01-01T09:00:00", "--tz", "Invalid/Timezone"], "Invalid --tz"],
     ["add", ["--at", "2030-01-01T09:00:00Z", "--tz", "Invalid/Timezone"], "Invalid --tz"],
@@ -383,6 +418,22 @@ describe("automation mutation options", () => {
       "--timeout-seconds is not supported for systemEvent jobs.",
     );
   });
+
+  it.each([
+    [
+      ["9am standup with the team today"],
+      'Invalid cron expression "9am standup with the team today". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".',
+    ],
+    [
+      ["--cron", "9am standup"],
+      'Invalid cron expression "9am standup". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".',
+    ],
+  ] as const)(
+    "rejects an unparseable cron schedule %j on creation before RPC",
+    async (args, expected) => {
+      await reject([...addArgs, ...args, "--message", "run"], expected);
+    },
+  );
 
   const cwdCases = [
     { flag: "--command-cwd", args: ["--every", "1m", "--command", "pwd"], target: "payload" },

@@ -260,7 +260,7 @@ export function hasVerifiedRequesterCompletionHandoff(
     | "preparedSessionCapabilityStore"
   >,
 ): boolean {
-  const delegatedPolicy = resolveDelegatedPolicy(params, undefined);
+  const delegatedPolicy = resolveDelegatedPolicy(params, params.preparedSessionCapabilityStore);
   return delegatedPolicy.delegated && delegatedPolicy.source === "completion-handoff";
 }
 

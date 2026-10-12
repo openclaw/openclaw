@@ -1,9 +1,9 @@
 import {
   createChannelApprovalCapability,
-  createApproverRestrictedNativeApprovalCapability,
+  createApproverRestrictedNativeApprovalCapabilityAsync,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelNativeOriginTargetResolver,
@@ -26,7 +26,6 @@ import {
   getMatrixExecApprovalApprovers,
   isMatrixAnyApprovalClientEnabled,
   isMatrixApprovalClientEnabled,
-  isMatrixExecApprovalClientEnabled,
   isMatrixExecApprovalAuthorizedSender,
   resolveMatrixExecApprovalTarget,
   shouldHandleMatrixApprovalRequest,
@@ -129,19 +128,8 @@ function resolveSuppressionAccountId(params: {
   );
 }
 
-const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
+const resolveMatrixOriginTargetBase = createChannelNativeOriginTargetResolver({
   channel: "matrix",
-  shouldHandleRequest: ({ cfg, accountId, approvalKind, request }) => {
-    if (approvalKind !== "exec" && approvalKind !== "plugin" && approvalKind !== "system-agent") {
-      return false;
-    }
-    return shouldHandleMatrixApprovalRequest({
-      cfg,
-      accountId,
-      approvalKind,
-      request,
-    });
-  },
   resolveTurnSourceTarget: resolveTurnSourceMatrixOriginTarget,
   resolveSessionTarget: resolveSessionMatrixOriginTarget,
   normalizeTargetForMatch: normalizeMatrixOriginTarget,
@@ -160,13 +148,25 @@ const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
   },
 });
 
-function resolveMatrixApproverDmTargets(params: {
+async function resolveMatrixOriginTarget(
+  params: Parameters<typeof resolveMatrixOriginTargetBase>[0],
+) {
+  const approvalKind = params.approvalKind;
+  if (!approvalKind) {
+    return null;
+  }
+  return (await shouldHandleMatrixApprovalRequest({ ...params, approvalKind }))
+    ? resolveMatrixOriginTargetBase(params)
+    : null;
+}
+
+async function resolveMatrixApproverDmTargets(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
-}): { to: string }[] {
-  if (!shouldHandleMatrixApprovalRequest(params)) {
+}): Promise<{ to: string }[]> {
+  if (!(await shouldHandleMatrixApprovalRequest(params))) {
     return [];
   }
   return getMatrixApprovalApprovers(params)
@@ -177,7 +177,7 @@ function resolveMatrixApproverDmTargets(params: {
     .filter((target): target is { to: string } => target !== null);
 }
 
-const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
+const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCapabilityAsync({
   channel: "matrix",
   channelLabel: "Matrix",
   describeExecApprovalSetup: ({
@@ -203,14 +203,15 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
       senderId,
       approvalKind: "plugin",
     }),
-  isNativeDeliveryEnabled: isMatrixExecApprovalClientEnabled,
+  isNativeDeliveryEnabled: ({ approvalKind, ...params }) =>
+    isMatrixApprovalClientEnabled({ ...params, approvalKind: approvalKind ?? "exec" }),
   resolveNativeDeliveryMode: resolveMatrixExecApprovalTarget,
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId,
   resolveOriginTarget: resolveMatrixOriginTarget,
   resolveApproverDmTargets: resolveMatrixApproverDmTargets,
   notifyOriginWhenDmOnly: true,
-  nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+  nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
     capabilityBoundary: true,
     eventKinds: ["exec", "plugin", "system-agent"],
     isConfigured: isMatrixAnyApprovalClientEnabled,
@@ -222,14 +223,16 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
 const splitMatrixApprovalCapability = splitChannelApprovalCapability(
   matrixNativeApprovalCapability,
 );
-const matrixBaseNativeApprovalAdapter = splitMatrixApprovalCapability.native;
+const matrixBaseNativeApprovalAdapter = splitMatrixApprovalCapability.nativeAsync;
 const matrixBaseDeliveryAdapter = splitMatrixApprovalCapability.delivery;
 type MatrixForwardingSuppressionParams = Parameters<
-  NonNullable<NonNullable<typeof matrixBaseDeliveryAdapter>["shouldSuppressForwardingFallback"]>
+  NonNullable<
+    NonNullable<typeof matrixBaseDeliveryAdapter>["shouldSuppressForwardingFallbackAsync"]
+  >
 >[0];
 const matrixDeliveryAdapter = matrixBaseDeliveryAdapter && {
   ...matrixBaseDeliveryAdapter,
-  shouldSuppressForwardingFallback: (params: MatrixForwardingSuppressionParams) => {
+  shouldSuppressForwardingFallbackAsync: async (params: MatrixForwardingSuppressionParams) => {
     const accountId = resolveSuppressionAccountId(params);
     if (
       !hasMatrixApprovalApprovers({
@@ -248,39 +251,16 @@ const matrixDeliveryAdapter = matrixBaseDeliveryAdapter && {
       return (
         targetChannel === "matrix" &&
         turnSourceChannel === "matrix" &&
-        shouldHandleMatrixApprovalRequest({
+        (await shouldHandleMatrixApprovalRequest({
           cfg: params.cfg,
           accountId,
           approvalKind: "plugin",
           request: params.request,
-        })
+        }))
       );
     }
-    return matrixBaseDeliveryAdapter.shouldSuppressForwardingFallback?.(params) ?? false;
+    return matrixBaseDeliveryAdapter.shouldSuppressForwardingFallbackAsync?.(params) ?? false;
   },
-};
-const matrixNativeAdapter = matrixBaseNativeApprovalAdapter && {
-  describeDeliveryCapabilities: (
-    params: Parameters<typeof matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities>[0],
-  ) => {
-    const capabilities = matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities(params);
-    const hasApprovers = hasMatrixApprovalApprovers({
-      cfg: params.cfg as CoreConfig,
-      accountId: params.accountId,
-      approvalKind: params.approvalKind,
-    });
-    const clientEnabled = isMatrixApprovalClientEnabled({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      approvalKind: params.approvalKind,
-    });
-    return {
-      ...capabilities,
-      enabled: hasApprovers && clientEnabled,
-    };
-  },
-  resolveOriginTarget: matrixBaseNativeApprovalAdapter.resolveOriginTarget,
-  resolveApproverDmTargets: matrixBaseNativeApprovalAdapter.resolveApproverDmTargets,
 };
 
 export const matrixApprovalCapability = createChannelApprovalCapability({
@@ -320,14 +300,16 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
       }
     );
   },
-  getExecInitiatingSurfaceState: (
-    params: Parameters<NonNullable<ChannelApprovalCapability["getExecInitiatingSurfaceState"]>>[0],
+  getExecInitiatingSurfaceStateAsync: async (
+    params: Parameters<
+      NonNullable<ChannelApprovalCapability["getExecInitiatingSurfaceStateAsync"]>
+    >[0],
   ) =>
-    matrixNativeApprovalCapability.getExecInitiatingSurfaceState?.(params) ??
+    (await matrixNativeApprovalCapability.getExecInitiatingSurfaceStateAsync?.(params)) ??
     ({ kind: "disabled" } as const),
   describeExecApprovalSetup: matrixNativeApprovalCapability.describeExecApprovalSetup,
   delivery: matrixDeliveryAdapter,
-  nativeRuntime: matrixNativeApprovalCapability.nativeRuntime,
-  native: matrixNativeAdapter,
+  nativeRuntimeAsync: matrixNativeApprovalCapability.nativeRuntimeAsync,
+  nativeAsync: matrixBaseNativeApprovalAdapter,
   render: matrixNativeApprovalCapability.render,
 });

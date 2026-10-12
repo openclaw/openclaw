@@ -225,7 +225,7 @@ describe("Codex plugin command context", () => {
     expect(test.request).toHaveBeenCalledWith(
       "account/login/start",
       expect.objectContaining({ type: "chatgptAuthTokens" }),
-      { assertCurrent: undefined },
+      expect.objectContaining({ assertCurrent: undefined }),
     );
     expect(test.release).toHaveBeenCalledOnce();
   });
@@ -352,6 +352,7 @@ describe("Codex plugin command context", () => {
           });
         }
         await vi.advanceTimersByTimeAsync(response === "overload" ? 1_000 : 0);
+        await pending;
         expect(test.harness.writes).toHaveLength(2);
         expect(String(failure)).toContain(
           change === "session"

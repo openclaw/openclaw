@@ -125,7 +125,6 @@ function repairMalformedOwnershipClaim(
       database,
       () => {
         assertStateDatabaseAccessAllowed(databasePath);
-        assertOpenClawStateDatabaseForMaintenance(database, { pathname: databasePath });
         return claimOwnershipRow(database, databasePath, managerId, true);
       },
       {

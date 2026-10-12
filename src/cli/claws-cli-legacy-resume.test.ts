@@ -35,6 +35,11 @@ vi.mock("../runtime.js", async () => ({
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   getRuntimeConfig: mocks.loadConfig,
+  loadConfig: mocks.loadConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.loadConfig>) =>
+    async () =>
+      mocks.loadConfig(...args),
 }));
 vi.mock("../config/mcp-config.js", () => ({
   listConfiguredMcpServers: mocks.listConfiguredMcpServers,

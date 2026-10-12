@@ -143,11 +143,7 @@ export function getCustomProviderApiKey(
   if (!ref) {
     return normalizeOptionalSecretInput(providerConfig?.apiKey);
   }
-  if (ref.source === "env") {
-    const envId = ref.id.trim();
-    return envId || NON_ENV_SECRETREF_MARKER;
-  }
-  return NON_ENV_SECRETREF_MARKER;
+  return (ref.source === "env" && ref.id.trim()) || NON_ENV_SECRETREF_MARKER;
 }
 
 type ResolvedCustomProviderApiKey = {
@@ -380,14 +376,7 @@ function canUseProfileAsProviderEntryApiKey(params: {
   if (!isBearerProfileCredential(params.credential)) {
     return false;
   }
-  if (
-    isStoredCredentialCompatibleWithAuthProvider({
-      cfg: params.cfg,
-      authAliasLookupParams: params.authAliasLookupParams,
-      provider: params.provider,
-      credential: params.credential,
-    })
-  ) {
+  if (isStoredCredentialCompatibleWithAuthProvider(params)) {
     return true;
   }
   // Split-provider entries may intentionally point at the same upstream endpoint

@@ -105,9 +105,6 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Sync yield harness does not acquire embedding providers");
   };
-  protected releaseProvider(): never {
-    throw new Error("Sync yield harness does not own embedding providers");
-  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";

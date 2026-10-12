@@ -454,27 +454,19 @@ it.each(["recorded source", "linked checkout source"] as const)(
   },
 );
 
-it.each(["standalone replacement", "broken pointer"] as const)(
-  "keeps idle %s contents purgeable when no shared source metadata resolves",
-  async (kind) => {
-    const root = tempDirs.make("openclaw-eviction-unresolved-own-metadata-");
-    const record = {
-      id: "owned",
-      path: path.join(root, "owned"),
-      repoRoot: path.join(root, "missing-source"),
-    };
-    if (kind === "standalone replacement") {
-      await requireGit(root, ["init", "--template=", "-b", "main", record.path]);
-    } else {
-      await fs.mkdir(record.path);
-      await fs.writeFile(path.join(record.path, ".git"), "gitdir: missing-metadata\n");
-    }
-    await fs.writeFile(path.join(record.path, "unsaved.txt"), "eligible idle bytes\n");
-    vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
-    await purgeWorktreeCheckout(record, [record]);
-    await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
+it("keeps an idle standalone replacement purgeable when no shared source metadata resolves", async () => {
+  const root = tempDirs.make("openclaw-eviction-unresolved-own-metadata-");
+  const record = {
+    id: "owned",
+    path: path.join(root, "owned"),
+    repoRoot: path.join(root, "missing-source"),
+  };
+  await requireGit(root, ["init", "--template=", "-b", "main", record.path]);
+  await fs.writeFile(path.join(record.path, "unsaved.txt"), "eligible idle bytes\n");
+  vi.spyOn(workerContext, "requestGitWorkerEffect").mockResolvedValue(undefined);
+  await purgeWorktreeCheckout(record, [record]);
+  await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+});
 
 it.each([true, false])(
   "preserves its own source relocated inside the checkout during admission (registered=%s)",

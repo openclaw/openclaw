@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -6,7 +7,10 @@ import {
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
 import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
-import { resolveCurrentConversationSession } from "../config/sessions/conversation-registry.js";
+import {
+  resolveCurrentConversationSession,
+  resolveCurrentConversationSessionAsync,
+} from "../config/sessions/conversation-registry.js";
 import {
   resolveExplicitSessionStorePathForScope,
   resolveSessionStorePathCore,
@@ -34,19 +38,25 @@ import {
   type SessionEntryPatchAuthority,
 } from "../config/sessions/session-entry-patch-authority.js";
 import { preserveGenerationPrivateFields } from "../config/sessions/session-entry-public-patch.js";
-import { readSessionUpdatedAtInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntrySummariesInWorker,
+  readSessionUpdatedAtInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   sessionEntryCommitGuardOptions,
 } from "../config/sessions/session-source-authority.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
+  getSessionEntryAsync,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
   type SessionStoreEntrySummary,
@@ -165,7 +175,7 @@ export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | 
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
-/** Reads the current session binding of one canonical transport address. */
+/** @deprecated Use getConversationSessionAsync. Removed at the next Plugin SDK major. */
 export function getConversationSession(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
@@ -176,18 +186,39 @@ export function getConversationSession(params: {
   peerId: string;
   threadId?: string;
 }): { sessionKey: string; sessionId: string } | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-conversation",
+    method: "getConversationSession",
+    replacement: "getConversationSessionAsync",
+  });
   const identity = buildConversationIdentity({ ...params, deliveryTarget: params.peerId });
   return identity ? resolveCurrentConversationSession(params, identity.conversationRef) : undefined;
+}
+
+/** Reads the current binding of one canonical transport address off the Gateway thread. */
+export async function getConversationSessionAsync(
+  params: Parameters<typeof getConversationSession>[0],
+): Promise<{ sessionKey: string; sessionId: string } | undefined> {
+  const identity = buildConversationIdentity({ ...params, deliveryTarget: params.peerId });
+  return identity
+    ? resolveCurrentConversationSessionAsync(params, identity.conversationRef)
+    : undefined;
 }
 
 /**
  * Lists session entries for one agent. `readOnly` reads without joining the
  * agent database writable lifecycle (no create/register/migrate) — required
  * for detection/introspection paths that may run across the whole fleet.
+ * @deprecated Use listSessionEntriesAsync for metadata reads; removed in the next Plugin SDK major.
  */
 export function listSessionEntries(
   params: SessionStoreListParams & { readOnly?: boolean } = {},
 ): SessionStoreEntrySummary[] {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "listSessionEntries",
+    replacement: "listSessionEntriesAsync",
+  });
   const list = params.readOnly ? listAccessorSessionEntriesReadOnly : listAccessorSessionEntries;
   return list({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
@@ -202,23 +233,76 @@ export function listSessionEntries(
   }));
 }
 
-/** Reads transcript events for a live SQLite-backed session identity. */
-export const loadTranscriptEventsSync: (params: {
-  agentId?: string;
+/** Lists public session metadata without hydrating saved prompts or opening a writable database. */
+export async function listSessionEntriesAsync(params: {
+  agentId: string;
   env?: NodeJS.ProcessEnv;
-  sessionId: string;
-  sessionKey?: string;
   storePath?: string;
-}) => SessionStoreTranscriptEvent[] = loadAccessorTranscriptEventsSync;
+}): Promise<SessionStoreEntrySummary[]> {
+  const entries = await readSessionEntrySummariesInWorker({
+    ...params,
+    storePath: params.storePath ?? resolveSessionStorePathCore(undefined, params),
+  });
+  return entries.map(({ sessionKey, entry }) => ({
+    sessionKey,
+    entry: projectPluginSessionEntry(entry),
+  }));
+}
 
-/** Reads transcript freshness and byte size without materializing event rows. */
-export const readTranscriptStatsSync: (params: {
+type SessionStoreTranscriptReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}) => { eventCount: number; maxSeq: number; sizeBytes: number } = readAccessorTranscriptStatsSync;
+};
+
+/** @deprecated Use loadTranscriptEvents; removed in the next Plugin SDK major. */
+function loadTranscriptEventsSyncLegacy(
+  params: SessionStoreTranscriptReadParams,
+): SessionStoreTranscriptEvent[] {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "loadTranscriptEventsSync",
+    replacement: "loadTranscriptEvents",
+  });
+  return loadAccessorTranscriptEventsSync(params);
+}
+
+/** Reads ordered transcript events through the session owner's worker. */
+export function loadTranscriptEvents(
+  params: SessionStoreTranscriptReadParams,
+): Promise<SessionStoreTranscriptEvent[]> {
+  return loadSessionTranscriptEvents(params);
+}
+
+export { loadTranscriptEventsSyncLegacy as loadTranscriptEventsSync };
+
+/** @deprecated Use readTranscriptStatsAsync; removed in the next Plugin SDK major. */
+function readSessionStoreTranscriptStatsSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): { eventCount: number; maxSeq: number; sizeBytes: number } {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-store",
+      method: "readTranscriptStatsSync",
+      replacement: "readTranscriptStatsAsync",
+    });
+  }
+  return readAccessorTranscriptStatsSync(params);
+}
+
+/** Reads transcript statistics through the existing session worker. */
+export const readTranscriptStatsAsync: (
+  params: Parameters<typeof readSessionStoreTranscriptStatsSync>[0],
+) => Promise<ReturnType<typeof readSessionStoreTranscriptStatsSync>> =
+  readAccessorTranscriptStatsAsync;
+
+export { readSessionStoreTranscriptStatsSync as readTranscriptStatsSync };
 
 /** Resolves the persisted session key for one SQLite transcript identity. */
 export { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";
@@ -346,10 +430,23 @@ export function readSessionUpdatedAtAsync(
 export { resolveAmbientTranscriptWatermarkKey, updateAmbientTranscriptWatermark };
 export type { AmbientTranscriptWatermarkScope };
 
+/** @deprecated Use readAmbientTranscriptWatermarkAsync. Removed at the next Plugin SDK major. */
 export function readAmbientTranscriptWatermark(
   params: ReadAmbientTranscriptWatermarkParams,
 ): AmbientTranscriptWatermark | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "readAmbientTranscriptWatermark",
+    replacement: "readAmbientTranscriptWatermarkAsync",
+  });
   return readAmbientTranscriptWatermarkFromEntry(getSessionEntry(params), params.key);
+}
+
+/** Reads the transcript watermark through the session owner's worker. */
+export async function readAmbientTranscriptWatermarkAsync(
+  params: ReadAmbientTranscriptWatermarkParams,
+): Promise<AmbientTranscriptWatermark | undefined> {
+  return readAmbientTranscriptWatermarkFromEntry(await getSessionEntryAsync(params), params.key);
 }
 
 /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */

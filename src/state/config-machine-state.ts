@@ -17,14 +17,20 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 type ConfigMachineStateReadCommand = Extract<
   OpenClawStateReadCommand,
-  { type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath" }
+  {
+    type:
+      | "nodeHost.config"
+      | "cron.store"
+      | "hooks.internal.installs"
+      | "operator.channelPolicy"
+      | "tts.prefsPath"
+      | "voicewake.triggers"
+      | "voicewake.routing";
+  }
 >;
 
 export function isConfigMachineStateReadCommand(
@@ -32,15 +38,19 @@ export function isConfigMachineStateReadCommand(
 ): command is ConfigMachineStateReadCommand {
   return (
     command.type === "nodeHost.config" ||
+    command.type === "cron.store" ||
+    command.type === "hooks.internal.installs" ||
     command.type === "operator.channelPolicy" ||
-    command.type === "tts.prefsPath"
+    command.type === "tts.prefsPath" ||
+    command.type === "voicewake.triggers" ||
+    command.type === "voicewake.routing"
   );
 }
 
 export function readConfigMachineStateCommandInDatabase(
   database: DatabaseSync,
   command: ConfigMachineStateReadCommand,
-): Extract<OpenClawStateReadResult, { type: ConfigMachineStateReadCommand["type"] }> {
+) {
   return {
     type: command.type,
     // Activation may precede deferred publication; never issue authority before v19.
@@ -126,35 +136,11 @@ export function readConfigMachineStateRowInDatabase(database: DatabaseSync, key:
       .select(["value_json", "updated_at_ms"])
       .where("state_key", "=", stateKey),
   );
-  // Workers return cold reads to the host; a concurrent host write must win installation.
+  // This host read is synchronous; worker results install through getTtsMachinePathAdmission.
   if (isMainThread) {
-    const published =
-      stateKey === "tts.prefsPath"
-        ? getSqliteDatabaseAdmission(database, ttsPathAdmission)
-        : undefined;
-    if (published) {
-      return published.row;
-    }
     publishConfigMachineStateRow(database, stateKey, row);
   }
   return row;
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
-export function readConfigMachineStateWithMetadata<T>(
-  key: string,
-  options: OpenClawStateDatabaseOptions = {},
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
-): { value: T; updatedAtMs: number } | undefined {
-  const read = ({ db: database }: { db: DatabaseSync }) => {
-    const row = readConfigMachineStateRowInDatabase(database, key);
-    return row
-      ? { value: JSON.parse(row.value_json) as T, updatedAtMs: row.updated_at_ms }
-      : undefined;
-  };
-  return behavior.artifactPreservingReadOnly
-    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, options)
-    : withExistingOpenClawStateDatabaseReadOnly(read, options);
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Callers own the JSON shape for open-ended state keys.
@@ -163,5 +149,12 @@ export function readConfigMachineState<T>(
   options: OpenClawStateDatabaseOptions = {},
   behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): T | undefined {
-  return readConfigMachineStateWithMetadata<T>(key, options, behavior)?.value;
+  const read = ({ db: database }: { db: DatabaseSync }) => {
+    const row = readConfigMachineStateRowInDatabase(database, key);
+    // SAFETY: Each key's owner defines its persisted JSON shape.
+    return row ? (JSON.parse(row.value_json) as T) : undefined;
+  };
+  return behavior.artifactPreservingReadOnly
+    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, options)
+    : withExistingOpenClawStateDatabaseReadOnly(read, options);
 }

@@ -1,4 +1,4 @@
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
@@ -91,7 +91,7 @@ export function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolea
   return true;
 }
 
-export function resolveMatrixSharedDmContextNotice(params: {
+export async function resolveMatrixSharedDmContextNotice(params: {
   storePath: string;
   sessionKey: string;
   roomId: string;
@@ -99,7 +99,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
   dmSessionScope?: "per-user" | "per-room";
   sentRooms: Set<string>;
   logVerboseMessage: (message: string) => void;
-}): string | null {
+}): Promise<string | null> {
   if ((params.dmSessionScope ?? "per-user") === "per-room") {
     return null;
   }
@@ -109,7 +109,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
 
   try {
     const currentSession = resolveMatrixStoredSessionMeta(
-      getSessionEntry({
+      await getSessionEntryAsync({
         storePath: params.storePath,
         sessionKey: params.sessionKey,
       }),

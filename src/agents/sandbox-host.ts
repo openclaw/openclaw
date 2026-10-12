@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
-  COMMAND_PALETTE_SHORTCUT,
+  COMMAND_PALETTE_SHORTCUTS,
   createKeyboardShortcutMatcher,
 } from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
@@ -44,7 +44,7 @@ function buildSandboxShortcutBridgeHtml(): string {
   const HTMLElementType=HTMLElement;
   const fields=["key","code","keyCode","isComposing","metaKey","ctrlKey","altKey","shiftKey"];
   const getters=fields.map(name=>descriptor(KeyboardEvent.prototype,name).get);
-  const combo=${JSON.stringify(COMMAND_PALETTE_SHORTCUT)};
+  const combos=${JSON.stringify(COMMAND_PALETTE_SHORTCUTS)};
   const matcher=(${createKeyboardShortcutMatcher.toString()})();
   const applePlatform=matcher.isApplePlatform();
   let nonce="";
@@ -66,7 +66,12 @@ function buildSandboxShortcutBridgeHtml(): string {
     if(!nonce||!event.isTrusted||apply(preventedGetter,event,[])||apply(repeatGetter,event,[]))return;
     const snapshot=create(null);
     for(let index=0;index<fields.length;index++)snapshot[fields[index]]=apply(getters[index],event,[]);
-    if(!matcher.matchesKeyboardShortcut(combo,snapshot,applePlatform,matcher.resolveAsciiShortcutKey(snapshot)))return;
+    const asciiKey=matcher.resolveAsciiShortcutKey(snapshot);
+    let matched=false;
+    for(let index=0;index<combos.length;index++){
+      if(matcher.matchesKeyboardShortcut(combos[index],snapshot,applePlatform,asciiKey)){matched=true;break;}
+    }
+    if(!matched)return;
     const target=apply(path,event,[])[0];
     returnFocus=target instanceof HTMLElementType?target:null;
     apply(prevent,event,[]);
@@ -144,46 +149,40 @@ function normalizeDomains(
   const allowedProtocols = options?.allowWebSocket
     ? new Set(["http:", "https:", "ws:", "wss:"])
     : new Set(["http:", "https:"]);
-  const entries = value
-    .filter((entry): entry is string => {
-      if (
-        typeof entry !== "string" ||
-        entry.length === 0 ||
-        entry.length > 2048 ||
-        entry !== entry.trim()
-      ) {
-        return false;
-      }
-      if (containsAsciiControlCharacter(entry)) {
-        return false;
-      }
-      if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
-        return true;
-      }
-      const parsed = URL.parse(entry);
-      if (
-        !parsed ||
-        !allowedProtocols.has(parsed.protocol) ||
-        parsed.username !== "" ||
-        parsed.password !== "" ||
-        parsed.pathname !== "/" ||
-        parsed.search !== "" ||
-        parsed.hash !== ""
-      ) {
-        return false;
-      }
-      // URL parsing validates bracketed IPv6. MCP Apps additionally support one
-      // leading wildcard label, while board declarations arrive as exact hosts.
-      return (
-        /^\[[0-9A-Fa-f:.]+\]$/u.test(parsed.hostname) ||
-        /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
-      );
-    })
-    .map((entry) =>
-      options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")
-        ? entry
-        : new URL(entry).origin,
-    );
+  const entries = value.flatMap((entry) => {
+    if (
+      typeof entry !== "string" ||
+      entry.length === 0 ||
+      entry.length > 2048 ||
+      entry !== entry.trim()
+    ) {
+      return [];
+    }
+    if (containsAsciiControlCharacter(entry)) {
+      return [];
+    }
+    if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
+      return [entry];
+    }
+    const parsed = URL.parse(entry);
+    if (
+      !parsed ||
+      !allowedProtocols.has(parsed.protocol) ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      return [];
+    }
+    // URL parsing validates bracketed IPv6. MCP Apps additionally support one
+    // leading wildcard label, while board declarations arrive as exact hosts.
+    return /^\[[0-9A-Fa-f:.]+\]$/u.test(parsed.hostname) ||
+      /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
+      ? [parsed.origin]
+      : [];
+  });
   return entries.length > 0 ? entries : undefined;
 }
 

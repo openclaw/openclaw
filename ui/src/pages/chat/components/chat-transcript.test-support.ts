@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { LitElement, nothing, render } from "lit";
 import { vi } from "vitest";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { resetThreadPresentation, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -30,9 +31,10 @@ export class TranscriptTestHost extends LitElement {
   }
 
   async settleUpdates(): Promise<void> {
-    while (this.isUpdatePending) {
+    do {
       await this.updateComplete;
-    }
+      flush();
+    } while (this.isUpdatePending);
   }
 }
 
@@ -198,6 +200,7 @@ export async function mountTestTranscript(
     });
     render(view, container);
     transcript.hostUpdated();
+    flush();
   };
   transcript.hostConnected();
   renderRows(initialRows);

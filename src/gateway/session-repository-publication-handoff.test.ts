@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
@@ -20,20 +21,17 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
-  ensureGitHubPublicationStore,
-  insertGitHubPublicationRequest,
-  claimGitHubPublicationExecution,
-  createGitHubPublicationExecutionStore,
-  isGitHubPublicationExecutionOwner,
-} from "./github-publication-store.js";
+  ensureGitHubPublicationStoreFixture as ensureGitHubPublicationStore,
+  claimGitHubPublicationExecutionFixture as claimGitHubPublicationExecution,
+  createGitHubPublicationExecutionStoreFixture as createGitHubPublicationExecutionStore,
+  insertRepositoryGitHubPublicationFixture as insertRepositoryGitHubPublication,
+  claimRepositoryGitHubPublicationFixture as claimRepositoryGitHubPublication,
+  readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication,
+} from "./github-publication-store.test-support.js";
+import { insertGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
-import {
-  insertRepositoryGitHubPublication,
-  repositoryGitHubPublicationDigest,
-  claimRepositoryGitHubPublication,
-  readRepositoryGitHubPublication,
-} from "./github-repository-publication-store.js";
+import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { assertReceiptOwner } from "./github-repository-publication-workspace.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
@@ -45,8 +43,9 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandBuffered: mocked.run,
   runCommandWithTimeout: mocked.timed,
 }));
+// mock-isolation: Publication handoff does not discover worker GitHub credentials.
 vi.mock("./worker-environments/worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
+  prepareGitHubPublicationFact: async () => undefined,
 }));
 afterEach(() => vi.restoreAllMocks());
 it.each([
@@ -68,6 +67,7 @@ it.each([
       mocked.timed.mockImplementation(actual.runCommandWithTimeout);
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const source = state.path("source"),
         bare = state.path("origin.git"),
         cloud = state.path("cloud");
@@ -419,7 +419,7 @@ it.each([
         initial,
         ...execution,
         identity: { prepare: async () => identity, isCurrent: () => true },
-        validateCustody: () => isGitHubPublicationExecutionOwner(requestId, "local-instance"),
+        validateCustody: () => currentOwner,
         validateAuthority: () => {
           requester.assertCurrent();
           return true;

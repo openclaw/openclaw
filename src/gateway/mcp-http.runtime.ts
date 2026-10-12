@@ -21,6 +21,7 @@ import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -61,6 +62,7 @@ type CachedScopedTools = {
 
 type McpLoopbackScopeParams = {
   admittedRunContext?: AdmittedRunContext;
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
@@ -339,6 +341,7 @@ async function constructMcpLoopbackTools(
     conversationReadOrigin: "delegated",
     surface: "loopback",
     admittedRunContext: params.admittedRunContext,
+    sessionEventSourcePolicy: params.sessionEventSourcePolicy,
     isGrantCurrent: params.isGrantCurrent,
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,

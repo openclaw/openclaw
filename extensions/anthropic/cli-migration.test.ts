@@ -5,7 +5,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const { probeClaudeCliAuthStatus, runUtf8CommandWithTimeout } = vi.hoisted(() => ({
   probeClaudeCliAuthStatus: vi.fn(),
@@ -176,14 +175,6 @@ describe("anthropic cli migration", () => {
               agentRuntime: { id: "claude-cli" },
             },
             "openai/gpt-5.2": {},
-            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-haiku-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
@@ -232,15 +223,6 @@ describe("anthropic cli migration", () => {
           models: {
             "openai/gpt-5.2": {},
             "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-haiku-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
@@ -265,7 +247,7 @@ describe("anthropic cli migration", () => {
     expect(result.configPatch?.agents?.defaults?.models?.["anthropic/gpt-5.2"]).toBeUndefined();
   });
 
-  it("backfills the Claude CLI allowlist when older configs only stored sonnet", () => {
+  it("migrates an older configured model without adding static membership", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {
         defaults: {
@@ -282,16 +264,7 @@ describe("anthropic cli migration", () => {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
           models: {
-            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-haiku-5-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
@@ -519,28 +492,24 @@ describe("anthropic cli migration", () => {
       alias: "Opus",
       agentRuntime: { id: "claude-cli" },
     });
-    expect(defaults?.models?.["anthropic/claude-opus-5"]).toEqual({
-      agentRuntime: { id: "claude-cli" },
-    });
+    expect(defaults?.models?.["anthropic/claude-opus-5"]).toBeUndefined();
     // Claude IDs outside the sign-in seed: catalog rows published later and typed IDs.
     expect(defaults?.models?.["anthropic/*"]).toEqual({ agentRuntime: { id: "claude-cli" } });
     expect(defaults?.models?.["openai/gpt-5.2"]).toEqual({});
   });
 
-  it("registered cli sign-in seeds no deprecated Claude CLI catalog rows", async () => {
+  it("registered cli sign-in keeps selected IDs without seeding a static menu", async () => {
     probeClaudeCliAuthStatus.mockReturnValue({ status: "available" });
     const method = await resolveAnthropicCliAuthMethod();
-    const deprecatedRefs = manifest.modelCatalog.providers["claude-cli"].models
-      .filter((model) => "status" in model && model.status === "deprecated")
-      .map(({ id }) => `anthropic/${id}`);
-    expect(deprecatedRefs).toContain("anthropic/claude-opus-4-8");
+    const deprecatedRef = "anthropic/claude-opus-4-8";
 
     const fresh = await method.runNonInteractive?.(createProviderAuthMethodNonInteractiveContext());
     const freshModels = fresh?.agents?.defaults?.models ?? {};
-    expect(Object.keys(freshModels)).toContain("anthropic/claude-opus-5-5");
-    for (const ref of deprecatedRefs) {
-      expect(freshModels).not.toHaveProperty([ref]);
-    }
+    expect(Object.keys(freshModels).toSorted()).toEqual([
+      "anthropic/*",
+      "anthropic/claude-opus-5-5",
+    ]);
+    expect(freshModels).not.toHaveProperty([deprecatedRef]);
 
     const existing = await method.runNonInteractive?.(
       createProviderAuthMethodNonInteractiveContext({

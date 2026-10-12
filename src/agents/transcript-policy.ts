@@ -87,30 +87,22 @@ function buildUnownedProviderTransportReplayFallback(params: {
   const isClaudeOpenAiResponses =
     isOpenAiResponses && /(?:^|[./:_-])claude(?:$|[./:_-])/.test(modelId);
   return {
-    ...(isGoogle ? { sanitizeMode: "full" as const } : {}),
+    sanitizeMode: isGoogle ? "full" : undefined,
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict",
-    ...(isGoogle
+    sanitizeThoughtSignatures: isGoogle
       ? {
-          sanitizeThoughtSignatures: {
-            allowBase64Only: true,
-            includeCamelCase: true,
-          },
+          allowBase64Only: true,
+          includeCamelCase: true,
         }
-      : {}),
-    ...(isStrictOpenAiCompatible
-      ? {
-          dropReasoningFromHistory:
-            params.model?.reasoning !== true && !requiresReasoningContentReplay(params.modelId),
-        }
-      : {}),
-    ...(isGoogle || isStrictOpenAiCompatible
-      ? { applyAssistantFirstOrderingFix: true, validateGeminiTurns: true }
-      : {}),
-    ...(isStrictOpenAiCompatible || isClaudeOpenAiResponses
-      ? { validateAnthropicTurns: true }
-      : {}),
-    ...(isGoogle || isOpenAiResponses ? { allowSyntheticToolResults: true } : {}),
+      : undefined,
+    dropReasoningFromHistory: isStrictOpenAiCompatible
+      ? params.model?.reasoning !== true && !requiresReasoningContentReplay(params.modelId)
+      : undefined,
+    applyAssistantFirstOrderingFix: isGoogle || isStrictOpenAiCompatible ? true : undefined,
+    validateGeminiTurns: isGoogle || isStrictOpenAiCompatible ? true : undefined,
+    validateAnthropicTurns: isStrictOpenAiCompatible || isClaudeOpenAiResponses ? true : undefined,
+    allowSyntheticToolResults: isGoogle || isOpenAiResponses ? true : undefined,
   };
 }
 

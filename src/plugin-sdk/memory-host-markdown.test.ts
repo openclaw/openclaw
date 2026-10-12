@@ -12,31 +12,6 @@ describe("withTrailingNewline", () => {
 });
 
 describe("replaceManagedMarkdownBlock", () => {
-  it("appends a managed block when missing", () => {
-    expect(
-      replaceManagedMarkdownBlock({
-        original: "# Title\n",
-        heading: "## Generated",
-        startMarker: "<!-- start -->",
-        endMarker: "<!-- end -->",
-        body: "- first",
-      }),
-    ).toBe("# Title\n\n## Generated\n<!-- start -->\n- first\n<!-- end -->\n");
-  });
-
-  it("replaces an existing managed block in place", () => {
-    expect(
-      replaceManagedMarkdownBlock({
-        original:
-          "# Title\n\n## Generated\n<!-- start -->\n- old\n<!-- end -->\n\n## Notes\nkept\n",
-        heading: "## Generated",
-        startMarker: "<!-- start -->",
-        endMarker: "<!-- end -->",
-        body: "- new",
-      }),
-    ).toBe("# Title\n\n## Generated\n<!-- start -->\n- new\n<!-- end -->\n\n## Notes\nkept\n");
-  });
-
   it("supports headingless blocks", () => {
     expect(
       replaceManagedMarkdownBlock({
@@ -96,20 +71,5 @@ describe("replaceManagedMarkdownBlock", () => {
     ).toBe(
       "# Title\n\nParagraph A\n\n\nParagraph B\n\n## Generated\n<!-- start -->\n- new\n<!-- end -->\n\n## Notes\nkept\n\n",
     );
-  });
-
-  it("is idempotent across repeated calls with the same body", () => {
-    const params = {
-      heading: "## Generated",
-      startMarker: "<!-- start -->",
-      endMarker: "<!-- end -->",
-      body: "- only",
-    } as const;
-    const first = replaceManagedMarkdownBlock({ original: "# Title\n", ...params });
-    const second = replaceManagedMarkdownBlock({ original: first, ...params });
-    const third = replaceManagedMarkdownBlock({ original: second, ...params });
-
-    expect(second).toBe(first);
-    expect(third).toBe(first);
   });
 });

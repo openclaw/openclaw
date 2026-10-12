@@ -36,6 +36,8 @@ export type ProjectionOptions = {
 };
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
+  /** A committed append's bounded preview; null means the newest message exceeded the bound. */
+  transcriptPreview?: string | null;
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
@@ -47,7 +49,11 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
   Partial<
     Pick<
       PreparedSessionRowDatabaseFacts,
-      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
+      | "acpMeta"
+      | "runtimeOwnership"
+      | "runtimeOwnershipDependencies"
+      | "repositoryWorkspace"
+      | "transcriptPreview"
     >
   >;
 
@@ -88,7 +94,7 @@ export type Row = {
   storedEntry?: SessionEntry;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
-  /** Presentation retains certified facets until their owner publishes or the row is demoted. */
+  /** Presentation retains committed facets until their owner publishes or the row is demoted. */
   retainedDatabaseFacts?: RetainedSessionRowDatabaseFacts;
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
@@ -228,20 +234,7 @@ export function changesSessionRowDependents(before: Row["storedEntry"], after: R
   );
 }
 
-/** Mark resident logical owners without changing stored entries, relatives, or backfill. */
-export function markAutomation(
-  rows: Iterable<Row>,
-  agentId: string | undefined,
-  dirty: Set<string>,
-) {
-  for (const row of rows) {
-    if (!agentId || row.agentId === agentId) {
-      dirty.add(identity(row));
-    }
-  }
-}
-
-/** Expire accepted facts and pending replies, retaining only independently certified facets. */
+/** Expire accepted facts and pending replies, retaining only installed owner facts. */
 export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowDatabaseFacts) {
   row.databaseFactsRevision++;
   row.pendingDatabaseFacts = undefined;

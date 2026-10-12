@@ -4,11 +4,12 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
+  createComposerContainer,
   createComposerProps as props,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 
 function questionPrompt(id: string, question: string): QuestionPrompt {
@@ -43,7 +44,7 @@ describe("composer question takeover", () => {
   it.each([true, false])(
     "swaps the expanded question with the composer and restores its draft, focus, and progress (open=%s)",
     async (progressOpen) => {
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       document.body.append(container);
       const prompt = questionPrompt("question-swap", "Choose a release target");
       const composerProps = props({
@@ -73,7 +74,7 @@ describe("composer question takeover", () => {
       )!;
       progress.querySelector("summary")!.click();
       expect(progress.open).toBe(progressOpen);
-      const progressWrapper = progress.parentElement!;
+      const progressWrapper = progress.closest<HTMLElement>(".agent-chat__progress-float")!;
       expect(progressWrapper.hidden).toBe(false);
       const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
       initialTextarea.focus();

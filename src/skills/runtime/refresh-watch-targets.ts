@@ -125,13 +125,11 @@ export function resolveSkillsWatchTargets(
     workspace ? [workspace, resolvePathViaExistingAncestorSync(workspace)] : [],
   );
   for (const target of sortedTargets) {
-    // Explicit workspace parents survive replacement of workspace-owned roots.
-    // External configured/plugin/target roots retain their own admitted parent.
-    for (const workspace of authorityWorkspaces) {
-      if (isPathInside(workspace, target.path)) {
-        target.authorityPath = path.dirname(workspace);
-        break;
-      }
+    // Keep sibling state/transcript writes outside workspace observation. A replaced
+    // workspace invalidates its Root and follows the watcher's joined re-admission.
+    const workspace = authorityWorkspaces.find((entry) => isPathInside(entry, target.path));
+    if (workspace) {
+      target.authorityPath = workspace;
     }
   }
   return { signature, targets: sortedTargets };

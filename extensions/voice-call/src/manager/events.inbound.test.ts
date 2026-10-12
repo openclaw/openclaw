@@ -307,11 +307,8 @@ describe("processEvent (functional inbound calls)", () => {
   });
 
   it("bounds rejected provider calls while retaining hangup-once behavior", async () => {
-    const rejectedProviderCallIds = new Map<string, symbol>(
-      Array.from(
-        { length: EVENT_MANAGER_REPLAY_KEY_LIMIT },
-        (_, index) => [`provider-${index}`, Symbol(`provider-${index}`)] as const,
-      ),
+    const rejectedProviderCallIds = new Set<string>(
+      Array.from({ length: EVENT_MANAGER_REPLAY_KEY_LIMIT }, (_, index) => `provider-${index}`),
     );
     const { ctx, hangupCalls } = createRejectingInboundContext();
     ctx.rejectedProviderCallIds = rejectedProviderCallIds;

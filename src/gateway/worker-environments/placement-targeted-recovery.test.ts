@@ -1,8 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
@@ -14,6 +18,8 @@ import type { WorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 async function seedAttached(environmentId: string) {
   await support.seedBootstrapping(environmentId);
@@ -37,12 +43,13 @@ async function seedAttached(environmentId: string) {
   });
 }
 
-function createDispatch(
+async function createDispatch(
   environments: WorkerEnvironmentService,
   placements: ReturnType<typeof createWorkerSessionPlacementStore>,
 ) {
   return coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
+      initialPlacements: await placements.listAsync(),
       placements,
       environments,
       runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -68,6 +75,7 @@ function createDispatch(
 describe("targeted worker placement recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
   beforeEach(() => {
+    setRuntimeConfigSnapshot(support.testState.config);
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
       protocolFeatures: [
@@ -105,7 +113,7 @@ describe("targeted worker placement recovery", () => {
       }),
       { maintainProviders },
     );
-    const dispatch = createDispatch(environments, placements);
+    const dispatch = await createDispatch(environments, placements);
     const uninstall = installWorkerPlacementReconcileGuard({
       placements,
       environments,
@@ -142,7 +150,7 @@ describe("targeted worker placement recovery", () => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const cleanupStarted = createDeferredCore();
     const releaseCleanup = createDeferredCore();
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
@@ -170,14 +178,14 @@ describe("targeted worker placement recovery", () => {
         targeted.then(() => "target-finished"),
         cleanupStarted.promise.then(() => "unrelated-move-cleanup"),
       ]);
-      retainedAfterTarget = placements.getPlacementMove(active.sessionId);
+      retainedAfterTarget = await placements.getPlacementMoveAsync(active.sessionId);
     } finally {
       releaseCleanup.resolve();
       await targeted;
     }
     await dispatch.reconcileActive();
     expect(placements.get(active.sessionId)?.state).toBe("local");
-    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(first).toBe("target-finished");
@@ -226,9 +234,9 @@ describe("targeted worker placement recovery", () => {
           executionMode: "remote-exec",
         });
       }
-      const dispatch = createDispatch(environments, placements);
+      const dispatch = await createDispatch(environments, placements);
       await dispatch.reconcileActive(match === "source" ? sourceId : destinationId);
-      expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       expect(placements.get(active.sessionId)?.state).toBe(
         match === "source" ? "failed" : "active",
       );

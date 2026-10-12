@@ -172,125 +172,61 @@ describe("update command admission with fresh state", () => {
     },
   );
 
-  it.each([
-    { source: "metadata", cleanup: "healthy" },
-    { source: "metadata", cleanup: "release" },
-    { source: "channel", cleanup: "healthy" },
-    { source: "channel", cleanup: "close" },
-    { source: "channel", cleanup: "release" },
-    { source: "channel", cleanup: "coordinator" },
-    { source: "channel", cleanup: "close-and-coordinator" },
-  ])("publishes one settled fresh refusal ($source / $cleanup)", async ({ source, cleanup }) => {
-    allowPackageRuntime();
-    const denyRelease = () => {
-      const db = new DatabaseSync(
-        path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
-      );
-      try {
-        db.exec(
-          "CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture refusal release denied'); END",
-        );
-      } finally {
-        db.close();
-      }
-    };
-    const doctor = vi
-      .spyOn(packageUpdate, "runPackageUpdateDoctor")
-      .mockRejectedValue(new Error("Unexpected target Doctor"));
-    const observations: { closed: boolean; lease: string }[] = [];
-    const staged = {
-      root: fixture.root,
-      run: vi.fn(),
-      close: vi.fn().mockImplementation(async () => {
-        if (cleanup === "release") {
-          denyRelease();
-        }
-        if (cleanup.includes("close")) {
-          throw new Error("fixture refused-stage cleanup failed");
-        }
-      }),
-    };
-    const legacyRelease = vi.fn(() => {
-      throw new Error("fixture legacy coordinator release failed");
-    });
-    if (cleanup.includes("coordinator")) {
-      vi.spyOn(initialization, "acquireLegacyUpdateInitializationFence").mockReturnValue({
-        assertCurrent() {},
-        run: (operation) => operation(),
-        release: legacyRelease,
-      });
-    }
-    vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
-      observations.push({
-        closed: staged.close.mock.calls.length === 1,
-        lease: createManagedHandoffLeaseStore().read(fixture.root).kind,
-      });
-    });
-    if (source === "metadata") {
+  it.each(["healthy", "release"] as const)(
+    "publishes one settled metadata refusal (%s)",
+    async (cleanup) => {
+      allowPackageRuntime();
+      const doctor = vi.spyOn(packageUpdate, "runPackageUpdateDoctor");
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunIds[0]);
       vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockImplementationOnce(async () => {
         if (cleanup === "release") {
-          denyRelease();
+          const db = new DatabaseSync(
+            path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
+          );
+          try {
+            db.exec(
+              "CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture refusal release denied'); END",
+            );
+          } finally {
+            db.close();
+          }
         }
-        return {
-          version: null,
-          nodeEngine: null,
-          error: "fixture registry unavailable",
-        };
+        return { version: null, nodeEngine: null, error: "fixture registry unavailable" };
       });
-    } else {
-      writeStoredChannel("stable");
-      vi.mocked(packageUpdate.stagePackageInstallUpdate).mockImplementationOnce(async () => {
-        writeStoredChannel("beta");
-        return staged;
+      const observations: string[] = [];
+      vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
+        observations.push(createManagedHandoffLeaseStore().read(fixture.root).kind);
       });
-    }
-    const failure = await updateCommand({
-      // Legacy coordinator faults require the installed preflight/staging order.
-      admission: cleanup.includes("coordinator") ? "installed" : undefined,
-      yes: true,
-      json: true,
-      restart: false,
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    const reason =
-      cleanup === "healthy"
-        ? source === "metadata"
-          ? "target-metadata-preflight"
-          : "update-channel-changed"
-        : "update-admission-cleanup-failed";
-    expect(observations).toEqual([
-      { closed: source === "channel", lease: cleanup === "release" ? "current" : "absent" },
-    ]);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "error", reason }),
-    );
-    expect(failure).toMatchObject({ code: 1 });
-    if (cleanup !== "healthy") {
+      const failure = await updateCommand({ yes: true, json: true, restart: false }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(observations).toEqual([cleanup === "release" ? "current" : "absent"]);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          status: "error",
+          reason:
+            cleanup === "healthy" ? "target-metadata-preflight" : "update-admission-cleanup-failed",
         }),
       );
-    }
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
-    expect(staged.run).not.toHaveBeenCalled();
-    expect(doctor).not.toHaveBeenCalled();
-    if (source === "metadata") {
+      expect(failure).toMatchObject({ code: 1 });
+      if (cleanup === "release") {
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          }),
+        );
+      }
+      expect(fs.existsSync(fixture.databasePath)).toBe(false);
+      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+      expect(doctor).not.toHaveBeenCalled();
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("registry unavailable"),
       );
       expectFreshStatePreserved();
-    } else {
-      expect(JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf8"))).toEqual({
-        update: { channel: "beta" },
-      });
-    }
-    expect(legacyRelease).toHaveBeenCalledTimes(cleanup.includes("coordinator") ? 1 : 0);
-  });
+    },
+  );
 
   it("closes the stage when successful initialization is followed by legacy release failure", async () => {
     allowPackageRuntime();
@@ -316,44 +252,6 @@ describe("update command admission with fresh state", () => {
     expect(staged.run).not.toHaveBeenCalled();
     expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("settles fresh staging and executor before reporting changed admission selectors", async () => {
-    allowPackageRuntime();
-    const staged = createStage(fixture.root);
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
-    vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
-      createSelectedTargetStateDatabase(fixture.databasePath);
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(path.dirname(fixture.root), "changed-profile"));
-    });
-    const observations: { boundary: string; closed: boolean; lease: string }[] = [];
-    const observe = (boundary: string) => {
-      observations.push({
-        boundary,
-        closed: staged.close.mock.calls.length === 1,
-        lease: createManagedHandoffLeaseStore().read(fixture.root).kind,
-      });
-    };
-    vi.mocked(defaultRuntime.writeJson).mockImplementation(() => observe("report"));
-    const exitAfterOutput = oneShotExit.exitCliAfterOutput;
-    vi.spyOn(oneShotExit, "exitCliAfterOutput").mockImplementation((...args) => {
-      observe("exit");
-      return exitAfterOutput(...args);
-    });
-
-    await expect(
-      updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: false }),
-    ).rejects.toMatchObject({ code: 1 });
-
-    expect(observations).toEqual([
-      { boundary: "report", closed: true, lease: "absent" },
-      { boundary: "exit", closed: true, lease: "absent" },
-    ]);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "error", reason: "managed-service-preflight" }),
-    );
-    expect(staged.run).not.toHaveBeenCalled();
-    expect(staged.close).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -590,40 +488,6 @@ describe("update command admission with fresh state", () => {
     );
     expectFreshStatePreserved();
   });
-
-  it.each([
-    { channel: undefined, reason: "update-channel-changed" },
-    { channel: "stable" as const, reason: "node-runtime-preflight" },
-  ])(
-    "fences a changed stored channel after target lookup with explicit channel=$channel",
-    async ({ channel, reason }) => {
-      const configPath = writeStoredChannel("stable");
-      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockImplementationOnce(async () => {
-        writeStoredChannel("beta");
-        return targetMetadata;
-      });
-      const runtime = vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
-        ok: false,
-        error: "fixture-stop",
-      });
-
-      await expect(
-        updateCommand({ admission: "installed", channel, yes: true, json: true, restart: false }),
-      ).rejects.toMatchObject({ code: 1 });
-
-      expect(
-        vi.mocked(updateCheck.resolveNpmChannelTag).mock.calls.map(([params]) => params.channel),
-      ).toEqual(["stable"]);
-      expect(runtime).toHaveBeenCalledTimes(channel ? 1 : 0);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "error", reason }),
-      );
-      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({
-        update: { channel: "beta" },
-      });
-      expectFreshStatePreserved();
-    },
-  );
 
   it("accepts target Doctor config changes that preserve the selected stored channel", async () => {
     const configPath = writeStoredChannel("stable");

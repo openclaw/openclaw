@@ -19,14 +19,14 @@ export async function waitForSettledFormControls(
   controls: readonly SettledFormControl[],
 ): Promise<void> {
   const expected = controls.map((control) =>
-    "value" in control ? { value: control.value } : { checked: control.checked ? "true" : "false" },
+    "value" in control ? { value: control.value } : { checked: control.checked },
   );
   const readControls = async () =>
     Promise.all(
       controls.map(async (control) =>
         "value" in control
           ? { value: await control.locator.inputValue() }
-          : { checked: await control.locator.getAttribute("aria-checked") },
+          : { checked: await control.locator.isChecked() },
       ),
     );
   await expect.poll(readControls).toEqual(expected);

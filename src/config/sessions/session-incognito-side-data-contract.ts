@@ -16,7 +16,11 @@ import type {
   TrajectoryRuntimeRetentionPlan,
 } from "../../trajectory/runtime-retention.contract.js";
 import type { deleteTrajectoryRuntimeRetention } from "../../trajectory/runtime-retention.sqlite.js";
-import type { SqliteTrajectoryRuntimeAppend } from "../../trajectory/runtime-store.sqlite.js";
+import type {
+  SqliteTrajectoryRuntimeAppend,
+  SqliteTrajectoryRuntimeReadScope,
+} from "../../trajectory/runtime-store.contract.js";
+import type { TrajectoryEvent } from "../../trajectory/types.js";
 import type { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
@@ -96,6 +100,12 @@ export type IncognitoSideDataOperations = {
   "session.heartbeat.persist": HeartbeatOutcomeWorkerOperations["persist"];
   "session.heartbeat.claim": HeartbeatOutcomeWorkerOperations["claim"];
   "session.messageToolOutcome.record": { input: MessageToolRunOutcomeInsert; output: void };
+  "session.trajectory.read": {
+    input: Omit<SqliteTrajectoryRuntimeReadScope, "agentId" | "env" | "storePath"> & {
+      sessionKey: string;
+    };
+    output: TrajectoryEvent[];
+  };
   "session.trajectory.append": {
     input: SqliteTrajectoryRuntimeAppend & { sessionKey: string; lifecycleRevision?: string };
     output: void;

@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { runWithAgentWorkspaceReadiness } from "../../workspace-readiness.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -98,6 +101,55 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       sessionPermissionPolicy: { root, mode: "guarded" },
       exec: { mode: "ask" },
     });
+  });
+
+  it("starts the built-in prompt while only workspace tools wait for checkout", async () => {
+    const ready = createDeferred();
+    const waiting = createDeferred();
+    const read = stubTool("read");
+    const executeRead = vi.fn(read.execute);
+    read.execute = executeRead;
+    const web = stubTool("web_search");
+    const executeWeb = vi.fn(web.execute);
+    web.execute = executeWeb;
+    hoisted.createOpenClawCodingToolsMock.mockReturnValue([read, web]);
+    await runWithAgentWorkspaceReadiness(
+      {
+        sessionKey: "agent:main:subagent:child",
+        waitUntilReady: () => {
+          waiting.resolve();
+          return ready.promise;
+        },
+        assertCurrent: () => {},
+      },
+      async () =>
+        createContextEngineAttemptRunner({
+          contextEngine: createContextEngineBootstrapAndAssemble(),
+          sessionKey: "agent:main:subagent:child",
+          tempPaths,
+          attemptOverrides: {
+            disableTools: false,
+            config: { tools: { toolSearch: false, codeMode: false } },
+          },
+          sessionPrompt: async () => {
+            const tools = hoisted.createAgentSessionMock.mock.calls
+              .at(-1)?.[0]
+              ?.customTools?.map((tool) => wrapToolDefinition(tool));
+            const boundRead = tools?.find((tool) => tool.name === "read");
+            const boundWeb = tools?.find((tool) => tool.name === "web_search");
+            expect(boundRead).toBeDefined();
+            expect(boundWeb).toBeDefined();
+            const pending = boundRead!.execute("read", {});
+            await Promise.race([waiting.promise, pending]);
+            await boundWeb!.execute("web", {});
+            expect(executeWeb).toHaveBeenCalledOnce();
+            expect(executeRead).not.toHaveBeenCalled();
+            ready.resolve();
+            await pending;
+          },
+        }),
+    );
+    expect(executeRead).toHaveBeenCalledOnce();
   });
 
   it("defaults rootless session permission boundaries to the canonical workspace", async () => {

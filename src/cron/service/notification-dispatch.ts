@@ -17,12 +17,12 @@ import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
 import { enqueueCronNotification } from "./wake.js";
 
-export function dispatchCronNotification(
+export async function dispatchCronNotification(
   state: CronServiceState,
   notification: CronNotificationIntent,
-): void {
+): Promise<void> {
   if (notification.kind === "failure-repair") {
-    requestFailureRepair(state, notification);
+    await requestFailureRepair(state, notification);
     return;
   }
   let routing = notification.routing ? { ...notification.routing } : undefined;
@@ -39,25 +39,41 @@ export function dispatchCronNotification(
         );
   }
   if (notification.kind === "auto-disabled") {
-    enqueueCronNotification(state, notification.job, notification.text, notification.kind, routing);
+    await enqueueCronNotification(
+      state,
+      notification.job,
+      notification.text,
+      notification.kind,
+      routing,
+    );
   } else {
-    transportFailureAlert(state, notification, routing);
+    await transportFailureAlert(state, notification, routing);
   }
 }
 
 /**
- * Starts the repair turn in the conversation that owns the job. A lost request needs no
- * fallback here: the incident records it, so the job's next failure sends the normal alert.
+ * Starts the repair turn in the conversation that owns the job. Request failures are logged;
+ * terminal one-shots send their fallback alert, while recurring jobs alert on the next failure.
  */
-function requestFailureRepair(
+async function requestFailureRepair(
   state: CronServiceState,
   notification: Extract<CronNotificationIntent, { kind: "failure-repair" }>,
-): void {
+): Promise<void> {
   const jobId = notification.job.id;
   const owner = state.store?.jobs.find((job) => job.id === jobId)?.owner;
   const sessionKey = owner?.sessionKey?.trim();
   const repairId = notification.job.state.lastFailureNotificationId;
+  const failed = async (err: unknown) => {
+    state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
+    if (notification.fallback) {
+      await dispatchCronNotification(state, {
+        ...notification.fallback,
+        routing: notification.routing,
+      });
+    }
+  };
   if (!sessionKey || !repairId || !state.deps.runCronFailureRepair) {
+    await failed(new Error("Missing failure repair runner, owner session, or repair ID"));
     return;
   }
   void state.deps
@@ -68,9 +84,10 @@ function requestFailureRepair(
       sessionKey,
       message: notification.text,
     })
-    .catch((err: unknown) => {
-      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
-    });
+    .catch(failed)
+    .catch((err: unknown) =>
+      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair fallback failed"),
+    );
 }
 
 type FailureAlertCycle = {
@@ -143,11 +160,11 @@ async function recordFailureAlertOutcome(
   }
 }
 
-function transportFailureAlert(
+async function transportFailureAlert(
   state: CronServiceState,
   params: Extract<CronNotificationIntent, { kind: "failure-alert" }>,
   routing: CronNotificationRouting,
-): void {
+): Promise<void> {
   const jobId = params.job.id;
   const alertAtMs = params.job.state.lastFailureAlertAtMs;
   const lifecycleGeneration = state.lifecycleGeneration;
@@ -157,7 +174,13 @@ function transportFailureAlert(
     // No transport means no send whose outcome could be recorded: the alert
     // goes straight to the in-app fallback queue and the intent stays
     // "unknown", matching the pre-existing contract for transport-less setups.
-    enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert", routing);
+    await enqueueCronNotification(
+      state,
+      params.job,
+      params.payload.text ?? "",
+      "failure-alert",
+      routing,
+    );
     return;
   }
   void state.deps
@@ -179,7 +202,7 @@ function transportFailureAlert(
           outcome,
         );
         if (recordResult !== "stale" && outcome.status === "not-delivered") {
-          enqueueCronNotification(
+          await enqueueCronNotification(
             state,
             params.job,
             params.payload.text ?? "",

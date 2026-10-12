@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -13,7 +14,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
-  it("shows child activity without a redundant wait line and restores the parent's working indicator", async () => {
+  it("keeps one composer wait line with child activity and restores the parent's working indicator", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
       ? createControlUiE2eArtifactDir("chat-subagent-waiting", artifactParent)
@@ -148,9 +149,20 @@ suite.define(() => {
         // Its launch row reads as the subagent: its name, not its assignment, and its state.
         const activityRow = activePane.locator(`[data-subagent-session-key="${child.key}"]`);
         await activityRow.getByText("Backend implementation", { exact: true }).waitFor();
+        const panel = activePane.locator("openclaw-chat-subagents-panel");
+        const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
+        const closePanel = async () => {
+          await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
+          await panel.waitFor({ state: "hidden" });
+        };
         const childHistoryReads = () =>
           gateway.getRequests("chat.history", { sessionKey: child.key });
-        expect(await childHistoryReads()).toHaveLength(0);
+        // The auto-opened panel loads child metrics. Once closed, inline observer
+        // updates must render from the roster without fetching another transcript.
+        await panelRow.waitFor();
+        await gateway.waitForRequest("chat.history", { match: { sessionKey: child.key } });
+        await closePanel();
+        const childReadsAfterClose = (await childHistoryReads()).length;
         await gateway.emitGatewayEvent("session.observer", {
           sessionKey: child.key,
           agentId: "main",
@@ -162,7 +174,7 @@ suite.define(() => {
           headline: "Verifying the API response",
         });
         await activityRow.getByText("Verifying the API response", { exact: true }).waitFor();
-        expect(await childHistoryReads()).toHaveLength(0);
+        expect(await childHistoryReads()).toHaveLength(childReadsAfterClose);
         const launchRow = activePane.locator(".chat-tool-row--subagent");
         const launchName = launchRow.locator(".chat-tool-row__subagent-link");
         const launchState = launchRow.locator(".chat-tool-row__subagent-state");
@@ -174,12 +186,6 @@ suite.define(() => {
           name: "1 subagent running",
           exact: true,
         });
-        const panel = activePane.locator("openclaw-chat-subagents-panel");
-        const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
-        const closePanel = async () => {
-          await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
-          await panel.waitFor({ state: "hidden" });
-        };
         const panelTabHasFocus = () =>
           activePane
             .locator('[data-region-header="side"] wa-tab[active]')
@@ -205,14 +211,17 @@ suite.define(() => {
         const backToList = panel.getByRole("button", { name: "Back to Subagents", exact: true });
         await backToList.click();
         await panelRow.waitFor();
-        // Closing returns to the conversation and focus to the count, whether the
-        // side panel is closed or its last tab is.
-        await activePane
-          .locator('[data-region-header="side"]')
-          .getByRole("button", { name: "Close", exact: true })
-          .click();
+        // Layout restores focus to its trigger; closing the last tab returns to
+        // the count that opened the panel.
+        await selectChatLayoutAction(activePane, "Minimize side panel");
         await indicator.waitFor();
-        await expect.poll(countHasFocus).toBe(true);
+        await expect
+          .poll(() =>
+            activePane
+              .getByRole("button", { name: "Layout", exact: true })
+              .evaluate((element) => element.matches(":focus")),
+          )
+          .toBe(true);
         await runningCount.click();
         await expect.poll(panelTabHasFocus).toBe(true);
         await closePanel();
@@ -320,7 +329,10 @@ suite.define(() => {
         const childLink = activityRow.getByRole("button");
         await childLink.waitFor();
         expect(await indicator.count()).toBe(0);
-        // Individual activity stays in the handed-off reply, without another status row.
+        expect(await activePane.locator(".agent-chat__composer-run-status--waiting").count()).toBe(
+          1,
+        );
+        // Individual activity stays in the handed-off reply; the single wait line is in the composer.
         expect(
           await activePane
             .locator(".chat-group.assistant", { hasText: "Backend work is now delegated." })
@@ -368,8 +380,10 @@ suite.define(() => {
         await childLink.waitFor({ state: "hidden" });
         await page.goBack();
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
-        await activePane.locator(".chat-working-indicator--subagents").waitFor();
-        expect(await indicator.textContent()).toContain("Waiting on subagents");
+        const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
+        await waitLine.waitFor();
+        expect(await waitLine.textContent()).toContain("Waiting on subagents");
+        expect(await indicator.count()).toBe(1);
         await gateway.waitForRequest("sessions.list", {
           after: childRosterReads,
           match: childRosterQuery,
@@ -425,9 +439,9 @@ suite.define(() => {
           updatedAt: now + 64_500,
           snapshotAt: now + 64_500,
         };
-        const childReads = (await gateway.getRequests("sessions.list", { spawnedBy: parent.key }))
-          .length;
+        const childReads = (await gateway.getRequests("sessions.list", childRosterQuery)).length;
         await gateway.setSessionsListResponse(sessionsListResponse([waitingAgain, restartedChild]));
+        await gateway.deferNext("sessions.list", childRosterQuery);
         await gateway.emitGatewayEvent("sessions.changed", {
           sessionKey: child.key,
           reason: "run-start",
@@ -435,11 +449,15 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
+        // The next batch reopens its panel, but the parent reflects the event
+        // while that panel's independent roster hydration is still pending.
         await activityRow.waitFor();
         expect(await indicator.count()).toBe(0);
-        expect(await gateway.getRequests("sessions.list", { spawnedBy: parent.key })).toHaveLength(
-          childReads,
-        );
+        await gateway.waitForRequest("sessions.list", {
+          after: childReads,
+          match: childRosterQuery,
+        });
+        await gateway.resolveDeferred("sessions.list", sessionsListResponse([restartedChild]));
         const resumedParent: GatewaySessionRow = {
           ...waitingAgain,
           hasActiveRun: true,
@@ -480,7 +498,7 @@ suite.define(() => {
           deltaText: answerText,
           message: { role: "assistant", content: answerText, timestamp: now + 65_000 },
         });
-        await page.locator(".chat-working-indicator--subagents").waitFor({ state: "detached" });
+        await waitLine.waitFor({ state: "hidden" });
         await page
           .locator(
             ".chat-pane-cache__pane--active .chat-working-indicator:not(.chat-working-indicator--subagents)",

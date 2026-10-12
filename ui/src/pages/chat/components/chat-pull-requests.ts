@@ -365,7 +365,7 @@ export function renderChatPullRequests(props: {
     </div>`;
   }
   if (props.pullRequests.length === 0) {
-    return nothing;
+    return null;
   }
   const recovery =
     retainedPublication && (!published || publication?.error) ? publication : undefined;

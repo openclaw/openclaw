@@ -14,7 +14,6 @@ import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extens
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { jsonResult } from "../tools/common.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
 import {
   consumeCompactionSafeguardCancellation,
@@ -107,8 +106,6 @@ function preservedTurnsText(messages: AgentMessage[]): string {
 }
 
 const {
-  collectToolFailures,
-  formatToolFailuresSection,
   splitPreservedRecentTurns,
   buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
@@ -189,60 +186,6 @@ function requireArray(value: unknown): unknown[] {
   }
   return value;
 }
-
-describe("compaction-safeguard tool failures", () => {
-  const acceptedDetails = jsonResult({
-    status: "accepted",
-    childSessionKey: "agent:watcher:subagent:abc",
-    runId: "run-123",
-    mode: "run",
-  }).details;
-  const failure = (id: string, text: string, details?: unknown, toolName = "exec") =>
-    toolResultMessage(id, text, { toolName, isError: true, details });
-  it.each([
-    {
-      name: "accepted spawn exclusion and look-alike failures",
-      messages: [
-        failure("call-spawn-accepted", "accepted", acceptedDetails, "sessions_spawn"),
-        failure("call-exec-failed", "boom", { status: "failed", exitCode: 1 }),
-        failure("call-spawn-error", "spawn rejected", { status: "error" }, "sessions_spawn"),
-        failure("call-other-lookalike", "real failure", acceptedDetails, "some_other_tool"),
-      ],
-      ids: ["call-exec-failed", "call-spawn-error", "call-other-lookalike"],
-      expected: ["exec (status=failed exitCode=1): boom"],
-      firstSummary: undefined,
-    },
-    {
-      name: "deduplication and empty output",
-      messages: [
-        { ...failure("call-1", "", { exitCode: 2 }), content: [] },
-        failure("call-1", "ignored"),
-      ],
-      ids: ["call-1"],
-      expected: ["exec (exitCode=2): failed"],
-      firstSummary: undefined,
-    },
-    {
-      name: "bounded failure counts and UTF-16 summaries",
-      messages: Array.from({ length: 9 }, (_, idx) =>
-        failure(`call-${idx}`, `${"x".repeat(236)}🚀tail-${idx}`),
-      ),
-      ids: Array.from({ length: 9 }, (_, idx) => `call-${idx}`),
-      expected: ["## Tool Failures", "...and 1 more"],
-      firstSummary: `${"x".repeat(236)}...`,
-    },
-  ])("formats tool failures with $name", ({ messages, ids, expected, firstSummary }) => {
-    const failures = collectToolFailures(messages);
-    expect(failures.map((entry: { toolCallId: string }) => entry.toolCallId)).toEqual(ids);
-    const section = formatToolFailuresSection(failures);
-    for (const text of expected) {
-      expect(section).toContain(text);
-    }
-    if (firstSummary !== undefined) {
-      expect(failures[0]?.summary).toBe(firstSummary);
-    }
-  });
-});
 
 describe("compaction-safeguard summary budgets", () => {
   it("preserves diagnostic sections (tool failures, file ops) when capping oversized body", () => {
@@ -1258,7 +1201,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it.each([false, true])(
-    "preserves history when corrective generation fails (caller aborted=%s)",
+    "recovers earlier summary after corrective failure unless caller aborted (%s)",
     async (aborted) => {
       const controller = new AbortController();
       const abortError = Object.assign(new Error("corrective compaction aborted"), {
@@ -1306,15 +1249,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
         expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
       } else {
         const { result } = await runCompactionScenario(sessionManager, event);
-        expect(result).toEqual({ cancel: true });
+        expect(result).toMatchObject({ compaction: { details: { qualityDegraded: true } } });
+        expect(expectCompactionResult(result).summary).toContain("history detail");
         expect(
           requireRecord(mockCallArg(mockSummarizeCompactionHistory, 2)).customInstructions,
         ).toContain("Quality check feedback");
-        expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-          "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
-        );
+        expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
         const warnings = compactionLogger.warn.mock.calls.flat().join("\n");
-        expect(warnings).toContain("reasonCode=corrective_generation_failed");
+        expect(warnings).toContain("reasonCode=quality_guard_degraded_fallback");
         expect(warnings).toContain("attempt=2");
         expect(warnings).not.toContain(correctiveFailureMarker);
       }

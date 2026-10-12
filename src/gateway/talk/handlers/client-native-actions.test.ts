@@ -56,10 +56,10 @@ import {
   upstream,
   withParkedNativeTask,
   withNativePlugin,
-  withRegisteredNativeEmbeddedRun,
 } from "./client-native-control.test-support.js";
 import { prepareMissingRegistrationFixture } from "./client-native-readiness.test-support.js";
 import { nativeCallSession } from "./client-native-request.test-support.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 import { flushNativeTranscript } from "./client-native-transcript.test-support.js";
 
 // Observe the real admission function before the consult loader captures it for later tests.

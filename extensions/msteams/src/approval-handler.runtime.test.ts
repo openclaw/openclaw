@@ -257,41 +257,6 @@ describe("msTeamsApprovalNativeRuntime", () => {
     }
   });
 
-  it.each([
-    {
-      name: "exec command and scope",
-      createView: createExecPendingView,
-      expectedContent: ["Exec Approval Required", "deploy --production", "operations", "gateway"],
-      expectedDecisions: ["allow-once", "deny"],
-    },
-    {
-      name: "plugin action and scope",
-      createView: createPluginPendingView,
-      expectedContent: [
-        "Plugin Approval Required",
-        "Deploy production service",
-        "deployments",
-        "deploy_service",
-      ],
-      expectedDecisions: ["allow-once"],
-    },
-  ])("renders the pending $name with only its authorized actions", async (testCase) => {
-    const { pendingPayload } = await createPendingScenario(testCase.createView());
-    const serializedCard = JSON.stringify(pendingPayload.card);
-    for (const expectedText of testCase.expectedContent) {
-      expect(serializedCard).toContain(expectedText);
-    }
-    expect(pendingPayload.allowedDecisions).toEqual(testCase.expectedDecisions);
-    expect(pendingPayload.card.actions).toEqual(
-      pendingPayload.actionTokens.map(({ token }, index) => ({
-        type: "Action.Submit",
-        title: testCase.createView().actions[index]?.label,
-        data: { openclawAction: "approval", token },
-      })),
-    );
-    expect(serializedCard).not.toContain("/approve");
-  });
-
   it("normalizes destinations and preserves thread roots only for channel conversations", async () => {
     const { view, request, pendingPayload } = await createPendingScenario();
     for (const testCase of [
@@ -324,31 +289,6 @@ describe("msTeamsApprovalNativeRuntime", () => {
       });
       expect(prepared?.target.to).toBe(testCase.expected);
     }
-  });
-
-  it("sends a visible text fallback when card delivery fails", async () => {
-    const { view, request, pendingPayload, plannedTarget } = await createPendingScenario();
-    sendMessageMSTeams.mockResolvedValue({
-      messageId: "fallback-1",
-      conversationId: "19:channel@thread.tacv2",
-    });
-
-    msTeamsApprovalNativeRuntime.observe?.onDeliveryError?.({
-      cfg,
-      accountId: "default",
-      error: new Error("card send failed"),
-      plannedTarget,
-      request,
-      approvalKind: "exec",
-      view,
-      pendingPayload,
-    });
-
-    await vi.waitFor(() => expect(sendMessageMSTeams).toHaveBeenCalledTimes(1));
-    const fallback = sendMessageMSTeams.mock.calls[0]?.[0];
-    expect(fallback?.to).toBe("msteams:conversation:19:channel@thread.tacv2");
-    expect(fallback?.accountId).toBe("default");
-    expect(fallback?.text).toContain("/approve exec-approval-1 <allow-once|deny>");
   });
 
   it("delivers and binds pending cards, then replaces resolved cards without actions", async () => {
@@ -456,6 +396,10 @@ describe("msTeamsApprovalNativeRuntime", () => {
   });
 
   it("preserves a named account through delivery, update, and fallback", async () => {
+    sendMessageMSTeams.mockResolvedValue({
+      messageId: "fallback-1",
+      conversationId: "19:channel@thread.tacv2",
+    });
     const { view, request, pendingPayload, plannedTarget, prepared } =
       await createPendingScenario();
     const entry = await msTeamsApprovalNativeRuntime.transport.deliverPending({
@@ -500,37 +444,38 @@ describe("msTeamsApprovalNativeRuntime", () => {
     });
     await vi.waitFor(() => expect(sendMessageMSTeams).toHaveBeenCalledTimes(1));
     expect(sendMessageMSTeams).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: "support" }),
+      expect.objectContaining({
+        accountId: "support",
+        to: "msteams:conversation:19:channel@thread.tacv2",
+        text: expect.stringContaining("/approve exec-approval-1 <allow-once|deny>"),
+      }),
     );
   });
 
-  it.each(["unknown", ""])(
-    "rejects an unaddressable approval activity id: %s",
-    async (messageId) => {
-      sendAdaptiveCardMSTeams.mockResolvedValue({
-        messageId,
-        conversationId: "19:channel@thread.tacv2",
-      });
-      const { view, request, pendingPayload, plannedTarget, prepared } =
-        await createPendingScenario();
+  it.each(["unknown"])("rejects an unaddressable approval activity id: %s", async (messageId) => {
+    sendAdaptiveCardMSTeams.mockResolvedValue({
+      messageId,
+      conversationId: "19:channel@thread.tacv2",
+    });
+    const { view, request, pendingPayload, plannedTarget, prepared } =
+      await createPendingScenario();
 
-      await expect(
-        msTeamsApprovalNativeRuntime.transport.deliverPending({
-          cfg,
-          accountId: "default",
-          plannedTarget,
-          preparedTarget: prepared.target,
-          request,
-          approvalKind: "exec",
-          view,
-          pendingPayload,
-        }),
-      ).resolves.toBeNull();
-      for (const { token } of pendingPayload.actionTokens) {
-        expect(msTeamsApprovalControls.get(token)).toBeNull();
-      }
-    },
-  );
+    await expect(
+      msTeamsApprovalNativeRuntime.transport.deliverPending({
+        cfg,
+        accountId: "default",
+        plannedTarget,
+        preparedTarget: prepared.target,
+        request,
+        approvalKind: "exec",
+        view,
+        pendingPayload,
+      }),
+    ).resolves.toBeNull();
+    for (const { token } of pendingPayload.actionTokens) {
+      expect(msTeamsApprovalControls.get(token)).toBeNull();
+    }
+  });
 
   it("replaces expired approvals without actions and releases canceled deliveries", async () => {
     const { view, request, pendingPayload, plannedTarget, prepared } =

@@ -28,17 +28,14 @@ import {
 import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
-} from "../gateway/github-publication-store.js";
-import {
-  readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
-  readRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-repository-publication-store.js";
-import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
+} from "../gateway/github-publication-store.worker.js";
+import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.worker.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
-} from "../gateway/operator-approval-standing-grants.js";
-import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
+} from "../gateway/operator-approval-standing-grants.worker.js";
+import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.worker.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {
@@ -79,6 +76,7 @@ import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
+import { readPluginMetadataStateRowsInDatabase } from "../plugins/installed-plugin-index-row.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
@@ -113,9 +111,9 @@ import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.w
 import { readStateStream } from "./openclaw-state-read-stream.js";
 import type {
   OpenClawStateReadReply,
+  OpenClawStateReadRequest,
   OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
-import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
@@ -124,13 +122,12 @@ import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
 
 serveOwnedWorkerTasks(
-  async function read(input, channel, control): Promise<OpenClawStateReadReply> {
+  async function read(message, channel, control): Promise<OpenClawStateReadReply> {
+    // SAFETY: Only the typed state-read pool sends requests on this private worker port.
+    const input = message as OpenClawStateReadRequest;
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
-      if (!isReadRequest(input)) {
-        throw new Error("Shared-state reader requires a captured state location and read command");
-      }
       const prepared = stateReadRegistry.prepare(input.command.type);
       if (prepared) {
         return prepared.then(() => read(input, channel, control));
@@ -409,6 +406,12 @@ serveOwnedWorkerTasks(
                 row: readExecApprovalsConfigRow(db),
               };
             }
+            if (command.type === "plugins.metadata.read") {
+              return {
+                type: command.type,
+                rows: readPluginMetadataStateRowsInDatabase(db, command.input.stateKeys),
+              };
+            }
             if (command.type === "skills.library.descriptions") {
               return {
                 type: command.type,
@@ -484,12 +487,6 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
-              };
-            }
-            if (command.type === "githubRepository.request") {
-              return {
-                type: command.type,
-                row: readRepositoryGitHubPublicationInDatabase(db, command.requestId),
               };
             }
             if (

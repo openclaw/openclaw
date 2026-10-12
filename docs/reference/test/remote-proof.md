@@ -10,21 +10,14 @@ read_when:
 
 ## Remote proof policy for agents
 
-Agent sessions run trusted development tests, changed gates, typecheck/lint,
-and builds locally by default, broadening only when the touched contract
-requires it. Never execute untrusted repository tooling locally. Use Crabbox
-when the environment is part of the proof: clean-machine, install/package,
-Docker, E2E, live, desktop, or cross-platform work, or when the operator
-explicitly requests remote proof. Do not use Crabbox merely as generic compute
-offload. The configured Testbox workflow hydrates credentials, so untrusted
-contributor or fork code must use secretless fork CI or sanitized direct AWS
-Crabbox instead.
+Use the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy)
+to decide whether remote proof is needed. The procedures below apply only to
+that exception. Never execute untrusted repository tooling locally; use
+secretless fork CI or sanitized direct AWS, never credential-hydrated Testbox.
 
-Do not pre-warm for anticipated work. Acquire the backend lazily when the
-first environment-sensitive command is ready, reuse the returned `tbx_...` id
-for later remote commands, sync the current checkout on every run, and stop it
-before handoff. Let the previous command and its cleanup finish before
-another synchronization or reuse of that lease.
+Acquire only when the command is ready; reuse task-owned leases and stop them
+before handoff. Finish commands and cleanup before syncing or reusing a lease.
 
 Testbox `run` and `warmup` use the workflow from `main` so new allocations
 inherit the maintained spending limits. The wrapper overrides configured workflow
@@ -39,8 +32,8 @@ base, dependency inputs, and Testbox preparation fingerprint under
 dependencies, preparation, and workflow inputs, including immediately before
 delegation. Source-only edits and commits can reuse that prepared box. The
 allocation receipt remains unchanged, while each command records its current
-source revision and syncs the checkout. A HEAD change during that command's
-preparation still stops delegation; rerun from the current candidate.
+source revision and syncs the checkout. Source edits during preparation are best
+effort; finish editing before starting proof, or rerun from the intended candidate.
 This source-refresh contract belongs to the OpenClaw wrapper's trusted task
 path; it does not permit raw native callers or untrusted proof to reuse a
 lease across revisions.
@@ -94,8 +87,7 @@ names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crab
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
 
-The [local test commands](/reference/test/local) are the normal trusted development path. Keep proof
-proportional to the touched contract.
+See [local commands](/reference/test/local) for focused development proof.
 
 For untrusted proof, lazily warm with `--provider aws`. Every run must set
 `CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use
@@ -150,7 +142,7 @@ See [runner limits](/ci/runners#testbox-spending-limits) for queue behavior.
 
 ## Crabbox repository setup
 
-The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
+The [Crabbox skill](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/SKILL.md)
 owns portable lease, trust, sync, and cleanup procedures. This section owns the
 OpenClaw wrapper and workflow inputs. Routine task-needed Crabbox/Testbox use
 and task-owned worktrees do not require another confirmation; preserve unrelated
@@ -255,14 +247,15 @@ tracking and the final raw transport tree use separate indexes, preserving the
 same ignored-file and untracked-file selection rules. The wrapper reports copied
 and reused file counts and preparation time.
 Commits on the same retained source ref keep the mirror reusable; each command
-still records its full current witness and rechecks the source revision before sealing.
+records its captured source witness.
 
 The mirror remains exclusively locked for the entire command, including artifact
 preservation and lease-claim restoration. An overlapping run from the same worktree
 prints a message and builds an independent fresh capsule. Only completed cleanup
 records an idle mirror for reuse; a missing witness, unsupported staging location,
-or unresolved owner uses fresh staging. Changed source during freezing fails the
-run. Cache metadata, payload, witness repository or ref, or Git-version mismatches
+or unresolved owner uses fresh staging. Avoid editing source during freezing;
+the capsule uses its captured selection and bytes without a final source rescan.
+Cache metadata, payload, witness repository or ref, or Git-version mismatches
 rebuild cold before upload. Source enumeration and metadata checks still scale with the repository;
 source-byte copying and hashing scale with changed files on warm runs.
 Private mirrors disable Git hooks and fsmonitor; source enumeration also disables

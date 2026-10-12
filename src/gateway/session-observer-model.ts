@@ -23,7 +23,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
@@ -39,8 +38,6 @@ const MAX_REVISION_FLOORS = 256;
 const MAX_SUPERSEDED_RUNS = 256;
 const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
-
-export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
 
 export type SessionObserverRead = {
   assertCurrent: () => void;
@@ -301,7 +298,7 @@ const ModelDigestSchema = z.strictObject({
 });
 
 export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
-  const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
+  const normalized = value.replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
 

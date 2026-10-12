@@ -256,10 +256,10 @@ export function resolveSessionResetCommand(
   return result;
 }
 
-export function resolveAuthorizedSessionResetCommand(
+export async function resolveAuthorizedSessionResetCommand(
   params: SessionResetCommandContext & { commandAuthorized: boolean },
-): { resetAuthorized: boolean; resetCommand: ResolvedSessionResetCommand } {
-  const resetAuthorized = isResetAuthorizedForContext(params);
+): Promise<{ resetAuthorized: boolean; resetCommand: ResolvedSessionResetCommand }> {
+  const resetAuthorized = await isResetAuthorizedForContext(params);
   return {
     resetAuthorized,
     resetCommand: resolveSessionResetCommand({

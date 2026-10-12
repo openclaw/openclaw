@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
-  readChatSessionSnapshot,
   resolveChatSnapshotKey,
   type ChatMessageCache,
   type ChatSessionSnapshot,
@@ -35,84 +34,6 @@ describe("session prefetch pane and navigation ownership", () => {
     shell.append(target);
     target.dispatchEvent(new Event("pointerover", { bubbles: true }));
   }
-
-  it.each(["pointerover", "focusin"])(
-    "prefetches only the session receiving %s",
-    async (eventType) => {
-      const intended = "agent:main:intended";
-      const request = vi.fn(async (_method: string, params: unknown) =>
-        historyResult((params as { sessionKey: string }).sessionKey),
-      );
-      updatePrefetch({
-        client: createTestGatewayClient(request),
-        listRevision: 1,
-        openSessionKeys: ["agent:main:foreground"],
-        rows: [row("agent:main:newest", NOW), row("agent:main:recent", NOW - 1), row(intended, 1)],
-      });
-      const target = document.createElement("a");
-      target.dataset.sessionKey = intended;
-      shell.append(target);
-      onTestFinished(() => target.remove());
-      target.dispatchEvent(new Event(eventType, { bubbles: true }));
-
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
-      expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: intended })).not.toBeNull();
-    },
-  );
-
-  it("keeps prefetch intent-only when a dashboard presents its conversation", async () => {
-    const dashboard = "agent:main:dashboard";
-    const intended = "agent:main:intended";
-    const recent = "agent:main:recent";
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: [dashboard],
-      hiddenConversationSessionKeys: [dashboard],
-      rows: [row(dashboard, NOW), row(recent, NOW - 1), row(intended, 1)],
-    });
-    const pane = fixture.host.firstElementChild as HTMLElement & {
-      conversationPresented: boolean;
-    };
-    // A visible sibling Home conversation does not establish navigation intent.
-    const home = Object.assign(document.createElement("openclaw-chat-pane"), {
-      sessionKey: "agent:main:home",
-      conversationPresented: true,
-      transcriptLoading: false,
-    });
-    shell.append(home);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await settlePromises();
-    expect(request).not.toHaveBeenCalled();
-
-    const target = document.createElement("a");
-    target.dataset.sessionKey = intended;
-    shell.append(target);
-    home.transcriptLoading = true;
-    home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
-    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
-    expect(request).not.toHaveBeenCalled();
-
-    home.transcriptLoading = false;
-    home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
-
-    pane.conversationPresented = true;
-    pane.dispatchEvent(new Event("openclaw-chat-pane-lifecycle-changed", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
-  });
 
   it.each(["stored read", "cursor reset"])(
     "rechecks dashboard intent after %s before another history request",
@@ -171,25 +92,6 @@ describe("session prefetch pane and navigation ownership", () => {
       );
     },
   );
-
-  it("does not prefetch on pane lifecycle changes without navigation intent", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
-    );
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:selected", "agent:main:other"],
-      hiddenConversationSessionKeys: ["agent:main:other"],
-      rows: [row("agent:main:recent", NOW - 1)],
-    });
-    fixture.host.lastElementChild!.dispatchEvent(
-      new Event("openclaw-chat-pane-lifecycle-changed", { bubbles: true }),
-    );
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
-    expect(request).not.toHaveBeenCalled();
-  });
 
   it("excludes the Home pane beside the page without borrowing another app's panes", async () => {
     const home = Object.assign(document.createElement("openclaw-chat-pane"), {

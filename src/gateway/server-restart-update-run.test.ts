@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { buildUpdateRestartSentinelPayload } from "../infra/update-restart-sentinel-payload.js";
 import {
   createUpdateRun,
@@ -21,8 +25,14 @@ vi.mock("../version.js", async (importOriginal) => ({
 }));
 
 const directories = createTempDirTracker();
+function prepareRestartState(prefix: string) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", directories.make(prefix));
+  setRuntimeConfigSnapshot({});
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   runtimeBuildId = null;
   directories.cleanup();
@@ -32,7 +42,7 @@ describe("update restart verification ownership", () => {
   it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
     "does not attribute an unrelated later boot to a terminal %s update",
     async (status) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-terminal-boot-"));
+      prepareRestartState("update-terminal-boot-");
       const run = createUpdateRun({ trigger: "cli" });
       const terminal = finishUpdateRun(run.runId, { status, reason: "original-outcome" });
       const payload = {
@@ -51,7 +61,7 @@ describe("update restart verification ownership", () => {
   it.each(["api", "chat", "control-ui", "campaign"] as const)(
     "finishes an unmanaged %s update after replacement startup",
     async (trigger) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-unmanaged-boot-"));
+      prepareRestartState("update-unmanaged-boot-");
       const version = resolveRuntimeServiceVersion();
       const run = createUpdateRun({ trigger, target: { version } });
       recordUpdateRunPhase(run.runId, "restarting", { after: { version } });
@@ -71,7 +81,7 @@ describe("update restart verification ownership", () => {
   it.each(["api", "chat", "control-ui", "campaign"] as const)(
     "preserves managed %s verification after replacement startup",
     async (trigger) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-boot-"));
+      prepareRestartState("update-managed-boot-");
       const version = resolveRuntimeServiceVersion();
       const run = createUpdateRun({ trigger, target: { version } });
       recordUpdateRunPhase(run.runId, "verifying", { after: { version } });
@@ -91,7 +101,7 @@ describe("update restart verification ownership", () => {
   it.each(["api", "chat", "control-ui", "campaign"] as const)(
     "preserves the restored-version verification for a failed managed %s update",
     async (trigger) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-restore-"));
+      prepareRestartState("update-managed-restore-");
       const restoredVersion = "1.2.3";
       const targetVersion = "2.0.0";
       vi.stubEnv("OPENCLAW_VERSION", restoredVersion);
@@ -134,7 +144,7 @@ describe("update restart verification ownership", () => {
   );
 
   it("regrades a restored-version boot reporting a different build against the update target", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-restore-build-mismatch-"));
+    prepareRestartState("update-managed-restore-build-mismatch-");
     const restoredVersion = "1.2.3";
     vi.stubEnv("OPENCLAW_VERSION", restoredVersion);
     runtimeBuildId = "build-other";
@@ -169,7 +179,7 @@ describe("update restart verification ownership", () => {
   });
 
   it("regrades a restored-version boot whose build cannot be resolved when a build was recorded", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-restore-build-missing-"));
+    prepareRestartState("update-managed-restore-build-missing-");
     const restoredVersion = "1.2.3";
     vi.stubEnv("OPENCLAW_VERSION", restoredVersion);
     runtimeBuildId = null;
@@ -200,7 +210,7 @@ describe("update restart verification ownership", () => {
   });
 
   it("reuses a restored-version verification recorded without build identity", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-managed-restore-build-unrecorded-"));
+    prepareRestartState("update-managed-restore-build-unrecorded-");
     const restoredVersion = "1.2.3";
     vi.stubEnv("OPENCLAW_VERSION", restoredVersion);
     runtimeBuildId = "build-other";
@@ -232,7 +242,7 @@ describe("update restart verification ownership", () => {
   });
 
   it("keeps ordinary expected-build checks when target verification already succeeded", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-ordinary-build-check-"));
+    prepareRestartState("update-ordinary-build-check-");
     const version = resolveRuntimeServiceVersion();
     runtimeBuildId = "build-running";
     // after.version is set, so target verification succeeded: the recorded
@@ -258,7 +268,7 @@ describe("update restart verification ownership", () => {
   });
 
   it("fails an expired unmanaged pending restart", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-unmanaged-expiry-"));
+    prepareRestartState("update-unmanaged-expiry-");
     const run = createUpdateRun({ trigger: "api" });
     recordUpdateRunPhase(run.runId, "restarting");
     expect(
@@ -283,7 +293,7 @@ describe("update restart verification ownership", () => {
     "restarting",
     "verifying",
   ] as const)("does not let sentinel expiry finish the orchestrator during %s", async (phase) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-boot-owner-"));
+    prepareRestartState("update-boot-owner-");
     const run = createUpdateRun({
       trigger: "cli",
       target: { version: resolveRuntimeServiceVersion() },

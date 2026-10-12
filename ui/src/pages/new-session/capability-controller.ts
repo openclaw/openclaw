@@ -4,7 +4,7 @@ import { t } from "../../i18n/index.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.ts";
+import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.tsx";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,

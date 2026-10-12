@@ -172,7 +172,10 @@ export async function prepareSessionsSendCommunication(params: {
       return;
     }
     const facts = change.facts;
-    if (facts?.kind === "entry" && facts.communicationBinding !== undefined) {
+    if (
+      (facts?.kind === "entry" || facts?.kind === "replacement") &&
+      facts.communicationBinding !== undefined
+    ) {
       dirty ||= selected.some(
         (endpoint) => communicationEntryBinding(endpoint.entry) !== facts.communicationBinding,
       );

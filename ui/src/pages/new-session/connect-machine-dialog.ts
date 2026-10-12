@@ -1,12 +1,14 @@
 import { html, nothing } from "lit";
-import { quoteCliArg } from "../../../../src/cli/quote-cli-arg.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { renderConnectCommand } from "../../components/connect-command.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
+import {
+  requestDevicePairJoinSetup,
+  type DevicePairJoinSetup,
+} from "../../lib/device-pair-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 
@@ -18,7 +20,7 @@ export class ConnectMachineSetupState {
   private openValue = false;
   private loadingValue = false;
   private errorValue: string | null = null;
-  private setupValue: DevicePairSetup | null = null;
+  private setupValue: DevicePairJoinSetup | null = null;
   private requestId = 0;
 
   constructor(
@@ -56,8 +58,7 @@ export class ConnectMachineSetupState {
     };
     const { loadingValue: loading, errorValue: error, setupValue: setup } = this;
     const title = t("newSession.connectMachineTitle");
-    const joinUrl = setup?.joinUrl?.trim();
-    const command = joinUrl ? `npx -y openclaw connect ${quoteCliArg(joinUrl)} --service` : null;
+    const command = setup?.command;
     const expiresAt = setup?.expiresAtMs
       ? formatTimeMs(setup.expiresAtMs, { hour: "numeric", minute: "2-digit" }, "")
       : "";
@@ -101,15 +102,24 @@ export class ConnectMachineSetupState {
                 : nothing
             }
             ${
-              command
+              setup
                 ? html`
-                    ${renderConnectCommand(`${command} --session-host`)}
+                    ${renderConnectCommand(setup.command)}
                     <p class="connect-machine-dialog__hint">
                       ${t("newSession.connectMachineTeamHint")}
                     </p>
+                    <p class="connect-machine-dialog__hint">
+                      ${t("newSession.connectMachineInstalled")}
+                      <code translate="no" style="overflow-wrap: anywhere"
+                        >${setup.installedCommand}</code
+                      >
+                    </p>
+                    <p class="connect-machine-dialog__hint" ?hidden=${!setup.versionNote}>
+                      ${setup.versionNote}
+                    </p>
                     <details>
                       <summary>${t("newSession.connectMachineCommandOnly")}</summary>
-                      ${renderConnectCommand(command)}
+                      ${renderConnectCommand(setup.serviceCommand)}
                     </details>
                     <p class="connect-machine-dialog__hint">
                       ${

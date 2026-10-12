@@ -380,3 +380,23 @@ export function selectChangedTsgoCoreTestShards(
     ),
   );
 }
+
+/** Prioritize declared changed test roots without changing the selected coverage. */
+export function orderChangedTsgoCoreTestShards(
+  shards: readonly { name: string; config: string }[],
+  paths: readonly string[],
+  graphs: readonly { config: string; roots: readonly string[] }[],
+): readonly { name: string; config: string }[] {
+  const changedTests = new Set(
+    paths.filter((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file)),
+  );
+  const owners = new Set(
+    graphs
+      .filter((graph) => graph.roots.some((root) => changedTests.has(root)))
+      .map((graph) => graph.config),
+  );
+  return [
+    ...shards.filter((shard) => owners.has(shard.config)),
+    ...shards.filter((shard) => !owners.has(shard.config)),
+  ];
+}

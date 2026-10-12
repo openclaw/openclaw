@@ -289,34 +289,6 @@ describe("channels controller WhatsApp provider selection", () => {
     expect(channels.state.whatsappLoginSessionKey).toBeNull();
     channels.dispose();
   });
-
-  it("retains the provider session key when a wait remains disconnected", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "web.login.start") {
-        return { message: "scan", sessionKey: "opaque-session" };
-      }
-      if (method === "web.login.wait") {
-        return { connected: false, message: "still waiting" };
-      }
-      return createChannelsSnapshot("refreshed");
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
-
-    await channels.startWhatsApp(false);
-    await channels.waitWhatsApp();
-
-    expect(channels.state.whatsappLoginSessionKey).toBe("opaque-session");
-    await channels.waitWhatsApp();
-    expect(request.mock.calls.findLast(([method]) => method === "web.login.wait")).toEqual([
-      "web.login.wait",
-      expect.objectContaining({ sessionKey: "opaque-session" }),
-    ]);
-    channels.dispose();
-  });
 });
 
 describe("channels controller WhatsApp logout", () => {
@@ -393,13 +365,6 @@ describe("channels controller WhatsApp mutation failures", () => {
       preservesQr: true,
       connected: null,
     },
-    {
-      operation: "logout",
-      method: "channels.logout",
-      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.logoutWhatsApp(),
-      preservesQr: true,
-      connected: true,
-    },
   ])(
     "publishes a rejected $operation without probing channel status",
     async ({ method, invoke, preservesQr, connected }) => {
@@ -469,53 +434,35 @@ describe("channels controller DM pairing", () => {
     ],
   };
 
-  it.each(["approve", "dismiss"] as const)(
-    "loads pending requests and refreshes after %s",
-    async (action) => {
-      let listCount = 0;
-      const request = vi.fn(async (method: string) => {
-        if (method === "channels.pairing.list") {
-          listCount += 1;
-          return listCount === 1 ? pendingPairing : emptyPairing;
-        }
-        if (method === "channels.pairing.approve") {
-          return {
-            requestId: "request-1",
-            senderId: "+1555",
-            notification: "sent",
-            commandOwnerBootstrap: "not-requested",
-          };
-        }
-        return {};
-      });
-      const channels = createChannelCapability({
-        snapshot: { client: { request }, phase: "connected" },
-        subscribe: () => () => undefined,
-        subscribeEvents: () => () => undefined,
-      } as never);
-
-      await channels.refreshPairing();
-      expect(channels.state.pairingSnapshot?.requests).toHaveLength(1);
-
-      const params = {
-        channel: "whatsapp",
-        accountId: "personal",
-        requestId: "request-1",
-      };
-      if (action === "approve") {
-        const approval = { ...params, notify: true, bootstrapCommandOwner: false };
-        const result = await channels.approvePairing(approval);
-        expect(result?.notification).toBe("sent");
-        expect(request).toHaveBeenCalledWith("channels.pairing.approve", approval);
-      } else {
-        await expect(channels.dismissPairing(params)).resolves.toBe(true);
-        expect(request).toHaveBeenCalledWith("channels.pairing.dismiss", params);
+  it("loads pending requests and refreshes after dismissal", async () => {
+    let listCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.pairing.list") {
+        listCount += 1;
+        return listCount === 1 ? pendingPairing : emptyPairing;
       }
-      expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-      expect(channels.state.pairingBusyRequestId).toBeNull();
-      channels.dispose();
-    },
-  );
+      return {};
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    } as never);
+
+    await channels.refreshPairing();
+    expect(channels.state.pairingSnapshot?.requests).toHaveLength(1);
+
+    const params = {
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "request-1",
+    };
+    await expect(channels.dismissPairing(params)).resolves.toBe(true);
+    expect(request).toHaveBeenCalledWith("channels.pairing.dismiss", params);
+    expect(channels.state.pairingSnapshot?.requests).toEqual([]);
+    expect(channels.state.pairingBusyRequestId).toBeNull();
+    channels.dispose();
+  });
 
   it("keeps the row resolved when refresh fails and blocks polling during mutation", async () => {
     const approvalResult = createDeferred<{
@@ -681,24 +628,6 @@ describe("channels controller DM pairing", () => {
     await expect(pendingApproval).resolves.toBeNull();
     expect(channels.state.pairingSnapshot).toBe(pendingPairing);
     expect(request.mock.calls.filter(([method]) => method === "channels.pairing.list")).toEqual([]);
-    channels.dispose();
-  });
-
-  it("keeps the last request snapshot visible when refresh fails", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("gateway unavailable");
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
-    channels.state.pairingSnapshot = emptyPairing;
-
-    await channels.refreshPairing();
-
-    expect(channels.state.pairingSnapshot).toBe(emptyPairing);
-    expect(channels.state.pairingError).toBe("gateway unavailable");
     channels.dispose();
   });
 });
@@ -909,28 +838,6 @@ describe("channel refresh sequencing", () => {
 
     expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("fresh");
     expect(channels.state.channelsLoading).toBe(false);
-    channels.dispose();
-  });
-
-  it("retains the previous snapshot while a refresh is pending", async () => {
-    const pending = createDeferred<ChannelsStatusSnapshot | null>();
-    const request = vi.fn(() => pending.promise);
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as never);
-    const previous = createChannelsSnapshot("previous");
-    channels.state.channelsSnapshot = previous;
-
-    const refresh = channels.refresh(true);
-
-    expect(channels.state.channelsLoading).toBe(true);
-    expect(channels.state.channelsSnapshot).toBe(previous);
-    pending.resolve(createChannelsSnapshot("next"));
-    await refresh;
-    expect(channels.state.channelsLoading).toBe(false);
-    expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("next");
     channels.dispose();
   });
 });

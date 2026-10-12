@@ -55,7 +55,7 @@ Place command-specific options after their command name, for example `openclaw s
 
 Unknown root options fail with an option error and a help hint instead of starting onboarding or the TUI.
 
-A named `--profile` replaces canonical state and config paths inherited from
+A named `--profile` replaces standard state and config paths inherited from
 another profile, including a running Gateway service. Explicitly customized
 state directories and config paths remain unchanged.
 

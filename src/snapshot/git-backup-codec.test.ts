@@ -16,7 +16,8 @@ it("restores a supported historical agent schema without migrating its data or a
   const sourcePath = path.join(root, "source.sqlite");
   const outputPath = path.join(root, "dump");
   const targetPath = path.join(root, "restored.sqlite");
-  const version = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
+  // Latest stable 2026.10.2 persisted schema 24; pin the shipped data contract.
+  const version = 24;
   const expected = { value: 9_223_372_036_854_775_806n, bytes: "000102FF" };
   try {
     const source = new DatabaseSync(sourcePath);

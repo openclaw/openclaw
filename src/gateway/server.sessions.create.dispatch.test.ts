@@ -167,8 +167,8 @@ test("chat.send deletes a session before its pending dashboard title finishes", 
     await dispatchAdmissionsReleased;
     expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
 
-    // Metadata-only naming must not delay deletion, even while its model is blocked.
-    const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
+    // Use the dispatching Gateway's terminal drain while its metadata-only title is blocked.
+    const deletion = rpcReq<{ deleted: boolean }>(ws, "sessions.delete", {
       key: sessionKey,
     });
     deletionCleanup = deletion.catch(() => {});
@@ -402,7 +402,7 @@ test.each(mentionCreationOwners)(
           "sessions.create",
           {
             agentId,
-            message: "@Bob review this",
+            message: "@Bob review this: API_TOKEN = computeToken()",
             mentions: [{ profileId: bob.id, start: 0, end: 4 }],
           },
           { client: sender, context, isWebchatConnect: () => true },
@@ -411,15 +411,24 @@ test.each(mentionCreationOwners)(
         expect(created.payload?.runStarted).toBe(true);
         key = created.payload?.key;
         expect(key).toMatch(new RegExp(`^agent:${agentId}:dashboard:`));
-        expect(inbox.list(recipient)).toMatchObject({
-          ok: true,
-          value: {
-            items: [
-              { senderProfileId: alice.id, sessionKey: key, agentId, excerpt: "@Bob review this" },
-            ],
-          },
+        await inbox.listAsync(recipient, (result) => {
+          expect(result).toMatchObject({
+            ok: true,
+            value: {
+              items: [
+                {
+                  senderProfileId: alice.id,
+                  sessionKey: key,
+                  agentId,
+                  excerpt: "@Bob review this: API_TOKEN = computeToken()",
+                },
+              ],
+            },
+          });
         });
-        expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
+        await inbox.listAsync(sender, (result) => {
+          expect(result).toMatchObject({ ok: true, value: { items: [] } });
+        });
       } finally {
         await waitForCreatedSessionRun(context, storePath, key);
         await inbox.dispose();
@@ -812,9 +821,9 @@ test("sessions.create sends selected global initial tasks to the requested agent
     task: "hello selected global",
   });
 
-  expect(created.ok).toBe(true);
+  expect(created.ok, JSON.stringify(created)).toBe(true);
   expect(created.payload?.key).toBe("global");
-  expect(created.payload?.runStarted).toBe(true);
+  expect(created.payload?.runStarted, JSON.stringify(created)).toBe(true);
   const runId = requireNonEmptyString(created.payload?.runId, "selected global run id");
   const wait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 1_000 });
   expect(wait.ok).toBe(true);

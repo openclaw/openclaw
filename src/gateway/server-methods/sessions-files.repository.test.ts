@@ -4,6 +4,10 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -69,6 +73,12 @@ const mocks = vi.hoisted(() => ({
   open: vi.fn(),
 }));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.load }));
+
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    mocks.load(params.key, { agentId: params.agentId }),
+}));
 vi.mock("../../config/sessions/session-accessor.js", async (original) => ({
   ...(await original<typeof import("../../config/sessions/session-accessor.js")>()),
   loadSessionEntryReadOnly: () => mocks.load().entry,
@@ -243,11 +253,13 @@ beforeEach(async () => {
     return result;
   });
   context = requestContext();
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
 });
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
   await closeOpenClawAgentDatabasesAsync(gatewayRoot);
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
@@ -597,8 +609,9 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   expect(retained.file.content).toBe("retained second\n");
   expect(retained.file.hash).toBeUndefined();
   expect(retained.root).toBeUndefined();
-  const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "blob").length;
+  const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
   const beforeOversized = blobsRead();
+  expect(beforeOversized).toBeGreaterThan(0);
   const oversized = expectError(
     await invoke("sessions.files.get", { sessionKey, path: "oversized.txt" }, context),
   );
@@ -628,14 +641,20 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
 
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
-    return args[1][1] === "blob" ? { ...result, stdout: Buffer.from("tampered\n") } : result;
+    if (args[1][1] !== "--batch") {
+      return result;
+    }
+    const stdout = Buffer.from(result.stdout);
+    const contentStart = stdout.indexOf(0x0a) + 1;
+    stdout[contentStart] = stdout[contentStart]! ^ 0xff;
+    return { ...result, stdout };
   });
   await expect(
     invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
   ).rejects.toThrow("staged result payload is invalid");
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
-    if (args[1][1] === "blob") {
+    if (args[1][1] === "--batch") {
       lifecycleRevision = `${lifecycleRevision}-next`;
     }
     return result;

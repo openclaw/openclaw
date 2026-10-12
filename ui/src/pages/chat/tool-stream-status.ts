@@ -308,9 +308,7 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
   const active =
     resolveModelLabel(data.activeProvider, data.activeModel) ??
     resolveModelLabel(data.toProvider, data.toModel);
-  const previous =
-    resolveModelLabel(data.previousActiveProvider, data.previousActiveModel) ??
-    toTrimmedString(data.previousActiveModel);
+  const previous = resolveModelLabel(data.previousActiveProvider, data.previousActiveModel);
   if (!selected || !active) {
     return;
   }

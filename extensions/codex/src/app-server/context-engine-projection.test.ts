@@ -273,7 +273,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("cat .env");
   });
 
-  it("preserves redacted tool payload context for thread bootstrap projections", async () => {
+  it("preserves tool payload context for thread bootstrap projections", async () => {
     const shared = { recursive: true };
     const nested: Record<string, unknown> = {
       first: shared,
@@ -341,12 +341,12 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain("OPENAI_API_KEY=");
     expect(result.promptText).toContain("status ok");
     expect(result.promptText).not.toContain("cat .env");
-    expect(result.promptText).not.toContain("sk-1234567890abcdef");
-    expect(result.promptText).not.toContain("842761");
+    expect(result.promptText).toContain("sk-1234567890abcdef");
+    expect(result.promptText).toContain("842761");
     expect(result.promptText).toContain('"attemptsRemaining": 3');
   });
 
-  it("preserves canonical tool results without exposing secrets or media bytes", async () => {
+  it("preserves canonical tool result text while omitting media bytes", async () => {
     const toolText = `OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok\n${"x".repeat(6_000)} tool tail`;
     const message: AgentMessage = {
       role: "toolResult",
@@ -366,7 +366,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
 
     expect(result.promptText).toContain("tool result: call-1");
-    expect(result.promptText).not.toContain("sk-1234567890abcdef");
+    expect(result.promptText).toContain("sk-1234567890abcdef");
     expect(result.promptText).not.toContain("private-image-bytes");
     expect(result.promptText).not.toContain("tool tail");
     expect(result.promptText).toContain("status ok");

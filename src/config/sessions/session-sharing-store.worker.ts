@@ -19,16 +19,13 @@ import {
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
+import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.worker.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import {
-  applySessionGroupCategoryMutation,
-  assertSessionGroupCategoryDestination,
-  prepareSessionGroupCategoryMutation,
-} from "./session-group-categories.kernel.js";
+import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
+import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import type {
   MembershipPublication,
@@ -37,11 +34,11 @@ import type {
   SessionSharingCommitReceipt,
 } from "./session-sharing-store.types.js";
 import {
-  addSessionSuggestion,
-  claimSessionSuggestionDispatch,
-  finalizeSessionSuggestionClaim,
-  releaseSessionSuggestionDispatch,
-} from "./session-suggestion-store.js";
+  addSessionSuggestionInDatabase,
+  claimSessionSuggestionDispatchInDatabase,
+  finalizeSessionSuggestionClaimInDatabase,
+  releaseSessionSuggestionDispatchInDatabase,
+} from "./session-suggestion-store.kernel.js";
 export type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 
 /** The canonical agent executor retains the connection and both live admission checks. */
@@ -57,7 +54,7 @@ export function bindSqliteWorkerBackend(
     | {
         from: string;
         storePath: string;
-        rows: ReturnType<typeof prepareSessionGroupCategoryMutation>;
+        keys: string[];
       }
     | undefined;
   const workerDatabase = (scope: SessionAccessScope) => {
@@ -86,9 +83,9 @@ export function bindSqliteWorkerBackend(
             categoryPlan = {
               from: command.input.from,
               storePath: database.path,
-              rows: prepareSessionGroupCategoryMutation(database, command.input.from),
+              keys: readSessionGroupCategoryKeys(database, command.input.from),
             };
-            return [...categoryPlan.rows.keys()];
+            return categoryPlan.keys;
           }),
         );
       }
@@ -129,16 +126,56 @@ export function bindSqliteWorkerBackend(
                 return ownerResult;
               }
               if (command.type === "suggestion.add") {
-                return addSessionSuggestion(scope, command.input.params);
+                const database = workerDatabase(scope);
+                return addSessionSuggestionInDatabase(
+                  database,
+                  scope.sessionKey,
+                  command.input.params,
+                  {
+                    agentId: database.agentId,
+                    path: database.path,
+                    env: scope.env,
+                  },
+                );
               }
               if (command.type === "suggestion.claim") {
-                return claimSessionSuggestionDispatch(scope, command.input.params);
+                const database = workerDatabase(scope);
+                return claimSessionSuggestionDispatchInDatabase(
+                  database,
+                  scope.sessionKey,
+                  command.input.params,
+                  {
+                    agentId: database.agentId,
+                    path: database.path,
+                    env: scope.env,
+                  },
+                );
               }
               if (command.type === "suggestion.release") {
-                return releaseSessionSuggestionDispatch(scope, command.input.params);
+                const database = workerDatabase(scope);
+                return releaseSessionSuggestionDispatchInDatabase(
+                  database,
+                  scope.sessionKey,
+                  command.input.params,
+                  {
+                    agentId: database.agentId,
+                    path: database.path,
+                    env: scope.env,
+                  },
+                );
               }
               if (command.type === "suggestion.finalize") {
-                return finalizeSessionSuggestionClaim(scope, command.input.params);
+                const database = workerDatabase(scope);
+                return finalizeSessionSuggestionClaimInDatabase(
+                  database,
+                  scope.sessionKey,
+                  command.input.params,
+                  {
+                    agentId: database.agentId,
+                    path: database.path,
+                    env: scope.env,
+                  },
+                );
               }
               if (command.type === "category.apply") {
                 const database = workerDatabase(scope);
@@ -149,10 +186,11 @@ export function bindSqliteWorkerBackend(
                 ) {
                   throw new Error("Session group category mutation has no matching prepared rows");
                 }
-                keys = [...categoryPlan.rows.keys()];
+                keys = categoryPlan.keys;
                 return applySessionGroupCategoryMutation(
                   database,
-                  categoryPlan.rows,
+                  categoryPlan.keys,
+                  command.input.from,
                   command.input.to,
                   scope.env ?? process.env,
                 );
@@ -250,15 +288,6 @@ export function bindSqliteWorkerBackend(
             operationLabel: `sessions.${command.type}`,
             busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
             databaseLabel: context.databasePath,
-            withCommit(commit) {
-              if (command.type === "category.apply") {
-                assertSessionGroupCategoryDestination(
-                  command.input.to,
-                  command.input.scope.env ?? process.env,
-                );
-              }
-              commit();
-            },
           },
         ),
       );

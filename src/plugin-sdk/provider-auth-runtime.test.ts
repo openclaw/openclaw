@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import {
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "../agents/auth-profiles/store-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
@@ -109,6 +112,29 @@ describe("plugin-sdk provider-auth-runtime", () => {
     ).toEqual({
       profileId: "openai:chatgpt",
       accountId: "acct-openai-workspace",
+    });
+    const params = { provider: "openai", profileId: "openai:chatgpt", agentDir };
+    await expect(
+      providerAuthRuntime.resolveProviderAuthProfileMetadataAsync(params),
+    ).resolves.toEqual({
+      profileId: "openai:chatgpt",
+      accountId: "acct-openai-workspace",
+    });
+    await updateAuthProfileStoreWithLock({
+      agentDir,
+      updater(store) {
+        const profile = store.profiles["openai:chatgpt"];
+        if (profile?.type === "oauth") {
+          profile.accountId = "acct-updated-workspace";
+        }
+        return true;
+      },
+    });
+    await expect(
+      providerAuthRuntime.resolveProviderAuthProfileMetadataAsync(params),
+    ).resolves.toEqual({
+      profileId: "openai:chatgpt",
+      accountId: "acct-updated-workspace",
     });
   });
 

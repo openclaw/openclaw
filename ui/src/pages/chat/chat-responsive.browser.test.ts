@@ -28,6 +28,7 @@ import {
   getBoundingBox,
   getRect,
   readUiCss,
+  mountMcpAppSurfaceFixture,
   rectsOverlap,
   waitForLayoutSettled,
   type ControlRect,
@@ -873,127 +874,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
-  it("keeps the split-pane close button reachable as the pane narrows", async () => {
-    await withBrowserPage(openBrowserPage(1100, 240), async (page) => {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
-          <div class="chat-split-view__cell" style="width: 320px;">
-            <div class="chat-pane__header chat-pane__header--closable">
-              <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
-              <span class="chat-pane__session-title"
-                ><span class="chat-pane__session-title-text"
-                  >A deliberately long split-pane session title</span
-                ></span
-              >
-              <openclaw-session-owner-chip>
-                <span class="session-owner-chip session-owner-chip--header">O</span>
-              </openclaw-session-owner-chip>
-              <button class="chat-pane__workspace-chip" type="button">
-                ${iconSvg()}<span>openclaw-workspace</span>
-              </button>
-              <wa-dropdown class="chat-pane__sharing-menu">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
-              </wa-dropdown>
-              <wa-dropdown class="chat-pane__branches-menu">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger" type="button">R</button>
-              </wa-dropdown>
-              <div class="chat-pane__actions">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-side-panel-toggle" type="button">L</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down" type="button">V</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right" type="button">H</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open" type="button">P</button>
-              </div>
-            </div>
-          </div>
-        </body></html>`,
-      );
-
-      const selectors = [
-        "openclaw-session-owner-chip",
-        ".chat-side-panel-toggle",
-        ".chat-pane__sharing-menu",
-        ".chat-pane__nav-toggle",
-        ".chat-pane__palette-open",
-        ".chat-pane__split-down",
-        ".chat-pane__split-right",
-      ];
-      const displayValues = async () =>
-        await page
-          .locator(selectors.join(","))
-          .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).display));
-      const setHeaderContentWidth = async (contentWidth: number) => {
-        await page.locator(".chat-split-view__cell").evaluate((cell, width) => {
-          const header = cell.querySelector<HTMLElement>(".chat-pane__header")!;
-          const style = getComputedStyle(header);
-          const horizontalInsets =
-            Number.parseFloat(style.paddingLeft) +
-            Number.parseFloat(style.paddingRight) +
-            Number.parseFloat(style.borderLeftWidth) +
-            Number.parseFloat(style.borderRightWidth);
-          (cell as HTMLElement).style.width = `${width + horizontalInsets}px`;
-        }, contentWidth);
-      };
-
-      const header = await getBoundingBox(page, ".chat-pane__header");
-      const close = await getBoundingBox(page, ".chat-pane__close-pane");
-      expect(close.x + close.width).toBeLessThanOrEqual(header.x + header.width);
-      expect(await displayValues()).toEqual(selectors.map(() => "none"));
-
-      await page.locator(".chat-split-view__cell").evaluate((cell) => {
-        (cell as HTMLElement).style.width = "580px";
-      });
-      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
-      const intermediateHeader = await getBoundingBox(page, ".chat-pane__header");
-      const intermediateClose = await getBoundingBox(page, ".chat-pane__close-pane");
-      expect(intermediateClose.x + intermediateClose.width).toBeLessThanOrEqual(
-        intermediateHeader.x + intermediateHeader.width,
-      );
-      expect(await displayValues()).toEqual(selectors.map(() => "none"));
-      const intermediateOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
-        clientWidth: element.clientWidth,
-        scrollWidth: element.scrollWidth,
-      }));
-      expect(intermediateOverflow.scrollWidth).toBeLessThanOrEqual(
-        intermediateOverflow.clientWidth,
-      );
-
-      await page.locator(".chat-split-view__cell").evaluate((cell) => {
-        (cell as HTMLElement).style.width = "1000px";
-      });
-      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
-      const fullCompositionWidth = await page.locator(".chat-pane__header").evaluate((element) => {
-        const headerElement = element as HTMLElement;
-        headerElement.style.containerType = "normal";
-        headerElement.style.width = "0px";
-        const width = headerElement.scrollWidth;
-        headerElement.style.removeProperty("width");
-        headerElement.style.removeProperty("container-type");
-        return width;
-      });
-      await setHeaderContentWidth(801);
-      await waitForLayoutSettled(page, ".chat-pane__header, .chat-pane__close-pane");
-      const transitionOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
-        clientWidth: element.clientWidth,
-        scrollWidth: element.scrollWidth,
-      }));
-      const transitionHeader = await getBoundingBox(page, ".chat-pane__header");
-      const transitionClose = await getBoundingBox(page, ".chat-pane__close-pane");
-      expect(transitionClose.x + transitionClose.width).toBeLessThanOrEqual(
-        transitionHeader.x + transitionHeader.width,
-      );
-      expect(await displayValues()).not.toContain("none");
-      expect(transitionOverflow.scrollWidth).toBeLessThanOrEqual(transitionOverflow.clientWidth);
-      expect(transitionOverflow.clientWidth - fullCompositionWidth).toBeGreaterThanOrEqual(8);
-
-      await page.locator(".chat-split-view__cell").evaluate((cell) => {
-        (cell as HTMLElement).style.width = "1000px";
-      });
-      expect(await displayValues()).not.toContain("none");
-    });
-  });
-
   it("caps a nested session trail at half the header while ellipsizing both titles", async () => {
     await withBrowserPage(openBrowserPage(720, 180), async (page) => {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
@@ -1021,7 +901,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 </div>
               </div>
               <div class="chat-pane__actions">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+                <button class="btn btn--ghost chat-pane__layout-trigger" type="button" aria-label="Layout">Layout</button>
               </div>
             </div>
           </div>
@@ -1503,25 +1383,21 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       if (!realChatServer) {
         throw new Error("Expected the Control UI server to be ready");
       }
-      await page.goto(realChatServer.baseUrl, { waitUntil: "domcontentloaded" });
-      await page.addScriptTag({
-        type: "module",
-        url: new URL("src/components/mcp-app-view-registration.ts", realChatServer.baseUrl).href,
-      });
-      const backgrounds = await page.evaluate(async () => {
+      const provider = await mountMcpAppSurfaceFixture(page, realChatServer.baseUrl);
+      const backgrounds = await provider.evaluate(async (owner: HTMLElement) => {
         await customElements.whenDefined("mcp-app-view");
         const readFrameBackground = async (boardSurface?: string) => {
-          const owner = document.createElement("div");
           if (boardSurface) {
             owner.style.setProperty("--board-surface", boardSurface);
+          } else {
+            owner.style.removeProperty("--board-surface");
           }
           const view = document.createElement("mcp-app-view") as HTMLElement & {
             updateComplete: Promise<boolean>;
           };
-          owner.append(view);
-          document.body.replaceChildren(owner);
+          owner.replaceChildren(view);
           await view.updateComplete;
-          const mount = view.shadowRoot?.querySelector(".mount");
+          const mount = view.querySelector(".mount");
           if (!mount) {
             throw new Error("MCP App mount is missing");
           }

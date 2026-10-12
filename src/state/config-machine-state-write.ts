@@ -61,13 +61,15 @@ export function writeConfigMachineStateInDatabase(
   database: DatabaseSync,
   key: string,
   value: unknown,
-): void {
+): number {
+  const now = Date.now();
   upsertConfigMachineState(
     database,
     normalizeConfigMachineStateKey(key),
     serializeStateValue(value),
-    Date.now(),
+    now,
   );
+  return now;
 }
 
 /** Atomically update one machine-state value from its current database value. */
@@ -176,25 +178,22 @@ export function importConfigMachineState(
       const imported: string[] = [];
       const kept: string[] = [];
       for (const entry of normalized) {
-        const existing = executeSqliteQueryTakeFirstSync(
+        const inserted = executeSqliteQueryTakeFirstSync(
           database.db,
           db
-            .selectFrom("config_machine_state")
-            .select("state_key")
-            .where("state_key", "=", entry.key),
+            .insertInto("config_machine_state")
+            .values({
+              state_key: entry.key,
+              value_json: entry.valueJson,
+              updated_at_ms: now,
+            })
+            .onConflict((conflict) => conflict.column("state_key").doNothing())
+            .returning("state_key"),
         );
-        if (existing) {
+        if (!inserted) {
           kept.push(entry.key);
           continue;
         }
-        executeSqliteQuerySync(
-          database.db,
-          db.insertInto("config_machine_state").values({
-            state_key: entry.key,
-            value_json: entry.valueJson,
-            updated_at_ms: now,
-          }),
-        );
         publishConfigMachineStateRow(database.db, entry.key, {
           value_json: entry.valueJson,
           updated_at_ms: now,

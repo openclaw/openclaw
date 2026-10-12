@@ -47,7 +47,7 @@ openclaw daemon uninstall
 - `status --deep` adds a best-effort system-level scan for other gateway-like services. The scan prints cleanup hints. One Gateway per machine is still the recommendation. `status --deep` also runs config validation in plugin-aware mode. That mode surfaces plugin manifest warnings that the fast default path skips.
 - On Linux systemd installs, token-drift checks inspect both `Environment=` and `EnvironmentFile=` unit sources.
 - Token-drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env). If token auth is not effectively active (`gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or unset with password able to win), config token resolution is skipped.
-- `install` validates that a SecretRef-managed `gateway.auth.token` is resolvable. It never persists the resolved value into service environment metadata. If it cannot resolve the token, `install` fails closed.
+- `install` validates that a SecretRef-managed `gateway.auth.token` is resolvable. It never persists the resolved value into service environment metadata. If it cannot resolve the token, `install` stops.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, `install` blocks until you set the mode explicitly.
 - On macOS, `install` writes LaunchAgent plists with mode `0644`. Secrets stay in the generated owner-only environment file (`0600`), loaded through an owner-only wrapper (`0700`).
 - Running multiple Gateways on one host: isolate ports, config/state, and workspaces. See [Multiple gateways](/gateway#multiple-gateways-same-host).

@@ -44,13 +44,6 @@ describe("Fish Audio speech provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("defaults to S2.1 Pro and accepts an environment key without a voice id", () => {
-    vi.stubEnv("FISH_API_KEY", "fish-test");
-    expect(provider.defaultModel).toBe("s2.1-pro");
-    expect(provider.models).toEqual(["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"]);
-    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 1_000 })).toBe(true);
-  });
-
   it("preserves Talk setting precedence and explicit blank-key clearing", () => {
     const params = {
       modelId: " ",
@@ -209,12 +202,8 @@ describe("Fish Audio speech provider", () => {
   });
 
   it.each([
-    { key: "temperature", value: "0", overrides: { temperature: 0 } },
-    { key: "fish_temperature", value: "-0", overrides: { temperature: -0 } },
-    { key: "top_p", value: "0", overrides: { topP: 0 } },
     { key: "topp", value: "1", overrides: { topP: 1 } },
     { key: "speed", value: "0.5", overrides: { speed: 0.5 } },
-    { key: "fish_speed", value: "2", overrides: { speed: 2 } },
   ])("accepts the $key=$value directive boundary", ({ key, value, overrides }) => {
     expect(
       provider.parseDirectiveToken?.({

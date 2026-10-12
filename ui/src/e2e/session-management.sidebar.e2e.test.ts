@@ -32,8 +32,8 @@ async function seedPersonalSessionPins(page: Page, keys: string[]) {
   await page.addInitScript(
     ({ storageKey, entries }) => {
       const stored = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-      if (!Array.isArray(stored.sidebarEntries)) {
-        localStorage.setItem(storageKey, JSON.stringify({ ...stored, sidebarEntries: entries }));
+      if (!Array.isArray(stored.railShortcuts)) {
+        localStorage.setItem(storageKey, JSON.stringify({ ...stored, railShortcuts: entries }));
       }
     },
     {
@@ -286,7 +286,7 @@ suite.define(() => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = page.locator(".sidebar-brand__collapse");
+      const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
       const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
@@ -977,7 +977,11 @@ suite.define(() => {
         .locator('[data-session-section="ungrouped"]')
         .getByRole("button", { name: "Show more" });
       for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
+        const visibleRows = await page.locator(".sidebar-recent-session").count();
         await loadMore.click();
+        await expect
+          .poll(() => page.locator(".sidebar-recent-session").count())
+          .toBeGreaterThan(visibleRows);
       }
       await page.locator(".sidebar-shell__body").evaluate((element) => {
         element.scrollTop = 0;

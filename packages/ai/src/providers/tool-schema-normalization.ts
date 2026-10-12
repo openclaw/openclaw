@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
+import { inheritToolSchemaTruncation, truncateToolSchemaDepth } from "./tool-schema-depth.js";
 import {
   copySchemaMeta,
   SCHEMA_MAP_KEYS as OPENAPI_MAP_KEYS,
@@ -45,18 +46,18 @@ const OPENAI_NULLABLE_ANNOTATION_KEYS = new Set([
 ]);
 
 // Profiles retain their schema-slot scope, map-name handling and root promotion.
-export function normalizeToolSchema(
+function normalizeToolSchemaRecursive(
   schema: unknown,
-  profile: "strict" | "compat" | "compat-map" | "openapi" | "openapi-map",
+  profile: "strict" | "strict-map" | "compat" | "compat-map" | "openapi" | "openapi-map",
   depth = 0,
 ): unknown {
   if (Array.isArray(schema)) {
-    if (profile === "compat-map" || profile === "openapi-map") {
+    if (profile === "strict-map" || profile === "compat-map" || profile === "openapi-map") {
       return schema;
     }
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeToolSchema(entry, profile, profile === "strict" ? depth : 1);
+      const next = normalizeToolSchemaRecursive(entry, profile, profile === "strict" ? depth : 1);
       changed ||= next !== entry;
       return next;
     });
@@ -94,11 +95,11 @@ export function normalizeToolSchema(
       }
       let next = value;
       if (OPENAPI_MAP_KEYS.has(key) && isRecord(value)) {
-        next = normalizeToolSchema(value, "openapi-map", 1);
+        next = normalizeToolSchemaRecursive(value, "openapi-map", 1);
       } else if (OPENAPI_OBJECT_KEYS.has(key) && isRecord(value)) {
-        next = normalizeToolSchema(value, profile, 1);
+        next = normalizeToolSchemaRecursive(value, profile, 1);
       } else if (OPENAPI_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-        const nextEntries = value.map((entry) => normalizeToolSchema(entry, profile, 1));
+        const nextEntries = value.map((entry) => normalizeToolSchemaRecursive(entry, profile, 1));
         // A changed sibling exposes copies even when this array's entries are unchanged.
         changed ||= nextEntries.some((entry, index) => entry !== value[index]);
         entries.push([key, nextEntries]);
@@ -110,13 +111,21 @@ export function normalizeToolSchema(
     }
     let next = value;
     if (profile === "strict") {
-      next = normalizeToolSchema(value, profile, key === "properties" ? depth : depth + 1);
-    } else if (profile === "compat-map" || profile === "openapi-map") {
-      next = normalizeToolSchema(value, profile === "compat-map" ? "compat" : "openapi", 1);
+      if (SCHEMA_MAP_KEYS.has(key)) {
+        next = normalizeToolSchemaRecursive(value, "strict-map", depth);
+      } else if (SCHEMA_NESTED_KEYS.has(key)) {
+        next = normalizeToolSchemaRecursive(value, profile, depth + 1);
+      }
+    } else if (profile === "strict-map" || profile === "compat-map" || profile === "openapi-map") {
+      next = normalizeToolSchemaRecursive(
+        value,
+        profile === "strict-map" ? "strict" : profile === "compat-map" ? "compat" : "openapi",
+        profile === "strict-map" ? depth + 1 : 1,
+      );
     } else if (SCHEMA_MAP_KEYS.has(key)) {
-      next = normalizeToolSchema(value, "compat-map", 1);
+      next = normalizeToolSchemaRecursive(value, "compat-map", 1);
     } else if (SCHEMA_NESTED_KEYS.has(key)) {
-      next = normalizeToolSchema(value, "compat", 1);
+      next = normalizeToolSchemaRecursive(value, "compat", 1);
     }
     changed ||= next !== value;
     entries.push([key, next]);
@@ -124,7 +133,7 @@ export function normalizeToolSchema(
   // Schema names are literal data; indexed writes would invoke __proto__'s setter.
   const normalized = Object.fromEntries<unknown>(entries);
 
-  if (profile === "compat-map" || profile === "openapi-map") {
+  if (profile === "strict-map" || profile === "compat-map" || profile === "openapi-map") {
     return changed ? normalized : schema;
   }
 
@@ -199,4 +208,12 @@ export function normalizeToolSchema(
   }
 
   return changed ? normalized : schema;
+}
+
+export function normalizeToolSchema(
+  schema: unknown,
+  profile: "strict" | "compat" | "openapi",
+): unknown {
+  const bounded = truncateToolSchemaDepth(schema);
+  return inheritToolSchemaTruncation(bounded, normalizeToolSchemaRecursive(bounded, profile));
 }

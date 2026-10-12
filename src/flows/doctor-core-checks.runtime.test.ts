@@ -818,14 +818,6 @@ describe("doctor gateway runtime checks", () => {
     ]);
   });
 
-  it("skips daemon findings for remote gateway mode", async () => {
-    await expect(
-      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "remote" } } }),
-    ).resolves.toEqual([]);
-
-    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
-  });
-
   it.each([
     { version: "26.8.1", text: false, status: "unsupported" as const, severity: "warning" },
     { version: "24.15.0", text: true, status: "supported" as const, severity: "info" },

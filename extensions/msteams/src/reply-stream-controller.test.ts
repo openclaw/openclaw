@@ -174,7 +174,7 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.close).not.toHaveBeenCalled();
   });
 
-  it("preserves held payload order after replacement emit fails", async () => {
+  it("preserves held payload order after replacement close fails", async () => {
     const stream = makeAcknowledgedStream();
     const ctrl = makeController({ stream });
 
@@ -182,15 +182,13 @@ describe("createTeamsReplyStreamController", () => {
     stream.acknowledge("abcde");
     ctrl.onPartialReply({ text: "provider replacement" });
     expect(ctrl.preparePayload({ mediaUrl: "https://example.test/before.png" })).toBeUndefined();
-    stream.emit.mockImplementationOnce(() => {
-      throw new Error("network failure");
-    });
+    stream.close.mockRejectedValueOnce(new Error("network failure"));
     expect(ctrl.preparePayload({ text: "provider replacement" })).toBeUndefined();
     expect(ctrl.preparePayload({ text: "later payload" })).toBeUndefined();
 
     await expect(ctrl.finalize()).resolves.toEqual({
       visibleReplySent: true,
-      messageId: "stream-final",
+      messageId: "stream-acknowledged",
       content: "abcde",
       logicalContent: "provider replacement\nlater payload",
       postNativePayloads: [
@@ -307,11 +305,9 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.update).not.toHaveBeenCalled();
   });
 
-  it("falls back to normal delivery when progress final streaming fails", () => {
+  it("falls back to normal delivery when progress final streaming fails", async () => {
     const stream = makeStream();
-    stream.emit.mockImplementation(() => {
-      throw new Error("progress final failed");
-    });
+    stream.close.mockRejectedValueOnce(new Error("progress final failed"));
     const ctrl = createTeamsReplyStreamController({
       allowProviderPreview: true,
       conversationType: "personal",
@@ -321,8 +317,10 @@ describe("createTeamsReplyStreamController", () => {
       msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
     });
 
-    expect(ctrl.preparePayload({ text: "complete final answer" })).toEqual({
-      text: "complete final answer",
+    expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toMatchObject({
+      visibleReplySent: false,
+      fallbackPayload: { text: "complete final answer" },
     });
   });
 
@@ -373,27 +371,25 @@ describe("createTeamsReplyStreamController", () => {
       });
     });
 
-    it("does not trim an independent later payload using a previous stream acknowledgement", () => {
+    it("does not trim an independent later payload using a previous stream acknowledgement", async () => {
       const stream = makeAcknowledgedStream();
       const ctrl = makeController({ stream });
 
       ctrl.onPartialReply({ text: "hello" });
       stream.acknowledge("hello");
-      stream.emit.mockImplementation(() => {
-        throw new Error("network failure");
-      });
+      stream.close.mockRejectedValueOnce(new Error("network failure"));
       ctrl.onPartialReply({ text: "hello world" });
 
-      expect(ctrl.preparePayload({ text: "hello world" })).toEqual({
-        text: " world",
+      expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toMatchObject({
+        fallbackPayload: { text: " world" },
       });
       expect(ctrl.preparePayload({ text: "hello again" })).toEqual({
         text: "hello again",
       });
-      expect(stream.events.off).not.toHaveBeenCalled();
     });
 
-    it("ignores unrelated, informative, and out-of-order stream acknowledgements", () => {
+    it("ignores unrelated, informative, and out-of-order stream acknowledgements", async () => {
       const stream = makeAcknowledgedStream();
       const ctrl = makeController({ stream });
 
@@ -404,25 +400,22 @@ describe("createTeamsReplyStreamController", () => {
       stream.acknowledge("he");
       stream.acknowledge("hello", { id: "different-stream" });
       stream.acknowledge("h");
-      stream.emit.mockImplementation(() => {
-        throw new Error("network failure");
-      });
+      stream.close.mockRejectedValueOnce(new Error("network failure"));
       ctrl.onPartialReply({ text: "hello world" });
 
-      expect(ctrl.preparePayload({ text: "hello world" })).toEqual({
-        text: "llo world",
+      expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toMatchObject({
+        fallbackPayload: { text: "llo world" },
       });
     });
 
-    it("retains media when Teams already acknowledged all fallback text", () => {
+    it("retains media when Teams already acknowledged all fallback text", async () => {
       const stream = makeAcknowledgedStream();
       const ctrl = makeController({ stream });
 
       ctrl.onPartialReply({ text: "hello" });
       stream.acknowledge("hello");
-      stream.emit.mockImplementation(() => {
-        throw new Error("network failure");
-      });
+      stream.close.mockRejectedValueOnce(new Error("network failure"));
       ctrl.onPartialReply({ text: "hello world" });
 
       expect(
@@ -431,6 +424,7 @@ describe("createTeamsReplyStreamController", () => {
         text: undefined,
         mediaUrl: "https://example.com/image.png",
       });
+      expect((await ctrl.finalize()).fallbackPayload).toBeUndefined();
     });
 
     it("treats post-cancel stream as inactive without further emit attempts", () => {

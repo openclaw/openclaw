@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import { ensureOpenClawAgentStandingIntentsSchema } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   assertTransactionUsable,
+  ensureOpenClawAgentStandingIntentsSchema,
   runSqliteImmediateTransactionSync,
   withSqlitePostCommitPublications,
   type SqliteWorkerBackend,
@@ -9,6 +9,7 @@ import {
 import {
   cancelStandingIntentInDatabase,
   createStandingIntentInDatabase,
+  invalidateStandingIntentLifecycle,
   listStandingIntentsInDatabase,
   maintainStandingIntentLifecycle,
   matchStandingIntentsInDatabase,
@@ -21,20 +22,27 @@ export function bindSqliteWorkerBackend(
   context: { database: DatabaseSync; admit(stage: "transaction" | "commit"): void },
 ): SqliteWorkerBackend<StandingIntentWorkerOperations> {
   const db = context.database;
-  const transact = <T>(run: () => T): T =>
-    runSqliteImmediateTransactionSync(
-      db,
-      () => {
-        context.admit("transaction");
-        return run();
-      },
-      {
-        withCommit(commit) {
-          context.admit("commit");
-          commit();
+  const transact = <T>(run: () => T): T => {
+    try {
+      return runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          context.admit("transaction");
+          return run();
         },
-      },
-    );
+        {
+          withCommit(commit) {
+            context.admit("commit");
+            commit();
+          },
+        },
+      );
+    } catch (error) {
+      // A refused commit must not retain deadlines from its rolled-back transitions.
+      invalidateStandingIntentLifecycle(db);
+      throw error;
+    }
+  };
   let schemaPrepared = false;
   // First-use installation commits independently and consumes this request's grant pair.
   withSqlitePostCommitPublications(db, () =>

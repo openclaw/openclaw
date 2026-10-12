@@ -35,10 +35,6 @@ import {
   withPreparedModelCatalogOwner,
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
-import {
-  getSubagentSessionListReadSnapshotIdentity,
-  prepareOptionalSubagentSessionListReadCache,
-} from "../agents/subagents/registry/subagent-registry-state.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -52,7 +48,11 @@ import {
 } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  getRuntimeConfig,
+  registerConfigWriteListener,
+} from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import {
@@ -106,7 +106,6 @@ import {
   setEmbeddedQuestionBroker,
 } from "../infra/embedded-question-broker.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { logInfo, logWarn } from "../logger.js";
 import {
   agentSessionKeysMatchByRequestKey,
   isIncognitoSessionKey,
@@ -133,8 +132,10 @@ import {
   type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
+import { embeddedSessionStartupMigrationLog, silentRuntime } from "./embedded-runtime.js";
 import {
   createEmbeddedSessionReader,
+  readEmbeddedHistorySession,
   readEmbeddedHistorySessionInfo,
   readEmbeddedPrivateHistorySessionInfo,
 } from "./embedded-session-reader.js";
@@ -156,19 +157,6 @@ type LocalPendingMessage = {
   run: LocalRunState;
   messageIndex: number;
   message: string;
-};
-
-const silentRuntime = {
-  log: (..._args: unknown[]) => undefined,
-  error: (..._args: unknown[]) => undefined,
-  exit: (code: number): never => {
-    throw new Error(`embedded tui runtime exit ${String(code)}`);
-  },
-};
-
-const embeddedSessionStartupMigrationLog = {
-  info: (message: string) => logInfo(message, silentRuntime),
-  warn: (message: string) => logWarn(message, silentRuntime),
 };
 
 export class EmbeddedTuiBackend implements TuiBackend {
@@ -224,9 +212,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribeQuestions = this.questionBroker.subscribe((event) => {
       this.emit(event.event, event.payload);
     });
-    const config = getRuntimeConfig();
     // Local mode shares the Gateway's session-store readiness checks.
     this.sessionProjection = (async () => {
+      const config = await captureRuntimeConfigAsyncReader()();
       const { runSessionStartupMigration } =
         await import("../config/sessions/startup-migration.js");
       await runSessionStartupMigration({
@@ -278,6 +266,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
       }
     }
+    // Abort is a cancellation request, not settlement. Keep the runtime and
+    // session projection alive until every owned run finishes its cleanup.
+    await Promise.allSettled([...this.runs.values()].flatMap((run) => run.promise ?? []));
     this.unbindSessionProjection?.();
     this.unbindSessionProjection = undefined;
     const projection = this.sessionProjection;
@@ -304,6 +295,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
+    this.scheduler.signal.throwIfAborted();
     const runId = opts.runId ?? randomUUID();
     const sideCommand = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(opts.message.trim());
     const question = sideCommand?.[1]?.trim() || undefined;
@@ -339,6 +331,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         if (claimed) {
           return claimed;
         }
+        this.scheduler.signal.throwIfAborted();
       }
       let queueSettings = resolveQueueSettingsCore({
         cfg,
@@ -365,6 +358,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             return { runId: queuedAfter.runId };
           }
         }
+        this.scheduler.signal.throwIfAborted();
         queueSettings = { ...queueSettings, mode: "followup" };
       }
       if (queueSettings.mode === "interrupt") {
@@ -455,14 +449,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
-    if (!getSubagentSessionListReadSnapshotIdentity()) {
-      await prepareOptionalSubagentSessionListReadCache();
-    }
-    const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const selected = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
-      ...loadOptions,
-      includeStoreChildEntries: true,
-    });
+    const selected = await readEmbeddedHistorySession(opts);
     const { cfg, agentId: sessionAgentId, storePath, readSource, entry, canonicalKey } = selected;
     const sessionId = entry?.sessionId;
     const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({

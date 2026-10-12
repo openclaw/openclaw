@@ -67,7 +67,6 @@ export function createNodeWorkerWorkspaceActions(params: {
     environmentId: params.environmentId,
     ownerEpoch: params.ownerEpoch,
     sessionId: params.sessionId,
-    generation: params.ownerEpoch,
     isAuthorized: params.isOwnerCurrent,
     signal: params.ownerSignal,
   };
@@ -410,7 +409,7 @@ export function createNodeWorkerWorkspaceActions(params: {
     const baseCommit = baseline.baseCommit;
     const remoteWorkspaceDir = baseline.remoteWorkspaceDir;
     if (request.gitAuthor && !source.prepared) {
-      await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
+      await repository.configureCheckout(remoteWorkspaceDir, request.gitAuthor);
     }
     await params.workspaceTransfer.prepareRepository({
       ...transferOwner,

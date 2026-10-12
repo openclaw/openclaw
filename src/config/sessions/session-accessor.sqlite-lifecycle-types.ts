@@ -1,7 +1,3 @@
-import type {
-  SubagentMaintenanceDurableBasis,
-  SubagentRunsDurableBasis,
-} from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
@@ -31,8 +27,10 @@ import type {
   SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
-import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type {
+  SessionEntryMaintenanceAgeChange,
+  SessionEntryMaintenanceAgeFact,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
@@ -47,7 +45,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 /** Transportable planning facts; live guards and native identity remain with their owners. */
 type SessionDeletionPlanningParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "expectedDatabaseIdentity" | "descendantRunBasis"
+  "commitGuard" | "env" | "expectedDatabaseIdentity"
 >;
 
 export type SessionEntryDeletionPlanInput = {
@@ -118,6 +116,7 @@ export type LifecycleRemovalProjectionInput = {
 export type ProjectedLifecycleCommitResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
   beforeCount: number;
+  afterCount: number;
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;
@@ -133,8 +132,6 @@ export type ProjectedLifecycleCommitInput = {
 };
 
 export type SessionEntryLifecycleMutationParams = {
-  /** Internal durable comparison paired with the caller's live descendant guard. */
-  descendantRunBasis?: SubagentRunsDurableBasis;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   storePath: string;
@@ -181,7 +178,7 @@ export type SqliteSessionReclamationCallbacks = {
 
 export type ReclamationDeleteParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "descendantRunBasis"
+  "commitGuard" | "env"
 >;
 
 /** Internal scope: a historical request cannot authorize whole-entry reclamation. */
@@ -198,20 +195,12 @@ export type SessionEntryMaintenanceInput = {
   storePath: string;
 };
 
-type SessionMaintenanceAgeSnapshot = {
-  incarnation: string;
-  revision: SqliteSessionEntryRevision;
-  capture: number;
-};
-
 export type SessionMaintenanceLiveProtection = Pick<
   SessionEntryMaintenanceInput,
   "activeSessionKeys" | "preservation"
 >;
 
 type SessionReclamationPlanBase = {
-  descendantRunBasis?: SubagentRunsDurableBasis;
-  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
@@ -222,27 +211,28 @@ export type SessionMaintenanceMetadataCommand =
       kind: "maintenance-age";
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       maintenance: ResolvedSessionMaintenanceConfig;
-      expected?: SessionMaintenanceAgeSnapshot;
-      /** A no-op reader rechecks the same policy instead of borrowing a writer snapshot. */
-      readOnly?: { input: SessionEntryMaintenanceInput; snapshot: SessionMaintenanceAgeSnapshot };
+      readOnly?: { input: SessionEntryMaintenanceInput };
     }
   | {
       kind: "maintenance-plan";
-      ageOwner?: string;
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       input: SessionEntryMaintenanceInput;
     };
 
 export type SessionMaintenanceMetadataResult =
   | { kind: "maintenance-statistics"; value: true }
-  | { kind: "maintenance-age"; nextAt: number | undefined }
+  | {
+      kind: "maintenance-age";
+      nextAt: number | undefined;
+      ageFact?: SessionEntryMaintenanceAgeFact;
+    }
   | { kind: "maintenance-preservation-required" }
   | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
-      ageSnapshot: SessionMaintenanceAgeSnapshot;
       nextAt: number | undefined;
+      ageFact?: SessionEntryMaintenanceAgeFact;
       readOnlyInput?: SessionEntryMaintenanceInput;
     };
 
