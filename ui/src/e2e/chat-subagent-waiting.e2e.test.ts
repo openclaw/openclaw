@@ -383,7 +383,7 @@ suite.define(() => {
         const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
         await waitLine.waitFor();
         expect(await waitLine.textContent()).toContain("Waiting on subagents");
-        expect(await indicator.count()).toBe(0);
+        expect(await indicator.count()).toBe(1);
         await gateway.waitForRequest("sessions.list", {
           after: childRosterReads,
           match: childRosterQuery,
