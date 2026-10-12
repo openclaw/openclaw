@@ -1,5 +1,6 @@
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import {
   readSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissions,
@@ -8,6 +9,7 @@ import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
+export const SQLITE_COLD_ADMISSION_PENDING = 4;
 
 const admissionUpstream = resolveGlobalSingleton<{
   connection?: { port: MessagePort; closed: boolean };
@@ -68,7 +70,14 @@ export function exchangeDatabaseAdmissions(
     while (Atomics.load(decision, 0) === REQUESTED) {
       Atomics.wait(decision, 0, REQUESTED);
     }
-    if (Atomics.load(decision, 0) !== GRANTED) {
+    const outcome = Atomics.load(decision, 0);
+    if (outcome === SQLITE_COLD_ADMISSION_PENDING && location && create === true) {
+      throw new StateDatabaseAdmissionPendingError(
+        location,
+        `OpenClaw state at ${location} is undergoing schema admission; retry when it finishes.`,
+      );
+    }
+    if (outcome !== GRANTED) {
       throw new SqliteWorkerError("SQLite admission facts exchange failed", "unavailable");
     }
     // The host posts the registry before publishing the shared completion flag.

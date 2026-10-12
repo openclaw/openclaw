@@ -2,9 +2,9 @@ import { For, createEffect, createMemo } from "solid-js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
-import { t } from "../../../i18n/index.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
 import {

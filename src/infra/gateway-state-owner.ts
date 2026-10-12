@@ -289,34 +289,43 @@ function acquireOwnerFile(
       }
     }
   }
-  try {
-    return acquireFileLockSync(pathname, {
-      lockPath: pathname,
-      retry:
-        busyTimeoutMs > 0
-          ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
-          : { retries: 0 },
-      timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
-      staleMs: Infinity,
-      staleRecovery: "remove-if-unchanged",
-      reentrantOwner: payload.ownerId,
-      payload: () => payload,
-      parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
-      shouldReclaim: stale,
-      shouldRemoveStaleLock: stale,
-    });
-  } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "file_lock_timeout" || code === "file_lock_stale") {
-      const { holder } = observed;
-      const holderDetail = describeGatewayLockHolder(
-        holder ?? {},
-        pathname,
-        holder && isPidAlive(holder.pid) ? "live" : "unknown",
-      );
-      throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
+  for (let retriedMissingParent = false; ;) {
+    try {
+      return acquireFileLockSync(pathname, {
+        lockPath: pathname,
+        retry:
+          busyTimeoutMs > 0
+            ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
+            : { retries: 0 },
+        timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
+        staleMs: Infinity,
+        staleRecovery: "remove-if-unchanged",
+        reentrantOwner: payload.ownerId,
+        payload: () => payload,
+        parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
+        shouldReclaim: stale,
+        shouldRemoveStaleLock: stale,
+      });
+    } catch (error) {
+      const code = extractErrorCode(error);
+      if (code === "ENOENT" && !retriedMissingParent) {
+        // Final lease cleanup can remove the parent before exclusive creation.
+        // Recreate it once without extending the original contention budget.
+        retriedMissingParent = true;
+        ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
+        continue;
+      }
+      if (code === "file_lock_timeout" || code === "file_lock_stale") {
+        const { holder } = observed;
+        const holderDetail = describeGatewayLockHolder(
+          holder ?? {},
+          pathname,
+          holder && isPidAlive(holder.pid) ? "live" : "unknown",
+        );
+        throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
+      }
+      throw error;
     }
-    throw error;
   }
 }
 

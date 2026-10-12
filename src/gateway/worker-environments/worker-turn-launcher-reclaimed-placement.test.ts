@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { runFallbackAttempt } from "../../agents/model-fallback-attempt.js";
 import {
   isAgentRunRestartAbortReason,
@@ -214,6 +215,7 @@ describe("worker turn launcher reclaimed placement", () => {
     expect(redispatchCalls).toBe(1);
     expect(launchTurn).toHaveBeenCalledOnce();
     expect(runLocal).not.toHaveBeenCalled();
+    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 

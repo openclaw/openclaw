@@ -171,9 +171,11 @@ OpenClaw release:
         For native-login users, the model picker reads Claude Code's own model menu
         in the background, without sending a prompt or using an inference turn.
         It shows unique native model IDs as `anthropic/<id>` on the Claude CLI
-        runtime, with the effort levels reported by Claude Code. Account and
-        organization restrictions therefore affect the menu. The hosted OpenClaw
-        catalog adds metadata only to those exact IDs; it cannot add native models.
+        runtime, with the effort levels reported by Claude Code. Models that allow
+        thinking to be disabled also offer `/think off`, independently of those
+        effort levels. Models with mandatory adaptive thinking do not offer `off`.
+        Account and organization restrictions therefore affect the menu. The hosted
+        OpenClaw catalog adds metadata only to those exact IDs; it cannot add native models.
         New native models do not require an OpenClaw upgrade or a catalog edit.
 
         Before the first discovery completes, only already configured or selected

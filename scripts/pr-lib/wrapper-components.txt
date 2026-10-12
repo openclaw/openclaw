@@ -605,6 +605,8 @@ src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/goals-operations.types.ts
+src/config/sessions/group-display.ts
+src/config/sessions/metadata-projection.ts
 src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts

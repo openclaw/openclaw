@@ -3,12 +3,87 @@ import { expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { listSessionPendingInputs } from "./session-accessor.pending-inputs.js";
 import { patchSessionEntryCore, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import * as actorScope from "./session-actor-scope.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
+
+it.each(["before", "after"] as const)(
+  "checks input staging lifecycle changes %s writer admission",
+  async (timing) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = createSessionCompoundWorkerFixture();
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { ...f.scope, target: f.target },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "admitted session actor",
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "Continue after the previous run", idempotencyKey: "next-input" },
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        updateMode: "none",
+      });
+      bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+      const completePrevious = () =>
+        patchSessionEntryCore(f.scope, () => ({ restartRecoveryTerminalRunIds: ["previous-run"] }));
+      const run = actorScope.runSessionActorCommand;
+      const accept = input.actor.acceptInput;
+      const competingWrite =
+        timing === "before"
+          ? vi
+              .spyOn(actorScope, "runSessionActorCommand")
+              .mockImplementationOnce(async (...args) => {
+                // A preceding terminal write owns the FIFO before this input joins it.
+                const completed = runOutsideStoreWriterContext(() =>
+                  runOpenClawAgentWriteAdmission(
+                    { agentId: "main", path: f.database.path },
+                    completePrevious,
+                  ),
+                );
+                try {
+                  return await run(...args);
+                } finally {
+                  await completed;
+                }
+              })
+          : vi.spyOn(input.actor, "acceptInput").mockImplementationOnce(async (...args) => {
+              await completePrevious();
+              const outcome = await accept(...args);
+              expect(outcome.kind).toBe("stale-version");
+              return outcome;
+            });
+      try {
+        const staged = recorder.stageApproved?.({ runId: "next-run", assertCurrent() {} });
+        if (timing === "before") {
+          await expect(staged).resolves.toBe(true);
+          bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire: async () => input });
+          await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+          expect(f.events()).toContainEqual(
+            expect.objectContaining({
+              message: expect.objectContaining({ content: "Continue after the previous run" }),
+            }),
+          );
+        } else {
+          await expect(staged).rejects.toThrow("lifecycle changed before its durable phase");
+          expect(f.events()).toEqual([]);
+        }
+        expect(await listSessionPendingInputs(f.scope)).toEqual({ items: [], total: 0 });
+      } finally {
+        competingWrite.mockRestore();
+        recorder.finishPendingInput?.("interrupted");
+        await recorder.waitForPendingInputSettlement?.();
+        await input.actor.release();
+      }
+    });
+  },
+);
 
 it.each(["stage", "acceptInput", "adoptRun"] as const)(
   "persists concurrent initial inputs exactly once with participant writes queued around %s admission",

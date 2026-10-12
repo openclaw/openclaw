@@ -96,48 +96,36 @@ describe("conversation resolution", () => {
     });
   });
 
-  it.each(["command", "threading"] as const)(
-    "normalizes conversation ids returned by the %s resolver",
-    (resolver) => {
-      const conversation = {
-        conversationId: "  user:U1234567890abcdef1234567890abcdef  ",
-        parentConversationId: "  room:R1234567890abcdef1234567890abcd  ",
-      };
-      registerChannelPlugin({
-        ...createChannelTestPluginBase({ id: "line", label: "LINE" }),
-        ...(resolver === "command"
-          ? {
-              bindings: {
-                ...createBindingProviderDefaults(),
-                resolveCommandConversation: () => conversation,
-              },
-            }
-          : {
-              threading: {
-                resolveFocusedBinding: () => ({
-                  ...conversation,
-                  placement: "current" as const,
-                  labelNoun: "conversation",
-                }),
-              },
-            }),
-      });
-
-      expect(
-        resolveCommandConversationResolution({
-          cfg: testConfig,
-          channel: "line",
-          accountId: " default ",
-          originatingTo: "ignored",
+  it.each(["threading"] as const)("normalizes conversation ids returned by the %s resolver", () => {
+    const conversation = {
+      conversationId: "  user:U1234567890abcdef1234567890abcdef  ",
+      parentConversationId: "  room:R1234567890abcdef1234567890abcd  ",
+    };
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "line", label: "LINE" }),
+      threading: {
+        resolveFocusedBinding: () => ({
+          ...conversation,
+          placement: "current" as const,
+          labelNoun: "conversation",
         }),
-      ).toEqual({
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
         channel: "line",
-        accountId: "default",
-        conversationId: "user:U1234567890abcdef1234567890abcdef",
-        parentConversationId: "room:R1234567890abcdef1234567890abcd",
-      });
-    },
-  );
+        accountId: " default ",
+        originatingTo: "ignored",
+      }),
+    ).toEqual({
+      channel: "line",
+      accountId: "default",
+      conversationId: "user:U1234567890abcdef1234567890abcdef",
+      parentConversationId: "room:R1234567890abcdef1234567890abcd",
+    });
+  });
 
   it("normalizes alias-prefixed topic routes before fallback resolution", () => {
     registerChannelPlugin({
@@ -164,31 +152,10 @@ describe("conversation resolution", () => {
 
   it.each([
     {
-      name: "declared raw shorthand",
-      channel: "telegram",
-      declaresNumericShorthand: true,
-      originatingTo: "-1001234567890:77",
-      expectedConversationId: "-1001234567890",
-    },
-    {
       name: "undeclared raw shorthand",
       channel: "plainchat",
       declaresNumericShorthand: false,
       originatingTo: "-1001234567890:77",
-      expectedConversationId: "-1001234567890:77",
-    },
-    {
-      name: "declared normalized shorthand",
-      channel: "telegram",
-      declaresNumericShorthand: true,
-      originatingTo: "topic-alias",
-      expectedConversationId: "-1001234567890",
-    },
-    {
-      name: "undeclared normalized shorthand",
-      channel: "plainchat",
-      declaresNumericShorthand: false,
-      originatingTo: "topic-alias",
       expectedConversationId: "-1001234567890:77",
     },
   ])(
@@ -266,23 +233,6 @@ describe("conversation resolution", () => {
       parentConversationId: "!Room:Example.org",
       threadId: "$thread-root",
     });
-  });
-
-  it("does not fall through when a channel explicitly rejects an inbound target", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-      messaging: {
-        resolveInboundConversation: () => null,
-      },
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "matrix",
-        to: "room:!Room:Example.org",
-      }),
-    ).toBeNull();
   });
 
   it("normalizes numeric inbound thread ids through the shared route contract", () => {

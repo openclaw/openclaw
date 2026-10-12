@@ -54,6 +54,8 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   }));
   const replacement = {
     model: model.id,
+    prompt_cache_key: "private-affinity",
+    previous_response_id: "private-response",
     messages,
     stream: true,
     tools: [...allowedTools, { type: "function", function: { name: "hidden" } }],
@@ -77,7 +79,18 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   let wire: string | undefined;
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     wire = await new Request(input, init).text();
-    return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    return new Response(sse, {
+      headers: {
+        "content-type": "text/event-stream",
+        "openai-processing-ms": "12.5",
+        "openai-model": "private-model",
+        "openai-organization": "private-account",
+        "x-openai-route": "private-route",
+        "x-openai-region": "private-region",
+        "x-request-id": "private-request",
+        "set-cookie": "private-cookie",
+      },
+    });
   });
   configureAiTransportHost({ ...originalHost, buildModelFetch: () => fetchMock });
   const state: ProviderPromptState = {};
@@ -137,6 +150,29 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       scopeDigest: expect.any(String),
       digest: hash("sha256", expectedWire),
       byteWeight: 614_400,
+      wire: {
+        requestBytes: 614_400,
+        prefixBytes: 4096,
+        prefixHash: hash("sha256", Buffer.from(expectedWire).subarray(0, 4096)),
+        cacheKeyPresent: true,
+        cacheKeyHash: hash("sha256", '"private-affinity"').slice(0, 16),
+        previousResponseIdPresent: true,
+        modelHash: hash("sha256", JSON.stringify(model.id)).slice(0, 16),
+        routeHash: hash("sha256", model.baseUrl).slice(0, 16),
+        attempts: 1,
+        retried: false,
+        response: {
+          status: 200,
+          headers: {
+            "openai-processing-ms": 12.5,
+            "openai-model": hash("sha256", "private-model").slice(0, 16),
+            "openai-organization": hash("sha256", "private-account").slice(0, 16),
+            "x-openai-route": hash("sha256", "private-route").slice(0, 16),
+            "x-openai-region": hash("sha256", "private-region").slice(0, 16),
+            "x-request-id": hash("sha256", "private-request").slice(0, 16),
+          },
+        },
+      },
       cachePrefix: {
         system: hash("sha256", "{}"),
         tools: hash("sha256", JSON.stringify({ tools: allowedTools })),
@@ -155,15 +191,26 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
         messageField: "messages",
         messageCount: 100,
         parameters: {
-          digest: hash("sha256", JSON.stringify({ model: model.id, stream: true })),
+          digest: hash(
+            "sha256",
+            JSON.stringify({
+              model: model.id,
+              prompt_cache_key: "private-affinity",
+              previous_response_id: "private-response",
+              stream: true,
+            }),
+          ),
           fields: {
             model: hash("sha256", JSON.stringify(model.id)),
+            prompt_cache_key: hash("sha256", '"private-affinity"'),
+            previous_response_id: hash("sha256", '"private-response"'),
             stream: hash("sha256", "true"),
           },
         },
-        continuation: false,
+        continuation: true,
       },
     });
+    expect(JSON.stringify(state)).not.toContain("private-");
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
 
     markLastProviderPromptContextRejected(state);

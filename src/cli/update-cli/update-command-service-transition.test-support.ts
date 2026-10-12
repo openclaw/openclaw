@@ -23,6 +23,7 @@ export const preservedActivationCases = [
   { phase: "late", mode: "git", denial: "sealed", outcome: "healthy", json: false },
   { phase: "late", mode: "npm", denial: "unknown", outcome: "healthy", json: false },
   { phase: "late", mode: "git", denial: "unknown", outcome: "json denial", json: true },
+  { phase: "late", mode: "npm", denial: "unknown", outcome: "clean refusal", json: true },
   { phase: "late", mode: "npm", denial: "sealed", outcome: "json denial", json: true },
   { phase: "late", mode: "git", denial: "sealed", outcome: "uninspectable", json: false },
   { phase: "late", mode: "npm", denial: "unknown", outcome: "foreign", json: false },
