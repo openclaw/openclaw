@@ -800,8 +800,8 @@ describe("native hook execution admission", () => {
     "settles workspace attribution before a %s effect and fences closure during the wait",
     async (path) => {
       for (const outcome of ["settled", "closed", "failed"] as const) {
-        const entered = createDeferredCore<void>();
-        const baseline = createDeferredCore<void>();
+        const entered = createDeferredCore();
+        const baseline = createDeferredCore();
         const host = await createAdmittedHostCapabilityTestFixture({
           runId: `attribution-${path}-${outcome}`,
           awaitSessionDiffBaseline: async () => {

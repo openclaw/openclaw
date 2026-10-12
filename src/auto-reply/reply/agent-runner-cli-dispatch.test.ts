@@ -71,8 +71,8 @@ afterEach(() => {
 
 describe("runCliAgentWithLifecycle", () => {
   it("settles workspace attribution before launching a CLI backend", async () => {
-    const entered = createDeferred<void>();
-    const baseline = createDeferred<void>();
+    const entered = createDeferred();
+    const baseline = createDeferred();
     cliDispatchState.runCliAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     const pending = runCliAgentWithLifecycle({
       runId: "cli-attribution",

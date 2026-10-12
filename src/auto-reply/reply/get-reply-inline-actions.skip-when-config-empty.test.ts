@@ -187,8 +187,8 @@ describe("handleInlineActions", () => {
   it.each(["settled", "failed", "authority revoked"] as const)(
     "waits for workspace attribution before command dispatch (%s)",
     async (outcome) => {
-      const entered = createDeferred<void>();
-      const baseline = createDeferred<void>();
+      const entered = createDeferred();
+      const baseline = createDeferred();
       let active = true;
       const result = runTestInlineActions({
         ctx: buildTestCtx({ Body: "/export-session", CommandBody: "/export-session" }),

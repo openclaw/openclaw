@@ -23,8 +23,8 @@ describe("inline tool execution ownership", () => {
   it.each(["settled", "failed", "authority revoked"] as const)(
     "waits for workspace attribution before direct skill effects (%s)",
     async (outcome) => {
-      const entered = createDeferred<void>();
-      const baseline = createDeferred<void>();
+      const entered = createDeferred();
+      const baseline = createDeferred();
       let active = true;
       const { typing, toolExecute, ctx, skillCommands } = createInlineToolDispatchFixture({
         body: "/send_status hello",
