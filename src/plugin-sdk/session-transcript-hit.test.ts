@@ -6,33 +6,49 @@ import {
   extractTranscriptStemFromSessionsMemoryHit,
   formatSessionTranscriptMemoryHitKey,
   loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayAsync,
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
 
-const loadGatewaySessionStore = vi.hoisted(() => vi.fn());
+const { loadGatewaySessionStore, loadGatewaySessionStoreAsync } = vi.hoisted(() => ({
+  loadGatewaySessionStore: vi.fn(),
+  loadGatewaySessionStoreAsync: vi.fn(),
+}));
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
   loadCombinedSessionStoreForGatewayCore: loadGatewaySessionStore,
 }));
+// mock-isolation: SDK projection tests supply synthetic snapshots without loading database owners.
+vi.mock("../config/sessions/combined-store-gateway-read.js", () => ({
+  loadCombinedSessionStoreForGatewayCoreAsync: loadGatewaySessionStoreAsync,
+}));
 
-it("filters incognito rows from the plugin cross-session store view", () => {
-  loadGatewaySessionStore.mockReturnValue({
-    storePath: "(multiple)",
-    store: {
-      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
-      "agent:main:dashboard:incognito-private": {
-        incognito: true,
-        sessionId: "private",
-        updatedAt: 2,
+it.each([
+  ["synchronous compatibility", loadCombinedSessionStoreForGateway],
+  ["async", loadCombinedSessionStoreForGatewayAsync],
+] as const)(
+  "filters incognito rows from the %s plugin cross-session view",
+  async (_label, load) => {
+    const snapshot = {
+      storePath: "(multiple)",
+      store: {
+        "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+        "agent:main:dashboard:incognito-private": {
+          incognito: true,
+          sessionId: "private",
+          updatedAt: 2,
+        },
       },
-    },
-  });
+    };
+    loadGatewaySessionStore.mockReturnValue(snapshot);
+    loadGatewaySessionStoreAsync.mockResolvedValue(snapshot);
 
-  expect(loadCombinedSessionStoreForGateway({}).store).toEqual({
-    "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
-  });
-});
+    expect((await load({})).store).toEqual({
+      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+    });
+  },
+);
 
 describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
   it("extracts builtin live and archived transcript identities", () => {

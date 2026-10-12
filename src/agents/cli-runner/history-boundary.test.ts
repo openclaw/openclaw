@@ -13,10 +13,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
-import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   runWithoutOwnedSessionTranscriptWrites,
@@ -171,58 +169,6 @@ describe("CLI transcript account boundary", () => {
       } finally {
         sql.restore();
       }
-    });
-  });
-
-  it("rechecks exact current-input identity inside the writer transaction", async () => {
-    const f = await fixture();
-    await f.seed();
-    const anchor = readActiveTranscriptEntryAnchor({
-      ...f.target,
-      entryId: f.manager().getLeafId()!,
-    });
-    if (!anchor) {
-      throw new Error("Missing current input anchor");
-    }
-    const patch = patchSessionEntryCore;
-    let changed = false;
-    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-      (target, update, options) =>
-        patch(
-          target,
-          async (...args) => {
-            const planned = await update(...args);
-            const foreign = new DatabaseSync(f.target.storePath);
-            try {
-              // A foreign identity edit leaves the session row and transcript watermark unchanged.
-              expect(
-                foreign
-                  .prepare(
-                    "UPDATE transcript_event_identities SET parent_id = ? WHERE session_id = ? AND event_id = ?",
-                  )
-                  .run("foreign-parent", f.target.sessionId, anchor.entryId).changes,
-              ).toBe(1);
-              changed = true;
-            } finally {
-              foreign.close();
-            }
-            return planned;
-          },
-          options,
-        ),
-    );
-    await f.withRun("current-input-check", async (params) => {
-      await expect(
-        runWithSessionTranscriptReadFence(
-          { ...anchor, role: "user", logicalTurnId: "current-input-check" },
-          () =>
-            prepareCliHistoryBoundary(params, {
-              credential: { type: "token", provider: "test-cli", token: "epoch-a" },
-            }),
-        ),
-      ).rejects.toThrow("Current-turn transcript admission identity changed");
-      expect(changed).toBe(true);
-      expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).not.toBe(params.runId);
     });
   });
 

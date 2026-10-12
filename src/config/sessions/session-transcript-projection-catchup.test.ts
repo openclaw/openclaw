@@ -88,8 +88,20 @@ function publishPreparedBase(params: {
 }
 
 describe("session transcript projection append catch-up", () => {
+  it("does not claim a session deleted after preparation", async () => {
+    const fixture = await prepareDirtyProjection("deleted");
+    runOpenClawAgentWriteTransaction((database) => {
+      database.db
+        .prepare("DELETE FROM session_windows WHERE session_id = ?")
+        .run(fixture.scope.sessionId);
+      expect(
+        claimPreparedSessionTranscriptProjectionInTransaction(database.db, fixture.plan, -41),
+      ).toBe(false);
+    }, fixture.databaseOptions);
+  });
+
   it.each(["invalid-leaf", "oversized"])(
-    "refuses an unsafe $0 catch-up before replacing the projection",
+    "keeps an unsafe $0 catch-up unpublished",
     async (label) => {
       const fixture = await prepareDirtyProjection(label);
       if (label === "invalid-leaf") {
@@ -119,13 +131,29 @@ describe("session transcript projection append catch-up", () => {
           );
         }, fixture.databaseOptions);
       }
+      const claimId = -41;
+      publishPreparedBase({
+        claimId,
+        databaseOptions: fixture.databaseOptions,
+        plan: fixture.plan,
+        sessionId: fixture.scope.sessionId,
+      });
       expect(
         runOpenClawAgentWriteTransaction(
           (database) =>
-            claimPreparedSessionTranscriptProjectionInTransaction(database.db, fixture.plan, -41),
+            finalizePreparedSessionTranscriptProjectionInTransaction(
+              database.db,
+              fixture.plan,
+              claimId,
+            ),
           fixture.databaseOptions,
         ),
       ).toBe(false);
+      expect(
+        fixture.database.db
+          .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+          .get(fixture.scope.sessionId),
+      ).toEqual({ needs_rebuild: 1 });
     },
   );
 

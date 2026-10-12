@@ -1,6 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { sql } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
   readPendingUserTurnTranscriptAdmission,
@@ -9,13 +7,11 @@ import type {
   UserTurnTranscriptAdmissionReceipt,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
 export { SessionTranscriptReadFenceError };
 
@@ -140,7 +136,7 @@ export function resolveSessionTranscriptReadFence(session: {
 }
 
 export function resolveSqliteSessionTranscriptReadFence(params: {
-  database: Pick<OpenClawAgentDatabase, "db" | "path">;
+  database: Pick<OpenClawAgentDatabase, "path">;
   agentId: string;
   sessionId: string;
   sessionKey?: string;
@@ -164,73 +160,11 @@ export function resolveSqliteSessionTranscriptReadFence(params: {
       "Current-turn transcript admission belongs to a different session key",
     );
   }
-  const db = getNodeSqliteKysely<
-    Pick<
-      DB,
-      | "transcript_event_identities"
-      | "session_transcript_active_events"
-      | "transcript_events"
-      | "transcript_rewrite_watermarks"
-    >
-  >(params.database.db);
-  const boundary = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "identity.session_id")
-          .onRef("event.seq", "=", "identity.seq"),
-      )
-      .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
-        join.onRef("rewrite.session_id", "=", "identity.session_id"),
-      )
-      .select([
-        "identity.seq",
-        "identity.parent_id",
-        "active.message_position",
-        "rewrite.generation",
-        /* kysely-allow-raw: validate the admission role without acquiring its private payload. */
-        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.type')`.as(
-          "event_type",
-        ),
-        /* kysely-allow-raw: admission validation needs the exact role, not the message body. */
-        sql<string>`json_extract(${transcriptEventNavigationSql("event")}, '$.message.role')`.as(
-          "message_role",
-        ),
-      ])
-      .where("identity.session_id", "=", params.sessionId)
-      .where("identity.event_id", "=", receipt.entryId)
-      .limit(1),
-  );
-  if (boundary?.message_position === null || boundary?.message_position === undefined) {
-    throw new SessionTranscriptReadFenceError(
-      `Current-turn transcript admission is no longer a visible message: ${receipt.entryId}`,
-    );
-  }
-  if (
-    boundary.generation !== receipt.generation ||
-    boundary.seq !== receipt.rawSeq ||
-    boundary.parent_id !== receipt.effectiveParentId ||
-    boundary.message_position !== receipt.activeMessagePosition
-  ) {
-    throw new SessionTranscriptReadFenceError(
-      `Current-turn transcript admission identity changed: ${receipt.entryId}`,
-    );
-  }
-  if (boundary.event_type !== "message" || boundary.message_role !== "user") {
-    throw new SessionTranscriptReadFenceError(
-      `Current-turn transcript admission is not a user message: ${receipt.entryId}`,
-    );
-  }
+  // The admission owner publishes these committed bounds. Context consumers
+  // validate their accepted snapshot; external SQLite writers are unsupported.
   return {
     admission: receipt,
-    beforeActiveMessagePosition: boundary.message_position,
-    beforeRawSeq: boundary.seq,
+    beforeActiveMessagePosition: receipt.activeMessagePosition,
+    beforeRawSeq: receipt.rawSeq,
   };
 }

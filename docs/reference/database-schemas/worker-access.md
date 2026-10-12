@@ -339,6 +339,20 @@ semantics are unchanged.
 
 ## SDK session writer migration
 
+Current-input read fences consume the committed admission receipt's sequence and
+message position. They validate the requested store, session key, and user role
+without rereading that receipt's identity from SQLite. Source/account authority
+still belongs to the context and writer owners at their effect boundaries.
+Direct SQLite edits without owner publication are unsupported.
+
+Transcript search returns its read snapshot and obtains indexing readiness from
+the projection owner. It does not reread a connection revision after awaiting
+readiness; an intervening append appears on the next search. Projection rebuilds
+check their source at final publication, retaining bounded append catch-up and
+refusing reset, branch, or generation changes. Successful chunk writes do not
+need a second count or classification query. Chunk ownership remains checked
+because a real transcript rewrite can replace the derived index during a rebuild.
+
 Historical dashboard title generation uses the same awaited transcript reader as
 incognito title generation. Its bounded title probes and watermark cache run in
 the existing history worker. Full suffix replacement derives its retained prefix
