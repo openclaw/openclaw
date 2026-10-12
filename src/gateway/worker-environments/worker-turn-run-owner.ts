@@ -67,11 +67,11 @@ export async function prepareWorkerTurnReplyDelivery(
   let delivered = false;
   return {
     isDelivered: () => delivered,
-    deliver(result: EmbeddedAgentRunResult) {
+    deliver(this: void, result: EmbeddedAgentRunResult) {
       delivered = true;
       reply.resolve(result);
     },
-    wait(execution: Promise<EmbeddedAgentRunResult>) {
+    wait(this: void, execution: Promise<EmbeddedAgentRunResult>) {
       void execution.catch((error: unknown) => {
         if (delivered) {
           logWarn(`Cloud worker background settlement failed: ${boundedWorkerError(error)}`);
