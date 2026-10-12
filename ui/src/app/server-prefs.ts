@@ -18,7 +18,6 @@ import {
 } from "./server-prefs-profile.ts";
 import {
   isNavigationPref,
-  prefValuesEqual,
   clearSidebarEntriesMetadata,
   isProfilePref,
   SYNCED_PREF_KEYS,
@@ -28,8 +27,8 @@ import {
 } from "./server-prefs-state.ts";
 import {
   PENDING_KEY,
-  LAST_SEEN_KEY,
   parseStoredPrefs,
+  serializeStoredPrefs,
   readRetainedLocalKeys,
   readStorage,
   readStoredPrefs,
@@ -140,24 +139,6 @@ function adoptPendingScope(scope: string): void {
   sync.pendingPersistedKeys = new Set(
     stored.available && stored.prefs ? pendingUiPrefKeys(stored.prefs) : [],
   );
-  if (
-    sync.pushProfileId &&
-    stored.prefs?.sidebarEntries &&
-    !Object.hasOwn(stored.prefs, "sidebarEntriesBase")
-  ) {
-    // v2026.9.9 saved pending pins without an edit base. Freeze only its same-profile
-    // recorded baseline before hydration can replace LAST_SEEN with a fresh remote value.
-    const previous = readStoredPrefs(LAST_SEEN_KEY, scope).prefs;
-    const base = SYNCED_PREFS.sidebarEntries.extract(previous?.sidebarEntries);
-    if (
-      previous?.navigationConfirmation === undefined &&
-      base &&
-      prefValuesEqual(base, previous?.sidebarEntries)
-    ) {
-      stored.prefs.sidebarEntriesBase = base;
-      writePendingStorage(stored.prefs);
-    }
-  }
 }
 function writePendingStorage(prefs: ServerUiPrefs | null): void {
   if (prefs && !prefs.sidebarEntries) {
@@ -166,7 +147,7 @@ function writePendingStorage(prefs: ServerUiPrefs | null): void {
   const persisted = writeStorage(
     PENDING_KEY,
     sync.pendingScope,
-    prefs && Object.keys(prefs).length ? JSON.stringify(prefs) : null,
+    prefs && Object.keys(prefs).length ? serializeStoredPrefs(prefs) : null,
   );
   if (persisted) {
     sync.pendingPersistedKeys = new Set(
@@ -203,7 +184,7 @@ function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void 
     writePendingStorage(next);
     return;
   }
-  writeStorage(PENDING_KEY, scope, next ? JSON.stringify(next) : null);
+  writeStorage(PENDING_KEY, scope, next ? serializeStoredPrefs(next) : null);
 }
 // localStorage pending is a cross-tab merged pool per gateway. Per-key read-merge-write prevents
 // one tab from clobbering sibling offline intent; its ms-scale race is accepted because storage has

@@ -119,8 +119,8 @@ suite.define(() => {
         await page.addInitScript(
           ({ key, entries }) => {
             const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
-            if (!Array.isArray(stored.sidebarEntries)) {
-              localStorage.setItem(key, JSON.stringify({ ...stored, sidebarEntries: entries }));
+            if (!Array.isArray(stored.railShortcuts)) {
+              localStorage.setItem(key, JSON.stringify({ ...stored, railShortcuts: entries }));
             }
           },
           {
