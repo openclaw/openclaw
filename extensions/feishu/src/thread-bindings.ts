@@ -98,10 +98,11 @@ export function createFeishuThreadBindingManager(params: {
 }): FeishuThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const { managersByAccountId, bindingsByAccountConversation } = getState();
-  const existing = managersByAccountId.get(accountId);
-  if (existing) {
-    return existing;
-  }
+  // Every monitor start owns a fresh manager and registers its own adapter: a
+  // replacement must never adopt the previous instance's registration, or the
+  // prior teardown's identity unregister would leave the live monitor's account
+  // without any binding adapter. Registrations are stacked, so the newest
+  // adapter wins while a superseded manager's late stop removes only itself.
 
   const idleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg: params.cfg,
