@@ -128,9 +128,8 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       captured.blocked = false;
       return true;
     },
-    beginMutation(invalidatesAuthority: boolean) {
+    beginMutation() {
       captured.epoch++;
-      captured.blocked ||= invalidatesAuthority;
       const mutation = {};
       captured.mutation = mutation;
       return {
@@ -161,7 +160,12 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
   };
 }
 
-/** Unknown facts suppress use without declaring an otherwise live node revoked. */
+/**
+ * Unknown facts suppress use without declaring an otherwise live node revoked.
+ * In-flight writes are not unknown: rows stay authoritative until COMMIT, and the pending
+ * services below install a committed receipt before this read. Gateway revocations also
+ * retire live clients directly.
+ */
 export function getPublishedPairedDeviceBinding(
   deviceId: string,
   baseDir?: string,
