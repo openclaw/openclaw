@@ -104,8 +104,19 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
 
 function normalizeOpenAIResponsesReasoningReplayItem(
   item: ReplayableResponseReasoningItem,
+  api: Api,
 ): ReplayableResponseReasoningItem {
-  return Array.isArray(item.summary) ? item : { ...item, summary: [] };
+  if (api === "openai-chatgpt-responses") {
+    return Array.isArray(item.summary) ? item : { ...item, summary: [] };
+  }
+  // Match storage's reasoning privacy shape and order before warm replay too.
+  return {
+    id: item.id,
+    type: "reasoning",
+    summary: [],
+    status: item.status,
+    encrypted_content: item.encrypted_content,
+  };
 }
 
 function prepareOpenAIResponsesReasoningItemForReplay(
@@ -117,7 +128,7 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   const hasRawMetadata = Object.hasOwn(item, OPENAI_RESPONSES_REASONING_REPLAY_META_KEY);
   const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } = item;
   if (!("encrypted_content" in rest)) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest);
+    return normalizeOpenAIResponsesReasoningReplayItem(rest, context.api);
   }
   const metadata =
     blockMetadata !== undefined
@@ -130,10 +141,11 @@ function prepareOpenAIResponsesReasoningItemForReplay(
     !hasRawMetadata &&
     options?.preserveUnattributedEncryptedContent === true;
   if (preserveUnattributed || (metadata && providerReplayContextMatches(metadata, context))) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest);
+    return normalizeOpenAIResponsesReasoningReplayItem(rest, context.api);
   }
   return normalizeOpenAIResponsesReasoningReplayItem(
     stripEncryptedReasoningContentFields(rest) as ReplayableResponseReasoningItem,
+    context.api,
   );
 }
 

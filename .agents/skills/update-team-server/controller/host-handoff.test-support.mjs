@@ -4,8 +4,8 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { makeReleaseFixture } from "./worker-config-owner-fixture.mjs";
-const library = process.env.REHEARSAL_SNAPSHOT_TEST_LIBRARY ?? new URL("./release-lib.mjs", import.meta.url).pathname;
-export function makeRehearsalSnapshotFixture(t) {
+const library = new URL("./release-lib.mjs", import.meta.url).pathname;
+export function makeHandoffSnapshotFixture(t) {
   const f = makeReleaseFixture(t);
   const stateRoot = join(f.runtime, ".openclaw"), config = join(stateRoot, "openclaw.json"), shared = join(stateRoot, "state/openclaw.sqlite");
   mkdirSync(dirname(shared), { recursive: true });
@@ -34,9 +34,5 @@ export function makeRehearsalSnapshotFixture(t) {
   writeFileSync(join(f.initial, "node_modules/sqlite-vec/index.js"), "exports.load=db=>db.function('vec_version',()=> 'fixture');");
   const seal = spawnSync(process.execPath, [library, "seal-tree", f.initial], { env: f.env, encoding: "utf8" });
   assert.equal(seal.status, 0, seal.stderr);
-  // Simulate capacity independently of the test host's free-space budget. Snapshot I/O is real.
-  const capacity = join(f.root, "capacity.mjs");
-  writeFileSync(capacity, "import fs from 'node:fs'; import {syncBuiltinESMExports} from 'node:module'; const original=fs.statfsSync; fs.statfsSync=(...args)=>({...original(...args),bavail:Number(process.env.SNAPSHOT_TEST_AVAILABLE),bsize:4096}); syncBuiltinESMExports();");
-  const run = (label = "warm", available = 16 * 1024 * 1024) => spawnSync(process.execPath, ["--import", capacity, library, "snapshot-for-rehearsal", f.serving, f.initial, config, shared, label], { env: { ...f.env, SNAPSHOT_TEST_AVAILABLE: String(available) }, encoding: "utf8", timeout: 30000 });
-  return { ...f, shared, config, agents, run };
+  return { ...f, shared, config, agents };
 }

@@ -119,8 +119,6 @@ jobs:
     timeout-minutes: 20
     outputs:
       checkout_revision: &target_sha ${{ steps.checkout_ref.outputs.sha }}
-      pr_job_count: ${{ steps.manifest.outputs.pr_job_count }}
-      pr_check_job_count: ${{ steps.manifest.outputs.pr_check_job_count }}
       candidate_trust: ${{ steps.candidate_trust.outputs.trust }}
       cache_mode: ${{ steps.candidate_trust.outputs.cache_mode }}
       cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
@@ -143,8 +141,6 @@ jobs:
       release_fast_lane: ${{ steps.manifest.outputs.release_fast_lane }}
       validation_tier: ${{ steps.manifest.outputs.validation_tier }}
       run_node: ${{ steps.manifest.outputs.run_node }}
-      # Freeze PR label policy once so every cancellation owner makes the same decision.
-      disable_fail_fast: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:no-fail-fast') && 'true' || 'false' }}
       # docker-seed-e2e-contract-v1: frozen targets without this marker skip the lane.
       run_docker_seed_e2e: ${{ steps.manifest.outputs.run_docker_seed_e2e }}
       docker_seed_lanes: ${{ steps.manifest.outputs.docker_seed_lanes }}
@@ -3223,7 +3219,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || (needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), matrix.check_name)) && 'blacksmith-16vcpu-ubuntu-2404' || matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
-      fail-fast: ${{ github.event_name == 'pull_request' && github.repository != 'openclaw/openclaw' && needs.preflight.outputs.disable_fail_fast != 'true' }}
+      fail-fast: ${{ github.event_name == 'pull_request' && github.repository != 'openclaw/openclaw' }}
       max-parallel: ${{ github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && needs.preflight.outputs.frozen_target != 'true' && contains(fromJSON('["blacksmith","hybrid"]'), needs.preflight.outputs.node_runner_backend) && contains(fromJSON('["","blacksmith","hybrid"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 130 || 96 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
@@ -3482,9 +3478,6 @@ jobs:
           OPENCLAW_CI_CHECK_PLAN_INPUT_JSON: ${{ needs.preflight.outputs.check_plan_input_json }}
           OPENCLAW_CI_TYPE_PLAN_SERIAL: ${{ vars.OPENCLAW_CI_TYPE_PLAN_SERIAL }}
         run: node scripts/ci-check-plan.mts
-      # The failure observer depends on this step name.
-      - name: "CI check job count v1: ${{ steps.plan.outputs.check_job_count }}"
-        run: ":"
 
   # Types, lint, and format check shards.
   check-shard:
@@ -6283,45 +6276,77 @@ jobs:
 
       - *runner_memory_peak_step
 
-  pr-fail-fast:
+  pr-failure-report:
     permissions:
       contents: read
-      actions: write
+      actions: read
       pull-requests: read
-    needs: [preflight]
-    if: ${{ always() && github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft && needs.preflight.result == 'success' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && needs.preflight.outputs.disable_fail_fast != 'true' }}
+    needs:
+      - preflight
+      - security-fast
+      - check-plan
+      - build-artifacts
+      - control-ui-performance
+      - native-i18n
+      - checks-ui
+      - checks-ui-e2e
+      - checks-ui-e2e-real-gateway
+      - control-ui-i18n
+      - checks-baseline-ratchets
+      - checks-fast-core
+      - qa-smoke-ci-profile
+      - checks-fast-plugin-contracts-shard
+      - checks-fast-channel-contracts-shard
+      - checks-node-compat
+      - checks-node-core-test-nondist-shard
+      - check-shard
+      - check-lint-hosted-core-shard
+      - check-lint-hosted-extension-shard
+      - check-test-types-hosted-core-shard
+      - check-additional-shard
+      - check-extension-package-boundary
+      - check-docs
+      - skills-python
+      - checks-windows
+      - macos-node
+      - macos-swift
+      - ios-build
+      - ios-release-e2e
+      - ios-screenshot-shard
+      - ios-screenshot-evidence
+      - android
+      - android-screenshots
+      - android-access-native
+      - docker-seed-e2e
+      - published-driver-update
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || github.event.pull_request.head.repo.full_name != github.repository || needs.preflight.outputs.runner_profile == 'github') && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
-    timeout-minutes: 60
+    timeout-minutes: 15
     outputs:
-      failure_job_id: ${{ steps.monitor.outputs.failure_job_id }}
-      failure_job_name: ${{ steps.monitor.outputs.failure_job_name }}
-      failure_run_attempt: ${{ steps.monitor.outputs.failure_run_attempt }}
-      known_main_red_attempt: ${{ steps.monitor.outputs.known_main_red_attempt }}
+      failure_job_id: ${{ steps.report.outputs.failure_job_id }}
+      known_main_red_attempt: ${{ steps.report.outputs.known_main_red_attempt }}
+      summary_json: ${{ steps.report.outputs.summary_json }}
+      failures_json: ${{ steps.report.outputs.failures_json }}
     steps:
-      - name: Checkout CI monitor
-        if: always()
+      - name: Checkout CI failure reporter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.sha || github.event.pull_request.base.sha }}
           persist-credentials: false
           sparse-checkout: |
-            scripts/ci-pr-fail-fast.mjs
+            scripts/ci-pr-failure-report.mjs
             scripts/ci-known-main-red.mjs
             scripts/lib/ci-node-test-evidence.mjs
             scripts/lib/ci-static-check-evidence.mjs
           sparse-checkout-cone-mode: false
-      - name: Classify PR failures and cancel eligible same-repository work
-        id: monitor
-        if: always()
+      - name: Classify completed PR failures
+        id: report
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_CI_PR_NUMBER: ${{ github.event.pull_request.number }}
           OPENCLAW_CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           OPENCLAW_CI_PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          OPENCLAW_CI_EXPECTED_JOBS: ${{ needs.preflight.outputs.pr_job_count }}
-          OPENCLAW_CI_PREFLIGHT_CHECK_JOBS: ${{ needs.preflight.outputs.pr_check_job_count }}
-          OPENCLAW_CI_CHECK_PLAN_EXPECTED: ${{ needs.preflight.outputs.run_check_plan }}
-        run: node scripts/ci-pr-fail-fast.mjs
+        run: node scripts/ci-pr-failure-report.mjs
 
   ci-gate:
     permissions:
@@ -6365,24 +6390,24 @@ jobs:
       - android-access-native
       - docker-seed-e2e
       - published-driver-update
-      - pr-fail-fast
-    if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && always() && (github.event_name == 'schedule' || !cancelled() || (needs.pr-fail-fast.outputs.failure_run_attempt == format('{0}', github.run_attempt) && needs.pr-fail-fast.outputs.failure_job_id != '') || (github.run_attempt == 1 && needs.pr-fail-fast.result == 'failure')) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
-    # Blacksmith PR failures need critical-path routing within cancellation grace.
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') || (github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && needs.preflight.outputs.runner_profile == 'blacksmith' && ((needs.pr-fail-fast.outputs.failure_run_attempt == '1' && needs.pr-fail-fast.outputs.failure_job_id != '') || needs.pr-fail-fast.result == 'failure'))) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') || (github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && needs.preflight.outputs.runner_profile == 'blacksmith' && ((needs.pr-fail-fast.outputs.failure_run_attempt == '1' && needs.pr-fail-fast.outputs.failure_job_id != '') || needs.pr-fail-fast.result == 'failure'))) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+      - pr-failure-report
+    if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && always() && (github.event_name == 'schedule' || !cancelled()) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
+    # Preserve critical-path routing for Blacksmith PR failures.
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') || (github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && needs.preflight.outputs.runner_profile == 'blacksmith' && (needs.pr-failure-report.outputs.failure_job_id != '' || needs.pr-failure-report.result == 'failure'))) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') || (github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && github.event.pull_request.head.repo.full_name == github.repository && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && needs.preflight.outputs.runner_profile == 'blacksmith' && (needs.pr-failure-report.outputs.failure_job_id != '' || needs.pr-failure-report.result == 'failure'))) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
-      - name: Report originating PR failure
-        if: always() && needs.pr-fail-fast.outputs.failure_run_attempt == format('{0}', github.run_attempt) && needs.pr-fail-fast.outputs.failure_job_id != ''
+      - name: Report PR failure classification
+        if: always() && needs.pr-failure-report.outputs.summary_json != ''
         env:
-          FAILURE_JOB_ID: ${{ needs.pr-fail-fast.outputs.failure_job_id }}
-          FAILURE_JOB_NAME: ${{ needs.pr-fail-fast.outputs.failure_job_name }}
+          SUMMARY_JSON: ${{ needs.pr-failure-report.outputs.summary_json }}
+          FAILURES_JSON: ${{ needs.pr-failure-report.outputs.failures_json }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
-          const name = process.env.FAILURE_JOB_NAME.replace(/[\r\n`]/g, " ");
-          const url = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/job/${process.env.FAILURE_JOB_ID}`;
-          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `PR CI stopped after **${name}** failed.\n\n[Originating job](${url}). Remaining jobs were cancelled to avoid wasted compute.\n`);
-          process.exitCode = 1;
+          const summary = JSON.parse(process.env.SUMMARY_JSON);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          console.log(summary);
+          console.log(`Failure classification JSON: ${process.env.FAILURES_JSON}`);
           EOF
       - name: Record published-driver dispatch limitation
         if: always() && needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision != github.sha
@@ -6395,7 +6420,7 @@ jobs:
         env:
           RELEASE_FAST_LANE: ${{ needs.preflight.outputs.release_fast_lane }}
           ALLOW_COALESCED_IOS: ${{ github.event_name == 'schedule' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
-          ALLOW_KNOWN_MAIN_RED: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 && needs.pr-fail-fast.result == 'success' && needs.pr-fail-fast.outputs.known_main_red_attempt == format('{0}', github.run_attempt) }}
+          ALLOW_KNOWN_MAIN_RED: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && needs.pr-failure-report.result == 'success' && needs.pr-failure-report.outputs.known_main_red_attempt == format('{0}', github.run_attempt) }}
           JOB_RESULTS: |
             preflight=${{ needs.preflight.result }}|true
             security-fast=${{ needs.security-fast.result }}|true
@@ -6434,7 +6459,7 @@ jobs:
             android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
             published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
-            pr-fail-fast=${{ github.run_attempt != 1 && 'skipped' || needs.pr-fail-fast.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && needs.preflight.outputs.disable_fail_fast != 'true' }}
+            pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
         run: |
           set -euo pipefail
           echo "release fast lane: ${RELEASE_FAST_LANE:-false}"
@@ -6516,7 +6541,7 @@ jobs:
       - android-access-native
       - docker-seed-e2e
       - published-driver-update
-      - pr-fail-fast
+      - pr-failure-report
       - ci-gate
     if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
     permissions:

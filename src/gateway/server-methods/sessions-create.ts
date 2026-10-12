@@ -71,6 +71,7 @@ import {
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
 import {
+  reportCreatedVisibleSpawn,
   resolveSessionCreateSpawnContext,
   validateSessionCreateSpawnRequest,
 } from "./session-create-spawn.js";
@@ -604,6 +605,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           assertCurrent: assertSessionCreateCurrent,
           signal,
         });
+        await reportCreatedVisibleSpawn(cfg, sessionCreation, session, publicRead);
         if (!hasInitialTurn) {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;

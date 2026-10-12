@@ -57,9 +57,7 @@ bus_address="unix:path=$runtime_dir/bus"
 mode=deploy
 declare +x allow_cpu_degraded=0
 interrupt_after_drain=0
-skip_migration_rehearsal=0
 offline_doctor_repair=0
-accept_partial_nocow=0
 capture_startup_profile=0
 arm_steady_profile=0
 profile_keep_arm=0
@@ -79,7 +77,6 @@ frozen_predecessor_pid=""
 frozen_predecessor_start=""
 frozen_process_instance=""
 frozen_release_binding=""
-rehearsal_snapshot_label=""
 handoff_peer=""
 handoff_target_sha=""
 handoff_stop_only=0
@@ -132,7 +129,6 @@ operator_expected_pid=""
 operator_expected_generation=""
 operator_receipt_open=0
 operator_restart_verified=0
-abandon_rehearsal_sha=""
 start_stopped_current=0
 stopped_expected_boot=""
 stopped_expected_invocation=""
@@ -141,10 +137,8 @@ stopped_start_attempted=0
 stopped_timer_attempted=0
 stopped_verified=0
 stopped_receipt_open=0
-migration_evidence=""
-migration_release_proof=""
+native_update_root=""
 migration_guard=""
-migration_recovered=0
 worker_config_recovered=0
 worker_config_token=""
 worker_expected_config_hash=""
@@ -1228,6 +1222,10 @@ process.stdout.write(processInfo.processInstanceId);
 		;;
 	*) verification_failure convergence.channel-result 0 "$verification_result_started" unexpected-result; return 1 ;;
 	esac
+	timeout_ms=$(((verification_deadline - SECONDS) * 1000))
+	verification_step convergence.sessions-budget test "$timeout_ms" -gt 0 || return 1
+	verification_step convergence.sessions-list run_gateway "$release" gateway call sessions.list \
+		--params '{"limit":1}' --json --timeout "$timeout_ms" >/dev/null || return 1
 	verification_step convergence.protected-state assert_protected_identity || return 1
 	verification_step convergence.policy assert_policy || return 1
 	verification_step convergence.scheduler assert_scheduler_owner "$release" || return 1
@@ -1413,58 +1411,15 @@ migration_install_guard() {
 	migration_native_guard
 }
 
-migration_check_guard() {
-	migration_native_guard || return 1
-	[[ -z "$migration_evidence" ]] || proof migration-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null
-}
-
 migration_check_existing_guard() {
 	local asset="$ancestor_boundary/etc/systemd/system/openclaw-gateway.service.d/zz-openclaw-agent-schema-migration.conf"
 	if [[ -e "$asset" || -L "$asset" ]]; then
 		migration_guard="$(proof migration-guard-descriptor "$serving_root")" || return 1
 		migration_native_guard || return 1
-		proof migration-permit-present "$serving_root" >/dev/null || return 1
+		if [[ ! -e "$journal_file" ]] || ! proof journal-field "$journal_file" nativeUpdate.backupRoot >/dev/null 2>&1; then
+			proof migration-permit-present "$serving_root" >/dev/null || return 1
+		fi
 	fi
-}
-
-migration_stop_contract() {
-	local stop_budget
-	stop_budget="$(system_systemctl show openclaw-gateway.service --property=TimeoutStopUSec --value)" || return 1
-	[[ "$(system_systemctl show openclaw-gateway.service --property=KillMode --value)" == control-group &&
-		"$(system_systemctl show openclaw-gateway.service --property=SendSIGKILL --value)" == yes &&
-		"$stop_budget" =~ ^[1-9][0-9]*(us|ms|s|min)([[:space:]].*)?$ ]] || {
-		fail 'agent migration requires bounded exact control-group shutdown'
-		return 1
-	}
-}
-
-migration_assert_inputs() {
-	local phase
-	if [[ "${migration_kind:-}" == config-codex-turn-idle || "${migration_nocow:-0}" == 1 ]]; then
-		phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	fi
-	if [[ "${phase:-}" == doctor-started && "${migration_nocow:-0}" == 1 ]]; then
-		proof offline-doctor-inputs "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-		assert_policy
-		return
-	fi
-	if [[ "${phase:-}" == doctor-started ]]; then
-		# Atomic replacement is still fenced. Original evidence guards policy and bytes;
-		# neither ordinary identity nor policy is rebound until stores verify.
-		proof migration-config-recovery-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null
-		return
-	fi
-	assert_protected_identity || return 1
-	assert_policy
-}
-
-migration_rebind_config_guards() {
-	local verified_policy
-	verified_policy="$(proof migration-config-policy "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-	policy_identity="$verified_policy"
-	assert_protected_identity || return 1
-	assert_policy
 }
 
 stopped_system_owners() {
@@ -1637,408 +1592,6 @@ process.stdout.write(JSON.stringify({ system, user, ancestors, groups, config })
 ' "$ancestor_boundary" "$proc_root" "$original_pid" "$serving_root" "$runtime_home" "$gateway_port" "$root_uid" "$root_gid"
 }
 
-migration_assert_stopped() {
-	migration_check_guard || return 1
-	stopped_system_owners || return 1
-	migration_assert_inputs
-}
-
-migration_capture_record() {
-	local process_json instance current_sha previous_sha system_enabled user_enabled system_active user_active
-	capture_generation system || return 1
-	process_json="$(run_gateway "$previous_release" gateway call system.info --params '{}' --json --timeout 30000)" || return 1
-	instance="$(PROCESS_JSON="$process_json" EXPECTED_PID="$service_pid" "$node_bin" -e '
-const p=JSON.parse(process.env.PROCESS_JSON); if(p.pid!==Number(process.env.EXPECTED_PID)||typeof p.processInstanceId!=="string"||!p.processInstanceId)process.exit(2); process.stdout.write(p.processInstanceId);
-')" || return 1
-	assert_frozen_predecessor "$instance" || return 1
-	current_sha="$(basename "$(read_pointer "$current_link")")" || return 1
-	[[ "$current_sha" == "$(basename "$previous_release")" ]] || return 1
-	previous_sha=absent
-	if [[ -L "$previous_link" ]]; then previous_sha="$(basename "$(read_pointer "$previous_link")")" || return 1; fi
-	system_enabled="$(system_unit_state)"; user_enabled="$(user_unit_state)"
-	system_active="$(system_state)"; user_active="$(user_state)"
-	PREVIOUS_INFO="$previous_info" CANDIDATE_INFO="$candidate_info" PROTECTED_PATHS="$protected_identity" CONFIG_MIGRATION_KIND="${migration_kind:-none}" OFFLINE_DOCTOR="$offline_doctor_repair" GATEWAY_RUNTIME="$gateway_runtime_snapshot" \
-		CURRENT_SHA="$current_sha" PREVIOUS_SHA="$previous_sha" PID="$service_pid" GENERATION="$service_generation" INSTANCE="$instance" \
-		SYSTEM_ENABLED="$system_enabled" USER_ENABLED="$user_enabled" SYSTEM_ACTIVE="$system_active" USER_ACTIVE="$user_active" \
-		"$node_bin" -e '
-const e=process.env; process.stdout.write(JSON.stringify({version:1,phase:"AGENT_REHEARSAL",topology:"system",gatewayRuntime:JSON.parse(e.GATEWAY_RUNTIME),predecessor:JSON.parse(e.PREVIOUS_INFO),candidate:JSON.parse(e.CANDIDATE_INFO),...(e.OFFLINE_DOCTOR==="1"?{offlineDoctor:true}:{}),...(e.CONFIG_MIGRATION_KIND==="config-codex-turn-idle"?{configMigration:{kind:e.CONFIG_MIGRATION_KIND}}:{}),process:{pid:Number(e.PID),generation:e.GENERATION,instance:e.INSTANCE},services:{system:{unitFileState:e.SYSTEM_ENABLED,activeState:e.SYSTEM_ACTIVE},user:{unitFileState:e.USER_ENABLED,activeState:e.USER_ACTIVE}},protectedPaths:JSON.parse(e.PROTECTED_PATHS),pointerTopology:{current:{present:true,sha:e.CURRENT_SHA},previous:{present:e.PREVIOUS_SHA!=="absent",sha:e.PREVIOUS_SHA==="absent"?null:e.PREVIOUS_SHA}},suspension:null}));
-'
-}
-
-migration_prepare_live() {
-	local process_json instance
-	# Audit sealed trees before starting the short native lease. The library binds
-	# these facts to this controller and lock, then rereads mutable inputs at use.
-	migration_release_proof="$(proof migration-live-preflight "$journal_file" "$serving_root" "$migration_evidence" "$$")" || return 1
-	# Rehearsal carries no mutation authority: take a fresh native lease and OS generation now.
-	capture_generation system || return 1
-	suspension_scope=system; suspension_release="$previous_release"
-	suspension_pid="$service_pid"; suspension_generation="$service_generation"
-	process_json="$(run_gateway "$previous_release" gateway call system.info --params '{}' --json --timeout 30000)" || return 1
-	instance="$(PROCESS_JSON="$process_json" EXPECTED_PID="$service_pid" "$node_bin" -e '
-const p=JSON.parse(process.env.PROCESS_JSON); if(p.pid!==Number(process.env.EXPECTED_PID)||typeof p.processInstanceId!=="string"||!p.processInstanceId)process.exit(2); process.stdout.write(p.processInstanceId);
-')" || return 1
-	assert_frozen_predecessor "$instance" || return 1
-	suspension_instance="$instance"
-	prepare_suspension "$previous_release" || return 1
-	check_suspension || return 1
-	migration_check_guard || return 1
-	migration_record_suspension
-}
-
-migration_record_suspension() {
-	local transition
-	((suspension_cleanup_only == 0)) || { fail 'cannot journal a cleanup-only suspension as migration authority'; return 1; }
-	transition="$(PID="$suspension_pid" GENERATION="$suspension_generation" INSTANCE="$suspension_instance" \
-		LEASE="$held_suspension" EXPIRY="$suspension_expiry" LEASE_STATE="$suspension_state" RELEASE_PROOF="$migration_release_proof" "$node_bin" -e '
-const e=process.env; process.stdout.write(JSON.stringify({phase:"prepared",process:{pid:Number(e.PID),generation:e.GENERATION,instance:e.INSTANCE},suspension:{id:e.LEASE,expiresAtMs:Number(e.EXPIRY),status:e.LEASE_STATE.toLowerCase(),terminalPolicy:"preserve"},releaseProof:JSON.parse(e.RELEASE_PROOF)}));
-')" || return 1
-	migration_evidence="$(printf '%s' "$transition" | proof migration-transition "$journal_file" "$serving_root" "$migration_evidence" @stdin "$$")" || return 1
-}
-
-migration_select_candidate() {
-	local phase current previous original_previous
-	phase="$(proof journal-field "$journal_file" phase)" || return 1
-	current="$(read_pointer "$current_link")" || return 1
-	previous=absent
-	if [[ -L "$previous_link" ]]; then previous="$(read_pointer "$previous_link")" || return 1; fi
-	if [[ "$(proof migration-status "$journal_file" "$serving_root")" != prepared ]]; then
-		[[ "$current" == "$candidate_release" && "$previous" == "$previous_release" ]] || return 1
-		return 0
-	fi
-	original_previous="$(proof journal-field "$journal_file" pointerTopology.previous.sha)" || return 1
-	[[ "$current" == "$previous_release" || "$current" == "$candidate_release" ]] || return 1
-	[[ "$previous" == "$previous_release" || "$previous" == "$releases_root/$original_previous" ||
-		("$original_previous" == null && "$previous" == absent) ]] || return 1
-	if [[ "$phase" == A_PREPARED || "$phase" == B_PREVIOUS_PUBLISHED ]]; then
-		if [[ "$previous" != "$previous_release" ]]; then
-			migration_check_guard || return 1
-			atomic_pointer "$previous_release" "$previous_link" || return 1
-		fi
-		if [[ "$current" == "$previous_release" ]]; then
-			migration_evidence="$(proof migration-advance-activation "$journal_file" "$serving_root" "$migration_evidence" B_PREVIOUS_PUBLISHED)" || return 1
-			migration_check_guard || return 1
-			atomic_pointer "$candidate_release" "$current_link" || return 1
-		fi
-	fi
-	migration_evidence="$(proof migration-advance-activation "$journal_file" "$serving_root" "$migration_evidence" C_CURRENT_SELECTED)" || return 1
-}
-
-recover_live_migration_candidate() {
-	local request snapshot receipt instance live_pid live_generation live_instance migration_kind migration_label migration_nocow
-	local migration_session_proof nocow_summary
-	[[ "$mode" == recover && "$reconcile_stopped" == 0 ]] || { fail 'live candidate reconciliation requires explicit live recovery'; return 1; }
-	operator_check_lock held || return 1
-	migration_evidence="$(proof migration-load "$journal_file" "$serving_root")" || return 1
-	previous_release="$releases_root/$(proof journal-field "$journal_file" predecessor.sha)" || return 1
-	candidate_release="$releases_root/$(proof journal-field "$journal_file" candidate.sha)" || return 1
-	candidate_info="$(proof validate-release "$candidate_release" "$(basename "$candidate_release")" "$root_uid" sealed)" || return 1
-	migration_guard="$(proof migration-guard-descriptor "$serving_root")" || return 1
-	migration_check_guard || return 1
-	if [[ -n "$reconcile_config_hash" ]]; then
-		[[ "$operator_expected_sha" == "$(basename "$candidate_release")" ]] || { fail 'config reconciliation requires the exact selected candidate'; return 1; }
-		recheck_generation system "$operator_expected_pid" "$operator_expected_generation" || return 1
-		instance="$(read_process_instance "$candidate_release" "$operator_expected_pid")" || return 1
-		request="$("$node_bin" -e 'const [candidate,pid,generation,instance,configSha256,journalSha256,runtimeUid]=process.argv.slice(1);process.stdout.write(JSON.stringify({candidate,process:{pid:Number(pid),generation,instance},configSha256,journalSha256,runtimeUid:Number(runtimeUid)}))' \
-			"$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$instance" "$reconcile_config_hash" "$reconcile_journal_hash" "$runtime_uid")" || return 1
-		snapshot="$(proof migration-reconcile-snapshot "$journal_file" "$serving_root" "$migration_evidence" "$request")" || return 1
-		recheck_generation system "$operator_expected_pid" "$operator_expected_generation" || return 1
-		[[ "$(read_process_instance "$candidate_release" "$operator_expected_pid")" == "$instance" ]] || return 1
-		migration_check_guard || return 1
-		migration_evidence="$(proof migration-reconcile-commit "$journal_file" "$serving_root" "$migration_evidence" "$snapshot")" || return 1
-		printf 'RECOVERY_CONFIG_RECONCILED config_sha256=%s journal_sha256=%s original-journal=retained-in-reconciliation restart=0\n' "$reconcile_config_hash" "$reconcile_journal_hash"
-	fi
-	receipt="$(proof migration-reconcile-check "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	read -r live_pid live_generation live_instance < <(printf '%s' "$receipt" | "$node_bin" -e 'const r=JSON.parse(require("node:fs").readFileSync(0,"utf8"));console.log(r.process.pid,r.process.generation,r.process.instance)')
-	recheck_generation system "$live_pid" "$live_generation" || return 1
-	[[ "$(read_process_instance "$candidate_release" "$live_pid")" == "$live_instance" ]] || return 1
-	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-	policy_identity="$(proof policy "$config_file")" || return 1
-	session_witness="$(proof migration-original-witness "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	migration_session_proof="$(proof migration-session-proof "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	if ! wait_for_live "$candidate_release" "$candidate_info" system "$live_pid" "$live_generation"; then
-		fail 'live selected candidate verification failed; journal and evidence retained, no service action performed'
-		return 1
-	fi
-	proof migration-reconcile-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	migration_check_guard || return 1
-	recheck_generation system "$live_pid" "$live_generation" || return 1
-	[[ "$(read_process_instance "$candidate_release" "$live_pid")" == "$live_instance" ]] || return 1
-	assert_protected_identity || return 1
-	assert_policy || return 1
-	verified_markers record "$(basename "$candidate_release")" || return 1
-	migration_kind="$(proof migration-record-kind "$journal_file" "$serving_root")" || return 1
-	migration_nocow="$(proof migration-record-nocow "$journal_file" "$serving_root")" || return 1
-	migration_label="${migration_kind%-*}-to-${migration_kind##*-}"
-	if [[ "$migration_nocow" == 1 ]]; then migration_label="${migration_kind}+nocow"; fi
-	nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	proof migration-finish "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	migration_evidence=""
-	printf 'SUCCESS sha=%s action=deploy migration=%s previous=%s session-proof=%s%s APPROVAL_DELTA=0\n' \
-		"$(basename "$candidate_release")" "$migration_label" "$(basename "$previous_release")" "$migration_session_proof" "$nocow_summary"
-}
-
-recover_agent_schema_migration() {
-	local migration_phase old_pid old_generation runtime_gid doctor_stage doctor_log migration_kind migration_label migration_session_proof migration_nocow
-	local warm_preflight rehearsal_inputs rehearsal_status verified_evidence doctor_exit=0
-	local nocow_summary=""
-	migration_evidence="$(proof migration-load "$journal_file" "$serving_root")" || return 1
-	previous_release="$releases_root/$(proof journal-field "$journal_file" predecessor.sha)" || return 1
-	candidate_release="$releases_root/$(proof journal-field "$journal_file" candidate.sha)" || return 1
-	previous_info="$(proof validate-release "$previous_release" "$(basename "$previous_release")" "$root_uid" sealed)" || return 1
-	candidate_info="$(proof validate-release "$candidate_release" "$(basename "$candidate_release")" "$root_uid" sealed)" || return 1
-	migration_kind="$(proof migration-record-kind "$journal_file" "$serving_root")" || return 1
-	migration_nocow="$(proof migration-record-nocow "$journal_file" "$serving_root")" || return 1
-	migration_label="${migration_kind%-*}-to-${migration_kind##*-}"
-	[[ "$migration_kind" != config-codex-turn-idle ]] || migration_label="$migration_kind"
-	if [[ "$migration_nocow" == 1 && "$migration_kind" != offline-doctor ]]; then migration_label="${migration_kind}+nocow"; fi
-	migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	if ((${accept_partial_nocow:-0})); then
-		[[ "$mode" == recover && "$migration_nocow" == 1 && "$migration_phase" == doctor-started ]] || {
-			fail '--accept-partial-nocow is not applicable: requires a doctor-started NOCOW recovery'; return 1;
-		}
-	fi
-	# A new copied proof may bind authored config only while the original process
-	# still serves, before cold work. The library publishes under this owner's lock.
-	if [[ "$migration_kind" != offline-doctor && ("$migration_phase" == rehearsal || "$migration_phase" == prepared) && "$(system_state)" == active ]]; then
-		warm_preflight="$(MIGRATION_EVIDENCE="$migration_evidence" "$node_bin" -e '
-const r=JSON.parse(process.env.MIGRATION_EVIDENCE).record;
-process.stdout.write(r && ["AGENT_REHEARSAL","A_PREPARED"].includes(r.phase) && r.agentMigration.artifacts.preflight ? "yes" : "no");
-')" || return 1
-		if [[ "$warm_preflight" == yes ]]; then
-			old_pid="$(proof journal-field "$journal_file" process.pid)" || return 1
-			old_generation="$(proof journal-field "$journal_file" process.generation)" || return 1
-			recheck_generation system "$old_pid" "$old_generation" || return 1
-			rehearsal_inputs="$(proof migration-rehearsal-inputs "$journal_file" "$serving_root" "$migration_evidence" "$runtime_uid")" || return 1
-			rehearsal_status="$(REHEARSAL_INPUTS="$rehearsal_inputs" "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.REHEARSAL_INPUTS).status)')" || return 1
-			[[ "$rehearsal_status" == current || "$rehearsal_status" == warm-config-refresh-required ]] || {
-				fail 'migration rehearsal inspector returned an unknown state'; return 1;
-			}
-			if [[ "$rehearsal_status" == warm-config-refresh-required ]]; then
-				runtime_gid="$(id -g openclaw)" || return 1
-				migration_evidence="$(proof migration-rehearse "$journal_file" "$serving_root" "$migration_evidence" \
-					"$config_file" "$state_database" "$runtime_home" "$runtime_uid" "$runtime_gid" "$build_budget")" || return 1
-				recheck_generation system "$old_pid" "$old_generation" || return 1
-				proof migration-preflight-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-				policy_identity="$(proof policy "$config_file")" || return 1
-				printf 'REHEARSAL_REFRESHED candidate=%s prior-evidence=retained\n' "$(basename "$candidate_release")"
-			fi
-		fi
-	fi
-	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-	if [[ "$migration_nocow" == 1 && "$migration_phase" == doctor-started ]]; then
-		proof offline-doctor-inputs "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	elif [[ "$migration_kind" == config-codex-turn-idle ]]; then
-		proof migration-config-recovery-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	else
-		assert_protected_identity || return 1
-	fi
-	if [[ "$migration_kind" == config-codex-turn-idle &&
-		"$(proof migration-status "$journal_file" "$serving_root")" == stores-verified ]]; then
-		migration_rebind_config_guards || return 1
-	else
-		migration_assert_inputs || return 1
-	fi
-	# Recovery never installs or recreates the permanent condition or a lost permit.
-	migration_guard="$(proof migration-guard-descriptor "$serving_root")" || return 1
-	migration_check_guard || return 1
-	migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	if [[ "$migration_kind" == offline-doctor && -z "$nocow_summary" && "${accept_partial_nocow:-0}" == 0 && ("$migration_phase" == recovering-predecessor || ("$mode" == recover && ("$migration_phase" == doctor-started || "$migration_phase" == prepared))) ]]; then
-		recover_offline_doctor_predecessor
-		return $?
-	fi
-	if [[ "$migration_kind" == offline-doctor && "$migration_phase" == doctor-started && -z "$nocow_summary" && "${accept_partial_nocow:-0}" == 0 ]]; then
-		fail 'offline Doctor already attempted; use explicit --recover, never repeat Doctor'
-		return 1
-	fi
-	if [[ "$migration_nocow" == 1 && "$migration_phase" == doctor-started && "$mode" != recover ]]; then
-		fail 'migration NOCOW Doctor requires explicit --recover; recovery is forward-only'
-		return 1
-	fi
-	if [[ "$migration_phase" == rehearsal ]]; then
-		proof migration-permit-present "$serving_root" >/dev/null || return 1
-		proof release-capacity activate "$candidate_release" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2 || return 1
-		if [[ "$migration_nocow" == 1 ]]; then
-			migration_evidence="$(proof offline-doctor-preflight "$journal_file" "$serving_root" "$migration_evidence" "$config_file" "$state_database")" || return 1
-		fi
-		if [[ "$migration_kind" == offline-doctor ]]; then
-			: # Its explicit cold-only preflight is already bound above.
-		elif ((skip_migration_rehearsal)); then
-			migration_evidence="$(proof migration-waive-rehearsal "$journal_file" "$serving_root" "$migration_evidence" \
-				"$config_file" "$state_database")" || return 1
-			printf 'REHEARSAL_WAIVED candidate=%s scope=warm-copy-only authority=explicit-operator\n' "$(basename "$candidate_release")"
-		else
-			runtime_gid="$(id -g openclaw)" || return 1
-			migration_evidence="$(proof migration-rehearse "$journal_file" "$serving_root" "$migration_evidence" \
-				"$config_file" "$state_database" "$runtime_home" "$runtime_uid" "$runtime_gid" "$build_budget")" || return 1
-		fi
-		migration_prepare_live || return 1
-		migration_phase=prepared
-	fi
-	if [[ "$migration_phase" != stores-verified ]]; then
-		old_pid="$(proof journal-field "$journal_file" process.pid)" || return 1
-		old_generation="$(proof journal-field "$journal_file" process.generation)" || return 1
-		if [[ "$(system_state)" == active ]]; then
-			[[ "$migration_phase" == prepared ]] || { fail 'unexpected writer during one-way agent migration'; return 1; }
-			recheck_generation system "$old_pid" "$old_generation" || return 1
-			if [[ -z "$held_suspension" ]]; then migration_prepare_live || return 1; fi
-			migration_stop_contract || return 1
-			proof migration-live-check "$journal_file" "$serving_root" "$migration_evidence" "$migration_release_proof" "$$" >/dev/null || return 1
-			# Once stopped or Doctor-started, recovery must finish forward using original evidence.
-			proof release-capacity activate "$candidate_release" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2 || return 1
-			renew_suspension_before_handoff || return 1
-			migration_record_suspension || return 1
-			check_suspension || return 1
-			arm_suspension_handoff || return 1
-			migration_check_guard || return 1
-			proof migration-permit-revoke "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-			check_suspension || return 1
-			# Revoke, then settle every admitted start job while current still selects the predecessor.
-			bounded 180 "$systemctl_bin" stop openclaw-gateway.service || return 1
-			held_suspension=""; predecessor_stopped=1
-		fi
-		if [[ "$migration_phase" == prepared ]]; then
-			proof migration-permit-revoke "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-		fi
-		proof migration-permit-absent "$serving_root" >/dev/null || return 1
-		migration_assert_stopped || return 1
-		[[ ! -e "$proc_root/$old_pid" || "$(process_generation "$old_pid")" != "$old_generation" ]] || return 1
-		migration_select_candidate || return 1
-		if [[ "$migration_phase" == prepared ]]; then
-			migration_evidence="$(proof migration-cold-backup "$journal_file" "$serving_root" "$migration_evidence" "$config_file" "$state_database" "$proc_root")" || return 1
-			migration_assert_stopped || return 1
-			migration_evidence="$(printf '%s' '{"phase":"doctor-started"}' | proof migration-transition "$journal_file" "$serving_root" "$migration_evidence" @stdin)" || return 1
-		fi
-		nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-		if ((${accept_partial_nocow:-0})) || [[ -n "$nocow_summary" ]]; then
-			migration_evidence="$(proof offline-doctor-accept-partial "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-			nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-			printf 'NOCOW_PARTIAL_ACCEPTED%s\n' "$nocow_summary"
-		else
-		if [[ "$migration_nocow" == 1 ]]; then
-			# Reuse the original capture on forward recovery; never recapture migrated data.
-			migration_evidence="$(proof offline-doctor-capture "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-		fi
-		migration_assert_stopped || return 1
-		proof migration-writers-stopped "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-		printf 'MIGRATING migration=%s candidate=%s recovery=forward-only\n' "$migration_label" "$(basename "$candidate_release")"
-		doctor_stage="$(proof journal-field "$journal_file" agentMigration.stage)" || return 1
-		doctor_log="$serving_root/journal/$doctor_stage/doctor-$(date -u +%Y%m%dT%H%M%SZ)-$$" || return 1
-		if [[ "$migration_kind" == config-codex-turn-idle ]]; then
-			migration_evidence="$(proof migration-config-apply "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-		else
-		if [[ "$migration_nocow" == 1 ]]; then
-			migration_evidence="$(proof offline-doctor-intent "$journal_file" "$serving_root" "$migration_evidence" "$doctor_log" "$proc_root")" || return 1
-			doctor_log="$(proof offline-doctor-log "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-		fi
-		# The candidate's Doctor defers the btrfs NOCOW store rewrite during managed updates
-		# unless the updater requests it; only the explicit +nocow transaction asks for it.
-		local doctor_nocow_env=()
-		if [[ "$migration_nocow" == 1 ]]; then doctor_nocow_env=(OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR=1); fi
-		(umask 077; set -o noclobber
-			if [[ "$migration_nocow" == 1 ]]; then
-				exec >>"$doctor_log.stdout" 2>>"$doctor_log.stderr" || exit 1
-			else
-				exec >"$doctor_log.stdout" 2>"$doctor_log.stderr" || exit 1
-			fi
-			bounded "$build_budget" "$runuser_bin" -u openclaw -- env -i \
-				HOME="$runtime_home" OPENCLAW_HOME="$runtime_home" OPENCLAW_STATE_DIR="$(dirname "$config_file")" \
-				OPENCLAW_CONFIG_PATH="$config_file" OPENCLAW_SUPERVISOR_MODE=external OPENCLAW_SERVICE_REPAIR_POLICY=external \
-				OPENCLAW_UPDATE_IN_PROGRESS=1 "${doctor_nocow_env[@]}" \
-				OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service PATH=/usr/bin:/bin TMPDIR=/tmp \
-				XDG_CONFIG_HOME="$runtime_home/.config" XDG_CACHE_HOME="$runtime_home/.cache" NODE_DISABLE_COMPILE_CACHE=1 \
-				"$node_bin" --no-warnings "$candidate_release/dist/index.js" doctor --repair --non-interactive --no-workspace-suggestions) || doctor_exit=$?
-		if [[ "$migration_nocow" == 1 ]]; then
-			stopped_system_owners || return 1
-			migration_native_guard || return 1
-			if verified_evidence="$(proof offline-doctor-verify "$journal_file" "$serving_root" "$migration_evidence" "$doctor_exit" "$proc_root")"; then
-				migration_evidence="$verified_evidence"
-			else
-				migration_evidence="$(proof migration-load "$journal_file" "$serving_root")" || return 1
-				return 1
-			fi
-		elif ((doctor_exit != 0)); then return 1; fi
-		fi
-		fi
-		migration_assert_stopped || return 1
-		proof migration-writers-stopped "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-		if verified_evidence="$(proof migration-verify-stores "$journal_file" "$serving_root" "$migration_evidence" "$config_file" "$state_database")"; then
-			migration_evidence="$verified_evidence"
-		else
-			migration_evidence="$(proof migration-load "$journal_file" "$serving_root")" || return 1
-			return 1
-		fi
-		protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-		if [[ "$migration_kind" == config-codex-turn-idle ]]; then migration_rebind_config_guards || return 1; fi
-	fi
-	# Reuse the bound pre-Doctor witness and report whether native code had already
-	# advanced the schema before this owner's cold capture.
-	session_witness="$(proof migration-original-witness "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	[[ -n "$session_witness" ]] || return 1
-	migration_session_proof="$(proof migration-session-proof "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	migration_check_guard || return 1
-	if [[ "$(system_state)" != active ]]; then
-		migration_assert_stopped || return 1
-		proof migration-permit-publish "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-		migration_check_guard || return 1
-		system_systemctl start openclaw-gateway.service || return 1
-	else
-		proof migration-permit-present "$serving_root" >/dev/null || return 1
-	fi
-	# A native condition skip exits0; Type=simple also does not prove exec/listener readiness.
-	capture_service_generation system || return 1
-	old_pid="$service_pid"; old_generation="$service_generation"
-	wait_for_live "$candidate_release" "$candidate_info" system || return 1
-	proof migration-check "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	recheck_generation system "$old_pid" "$old_generation" || return 1
-	assert_protected_identity || return 1
-	assert_policy || return 1
-	verified_markers record "$(basename "$candidate_release")" || return 1
-	nocow_summary="$(proof migration-nocow-summary "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	proof migration-finish "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	migration_evidence=""
-	cleanup_releases || return 1
-	printf 'SUCCESS sha=%s action=deploy migration=%s previous=%s session-proof=%s%s APPROVAL_DELTA=0\n' \
-	  "$(basename "$candidate_release")" "$migration_label" "$(basename "$previous_release")" "$migration_session_proof" "$nocow_summary"
-}
-
-recover_offline_doctor_predecessor() {
-	local phase recovered_pid recovered_generation
-	[[ "$mode" == recover ]] || { fail 'offline Doctor rollback requires explicit --recover'; return 1; }
-	phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	if [[ "$phase" == prepared ]]; then
-		migration_assert_stopped || return 1
-		migration_evidence="$(printf '%s' '{"phase":"doctor-started"}' | proof migration-transition "$journal_file" "$serving_root" "$migration_evidence" @stdin)" || return 1
-		phase=doctor-started
-	fi
-	if [[ "$phase" == doctor-started ]]; then
-		migration_assert_stopped || return 1
-		migration_evidence="$(proof offline-doctor-recover "$journal_file" "$serving_root" "$migration_evidence" "$proc_root")" || return 1
-	fi
-	proof offline-recovery-position "$journal_file" "$serving_root" "$migration_evidence" >/dev/null || return 1
-	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
-	session_witness="$(proof migration-original-witness "$journal_file" "$serving_root" "$migration_evidence")" || return 1
-	if [[ "$(system_state)" != active ]]; then
-		migration_assert_stopped || return 1
-		proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null || return 1
-		restore_pointer_topology || return 1
-		migration_assert_stopped || return 1
-		proof offline-recovery-permit "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-		system_systemctl start openclaw-gateway.service || return 1
-	fi
-	capture_service_generation system || return 1
-	recovered_pid="$service_pid"; recovered_generation="$service_generation"
-	[[ "$(read_pointer "$current_link")" == "$previous_release" && "$(realpath "$proc_root/$recovered_pid/cwd")" == "$previous_release" ]] || return 1
-	proof migration-permit-present "$serving_root" >/dev/null || return 1
-	wait_for_live "$previous_release" "$previous_info" system "$recovered_pid" "$recovered_generation" || return 1
-	assert_protected_identity && assert_policy || return 1
-	recheck_generation system "$recovered_pid" "$recovered_generation" || return 1
-	proof offline-recovery-finish "$journal_file" "$serving_root" "$migration_evidence" "$proc_root" >/dev/null || return 1
-	migration_evidence=""
-	printf 'RECOVERED action=restored-offline-doctor-predecessor sha=%s backups=retained APPROVAL_DELTA=0\n' "$(basename "$previous_release")"
-}
-
 install_migration_guard_current() {
 	[[ ! -e "$journal_file" && ! -L "$journal_file" ]] || { fail 'native guard bootstrap refuses a pending journal'; return 1; }
 	local release
@@ -2057,25 +1610,6 @@ install_migration_guard_current() {
 	assert_policy || return 1
 	proof migration-permit-present "$serving_root" >/dev/null || return 1
 	printf 'MIGRATION_GUARD_INSTALLED sha=%s restart=0 native-condition=positive-path-exists\n' "$operator_expected_sha"
-}
-
-activate_agent_schema_migration() {
-	local record
-	assert_protected_identity || return 1
-	assert_policy || return 1
-	capture_generation system || return 1
-	operator_expected_sha="$(basename "$previous_release")"
-	operator_expected_pid="$service_pid"; operator_expected_generation="$service_generation"
-	if ((offline_doctor_repair)); then
-		migration_guard="$(proof migration-guard-descriptor "$serving_root")" || return 1
-		migration_check_guard || return 1
-		proof migration-permit-present "$serving_root" >/dev/null || return 1
-	else
-		install_migration_guard_current || return 1
-	fi
-	record="$(migration_capture_record)" || return 1
-	migration_evidence="$(printf '%s' "$record" | proof migration-create "$serving_root" @stdin)" || return 1
-	recover_agent_schema_migration
 }
 
 bind_successor_generation() {
@@ -2106,18 +1640,45 @@ prepare_rollback_suspension() {
 	fail 'rollback successor could not be safely fenced; refusing restart and retaining evidence'
 }
 
+native_update_permit() {
+	stopped_system_owners || return 1
+	session_witness_record="$(proof journal-read "$journal_file")" || return 1
+	proof journal-native-permit "$journal_file" "$session_witness_record" "$1" >/dev/null
+}
+
+finish_native_update() {
+	[[ -n "$native_update_root" ]] || return 0
+	run_gateway "$candidate_release" update finish --backup-root "$native_update_root" ||
+		printf 'WARNING native update backup cleanup remains pending: %s\n' "$native_update_root" >&2
+}
+
+native_update() {
+	local action="$1" migration_budget
+	# A 37 GiB crossing can take 39 minutes before its backup; keep slow disks in budget.
+	migration_budget=$((build_budget < 7200 ? 7200 : build_budget))
+	session_witness_record="$(proof journal-read "$journal_file")" || return 1
+	stopped_system_owners || return 1
+	if [[ "$action" == restore ]]; then
+		proof journal-native-permit "$journal_file" "$session_witness_record" revoke >/dev/null || return 1
+	fi
+	bounded "$migration_budget" "$runuser_bin" -u openclaw -- env \
+		HOME="$runtime_home" OPENCLAW_HOME="$runtime_home" \
+		OPENCLAW_CONFIG_PATH="$config_file" OPENCLAW_STATE_DIR="$(dirname "$(dirname "$state_database")")" \
+		OPENCLAW_SUPERVISOR_MODE=external OPENCLAW_SERVICE_REPAIR_POLICY=external \
+		OPENCLAW_UPDATE_IN_PROGRESS=1 OPENCLAW_DOCTOR_SQLITE_NOCOW_REPAIR="$offline_doctor_repair" \
+		OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service \
+		"$node_bin" "$candidate_release/dist/index.js" update "$action" --backup-root "$native_update_root" || return 1
+	stopped_system_owners || return 1
+	session_witness_record="$(proof journal-native-state "$journal_file" "$session_witness_record" "$config_file" "$state_database")" || return 1
+	protected_identity="$(proof journal-field "$journal_file" protectedPaths)" || return 1
+	load_journal_witness
+}
+
 rollback_activation() {
 	local exit_code="$1" predecessor_sha candidate_sha topology expected_pid expected_generation rollback_owner
 	local failure_code="$1" rollback_pid="" rollback_generation=""
 	((failure_code != 0)) || failure_code=1
 	((rollback_armed)) || return "$exit_code"
-	local migration_phase
-	migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || { rollback_armed=0; return "$failure_code"; }
-	if [[ "$migration_phase" != none ]]; then
-		rollback_armed=0
-		fail 'agent schema migration is forward-only; journal, backups, and boot fence retained'
-		return "$failure_code"
-	fi
 	rollback_armed=0
 	load_journal_witness || return "$failure_code"
 	verification_deadline=0
@@ -2127,15 +1688,17 @@ rollback_activation() {
 	if [[ "$candidate_sha" != "$predecessor_sha" ]]; then
 		record_failed "$candidate_sha" || return "$failure_code"
 	fi
-	if ! proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null; then
-		proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
-		fail 'rollback compatibility cannot be proved; candidate remains selected and evidence is retained'
-		return "$failure_code"
-	fi
-	# Changed system-deployment policy cannot converge by polling the previous runtime.
-	if ! assert_protected_identity || { [[ "$topology" == system ]] && ! assert_policy; }; then
-		proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
-		return "$failure_code"
+	if [[ -z "$native_update_root" || ! -f "$native_update_root.receipt.json" ]]; then
+		if ! proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null; then
+			proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
+			fail 'rollback compatibility cannot be proved; candidate remains selected and evidence is retained'
+			return "$failure_code"
+		fi
+		# Changed system-deployment policy cannot converge by polling the previous runtime.
+		if ! assert_protected_identity || { [[ "$topology" == system ]] && ! assert_policy; }; then
+			proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
+			return "$failure_code"
+		fi
 	fi
 	if [[ "$topology" == migration-user ]]; then
 		if ! restore_migration_topology; then
@@ -2171,7 +1734,26 @@ rollback_activation() {
 				return 1
 			fi
 		fi
+		if [[ -n "$native_update_root" && -f "$native_update_root.receipt.json" ]]; then
+			if [[ "$rollback_owner" == running ]]; then
+				assert_policy && check_suspension && arm_suspension_handoff || return "$failure_code"
+				system_systemctl stop openclaw-gateway.service || return "$failure_code"
+				held_suspension=""
+				predecessor_is_stopped "$expected_pid" || return "$failure_code"
+				rollback_owner=stopped
+			fi
+			native_update restore || {
+				proof journal-phase "$journal_file" ROLLBACK_FAILED "$session_witness_record" >/dev/null || true
+				fail 'native update restoration failed; Gateway remains stopped with recovery evidence retained'
+				return "$failure_code"
+			}
+			proof compatibility "$candidate_release" "$previous_release" "$state_database" >/dev/null &&
+				assert_protected_identity && assert_policy || return "$failure_code"
+		fi
 		restore_pointer_topology || return "$failure_code"
+		if [[ -n "$native_update_root" && "$rollback_owner" != untouched ]]; then
+			native_update_permit publish || return "$failure_code"
+		fi
 		if [[ "$rollback_owner" == untouched ]]; then
 			resume_suspension || return 1
 			if [[ "$mode" != runtime ]]; then
@@ -2293,9 +1875,9 @@ restore_pointer_topology() {
 
 on_exit() {
 	local exit_code=$? cleanup_exit
-	if [[ -n "$abandon_rehearsal_sha" || "$mode" == prepare-release || "$mode" == snapshot-rehearsal || "$mode" == continue-frozen ]]; then exit "$exit_code"; fi
+	if [[ "$mode" == prepare-release || "$mode" == continue-frozen ]]; then exit "$exit_code"; fi
 	# Admission failure or a lost journal receipt carries no profile cleanup authority.
-	if [[ -n "$frozen_target_sha" && -z "$migration_evidence" && -z "$held_suspension" ]] && ((rollback_armed == 0)); then exit "$exit_code"; fi
+	if [[ -n "$frozen_target_sha" && -z "$held_suspension" ]] && ((rollback_armed == 0)); then exit "$exit_code"; fi
 	if [[ "$mode" == handoff-source ]]; then
 		trap - EXIT
 		if [[ -n "$held_suspension" ]]; then resume_suspension || exit_code=1; fi
@@ -2325,18 +1907,6 @@ on_exit() {
 	if [[ "$mode" == operator-restart ]] && ((operator_receipt_open && !operator_restart_verified)); then
 		((exit_code != 0)) || exit_code=1
 		operator_receipt failed "$exit_code" || true
-	fi
-	if ((exit_code != 0)) && [[ -n "$migration_evidence" && -e "$journal_file" ]]; then
-		local migration_phase
-		migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || migration_phase=unknown
-		if [[ "$migration_phase" == doctor-started || "$migration_phase" == stores-verified ]]; then
-			record_failed "$(basename "$candidate_release")" || exit_code=1
-			if [[ "$(proof migration-record-kind "$journal_file" "$serving_root")" == offline-doctor ]]; then
-				printf 'OFFLINE_DOCTOR_RETAINED recovery=explicit-verified-owner phase=%s\n' "$migration_phase" >&2
-			else
-				printf 'MIGRATION_RETAINED recovery=forward-only phase=%s\n' "$migration_phase" >&2
-			fi
-		fi
 	fi
 	if ((rollback_armed)); then
 		rollback_activation "$exit_code" || exit_code=$?
@@ -2681,26 +2251,6 @@ recovery_jobs_settled() {
 	done
 }
 
-abandon_rehearsal() {
-	local evidence snapshot instance admitted_instance retired
-	operator_check_lock held
-	evidence="$(proof migration-abandon-evidence "$journal_file" "$serving_root" "$abandon_rehearsal_sha")"
-	previous_release="$releases_root/$(printf '%s' "$evidence" | "$node_bin" -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).record.predecessor.sha)')"
-	load_gateway_runtime
-	capture_generation system
-	migration_guard="$(proof migration-guard-descriptor "$serving_root")"
-	migration_native_guard
-	instance="$(read_process_instance "$previous_release" "$service_pid")"
-	snapshot="$(proof migration-abandon-snapshot "$journal_file" "$serving_root" "$abandon_rehearsal_sha" "$$" "$instance" "$evidence")"
-	capture_generation system
-	migration_native_guard
-	admitted_instance="$(read_process_instance "$previous_release" "$service_pid")"
-	[[ "$instance" == "$admitted_instance" ]] || fail 'rehearsal abandonment Gateway process instance changed'
-	operator_check_lock held
-	retired="$(proof migration-abandon "$journal_file" "$serving_root" "$abandon_rehearsal_sha" "$$" "$admitted_instance" "$snapshot")"
-	printf 'ABANDONED sha=%s action=abandon-rehearsal restart=0 retained=%s\n' "$abandon_rehearsal_sha" "$retired"
-}
-
 recover_journal() {
 	local phase predecessor_sha candidate_sha current_sha topology expected_pid expected_generation
 	local observed_system observed_user recovery_record evidence recovery_position recovery_release recovery_info recovery_label
@@ -2716,25 +2266,10 @@ recover_journal() {
 		[[ "$phase" != C_CURRENT_SELECTED || "$(proof gateway-runtime changing "$serving_root")" == no ]] || return 1
 	fi
 	worker_phase="$(proof worker-config pending "$serving_root")" || return 1
-	if ((${accept_partial_nocow:-0})); then
-		[[ "$worker_phase" == none && "$(proof migration-status "$journal_file" "$serving_root")" == doctor-started ]] || {
-			fail '--accept-partial-nocow is not applicable to this recovery'; return 1;
-		}
-	fi
 	if [[ "$worker_phase" != none ]]; then
 		[[ -z "$reconcile_config_hash" ]] || { fail 'config reconciliation refuses a worker config journal'; return 1; }
 		recover_worker_config || return $?
 		worker_config_recovered=1
-		return 0
-	fi
-	migration_phase="$(proof migration-status "$journal_file" "$serving_root")" || return 1
-	if [[ "$migration_phase" != none ]]; then
-		if [[ -n "$reconcile_config_hash" ]] || proof journal-field "$journal_file" agentMigration.artifacts.reconciliation >/dev/null 2>&1; then
-			recover_live_migration_candidate || return $?
-		else
-			recover_agent_schema_migration || return $?
-		fi
-		migration_recovered=1
 		return 0
 	fi
 	migration_check_existing_guard || return 1
@@ -2760,6 +2295,16 @@ recover_journal() {
 	previous_info="$(proof validate-release "$previous_release" "$predecessor_sha" "$root_uid" sealed)"
 	candidate_info="$(proof validate-release "$candidate_release" "$candidate_sha" "$root_uid" sealed)"
 	protected_identity="$(proof journal-field "$journal_file" protectedPaths)"
+	native_update_root="$(proof journal-field "$journal_file" nativeUpdate.backupRoot 2>/dev/null || true)"
+	[[ "$native_update_root" != null ]] || native_update_root=""
+	policy_identity="$(proof policy "$config_file")"
+	if [[ -n "$native_update_root" ]]; then
+		predecessor_stopped=1
+		if ! predecessor_is_stopped "$expected_pid"; then bind_successor_generation || return 1; fi
+		rollback_armed=1
+		rollback_activation 0
+		return $?
+	fi
 	if [[ -z "$reconcile_config_hash" ]]; then assert_protected_identity; fi
 	policy_identity="$(proof policy "$config_file")"
 	current_sha=absent
@@ -3124,32 +2669,14 @@ continue_frozen_release() {
 }
 
 activate_prepared_release() {
-	migration_kind="$(proof migration-kind "$previous_info" "$candidate_info" "$config_file")"
-	if ((offline_doctor_repair)); then
-		if [[ "$migration_kind" == none ]]; then migration_kind=offline-doctor; fi
+	# The candidate update owner decides whether the installed databases can migrate.
+	native_update_root=""
+	if [[ "$(proof migration-kind "$previous_info" "$candidate_info")" != none || "$offline_doctor_repair" == 1 ]]; then
+		native_update_root="$runtime_home/.openclaw-update/update-$(basename "$candidate_release")-$("$node_bin" -e 'process.stdout.write(require("node:crypto").randomUUID())')/native"
+		((capture_startup_profile + arm_steady_profile == 0)) || fail 'startup profiling cannot accompany a native state update'
 	fi
-	if [[ -n "$frozen_target_sha" && "$migration_kind" != none && "$migration_kind" != state-17-18 && "$migration_kind" != state-18-19 && "$migration_kind" != state-19-20 && "$migration_kind" != agent-23-24 && "$migration_kind" != agent-24-25 && "$migration_kind" != offline-doctor ]]; then
-		fail 'frozen continuation requires unchanged schemas or a qualified state17/agent23 to18/23, state18/agent23 to19/23, state19/agent23 to19/24, state19/agent24 to20/24, or state20/agent24 to20/25 edge'
-	fi
-	# The selector supplies facts. The existing deployment owner creates the journal
-	# and retains its normal suspension, Doctor and forward-recovery responsibilities.
 	if [[ "$mode" == continue-frozen ]]; then mode=deploy; fi
-	if [[ "$migration_kind" != none ]]; then
-		((capture_startup_profile + arm_steady_profile == 0)) || fail 'startup profiling cannot accompany a storage or configuration migration'
-		activate_agent_schema_migration
-	else
-		activate_release system
-	fi
-}
-
-snapshot_for_rehearsal() {
-	local release
-	[[ ! -e "$journal_file" && ! -L "$journal_file" ]] || fail 'rehearsal snapshot refuses a pending activation journal'
-	release="$(read_pointer "$current_link")" || return 1
-	bounded "${OPENCLAW_TEAM_SNAPSHOT_BUDGET:-7200}" "$node_bin" --no-warnings "$release_lib" snapshot-for-rehearsal \
-		"$serving_root" "$release" "$config_file" "$state_database" "$rehearsal_snapshot_label"
-	[[ ! -e "$journal_file" && ! -L "$journal_file" && "$(read_pointer "$current_link")" == "$release" ]] ||
-		fail 'serving release or activation state changed during rehearsal snapshot'
+	activate_release system
 }
 
 handoff_source() {
@@ -3507,7 +3034,11 @@ activate_release() {
 	assert_protected_identity
 	assert_policy
 	assert_scheduler_owner "$previous_release"
-	run_gateway "$candidate_release" config validate >/dev/null
+	if [[ -n "${native_update_root:-}" ]]; then
+		migration_install_guard || return 1
+	else
+		run_gateway "$candidate_release" config validate >/dev/null
+	fi
 	session_witness="$(proof session-preservation-witness "$previous_release" "$candidate_release" "$state_database")"
 	# Bind before suspension fences ordinary RPCs; frozen continuation must keep
 	# its admitted predecessor through the ordinary activation owner.
@@ -3546,7 +3077,7 @@ activate_release() {
 		"$prior_system_enabled" "$prior_system_active" "$prior_user_enabled" "$prior_user_active" \
 		"$held_suspension" "$suspension_expiry" "$suspension_state"
 	if [[ "$topology" == system ]]; then
-		printf '%s' "$session_witness" | proof journal-create "$@" @stdin "$runtime_target" >/dev/null
+		printf '%s' "$session_witness" | proof journal-create "$@" @stdin "$runtime_target" "${native_update_root:-}" >/dev/null
 	else
 		proof journal-create "$@" >/dev/null
 	fi
@@ -3587,6 +3118,12 @@ activate_release() {
 		predecessor_is_stopped "$old_pid" || return 1
 		assert_protected_identity
 		assert_policy
+		if [[ -n "${native_update_root:-}" ]]; then
+			install -d -m 0700 -o "$runtime_uid" -g "$(id -g openclaw)" "$(dirname "$native_update_root")"
+			native_update_permit revoke || return 1
+			native_update migrate || return 1
+			assert_policy || return 1
+		fi
 	fi
 	if [[ "$mode" == runtime ]]; then
 		rollback_armed=1
@@ -3597,6 +3134,7 @@ activate_release() {
 		atomic_pointer "$candidate_release" "$current_link"
 	fi
 	proof journal-phase "$journal_file" C_CURRENT_SELECTED "$session_witness_record" >/dev/null
+	if [[ -n "${native_update_root:-}" ]]; then native_update_permit publish || return 1; fi
 	rollback_armed=1
 	if [[ "$topology" == migration-user ]]; then
 		proof journal-phase "$journal_file" MIGRATION_SWITCHING "$session_witness_record" >/dev/null
@@ -3661,6 +3199,7 @@ activate_release() {
 	rollback_armed=0
 	if [[ "$mode" == deploy ]]; then verified_markers record "$candidate_sha"; fi
 	proof unlink-exact "$journal_file" "$root_uid" "$session_witness_record"
+	if [[ -n "${native_update_root:-}" ]]; then finish_native_update; fi
 	if [[ "$mode" != runtime ]]; then cleanup_releases; fi
 	printf 'SUCCESS sha=%s action=%s previous=%s APPROVAL_DELTA=0\n' \
 		"$candidate_sha" "$mode" "$predecessor_sha"
@@ -4187,11 +3726,6 @@ while (($#)); do
 		mode=handoff-source; operator_expected_sha="$2"; operator_expected_pid="$3"; operator_expected_generation="$4"
 		handoff_peer="$5"; handoff_target_sha="$6"; shift 5
 		;;
-	--snapshot-for-rehearsal)
-		[[ "$mode" == deploy && $# -ge 2 && -z "$requested_sha" && "$2" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ ]] || fail 'rehearsal snapshot requires one fresh label'
-		mode=snapshot-rehearsal; rehearsal_snapshot_label="$2"
-		shift
-		;;
 	--prepare-release)
 		[[ "$mode" == deploy && $# -ge 2 && -z "$requested_sha" && "$2" =~ ^[a-f0-9]{40}$ ]] || fail 'release preparation requires one exact official SHA'
 		mode=prepare-release; requested_sha="$2"
@@ -4229,11 +3763,6 @@ while (($#)); do
 		[[ "$mode" == deploy ]] || fail 'recovery mode cannot be combined with another action'
 		mode=recover
 		;;
-	--abandon-rehearsal)
-		[[ -z "$abandon_rehearsal_sha" && $# -ge 2 && "$2" =~ ^[a-f0-9]{40}$ ]] || fail '--abandon-rehearsal requires one candidate SHA'
-		abandon_rehearsal_sha="$2"
-		shift
-		;;
 	--start-stopped-current)
 		((start_stopped_current == 0)) && [[ $# -ge 6 ]] || fail 'stopped current recovery requires SHA BOOT_ID LAST_EXEC_PID LAST_EXEC_START_US LAST_INVOCATION'
 		start_stopped_current=1
@@ -4266,14 +3795,6 @@ while (($#)); do
 		((offline_doctor_repair == 0)) || fail 'offline Doctor may be selected only once'
 		offline_doctor_repair=1
 		;;
-	--accept-partial-nocow)
-		((accept_partial_nocow == 0)) || fail 'partial NOCOW acceptance may be selected only once'
-		accept_partial_nocow=1
-		;;
-	--skip-migration-rehearsal)
-		((skip_migration_rehearsal == 0)) || fail 'rehearsal waiver may be selected only once'
-		skip_migration_rehearsal=1
-		;;
 	--arm-steady-profile)
 		((arm_steady_profile == 0)) || fail 'steady profiling may be armed only once'
 		arm_steady_profile=1
@@ -4294,26 +3815,10 @@ while (($#)); do
 		# only meaningful with --interrupt-after-drain; receipted as TERMINAL_PERSISTENCE_WAIVED.
 		waive_terminal_persistence=1
 		;;
-	*) fail 'usage: openclaw-release-deploy [--continue-frozen-release TARGET_SHA MANIFEST_SHA256 CURRENT_SHA PID START|--prepare-release OFFICIAL_SHA|--switch-runtime node|bun BINARY SHA256|--migrate|--recover [--abandon-rehearsal CANDIDATE_SHA|--accept-partial-nocow]|--cleanup] [--reconcile-config SHA PID START CONFIG_SHA256 JOURNAL_SHA256|--reconcile-stopped-predecessor SHA CONFIG_SHA256 JOURNAL_SHA256] [--repair-worker-bootstrap SHA PID START CONFIG_SHA256 OLD_SETUP_SHA256] [--sha OFFICIAL_MAIN_SHA] [--interrupt-after-drain] [--skip-migration-rehearsal] [--offline-doctor-repair] [--allow-cpu-degraded] [--capture-startup-profile|--arm-steady-profile] [--capture-steady-profile OPERATION SHA PID START]' ;;
+	*) fail 'usage: openclaw-release-deploy [--continue-frozen-release TARGET_SHA MANIFEST_SHA256 CURRENT_SHA PID START|--prepare-release OFFICIAL_SHA|--switch-runtime node|bun BINARY SHA256|--migrate|--recover|--cleanup] [--reconcile-config SHA PID START CONFIG_SHA256 JOURNAL_SHA256|--reconcile-stopped-predecessor SHA CONFIG_SHA256 JOURNAL_SHA256] [--repair-worker-bootstrap SHA PID START CONFIG_SHA256 OLD_SETUP_SHA256] [--sha OFFICIAL_MAIN_SHA] [--interrupt-after-drain] [--offline-doctor-repair] [--allow-cpu-degraded] [--capture-startup-profile|--arm-steady-profile] [--capture-steady-profile OPERATION SHA PID START]' ;;
 	esac
 	shift
 done
-
-if ((accept_partial_nocow)); then
-	[[ "$mode" == recover && -z "$requested_sha" && -z "$reconcile_config_hash" && -z "$abandon_rehearsal_sha" &&
-		"$start_stopped_current" == 0 && "$offline_doctor_repair" == 0 && "$skip_migration_rehearsal" == 0 &&
-		"$interrupt_after_drain" == 0 && "$capture_startup_profile" == 0 && "$arm_steady_profile" == 0 ]] ||
-		fail '--accept-partial-nocow requires --recover and allows only --allow-cpu-degraded'
-fi
-
-if [[ -n "$abandon_rehearsal_sha" ]]; then
-	[[ "$mode" == recover && "$abandon_rehearsal_sha" =~ ^[a-f0-9]{40}$ &&
-		-z "$requested_sha" && -z "$reconcile_config_hash" && "$start_stopped_current" == 0 &&
-		"$offline_doctor_repair" == 0 && "$skip_migration_rehearsal" == 0 && "$interrupt_after_drain" == 0 &&
-		"$allow_cpu_degraded" == 0 && "$capture_startup_profile" == 0 && "$arm_steady_profile" == 0 ]] ||
-		fail '--abandon-rehearsal requires --recover and an exact candidate SHA without another action'
-	operator_check_lock before
-fi
 
 if [[ "$mode" == continue-frozen ]]; then
 	[[ -z "$requested_sha" && -z "$reconcile_config_hash" && "$start_stopped_current" == 0 &&
@@ -4323,8 +3828,6 @@ if [[ "$mode" == continue-frozen ]]; then
 		fail 'frozen continuation requires exact candidate, manifest and predecessor bindings without another action'
 	operator_check_lock before
 fi
-
-[[ "$mode" != snapshot-rehearsal || -z "$requested_sha" ]] || fail 'rehearsal snapshot cannot be combined with --sha'
 
 if ((start_stopped_current)); then
 	[[ "$mode" == recover && -z "$requested_sha" && -z "$reconcile_config_hash" &&
@@ -4343,19 +3846,17 @@ if [[ -n "$reconcile_config_hash" ]]; then
 fi
 
 ((offline_doctor_repair == 0)) || [[ ("$mode" == deploy || "$mode" == continue-frozen) && "$interrupt_after_drain" == 1 &&
-  "$capture_startup_profile" == 0 && "$arm_steady_profile" == 0 && "$skip_migration_rehearsal" == 0 ]] ||
-  fail '--offline-doctor-repair requires a fenced system deployment with --interrupt-after-drain, without profiling or rehearsal waiver'
+  "$capture_startup_profile" == 0 && "$arm_steady_profile" == 0 ]] ||
+  fail '--offline-doctor-repair requires a fenced system deployment with --interrupt-after-drain, without profiling'
 
 ((capture_startup_profile + arm_steady_profile <= 1)) || fail 'select only one profiling mode'
-((capture_startup_profile + arm_steady_profile == 0)) || [[ "$mode" == deploy && "$skip_migration_rehearsal" == 0 ]] ||
+((capture_startup_profile + arm_steady_profile == 0)) || [[ "$mode" == deploy ]] ||
 	fail 'startup profiling is only valid for an ordinary deployment without migration'
 
 ((allow_cpu_degraded == 0)) || [[ "$mode" == deploy || "$mode" == continue-frozen || "$mode" == recover || "$mode" == runtime || "$mode" == handoff-source || "$mode" == handoff-activate ]] ||
 	fail '--allow-cpu-degraded is only valid for deployment, runtime switching, recovery, or handoff'
 ((interrupt_after_drain == 0)) || [[ "$mode" == deploy || "$mode" == continue-frozen || "$mode" == worker-config || "$mode" == runtime || "$mode" == handoff-source ]] ||
 	fail '--interrupt-after-drain is only valid for deployment, runtime switching, worker config repair, or source handoff'
-((skip_migration_rehearsal == 0)) || [[ "$mode" == deploy ]] ||
-	fail '--skip-migration-rehearsal is only valid for the canonical system deployment'
 
 if [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == handoff-source ]]; then
 	[[ -z "$requested_sha" && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
@@ -4381,7 +3882,7 @@ fi
 
 exec 9>"$lock_file"
 flock -n 9 || {
-		if [[ -n "$abandon_rehearsal_sha" || "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == snapshot-rehearsal || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
+		if [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
 		fail 'bound maintenance action refused: canonical deployment lock is busy'
 		exit 1
 	fi
@@ -4391,17 +3892,12 @@ flock -n 9 || {
 proof maintenance-idle "$ancestor_boundary" >/dev/null ||
 	fail 'scheduled maintenance has not settled; deployment admission refused'
 if [[ -n "$reconcile_config_hash" ]]; then operator_check_lock held; fi
-if [[ -z "$abandon_rehearsal_sha" && "$mode" != handoff-* && ( -e "$journal_file" || -L "$journal_file" ) ]]; then
+if [[ "$mode" != handoff-* && ( -e "$journal_file" || -L "$journal_file" ) ]]; then
 	handoff_pending="$(proof host-handoff status "$serving_root")"
 	[[ "$handoff_pending" != SOURCE_* && "$handoff_pending" != TARGET_* ]] ||
 		fail 'cross-host handoff is retained; resume its matching --handoff action, never ordinary deployment or rollback'
 fi
 trap on_exit EXIT
-
-if [[ -n "$abandon_rehearsal_sha" ]]; then
-	abandon_rehearsal
-	exit 0
-fi
 
 if [[ "$mode" == steady-profile ]]; then
 	operator_check_lock held
@@ -4435,10 +3931,6 @@ if [[ "$mode" == handoff-* ]]; then
 fi
 if [[ "$mode" == prepare-release ]]; then
 	prepare_release
-	exit 0
-fi
-if [[ "$mode" == snapshot-rehearsal ]]; then
-	snapshot_for_rehearsal
 	exit 0
 fi
 if [[ "$mode" == continue-frozen ]]; then
@@ -4509,7 +4001,7 @@ if [[ "$mode" == cleanup ]]; then
 	exit 0
 fi
 recover_journal
-((migration_recovered == 0 && worker_config_recovered == 0)) || exit 0
+((worker_config_recovered == 0)) || exit 0
 
 assert_protected_identity
 assert_policy

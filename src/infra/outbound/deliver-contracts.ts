@@ -178,6 +178,8 @@ type OutboundChannelContext = {
 export type ChannelHandlerParams = OutboundChannelContext & {
   /** Admitted run owner for agent-scoped channel runtime discovery. */
   agentId?: string;
+  /** Originating runtime session; never replaced by the delivery policy session. */
+  sessionKey?: string;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;

@@ -14,6 +14,7 @@ import {
   type Payload,
 } from "./test-support/monitor-fixture.js";
 import { createQueue } from "./test-support/monitor.js";
+import { openXWorkOrigins } from "./work-origin.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
@@ -31,12 +32,12 @@ afterEach(() => {
 });
 
 describe("X work-session publication admission", () => {
-  it.each(["off", "public", "protected", "guest"])(
+  it.each(["off", "no-link", "public", "protected", "guest"])(
     "attaches publication intent only for opted-in public maintainer context: %s",
     async (kind) => {
       const completed = Promise.withResolvers<void>();
       const cfg: OpenClawConfig = structuredClone(config);
-      cfg.channels!.x!.autoPublishWorkSessions = kind !== "off";
+      cfg.channels!.x!.autoPublishWorkSessions = kind !== "off" && kind !== "no-link";
       if (kind === "guest") {
         cfg.channels!.x!.guests = { enabled: true };
         cfg.messages = { queue: { mode: "collect" } };
@@ -46,6 +47,7 @@ describe("X work-session publication admission", () => {
       }
       const test = fixture({
         cfg,
+        ...(kind === "no-link" ? { visibleSessionUrl: null } : {}),
         posts: [post("501", kind === "guest" ? "20" : "10")],
         queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
       });
@@ -63,8 +65,22 @@ describe("X work-session publication admission", () => {
           ([input]) => input.contextBinding,
         )?.[0];
         expect(Boolean(admission?.childSessionPublication)).toBe(kind === "public");
+        expect(
+          await openXWorkOrigins(test.runtime).lookup("agent:maintainer:work:example"),
+        ).toEqual(
+          kind === "guest"
+            ? undefined
+            : {
+                accountId: "default",
+                postId: "501",
+                postUrl: "https://x.com/config_maintainer/status/501",
+                authorHandle: "config_maintainer",
+                conversationId: "500",
+                senderTier: "maintainer",
+              },
+        );
         expect(test.api.getPublicPosts).toHaveBeenCalledTimes(
-          kind === "off" || kind === "guest" ? 0 : 1,
+          kind === "off" || kind === "no-link" || kind === "guest" ? 0 : 1,
         );
         if (kind === "guest") {
           expect(test.dispatch.mock.calls[0]![0].route.sessionKey).toBe(

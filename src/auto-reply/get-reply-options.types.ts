@@ -189,8 +189,15 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
-  /** Reports visible work sessions this agent run spawned, in acceptance order. */
-  onVisibleWorkSessions?: (sessions: readonly VisibleWorkSession[]) => void;
+  /**
+   * Reports fresh visible children before their first turn and accepted spawns at settlement.
+   * Creation reports include the key even when no public session URL is configured.
+   * Awaited before child dispatch; a child may be reported again at settlement.
+   */
+  onVisibleWorkSessions?: (
+    sessions: readonly VisibleWorkSession[],
+    creation?: { createdSessionKey: string },
+  ) => void | Promise<void>;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
