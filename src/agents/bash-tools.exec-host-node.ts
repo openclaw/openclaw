@@ -25,6 +25,7 @@ import {
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import { waitForNodeInlineExecApprovalWithHumanInputProtection } from "./bash-tools.exec-host-node-approval-wait.js";
 import {
   formatNodeInvokeFailureFollowup,
   invokeNodeSystemRun,
@@ -386,11 +387,27 @@ export async function executeNodeHostCommand(
       } else if (unavailableReason === null && params.approvalFollowupMode === undefined) {
         // Keep the admitted turn alive while its approval is pending. Returning
         // approval-pending here closes the authority before the operator can act.
-        const outcome = await execHostShared.resolveExecApprovalWaitOutcome({
+        // Register as human_input_wait (same invariant as plugin approvals / #161821).
+        const outcome = await waitForNodeInlineExecApprovalWithHumanInputProtection({
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          toolCallId: params.toolCallId,
           approvalId,
-          preResolvedDecision,
+          expiresAtMs,
           signal: params.signal,
-          ...approvalDecisionPolicy,
+          wait: () =>
+            execHostShared.resolveExecApprovalWaitOutcome({
+              approvalId,
+              preResolvedDecision,
+              signal: params.signal,
+              ...approvalDecisionPolicy,
+            }),
+          isHumanDecision: (waitOutcome) =>
+            waitOutcome.kind === "resolved" &&
+            (waitOutcome.decision === "allow-once" ||
+              waitOutcome.decision === "allow-always" ||
+              waitOutcome.decision === "deny"),
         });
         params.signal?.throwIfAborted();
         if (outcome.kind !== "resolved") {

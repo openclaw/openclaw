@@ -492,6 +492,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             executionContext,
             requestedNode: params.node?.trim(),
             boundNode: defaults?.node?.trim(),
+            runId: defaults?.runId,
             foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
             // Remote system.run has no process-session owner.
             processContinuationAvailable: false,
