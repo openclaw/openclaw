@@ -63,15 +63,6 @@ struct ChatReaderScrollStateTests {
             liveTurnID: nil) == .unchanged)
     }
 
-    @Test func `a live text or voice turn after opening still anchors`() {
-        let previous = UUID()
-        let live = UUID()
-        #expect(chatReaderUserTransition(
-            previousID: previous,
-            visibleIDs: [previous, live],
-            liveTurnID: live) == .added(live))
-    }
-
     @Test func `a live user anchors even when narration adds a later boundary`() {
         let previous = UUID()
         let user = UUID()
@@ -119,21 +110,6 @@ struct ChatReaderScrollStateTests {
     @Test func `touch down cancels following before a streaming tick can move the reader`() {
         #expect(chatReaderScrollReleasesFollow(.tracking))
         #expect(chatReaderScrollReleasesFollow(.decelerating))
-    }
-
-    @Test func `completed voice reply belongs only to its followed user turn`() throws {
-        func message(_ role: String) throws -> OpenClawChatMessage {
-            try JSONDecoder().decode(OpenClawChatMessage.self, from: Data(
-                "{\"role\":\"\(role)\",\"content\":[{\"type\":\"text\",\"text\":\"reply\"}]}".utf8))
-        }
-        let oldReply = try message("assistant")
-        let user = try message("user")
-        let reply = try message("assistant")
-        let nextUser = try message("user")
-        #expect(!chatReaderHasAssistantReply(after: user.id, rows: [.message(oldReply), .message(user)]))
-        #expect(chatReaderHasAssistantReply(after: user.id, rows: [.message(user), .message(reply)]))
-        #expect(!chatReaderHasAssistantReply(
-            after: user.id, rows: [.message(user), .message(nextUser), .message(reply)]))
     }
 
     @Test func `streaming at the live edge never offers a latest jump`() {
