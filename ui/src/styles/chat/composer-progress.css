@@ -250,7 +250,7 @@
   }
 
   .agent-chat__goal[data-expanded="false"] .agent-chat__goal-command-actions {
-    display: contents;
+    display: none;
   }
 
   .agent-chat__goal[data-expanded="false"]
