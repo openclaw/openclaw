@@ -26,7 +26,7 @@
     "@novnc/novnc": "1.7.0",
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/gateway-protocol": "workspace:*",
-    "@openclaw/libterminal": "0.3.8",
+    "@openclaw/libterminal": "0.3.9",
     "@openclaw/media-core": "workspace:*",
     "@openclaw/mermaid-renderer": "workspace:*",
     "@openclaw/model-catalog-core": "workspace:*",

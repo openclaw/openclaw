@@ -7,6 +7,7 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../state/openclaw-agent-progress-card-schema.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { normalizeProgressCardWrite } from "./progress-card-values.js";
 
 type ProgressCardDatabase = Pick<OpenClawAgentKyselyDatabase, "session_progress_cards">;
 type StoredProgressCardRow = Selectable<ProgressCardDatabase["session_progress_cards"]>;
@@ -122,8 +123,7 @@ export function prepareSessionProgressCardWrite(input: {
   steps?: ProgressCardStep[];
   expectedRevision?: number;
 }) {
-  const markdown = input.markdown?.trim() ? input.markdown : undefined;
-  const steps = input.steps && input.steps.length > 0 ? input.steps : undefined;
+  const { markdown, steps } = normalizeProgressCardWrite(input);
   return {
     markdown,
     steps,

@@ -496,7 +496,6 @@ describe("CronService failure repair", () => {
       job,
       runningAtMs,
       nowMs: runningAtMs + 30_000,
-      recoverInterruptedOneShot: false,
       deferredNotifications,
     });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
