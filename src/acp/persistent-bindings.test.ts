@@ -141,6 +141,23 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.record.metadata?.source).toBe("config");
   });
 
+  it("prefers exact account binding over wildcard for the same discord conversation", () => {
+    const cfg = createCfgWithBindings([
+      createDiscordBinding({
+        agentId: "codex",
+        conversationId: defaultDiscordConversationId,
+        accountId: "*",
+      }),
+      createDiscordBinding({
+        agentId: "claude",
+        conversationId: defaultDiscordConversationId,
+      }),
+    ]);
+    const resolved = resolveBindingRecord(cfg);
+
+    expect(resolved?.spec.agentId).toBe("claude");
+  });
+
   it("returns null when no top-level ACP binding matches the conversation", () => {
     const cfg = createCfgWithBindings([
       createDiscordBinding({

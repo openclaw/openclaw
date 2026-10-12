@@ -360,6 +360,41 @@ describe("watch node HTTP transport", () => {
     },
   );
 
+  it("rejects an HTTP node session after an external reapproval changes its generation", async () => {
+    const { baseDir, identity, issued, nodeRegistry, disconnectedNodes, runtime, baseUrl } =
+      await createWatchNodeFixture("openclaw-watch-node-reapproval-");
+    const connectResponse = await connectWatchNode({
+      baseUrl,
+      identity,
+      bootstrapToken: issued.token,
+    });
+    const connected = await readJson(connectResponse);
+    const paired = await getPairedDevice(identity.deviceId, baseDir);
+    const repair = await requestDevicePairing(
+      {
+        deviceId: identity.deviceId,
+        publicKey: paired?.publicKey ?? "",
+        role: "node",
+        roles: ["node"],
+        scopes: [],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+    const stalePoll = await fetch(`${baseUrl}/poll`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${String(connected.sessionToken)}` },
+    });
+    expect(stalePoll.status).toBe(401);
+    expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
+    expect(disconnectedNodes).toContainEqual({
+      nodeId: identity.deviceId,
+      reason: "node pairing changed",
+    });
+    runtime.close();
+  });
+
   it("does not deliver queued work after a verified HTTP session is retired", async () => {
     const { baseDir, identity, issued, nodeRegistry, runtime, baseUrl } =
       await createWatchNodeFixture("openclaw-watch-node-poll-retirement-");

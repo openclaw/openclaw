@@ -37,10 +37,10 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
     (surface) => {
       it.each(
         surface === "browser-rpc"
-          ? ["reused run ID", "other call"]
+          ? ["replaced run", "reused run ID", "other call"]
           : surface === "browser-provider"
-            ? ["reused run ID", "other call", "same call"]
-            : ["foreign global", "reused run ID", "other call"],
+            ? ["replaced run", "reused run ID", "other call", "same call"]
+            : ["foreign global", "replaced run", "reused run ID", "other call"],
       )("keeps %s control within its declared scope", async (replacement) => {
         harness.getConfig().session = { scope: "global" };
         const started = createDeferredCore<RunEmbeddedAgentParams>();
@@ -115,7 +115,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             controlSessionId = call.sessionId;
           } else {
             setActiveEmbeddedRun(
-              "other-agent-session",
+              replacement === "replaced run" ? active.sessionId : "other-agent-session",
               {
                 runId: replacement === "reused run ID" ? active.runId : "other-run",
                 queueMessage: async () => undefined,

@@ -74,24 +74,26 @@ describe("web search Codex native config validation", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects blocked tools.web.search keys", () => {
-    const key = "__proto__";
-    const result = validateConfigObjectRaw(
-      JSON.parse(`{"tools":{"web":{"search":{${JSON.stringify(key)}:{"polluted":true}}}}}`),
-    );
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: `tools.web.search.${key}`,
-            message: "tools.web.search must not contain blocked object keys",
-          }),
-        ]),
+  it.each(["__proto__", "prototype", "constructor"])(
+    "rejects blocked tools.web.search key %s",
+    (key) => {
+      const result = validateConfigObjectRaw(
+        JSON.parse(`{"tools":{"web":{"search":{${JSON.stringify(key)}:{"polluted":true}}}}}`),
       );
-    }
-  });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              path: `tools.web.search.${key}`,
+              message: "tools.web.search must not contain blocked object keys",
+            }),
+          ]),
+        );
+      }
+    },
+  );
 
   it("rejects invalid openaiCodex.mode", () => {
     const result = validateConfigObjectRaw({
