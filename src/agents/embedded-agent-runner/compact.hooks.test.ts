@@ -2453,6 +2453,12 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     },
     {
       agentHarnessId: "copilot",
+      failureReason: "stale_thread_binding",
+      reason: "copilot binding changed before native compaction",
+      nativeCapabilityUsed: true,
+    },
+    {
+      agentHarnessId: "copilot",
       failureReason: "missing_thread_binding",
       reason: "no copilot app-server thread binding",
       nativeCapabilityUsed: false,
@@ -2488,16 +2494,17 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           agentHarnessId,
           trigger: "budget",
           preflightRequired: true,
-          ...(nativeCapabilityUsed
-            ? {
-                config: {
-                  models: {
-                    providers: { openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] } },
-                  },
-                },
-              }
-            : {}),
+          preflightCompactionTrigger: "transcript_bytes",
+          config: {
+            agents: {
+              defaults: { compaction: { transcriptByteModel: "deepseek/deepseek-flash" } },
+            },
+            models: {
+              providers: { openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] } },
+            },
+          },
         }),
+        { transcriptBytePreflight: true },
       );
       expect(result).toMatchObject(
         nativeCapabilityUsed

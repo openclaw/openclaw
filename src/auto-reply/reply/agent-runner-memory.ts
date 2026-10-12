@@ -476,6 +476,7 @@ export async function runSessionCompactionIfNeeded(params: {
       {
         assertActive,
         sourceAuthority: { assertActive, operatorAuthority },
+        transcriptBytePreflight: shouldCompactByTranscriptBytes || undefined,
         requestBudget: params.compactionRequestBudget,
         pendingUserEntryId: params.pendingUserEntryId,
         ...(compactionTrigger === "transcript_bytes" && isCodexRuntime
@@ -508,9 +509,8 @@ export async function runSessionCompactionIfNeeded(params: {
                     },
                   }
                 : {}),
-              onHostCompactionTranscriptSettled: async (commit) => {
-                await recordCompactionAccounting(commit.entry, undefined, undefined, 0);
-              },
+              onHostCompactionTranscriptSettled: (commit) =>
+                recordCompactionAccounting(commit.entry, undefined, undefined, 0),
             }
           : {}),
         // Record every host compaction while its session lane still excludes the next writer.

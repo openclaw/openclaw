@@ -15,7 +15,8 @@ export type TranscriptByteCompactionPersistence = CompactionAppendPersistence;
 export type TranscriptByteCompactionPersistenceAsync = CompactionAppendPersistenceAsync;
 
 export type TranscriptBytePreflightClaim = {
-  authority: TranscriptBytePreflightAuthority;
+  authority?: TranscriptBytePreflightAuthority;
+  agentHarnessId?: string;
   assertActive: () => Promise<void>;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   sessionTarget: Partial<SessionTranscriptRuntimeTarget>;
@@ -44,13 +45,15 @@ export function setTranscriptBytePreflightClaim(
   withCompactionPersistence?: TranscriptByteCompactionPersistence,
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  hostTranscriptByteSummary = false,
 ): () => void {
-  if (!runtimeContext || !authority) {
+  if (!runtimeContext || (!authority && !hostTranscriptByteSummary)) {
     return () => {};
   }
   const target = runtimeContext.sessionTarget;
   const claim = {
     authority,
+    agentHarnessId: runtimeContext.agentHarnessId,
     assertActive,
     operatorAuthority,
     ...(withCompactionPersistence ? { withCompactionPersistence } : {}),
@@ -81,17 +84,20 @@ export function consumeTranscriptBytePreflightClaim(
     return undefined;
   }
   const { authority, sessionTarget: expected } = claim;
-  const active = resolveTranscriptBytePreflightAuthority(authority);
+  const active = authority ? resolveTranscriptBytePreflightAuthority(authority) : undefined;
   claims.delete(runtimeContext);
-  return (lockedHarnessRuntime ?? params.agentHarnessId) === authority.id &&
+  const harnessRuntime = lockedHarnessRuntime ?? params.agentHarnessId;
+  const sameHarness = authority
+    ? harnessRuntime === authority.id && active === authority
+    : harnessRuntime === claim.agentHarnessId;
+  return sameHarness &&
     params.preflightRequired === true &&
     params.preflightCompactionTrigger === "transcript_bytes" &&
     params.trigger === "budget" &&
     expected?.agentId === sessionTarget.agentId &&
     expected.sessionId === sessionTarget.sessionId &&
     expected.sessionKey === sessionTarget.sessionKey &&
-    expected.storePath === sessionTarget.storePath &&
-    active === authority
+    expected.storePath === sessionTarget.storePath
     ? claim
     : undefined;
 }

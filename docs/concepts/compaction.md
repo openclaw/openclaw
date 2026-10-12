@@ -211,10 +211,37 @@ the guard.
 Retained history remains available on disk and may continue growing; this is not
 a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and
-oversized native threads restart fresh. For an unlocked Codex conversation,
-the host mirror summary honors `agents.defaults.compaction.model`; its model
-and credentials are separate from normal chat and subsequent native compaction.
-Model-locked conversations keep their creating model for every history read.
+oversized native threads restart fresh.
+
+To select a model only for built-in summaries triggered by this byte guard, set
+`agents.defaults.compaction.transcriptByteModel` to a `provider/model-id` or a
+configured bare alias:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "maxActiveTranscriptBytes": "20mb",
+        "transcriptByteModel": "deepseek/deepseek-flash"
+      }
+    }
+  }
+}
+```
+
+This is a separate opt-in: OpenClaw does not copy `compaction.model` into the new
+setting during upgrades. With no `transcriptByteModel`, Codex host summaries keep
+using the conversation model and ignore `compaction.model`; other built-in byte
+summaries keep using `compaction.model`, or the conversation model when unset.
+Token-triggered and manual compaction keep their existing model selection.
+
+An explicit byte-summary model sends history to that model using its own
+credentials and billing route. The original operator must still have permission
+to use it, and model-locked histories cannot move to a different model. The
+normal chat model and any subsequent native Codex compaction remain unchanged.
+This setting controls built-in summary model selection; it does not override
+custom context engines' or compaction providers' own summarization policy.
 
 <Warning>
 The byte guard applies to the active SQLite transcript history. Legacy JSONL

@@ -71,6 +71,7 @@ type QueuedCompactionHostCommit = {
 export type QueuedCompactionHostOptions = CompactionRequestConstraints & {
   sourceAuthority: AgentHarnessCompactionSourceAuthority;
   assertActive?: SessionSourceAssertion;
+  transcriptBytePreflight?: true;
   transcriptBytePreflightHarness?: "codex";
   withCompactionPersistence?: TranscriptByteCompactionPersistence;
   withCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
@@ -361,6 +362,10 @@ export async function executeQueuedContextEngineCompaction(input: {
               host.withCompactionPersistence,
               host.withCompactionPersistenceAsync,
               host.sourceAuthority.operatorAuthority,
+              host.transcriptBytePreflight === true &&
+                params.modelSelectionLocked !== true &&
+                !engineOwnsCompaction &&
+                Boolean(params.config?.agents?.defaults?.compaction?.transcriptByteModel?.trim()),
             );
             return withOwnedSessionTranscriptWrites(writeContext, () =>
               contextEngine.compact(backendParams),

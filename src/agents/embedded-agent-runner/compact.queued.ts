@@ -54,7 +54,7 @@ import {
 } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
-  projectCodexHostTranscriptBytePreflightConfig,
+  projectHostCompactionConfig,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import type { acceptCompactionSuccessor } from "./compaction-successor.js";
@@ -123,10 +123,16 @@ export async function compactEmbeddedAgentSession(
   return await runWithAsyncWorkResources(async (onAcquired) => {
     const releaseSource = retainAgentHarnessCompactionSource(options.sourceAuthority);
     onAcquired({ release: releaseSource, releaseBeforeResultWhenIdle: true });
-    const sourceAuthority = options.sourceAuthority;
-    const assertHostActive = options.assertActive;
+    const { sourceAuthority, assertActive: assertHostActive } = options;
     const host = {
       ...options,
+      transcriptBytePreflight:
+        options.transcriptBytePreflight === true &&
+        input.preflightRequired === true &&
+        input.preflightCompactionTrigger === "transcript_bytes" &&
+        input.trigger === "budget"
+          ? (true as const)
+          : undefined,
       assertActive: composeSessionSourceAssertion([
         assertHostActive,
         sourceAuthority.assertActive,
@@ -168,11 +174,6 @@ export async function compactEmbeddedAgentSession(
       };
       const resolvedParams = {
         ...params,
-        config: projectCodexHostTranscriptBytePreflightConfig(
-          params.config,
-          Boolean(host.transcriptBytePreflightHarness),
-          (entry?.modelSelectionLocked ?? params.modelSelectionLocked) !== true,
-        ),
         sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
         agentHarnessId: resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId,
         modelSelectionLocked: entry?.modelSelectionLocked ?? params.modelSelectionLocked,
@@ -298,17 +299,19 @@ async function compactEmbeddedAgentSessionImpl(
       preparedRuntimePlan: inputParams.runtimePlan,
       selectedHarnessRuntime: resolveSessionPinnedHarnessId(inputParams.sessionEntry),
     };
-    const nativeCodexSelection =
+    const nativeCodex =
       Boolean(host.transcriptBytePreflightHarness) ||
       normalizeOptionalAgentRuntimeId(requestedSelection.boundHarnessRuntime) === "codex" ||
       requestedSelection.selectedHarnessRuntime === "codex";
     const runtimeSelection = resolveCompactionRuntimeSelection({
       ...requestedSelection,
-      config: projectCodexHostTranscriptBytePreflightConfig(
-        inputParams.config,
-        nativeCodexSelection,
-      ),
+      config: projectHostCompactionConfig(inputParams.config, {
+        nativeCodex,
+      }),
     });
+    if (nativeCodex || runtimeSelection.attemptNativeHarnessCompaction) {
+      host.transcriptBytePreflight = undefined;
+    }
     // Native control operations reuse the backend's existing authenticated session.
     // Run them before generic model preparation so subscription-only CLI sessions do
     // not incorrectly require an OpenClaw model API credential.
@@ -340,20 +343,28 @@ async function compactEmbeddedAgentSessionImpl(
         {
           abortSignal: inputParams.abortSignal,
           deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
-            const selected = resolveCompactionRuntimeSelection({
-              ...requestedSelection,
-              config: projectCodexHostTranscriptBytePreflightConfig(config, nativeCodexSelection),
-              manifestPlugins: metadataSnapshot,
-              allowPluginNormalization: false,
+            const configs = [projectHostCompactionConfig(config, { nativeCodex })];
+            if (host.transcriptBytePreflight) {
+              configs.push(
+                projectHostCompactionConfig(config, {
+                  transcriptByteSummary: true,
+                  modelSelectionLocked: inputParams.modelSelectionLocked,
+                }),
+              );
+            }
+            return [...new Set(configs)].map((selectedConfig) => {
+              const {
+                provider,
+                modelId,
+                selectedHarnessRuntime: runtime,
+              } = resolveCompactionRuntimeSelection({
+                ...requestedSelection,
+                config: selectedConfig,
+                manifestPlugins: metadataSnapshot,
+                allowPluginNormalization: false,
+              });
+              return { provider, modelId, runtime, agentId: agentIds.sessionAgentId };
             });
-            return [
-              {
-                provider: selected.provider,
-                modelId: selected.modelId,
-                runtime: selected.selectedHarnessRuntime,
-                agentId: agentIds.sessionAgentId,
-              },
-            ];
           },
         },
       ),
@@ -364,11 +375,9 @@ async function compactEmbeddedAgentSessionImpl(
       ...inputParams,
       ...(placementSandbox ? { sandbox: placementSandbox } : {}),
       memorySandboxed: (placementSandbox ?? inputParams.sandbox)?.enabled === true,
-      config: projectCodexHostTranscriptBytePreflightConfig(
-        lease.snapshot.config,
-        Boolean(host.transcriptBytePreflightHarness),
-        inputParams.modelSelectionLocked !== true,
-      ),
+      config: projectHostCompactionConfig(lease.snapshot.config, {
+        nativeCodex: Boolean(host.transcriptBytePreflightHarness),
+      }),
       agentDir: lease.snapshot.agentDir,
     };
     assertQueuedCompactionPreparationActive(inputParams, host);
@@ -382,7 +391,15 @@ async function compactEmbeddedAgentSessionImpl(
         }),
       );
       assertQueuedCompactionPreparationActive(admittedParams, host);
-      const params = admittedParams;
+      // Native synchronization keeps its conversation route. A plugin that owns
+      // compaction keeps its own policy; only the built-in delegate uses this opt-in.
+      const params = {
+        ...admittedParams,
+        config: projectHostCompactionConfig(admittedParams.config, {
+          transcriptByteSummary: host.transcriptBytePreflight && !contextEngine.info.ownsCompaction,
+          modelSelectionLocked: admittedParams.modelSelectionLocked,
+        }),
+      };
       const agentDir = params.agentDir;
       const preparedModelRuntime = lease.snapshot;
       const lockedHarnessRuntime = resolveSessionPinnedHarnessId(params.sessionEntry);
@@ -404,7 +421,7 @@ async function compactEmbeddedAgentSessionImpl(
         attemptNativeHarnessCompaction: selectedNativeHarnessCompaction,
       } = resolveCompactionRuntimeSelection({
         ...params,
-        config: projectCodexHostTranscriptBytePreflightConfig(params.config, nativeCodexSelection),
+        config: projectHostCompactionConfig(params.config, { nativeCodex }),
         modelId: params.model,
         boundHarnessRuntime: params.agentHarnessId,
         preparedRuntimePlan: params.runtimePlan,
@@ -541,23 +558,20 @@ async function compactEmbeddedAgentSessionImpl(
         model: effectiveRuntimeModel,
         requestedTokenBudget: params.contextTokenBudget,
       });
-      const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = preparedParams;
+      // The public delegate receives the original route; selecting the new model
+      // still requires consuming the private claim, not retaining projected config.
+      const delegateParams =
+        params.config === admittedParams.config ? preparedParams : admittedParams;
+      const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = delegateParams;
       const contextEngineRuntimeContext: ContextEngineRuntimeContext = {
         ...runtimeParams,
         sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
         ...buildEmbeddedCompactionRuntimeContext({
-          ...preparedParams,
-          config: projectCodexHostTranscriptBytePreflightConfig(
-            preparedParams.config,
-            Boolean(transcriptBytePreflightAuthority),
-          ),
+          ...delegateParams,
           agentDir,
-          modelId: preparedParams.model,
+          modelId: delegateParams.model,
           harnessRuntime: preparedHarnessRuntime,
         }),
-        // The delegate resolves the summary model under the private byte claim;
-        // native synchronization above retains the conversation's model and auth.
-        config: preparedParams.config,
         ...resolveContextEngineCapabilities({
           config: preparedParams.config,
           sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,

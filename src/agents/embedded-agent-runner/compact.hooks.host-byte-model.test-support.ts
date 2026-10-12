@@ -88,7 +88,7 @@ export function registerCodexHostByteModelTests(fixture: {
   wrappedArgs: (overrides?: Record<string, unknown>) => Parameters<CompactHooksQueuedCompaction>[0];
   workspaceDir: () => string;
 }): void {
-  describe("Codex host byte summary model", () => {
+  describe("host byte summary model", () => {
     registerAgentSessionLoopTestLifecycle();
 
     it("keeps manual native compaction on the chat model with a host summary override", async () => {
@@ -102,7 +102,11 @@ export function registerCodexHostByteModelTests(fixture: {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
-            compaction: { model: "deepseek/deepseek-flash", maxActiveTranscriptBytes: "20mb" },
+            compaction: {
+              model: "deepseek/legacy-summary",
+              transcriptByteModel: "deepseek/deepseek-flash",
+              maxActiveTranscriptBytes: "20mb",
+            },
           },
         },
       };
@@ -140,7 +144,9 @@ export function registerCodexHostByteModelTests(fixture: {
         trigger: "budget",
         preflightRequired: true,
         preflightCompactionTrigger: "transcript_bytes",
-        config: { agents: { defaults: { compaction: { model: "deepseek/deepseek-flash" } } } },
+        config: {
+          agents: { defaults: { compaction: { transcriptByteModel: "deepseek/deepseek-flash" } } },
+        },
       });
       const forgedAssertion = vi.fn(async () => {
         throw new Error("forged source must not be used");
@@ -173,12 +179,29 @@ export function registerCodexHostByteModelTests(fixture: {
       "operator-allowed",
       "operator-denied",
       "model-permission-removed",
+      "old-model-only",
+      "builtin-byte",
+      "builtin-old-model-only",
+      "builtin-manual",
+      "builtin-tokens",
+      "builtin-public-trigger-only",
+      "builtin-locked",
+      "builtin-operator-denied",
     ] as const)("gates host summary model egress for %s history", async (scenario) => {
-      const locked = scenario === "locked";
+      const locked = scenario.endsWith("locked") && scenario !== "unlocked";
+      const builtin = scenario.startsWith("builtin-");
+      const oldModelOnly = scenario.endsWith("old-model-only");
+      const byteTrigger = scenario !== "builtin-manual" && scenario !== "builtin-tokens";
+      const trustedByteTrigger = byteTrigger && scenario !== "builtin-public-trigger-only";
+      const useByteModel = !locked && !oldModelOnly && trustedByteTrigger;
+      const expectedModel =
+        locked || (!builtin && oldModelOnly)
+          ? { provider: "openai", id: "gpt-5.5" }
+          : { provider: "deepseek", id: useByteModel ? "deepseek-flash" : "legacy-summary" };
       let sourceActive = true;
-      let summaryAllowed = scenario !== "operator-denied";
+      let summaryAllowed = !scenario.endsWith("operator-denied");
       const operatorScenario =
-        scenario.startsWith("operator-") || scenario === "model-permission-removed";
+        scenario.includes("operator-") || scenario === "model-permission-removed";
       const policyListeners = new Set<() => void>();
       let bindingsAtPermissionRemoval: number | undefined;
       const assertSourceActive = () => {
@@ -206,8 +229,9 @@ export function registerCodexHostByteModelTests(fixture: {
         agents: {
           defaults: {
             compaction: {
-              model: "deepseek/deepseek-flash",
-              provider: "synthetic-provider",
+              model: "deepseek/legacy-summary",
+              ...(!oldModelOnly ? { transcriptByteModel: "deepseek/deepseek-flash" } : {}),
+              ...(!builtin ? { provider: "synthetic-provider" } : {}),
               maxActiveTranscriptBytes: "20mb",
             },
           },
@@ -230,7 +254,7 @@ export function registerCodexHostByteModelTests(fixture: {
         config,
         provider: "openai",
         model: "gpt-5.5",
-        agentHarnessId: "codex",
+        agentHarnessId: builtin ? "openclaw" : "codex",
         modelSelectionLocked: locked,
         authProfileId: "openai:source",
         authProfileIdSource: "user",
@@ -247,13 +271,13 @@ export function registerCodexHostByteModelTests(fixture: {
             baseUrl: "https://api.openai.com/v1",
             authRequirement: "api-key",
             requestTransportOverrides: "none",
-            runtimePolicy: { compatibleIds: ["codex"] },
+            runtimePolicy: { compatibleIds: [builtin ? "openclaw" : "codex"] },
           },
         },
-        trigger: "budget",
+        trigger: scenario === "builtin-manual" ? "manual" : "budget",
         forcePreflight: true,
         preflightRequired: true,
-        preflightCompactionTrigger: "transcript_bytes",
+        preflightCompactionTrigger: byteTrigger ? "transcript_bytes" : "tokens",
       });
       const target = {
         agentId: expectDefined(params.sessionTarget?.agentId, "test agent id"),
@@ -264,7 +288,7 @@ export function registerCodexHostByteModelTests(fixture: {
       await upsertSessionEntryCore(target, {
         sessionId: params.sessionId,
         updatedAt: 1,
-        agentHarnessId: "codex",
+        agentHarnessId: builtin ? "openclaw" : "codex",
         modelSelectionLocked: locked,
         providerOverride: "openai",
         modelOverride: "gpt-5.5",
@@ -347,15 +371,20 @@ export function registerCodexHostByteModelTests(fixture: {
 
       const result = await fixture
         .compact()(params, {
-          transcriptBytePreflightHarness: "codex",
+          ...(trustedByteTrigger ? { transcriptBytePreflight: true as const } : {}),
+          ...(!builtin ? { transcriptBytePreflightHarness: "codex" as const } : {}),
           assertActive: assertSourceActive,
           sourceAuthority: { assertActive: assertSourceActive, operatorAuthority },
         })
         .catch((error: unknown) => {
           if (
-            !["revoked", "replaced-writer", "operator-denied", "model-permission-removed"].includes(
-              scenario,
-            )
+            ![
+              "revoked",
+              "replaced-writer",
+              "operator-denied",
+              "builtin-operator-denied",
+              "model-permission-removed",
+            ].includes(scenario)
           ) {
             throw error;
           }
@@ -367,9 +396,13 @@ export function registerCodexHostByteModelTests(fixture: {
         });
 
       if (
-        ["revoked", "replaced-writer", "operator-denied", "model-permission-removed"].includes(
-          scenario,
-        )
+        [
+          "revoked",
+          "replaced-writer",
+          "operator-denied",
+          "builtin-operator-denied",
+          "model-permission-removed",
+        ].includes(scenario)
       ) {
         if (scenario === "model-permission-removed") {
           expect(bindingsAtPermissionRemoval).toBe(1);
@@ -388,48 +421,38 @@ export function registerCodexHostByteModelTests(fixture: {
         return;
       }
       expect(result, result.reason).toMatchObject({ ok: true, compacted: true });
-      const engineConfig = compactEngine.mock.calls[0]?.[0].runtimeContext?.config;
-      expect(engineConfig).not.toHaveProperty("agents.defaults.compaction.provider");
-      if (locked) {
-        expect(engineConfig).not.toHaveProperty("agents.defaults.compaction.model");
-      } else {
-        expect(engineConfig).toHaveProperty(
-          "agents.defaults.compaction.model",
-          "deepseek/deepseek-flash",
-        );
-      }
       expect(stream).toHaveBeenCalledOnce();
       expect(vi.mocked(resolveEmbeddedAgentStream).mock.calls.at(-1)?.[0].resolvedApiKey).toBe(
-        locked ? "synthetic-source-key" : "synthetic-summary-key",
+        expectedModel.provider === "openai" ? "synthetic-source-key" : "synthetic-summary-key",
       );
-      expect(stream.mock.calls[0]?.[0]).toMatchObject(
-        locked
-          ? { provider: "openai", id: "gpt-5.5" }
-          : { provider: "deepseek", id: "deepseek-flash" },
-      );
+      expect(stream.mock.calls[0]?.[0]).toMatchObject(expectedModel);
       expect(
         sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
       ).toMatchObject({ summary: "Kept the checklist, options and notes." });
-      expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
-      expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "openai",
-          model: "gpt-5.5",
-          agentHarnessId: "codex",
-          authProfileId: "openai:source",
-        }),
-        {
-          ...expectedNativeCompactionOptions("after_context_engine"),
-          sourceAuthority: { assertActive: expect.any(Function), operatorAuthority },
-        },
-      );
+      if (builtin) {
+        expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+      } else {
+        expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
+        expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider: "openai",
+            model: "gpt-5.5",
+            agentHarnessId: "codex",
+            authProfileId: "openai:source",
+          }),
+          {
+            ...expectedNativeCompactionOptions("after_context_engine"),
+            sourceAuthority: { assertActive: expect.any(Function), operatorAuthority },
+          },
+        );
+      }
       expect(loadSessionEntryReadOnly(target)).toMatchObject({
-        agentHarnessId: "codex",
+        agentHarnessId: builtin ? "openclaw" : "codex",
         modelSelectionLocked: locked,
         providerOverride: "openai",
         modelOverride: "gpt-5.5",
       });
-      expect(config.agents?.defaults?.compaction?.model).toBe("deepseek/deepseek-flash");
+      expect(config.agents?.defaults?.compaction?.model).toBe("deepseek/legacy-summary");
     });
   });
 }

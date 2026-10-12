@@ -550,27 +550,40 @@ describe("collectCodexRouteWarnings", () => {
   });
 
   it.each([
-    { limit: "20mb", preserved: true },
-    { limit: 0, preserved: false },
-    { limit: undefined, preserved: false },
+    { limit: "20mb", mixed: false, transcriptByteModel: "ollama/llama3.1:8b" },
+    { limit: 0, mixed: false, transcriptByteModel: "ollama/llama3.1:8b" },
+    { limit: undefined, mixed: false, transcriptByteModel: "ollama/llama3.1:8b" },
+    { limit: "20mb", mixed: false, transcriptByteModel: undefined },
+    { limit: "20mb", mixed: true, transcriptByteModel: "ollama/llama3.1:8b" },
   ])(
-    "preserves the shared Codex host summary model only with an active byte guard ($limit)",
-    ({ limit, preserved }) => {
+    "keeps byte-summary opt-in separate from legacy cleanup ($limit, mixed=$mixed, $transcriptByteModel)",
+    ({ limit, mixed, transcriptByteModel }) => {
+      const compaction = {
+        model: "deepseek/deepseek-flash",
+        provider: "custom-summary",
+        maxActiveTranscriptBytes: limit,
+        ...(transcriptByteModel === undefined ? {} : { transcriptByteModel }),
+      };
       const cfg: OpenClawConfig = {
         agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
-            compaction: { model: "deepseek/deepseek-flash", maxActiveTranscriptBytes: limit },
-          },
+          defaults: { model: "openai/gpt-5.5", compaction },
+          ...(mixed ? { entries: { worker: { model: "anthropic/claude-sonnet-4-6" } } } : {}),
         },
       };
       const warnings = collectCodexRouteWarnings(cfg);
       const result = maybeRepairCodexRoutes(cfg);
-      expect(result.cfg.agents?.defaults?.compaction?.model).toBe(
-        preserved ? "deepseek/deepseek-flash" : undefined,
+      expect(result.cfg.agents?.defaults?.compaction).toEqual({
+        ...(mixed ? { model: "deepseek/deepseek-flash", provider: "custom-summary" } : {}),
+        maxActiveTranscriptBytes: limit,
+        ...(transcriptByteModel === undefined ? {} : { transcriptByteModel }),
+      });
+      expect(warnings.some((warning) => warning.includes("compaction.model"))).toBe(true);
+      expect(warnings.some((warning) => warning.includes("compaction.transcriptByteModel"))).toBe(
+        false,
       );
-      expect(warnings.some((warning) => warning.includes("compaction.model"))).toBe(!preserved);
+      expect(maybeRepairCodexRoutes(result.cfg).changes).toEqual([]);
       expect(cfg.agents?.defaults?.compaction?.model).toBe("deepseek/deepseek-flash");
+      expect(cfg.agents?.defaults?.compaction?.provider).toBe("custom-summary");
     },
   );
 

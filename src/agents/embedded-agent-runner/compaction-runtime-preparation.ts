@@ -33,23 +33,33 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 
-export function projectCodexHostTranscriptBytePreflightConfig(
+export function projectHostCompactionConfig(
   config: OpenClawConfig | undefined,
-  active: boolean,
-  preserveModel = false,
+  options: {
+    nativeCodex?: boolean;
+    transcriptByteSummary?: boolean;
+    modelSelectionLocked?: boolean;
+  },
 ): OpenClawConfig | undefined {
   const compaction = config?.agents?.defaults?.compaction;
+  if (!compaction) {
+    return config;
+  }
+  const byteModel =
+    options.transcriptByteSummary && !options.modelSelectionLocked
+      ? compaction.transcriptByteModel?.trim()
+      : undefined;
   if (
-    !active ||
-    !compaction ||
-    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
+    !byteModel &&
+    (!options.nativeCodex ||
+      (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider")))
   ) {
     return config;
   }
-  const { model, provider: _provider, ...nativeCompaction } = compaction;
+  const { model: _model, provider: _provider, ...nativeCompaction } = compaction;
   const projectedCompaction = {
-    ...nativeCompaction,
-    ...(preserveModel && model !== undefined ? { model } : {}),
+    ...(options.nativeCodex ? nativeCompaction : compaction),
+    ...(byteModel ? { model: byteModel } : {}),
   };
   return {
     ...config,

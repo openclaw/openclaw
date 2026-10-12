@@ -162,7 +162,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.timeoutSeconds":
     "Seconds a built-in compaction model request may go without progress (default: 180). Each request start and each streamed output token refreshes the window, so a slow request that keeps streaming is not cut off; the complete compaction stops after 10 windows. Plugin-owned compaction receives one window for the complete operation.",
   "agents.defaults.compaction.model":
-    "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
+    "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model. Codex ignores this setting; use transcriptByteModel to opt into a separate built-in host byte-summary model.",
+  "agents.defaults.compaction.transcriptByteModel":
+    "Optional provider/model or configured bare alias used only for built-in host summaries triggered by maxActiveTranscriptBytes. Unset preserves existing routing: Codex host summaries use the conversation model; other built-in summaries use compaction.model or the conversation model. Explicit selection sends history to that model using its own credentials and billing route. Model locks and permissions still apply; native, token-triggered, and manual compaction are unchanged.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
     'Byte threshold that triggers normal preflight local compaction when the transcript window the model sees (since the latest compaction or reset) reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
   "agents.defaults.compaction.notifyUser":

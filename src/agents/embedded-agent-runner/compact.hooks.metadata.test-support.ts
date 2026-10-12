@@ -186,3 +186,20 @@ export type MockResolvedModel = {
   >;
   modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
 };
+
+export function mockCompactHooksStream(
+  resolveEmbeddedAgentStream: typeof import("./compact.hooks.harness.js").resolveEmbeddedAgentStreamMock,
+): void {
+  // mock-isolation: Isolate fixture transports/auth from provider state; claim and request guards stay real.
+  vi.doMock("./stream-resolution.js", () => ({
+    resolveEmbeddedAgentApiKey: resolveCompactHooksApiKeyMock,
+    resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
+    resolveEmbeddedAgentStream,
+    selectEmbeddedAgentStream: (
+      params: Parameters<typeof import("./stream-resolution.js").selectEmbeddedAgentStream>[0],
+    ) => ({
+      ...resolveEmbeddedAgentStream(params),
+      wrapApiKey: (stream: import("../runtime/index.js").StreamFn) => stream,
+    }),
+  }));
+}

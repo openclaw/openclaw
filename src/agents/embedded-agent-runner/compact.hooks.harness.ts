@@ -26,7 +26,7 @@ import {
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksContextEngine,
   mockCompactHooksPluginMetadata,
-  resolveCompactHooksApiKeyMock,
+  mockCompactHooksStream,
   type CompactHooksQueuedCompaction,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
@@ -809,18 +809,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     validateReplayTurns: validateReplayTurnsMock,
   }));
 
-  // mock-isolation: Isolate fixture transports/auth from provider state; claim and request guards stay real.
-  vi.doMock("./stream-resolution.js", () => ({
-    resolveEmbeddedAgentApiKey: resolveCompactHooksApiKeyMock,
-    resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
-    resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
-    selectEmbeddedAgentStream: (
-      params: Parameters<typeof import("./stream-resolution.js").selectEmbeddedAgentStream>[0],
-    ) => ({
-      ...resolveEmbeddedAgentStreamMock(params),
-      wrapApiKey: (stream: import("../runtime/index.js").StreamFn) => stream,
-    }),
-  }));
+  mockCompactHooksStream(resolveEmbeddedAgentStreamMock);
 
   vi.doMock("./extra-params.js", () => ({
     applyExtraParamsToAgent: applyExtraParamsToAgentMock,
