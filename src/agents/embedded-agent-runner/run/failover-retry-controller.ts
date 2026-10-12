@@ -370,15 +370,19 @@ export function createEmbeddedRunFailoverRetryController(input: {
       log.warn(
         `transient same-model retry ${retryCount + 1}/${retryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
       );
-      await retry.onRetry?.({
-        attempt: retry.reason === "output_limit" ? outputLimitRetryCount + 1 : retryCount + 1,
-        maxRetries:
-          retry.reason === "output_limit"
-            ? Math.min(retryBudget, MAX_OUTPUT_LIMIT_RETRIES)
-            : retryBudget,
-        delayMs,
-        reason: retry.reason,
-      });
+      try {
+        await retry.onRetry?.({
+          attempt: retry.reason === "output_limit" ? outputLimitRetryCount + 1 : retryCount + 1,
+          maxRetries:
+            retry.reason === "output_limit"
+              ? Math.min(retryBudget, MAX_OUTPUT_LIMIT_RETRIES)
+              : retryBudget,
+          delayMs,
+          reason: retry.reason,
+        });
+      } catch {
+        log.warn("transient retry status callback failed; continuing retry");
+      }
       const closeRetryWait = params.onRetryWait?.(Date.now() + delayMs, params.abortSignal);
       let completed = false;
       try {
