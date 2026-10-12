@@ -876,12 +876,14 @@ The prompt contains a bounded skill directory. Skills omitted by the prompt
 budget remain discoverable through `skills_search` when that tool is enabled.
 Small catalogs continue to appear in full.
 
-When search is available, the agent is instructed to check for a relevant skill
-before work involving files, specialized tools, or a reusable workflow.
-An omitted directory is identified explicitly; the agent searches by task goal
-instead of trying to scan a list that is not present. Known names and clear
-directory matches can go directly to a complete skill read. Simple conversation
-and self-contained answers do not require discovery.
+When skill reads are available, the agent checks the listed skills once at the
+start of a new task and uses a skill when the task matches it or the user names it.
+It searches when the task likely needs a reusable workflow that is not listed.
+It searches or reads again only when the task's scope changes or the user names
+a skill. Simple conversation and self-contained answers do not require discovery.
+The prompt lists names and descriptions without file locations. Search results
+still include locations for resolving relative resources. Without an effective
+skill read tool, the existing location-based prompt is unchanged.
 
 - `skills_search({ query, limit? })` searches eligible installed names,
   descriptions, and bounded instruction text. The default limit is 5; the maximum
@@ -949,11 +951,14 @@ prompt. The cost follows a fixed formula and scales linearly per skill:
 
 - **Base overhead** (only when 1+ skills are eligible): a fixed block of intro
   prose plus the `<available_skills>` wrapper.
-- **Per skill:** ~97 characters + your `name`, `description`, and `location`
+- **Per skill with `skills_read`:** ~71 characters + your `name` and `description`
   field lengths.
+- **Per skill without `skills_read`:** ~97 characters + your `name`, `description`,
+  and `location` field lengths.
 - XML escaping expands `& < > " '` into entities, adding a few characters per
   occurrence.
-- At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths.
+- At ~4 chars/token, 71 chars ≈ 18 tokens (97 chars ≈ 24 tokens without
+  `skills_read`) per skill before field lengths.
 
 If the rendered block would exceed the configured prompt budget
 (`skills.limits.maxSkillsPromptChars`), OpenClaw first preserves as many skill
