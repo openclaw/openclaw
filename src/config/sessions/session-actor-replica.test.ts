@@ -441,8 +441,8 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     withSqliteDatabaseWriteScope(database.db, [scope.sessionKey], () =>
       runSqliteImmediateTransactionSync(database.db, () => {
         database.db
-          .prepare("UPDATE session_nodes SET updated_at = ? WHERE session_key = ?")
-          .run(2, scope.sessionKey);
+          .prepare("UPDATE session_nodes SET updated_at = ?, entry_json = ? WHERE session_key = ?")
+          .run(2, JSON.stringify({ ...shared.entry, updatedAt: 2 }), scope.sessionKey);
       }),
     );
     expect(replica.read()).toBeUndefined();
