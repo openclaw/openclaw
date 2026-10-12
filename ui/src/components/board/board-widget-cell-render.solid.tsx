@@ -1,10 +1,40 @@
-import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
+import { dynamic, type JSX } from "@solidjs/web";
+import { createEffect, For, Show } from "solid-js";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
 import { BOARD_SIZE_PRESETS } from "./board-widget-cell-options.ts";
+
+export function BoardCoreWidget(props: {
+  tagName?: string;
+  widget?: BoardWidget;
+  session?: BoardGetParams;
+  active: boolean;
+}) {
+  const Element = dynamic(() => props.tagName);
+  let element!: HTMLElement & {
+    widget?: BoardWidget;
+    session?: BoardGetParams;
+    active?: boolean;
+  };
+  createEffect(
+    () => ({ widget: props.widget, session: props.session, active: props.active }),
+    (value) => {
+      element.widget = value.widget;
+      element.session = value.session ?? { sessionKey: "" };
+      element.active = value.active;
+    },
+  );
+  return (
+    <Element
+      ref={(node: typeof element) => {
+        element = node;
+      }}
+    />
+  );
+}
 
 export function BoardWidgetMenu(props: {
   widget: BoardWidget;

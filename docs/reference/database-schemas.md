@@ -228,6 +228,14 @@ use the existing primary key and require no schema or data migration.
 Session entry writes batch their saved snapshot fields in one upsert, preserving
 per-field revision triggers and rollback.
 
+Entry replacement snapshots carry the transcript watermark alongside the existing
+window facts. Metadata writers return that token with their entry postimage;
+a transcript mutation in the same transaction supplies its newer committed token.
+Publication does not scan the transcript again. Exact message rewrites likewise
+return the generation minted by their writer. Detached edits still compare their
+prepared payload with the current row before writing. Schemas, stored bytes,
+retention, permissions, and update behavior are unchanged.
+
 Canonical main-key policy, external-supervision ownership, and the machine-owned
 TTS preference path are loaded once for the physical database and shared across
 handles and workers. Their owning writers publish committed replacements;

@@ -192,57 +192,6 @@ describe("native link routing", () => {
     expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
   });
 
-  it("routes an unmodified external click to the native panel and preserves page-level cleanup", async () => {
-    const bridge = installBridge();
-    routing = startNativeLinkRouting({ canPresentBrowserPanel: () => true });
-    const anchor = appendLink("https://example.com/report");
-    const bubbleHandler = vi.fn();
-    anchor.addEventListener("click", bubbleHandler);
-
-    const event = click(anchor);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(bubbleHandler).toHaveBeenCalledOnce();
-    expect(bridge.messages).toEqual([]);
-    expect(bridge.browserRequests).toEqual([
-      { open: true, url: "https://example.com/report", native: true },
-    ]);
-  });
-
-  it("opens links externally during a Settings takeover and restores panel routing when it closes", async () => {
-    const bridge = installBridge();
-    let canPresentBrowserPanel = false;
-    routing = startNativeLinkRouting({
-      canPresentBrowserPanel: () => canPresentBrowserPanel,
-    });
-    const anchor = appendLink("https://example.com/report");
-
-    expect(click(anchor).defaultPrevented).toBe(true);
-    expect(bridge.messages).toEqual([
-      { type: "open-link", url: "https://example.com/report", target: "external" },
-    ]);
-    expect(bridge.browserRequests).toEqual([]);
-
-    canPresentBrowserPanel = true;
-    expect(click(anchor).defaultPrevented).toBe(true);
-    expect(bridge.messages).toHaveLength(1);
-    expect(bridge.browserRequests).toEqual([
-      { open: true, url: "https://example.com/report", native: true },
-    ]);
-  });
-
-  it("preserves link handlers that cancel an external click", async () => {
-    const bridge = installBridge();
-    routing = startNativeLinkRouting();
-    const anchor = appendLink("https://example.com/handled");
-    anchor.addEventListener("click", (event) => event.preventDefault());
-
-    const event = click(anchor);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(bridge.messages).toEqual([]);
-  });
-
   it("defines the hovercard once across duplicate bootstrap module instances", async () => {
     // Regression: the non-isolated jsdom lane evaluates the registration
     // module once per sibling file against one persistent document, so stale

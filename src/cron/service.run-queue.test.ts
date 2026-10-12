@@ -6,8 +6,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import {
   createGatewaySchedulerClock,
@@ -16,6 +18,11 @@ import {
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { stop } from "./service/ops-lifecycle.js";
+import { requestCronRuns } from "./service/run-queue.js";
+import { createCronServiceState } from "./service/state.js";
+import { ensureLoaded } from "./service/store.js";
+import { onTimer } from "./service/timer-scheduler.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJob } from "./types.js";
@@ -33,6 +40,54 @@ function commandJob(id: string, nextRunAtMs = NOW + 60_000): CronJob {
     payload: { kind: "command", argv: ["synthetic", id] },
   };
 }
+
+it("keeps owned running work out of watchdog database polling", async () => {
+  const { storePath } = await makeStorePath();
+  const job = commandJob("owned-running", NOW);
+  const entered = createDeferred();
+  const release = createDeferred();
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+  const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => NOW,
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "main",
+    log: logger,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    runIsolatedAgentJob: async () => ({ status: "ok" }),
+    runCommandJob: async () => {
+      entered.resolve();
+      await release.promise;
+      return { status: "ok" };
+    },
+  });
+  let completion: Promise<unknown> | undefined;
+  try {
+    await ensureLoaded(state);
+    const [request] = await requestCronRuns(state, [job]);
+    completion = request!.completion;
+    await entered.promise;
+    // Consume the queue's committed publication once, then the loaded owner is current.
+    await onTimer(state);
+    const reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+    const writes = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+    try {
+      await onTimer(state);
+      expect(reads).not.toHaveBeenCalled();
+      expect(writes).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+      writes.mockRestore();
+    }
+  } finally {
+    release.resolve();
+    await completion;
+    stop(state);
+    await state.schedulerDrain;
+  }
+});
 
 it("force-runs a disabled job while scheduling is paused without consuming its paced slot", async () => {
   const { storePath } = await makeStorePath();

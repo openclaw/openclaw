@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -323,7 +324,7 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByRole("button", { name: "Device offline" }).waitFor();
-      await page.getByRole("button", { name: "Open split view" }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       for (const pane of await panes.all()) {
@@ -656,7 +657,7 @@ suite.define(() => {
       ).toBe("offline");
       expect(await gateway.getSocketCount()).toBe(1);
 
-      await page.getByRole("button", { name: "Open split view" }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);

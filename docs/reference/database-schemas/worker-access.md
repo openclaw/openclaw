@@ -46,6 +46,16 @@ from the index-facts postimage. The publication worker owns vector extension loa
 and retirement, while the retrieval worker owns read-only capability probing.
 These paths add no schema, retention, or update contract.
 
+Scheduled cron runs reuse the job and receipt loaded by their queue transaction
+when claiming and activating work. Activation commits ownership and start time
+together. Isolated preparation persists skills with the pre-run metadata, and
+continuation synchronization includes its selected CLI provider in the same
+write. Transcript existence is read only when resume fields need reconciliation.
+Duplicate-run exclusion, delivery settlement, and run-history retention keep
+their existing owners and semantics.
+The watchdog reuses write-invalidated scheduler rows and live local receipt
+ownership. Running contexts do not trigger queue drains; queued rows still do.
+
 Managed outgoing media cleanup uses the same retained session reader as media
 serving. Durable session discovery and entry reads execute in the existing
 read workers; bound incognito reads use their actor. Cleanup distinguishes an
@@ -78,8 +88,8 @@ not query refresh-lock state. These changes preserve schema versions, retention,
 stored data, and update compatibility.
 
 Remaining synchronous compatibility debt includes released conversation-binding
-and proxy-capture SDK callbacks, opaque native Web Push guards, and the public
-prepared-workspace acquisition guard. Unbound incognito usage/outcome storage
+and proxy-capture SDK callbacks and the public prepared-workspace acquisition
+guard. Unbound incognito usage/outcome storage
 still belongs to its native process-held database until the incognito actor
 cutover. Hidden GitHub credentials retain their synchronous credential-lifecycle
 owner and current effect checks. Moving these calls requires their owning
@@ -296,7 +306,11 @@ unbound incognito stores retain their existing process-local native owner.
 Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
 there is no post-read registry retry or repeated listing-identity capture.
-Write receipts invalidate reusable target facts. Current authorization at
+Registry receipts and physical replacement invalidate reusable target facts.
+Session-row writes invalidate fixed-store inventories, whose agent visibility
+can depend on those rows. Per-agent inventories retain their path and registry
+facts across ordinary turns, avoiding another discovery and
+reader-cleanup request. Current authorization at
 search disclosure, project removal, and other real effects remains required.
 The released synchronous transcript-hit SDK and native mutation callbacks retain
 their existing kernels until those owning contracts are migrated; this is not a
@@ -345,6 +359,11 @@ the existing history worker. Full suffix replacement derives its retained prefix
 from the canonical rows already compared inside the writer transaction; it does
 not reread the derived active-event prefix. Unsupported direct edits to derived
 rows are repaired by reconciliation rather than checked on every replacement.
+
+Activity recap presentation consumes the watermark prepared with its row. Explicit
+recap requests read freshness through the history worker and revalidate access
+before returning the result. The unused synchronous message-by-event-ID accessor
+has been removed; transaction owners retain their existing message lookup kernel.
 
 The session S–Z inventory still includes shared native kernels. They must not be
 marked worker-only merely because their ordinary durable callers use workers:
@@ -987,6 +1006,8 @@ predicates, prepared message bytes, and live authority checks. Committed and
 unknown outcomes never replay. Durable commands retain the physical writer FIFO
 across snapshot selection, command settlement, and the single rebase, so another
 queued writer cannot invalidate the refused postimage before its retry enters.
+Pending-input staging selects its initial lifecycle facts after entering that
+FIFO, so an earlier terminal write cannot make a new input stale before admission.
 Transcript appends and terminal accounting use the same command owner. Message
 preparation and external hooks remain outside this reservation; each native
 transaction still settles before another command starts.
@@ -1528,11 +1549,14 @@ exact joined read because native and SDK writers can revoke rows outside owner
 publication. Released synchronous standing-grant methods retain their arguments
 and completion timing; bundled preparation uses their awaited replacements.
 
-Web Push reads, approval delivery operations, and current-subscription cleanup
-have exact worker-only entries; native preferences, subscription upsert/deletion,
-and their shared schema helper remain T1. Prepared-workspace list and mutation
-operations are worker-only, while the synchronous `find` compatibility query
-remains T1. Approval history and unguarded insert, pending-list, expiry, and
+All Web Push reads and mutations execute through the shared-state worker. The
+Gateway checks current requester and profile authority at the existing worker
+transaction grant, including opaque in-process request callbacks. The profile
+binding is resolved once inside that transaction; subscription-presence facts
+are published directly from synchronous reads and invalidated by write receipts.
+Only the shared additive-column helper also runs in offline legacy migration.
+Prepared-workspace list and mutation operations are worker-only, while the
+synchronous `find` compatibility query remains T1. Approval history and unguarded insert, pending-list, expiry, and
 allow-once consumption have exact worker-only entries; guarded native
 compatibility operations retain their existing tiers. Offline full-store reset inventory and
 archive-reset operations are T3 CLI one-shots, including dev bootstrap; Gateway

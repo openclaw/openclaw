@@ -278,13 +278,6 @@ it.each(["native", "supplied"] as const)(
   },
 );
 
-it("leaves supplied initial-writer creation with the session manager", async () => {
-  current = undefined;
-  await run("supplied").result;
-  expect(mocks.read).not.toHaveBeenCalled();
-  expect(mocks.append).toHaveBeenCalledOnce();
-});
-
 it("keeps a supplied detached manager targetless", async () => {
   mocks.getTarget.mockReturnValue(undefined);
   await run("supplied").result;

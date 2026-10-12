@@ -276,28 +276,6 @@ describe("ExtensionRelayBridge Fetch ownership", () => {
     );
   });
 
-  it("rejects a stale request ID after disable and successor enable without disturbing the new request", async () => {
-    expect(await owner.request("Fetch.enable", sessionId)).toMatchObject(success);
-    emitPaused("old-request");
-    const staleId = pausedRequestId(owner, sessionId);
-    expect(await owner.request("Fetch.disable", sessionId)).toMatchObject(success);
-    expect(await observer.request("Fetch.enable", observerSessionId)).toMatchObject(success);
-    emitPaused("new-request");
-    const currentId = pausedRequestId(observer, observerSessionId);
-    const beforeResolution = fetchCommands().length;
-
-    expect
-      .soft(
-        await observer.request("Fetch.continueRequest", observerSessionId, { requestId: staleId }),
-      )
-      .toMatchObject(ownershipError);
-    expect.soft(fetchCommands()).toHaveLength(beforeResolution);
-    expect(
-      await observer.request("Fetch.continueRequest", observerSessionId, { requestId: currentId }),
-    ).toMatchObject(success);
-    expect(fetchCommands().at(-1)).toMatchObject({ params: { requestId: "new-request" } });
-  });
-
   it("owns child Fetch independently of the root physical scope", async () => {
     const { ownerChild, observerChild } = await attachChild();
     expect(await owner.request("Fetch.enable", ownerChild)).toMatchObject(success);

@@ -1953,6 +1953,12 @@ adoption retains its separate header initialization and native deletion rollback
 composition. Pending-archive recovery still follows the replacement receipt after
 writer release. Stored formats, schemas, retention, and update behavior are unchanged.
 
+Fresh creation carries its initial absent-target snapshot into that replacement
+command instead of preparing the same target again. The writer still checks the
+target and any label claim in its transaction, preserving a competing creation
+committed during preparation. Existing entries and alias adoption retain their
+replacement snapshots.
+
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
 while any required first full integrity and foreign-key checks run on the same
