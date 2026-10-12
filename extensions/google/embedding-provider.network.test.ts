@@ -44,7 +44,9 @@ it.each([undefined, false, true])(
       .spyOn(providerHttp, "waitProviderOperationPollInterval")
       .mockResolvedValue(undefined);
     try {
-      await new Promise<void>((resolve) => server.listen(claim.port, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(claim.port, "127.0.0.1", resolve);
+      });
       const { client } = await createGeminiEmbeddingProvider({
         config: {
           models: {
@@ -87,9 +89,9 @@ it.each([undefined, false, true])(
       wait.mockRestore();
       server.closeAllConnections();
       if (server.listening) {
-        await new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        );
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
       }
       await claim.release();
     }

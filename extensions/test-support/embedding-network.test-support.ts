@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
-import {
-  type MemoryEmbeddingProviderCreateOptions,
-  type MemoryEmbeddingProvider,
+import type {
+  MemoryEmbeddingProviderCreateOptions,
+  MemoryEmbeddingProvider,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
@@ -43,7 +43,9 @@ export function testEmbeddingNetworkPolicy(params: {
         }
       });
       try {
-        await new Promise<void>((resolve) => server.listen(claim.port, "127.0.0.1", resolve));
+        await new Promise<void>((resolve) => {
+          server.listen(claim.port, "127.0.0.1", resolve);
+        });
         const { provider } = await params.create({
           config: {
             models: {
@@ -83,9 +85,9 @@ export function testEmbeddingNetworkPolicy(params: {
       } finally {
         server.closeAllConnections();
         if (server.listening) {
-          await new Promise<void>((resolve, reject) =>
-            server.close((error) => (error ? reject(error) : resolve())),
-          );
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
         }
         await claim.release();
       }
