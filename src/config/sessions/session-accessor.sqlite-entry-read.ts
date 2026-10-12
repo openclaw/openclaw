@@ -357,6 +357,10 @@ export function readExactSessionEntryRow(
                   actor.hot.members.map((member) => member.identityId),
                 ),
                 board_present: actor.hasBoard ? 1 : 0,
+                transcriptWatermark: {
+                  sessionId: selected.entry.sessionId,
+                  ...actor.hot.transcript.watermark,
+                },
               }
             : {}),
         },
@@ -422,15 +426,34 @@ function readSelectedSessionEntryRows(
             ),
           )
       : selectReadableSessionEntryRows(database, projection);
-  const windowQuery = options?.includeWindowFacts
-    ? baseQuery
-        .leftJoin(
-          selectSessionEntryWindowFacts(database),
-          "entry_window.window_session_id",
-          "session_nodes.current_session_id",
-        )
-        .selectAll("entry_window")
-    : baseQuery;
+  const windowQuery = baseQuery.$if(options?.includeWindowFacts === true, (builder) =>
+    builder
+      .leftJoin(
+        selectSessionEntryWindowFacts(database),
+        "entry_window.window_session_id",
+        "session_nodes.current_session_id",
+      )
+      .selectAll("entry_window")
+      .select((eb) => [
+        eb
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .whereRef("session_id", "=", "session_nodes.current_session_id")
+          .as("transcript_generation"),
+        eb.fn
+          .coalesce(
+            eb
+              .selectFrom("session_transcript_cold_archives")
+              .select("last_seq")
+              .whereRef("session_id", "=", "session_nodes.current_session_id"),
+            eb
+              .selectFrom("transcript_events")
+              .select((inner) => inner.fn.max<number>("seq").as("max_seq"))
+              .whereRef("session_id", "=", "session_nodes.current_session_id"),
+          )
+          .as("transcript_max_seq"),
+      ]),
+  );
   const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
   // Old stores have no board tables until first use; branch before compiling SQL.
   const boardQuery = options?.includeBoardPresence
@@ -473,7 +496,16 @@ function readSelectedSessionEntryRows(
   return options?.includeWindowFacts
     ? rows.map((row) => {
         const window = takeSessionEntryWindowFacts(row);
-        return { ...row, window };
+        const { transcript_generation, transcript_max_seq, ...entryRow } = row;
+        return {
+          ...entryRow,
+          window,
+          transcriptWatermark: {
+            sessionId: row.current_session_id,
+            generation: transcript_generation ?? null,
+            maxSeq: transcript_max_seq ?? null,
+          },
+        };
       })
     : rows;
 }

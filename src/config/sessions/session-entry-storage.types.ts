@@ -1,5 +1,6 @@
 import type { Selectable, SqlBool } from "kysely";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -28,5 +29,6 @@ export type ResolvedSessionEntryRow = {
       board_present?: SqlBool;
       member_ids_json?: string;
       window?: SessionEntryWindowRow | null;
+      transcriptWatermark?: SessionTranscriptWatermark & { sessionId: string };
     };
 };

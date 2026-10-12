@@ -1,3 +1,4 @@
+import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type { SessionEntrySnapshot } from "./session-entry-snapshots.js";
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
@@ -9,6 +10,7 @@ export type SessionEntryWritePostimage = {
   entry: SessionEntry;
   row: ResolvedSessionEntryRow["row"];
   window: SessionEntryWindowRow;
+  transcriptWatermark?: SessionTranscriptWatermark;
   sideTables: {
     memberIdsJson: string;
     hasBoard: boolean;
