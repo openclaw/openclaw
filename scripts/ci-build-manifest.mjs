@@ -1512,15 +1512,16 @@ const manifest = {
   ui_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.ui) : "",
   ui_e2e_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.e2e) : "",
   ui_real_gateway_matrix: createMatrix(
-    uiRealGatewayShards.map(({ groups, ...row }) => ({
-      ...row,
-      run_tests:
-        !groups ||
-        groups.some(
-          (group) => group.includePatterns === undefined || group.includePatterns.length > 0,
-        ),
-      test_groups_gzip_base64: groups ? encodeNodeTestGroups(groups) : "",
-    })),
+    uiRealGatewayShards.map(({ groups, ...row }) =>
+      Object.assign(row, {
+        run_tests:
+          !groups ||
+          groups.some(
+            (group) => group.includePatterns === undefined || group.includePatterns.length > 0,
+          ),
+        test_groups_gzip_base64: groups ? encodeNodeTestGroups(groups) : "",
+      }),
+    ),
   ),
   run_control_ui_performance: runControlUiPerformance,
   run_ui_e2e: runUiE2e,

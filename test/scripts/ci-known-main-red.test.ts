@@ -251,11 +251,83 @@ const known = async (options: Parameters<typeof classify>[0] = {}) =>
 
 describe("main failure attribution", () => {
   it.each([
+    { conclusion: "success", mainSelected: true, expected: "unknown" },
+    { conclusion: "failure", mainSelected: true, expected: "unknown" },
+    { conclusion: "success", mainSelected: false, expected: "new" },
+  ])(
+    "compares selected build verifiers against main $conclusion (other verifiers=$mainSelected)",
+    async ({ conclusion, mainSelected, expected }) => {
+      const build = { ...job, name: "build-artifacts" };
+      const flags = (selected: boolean) =>
+        [
+          "RUN_CHANNELS",
+          "RUN_DOCTOR_PLUGIN_INDEX",
+          "RUN_DISCORD_COMPONENT_PROOF",
+          "RUN_CORE_SUPPORT_BOUNDARY",
+          "RUN_GATEWAY_WATCH",
+          "RUN_SQLITE_SESSION_LIFECYCLE",
+          "RUN_TUI_PTY",
+        ]
+          .map(
+            (name) =>
+              `2026-10-12T08:07:34.000Z   ${name}: ${name === "RUN_SQLITE_SESSION_LIFECYCLE" || selected}`,
+          )
+          .join("\n");
+      const classifier = failureClassifier({
+        mainJobs: [{ ...build, id: 20, conclusion }],
+        mainReport: flags(mainSelected),
+        prReport: flags(false),
+      });
+      expect(await classifier.classifyJob(build)).toMatchObject({
+        class: expected,
+        mainRunId: 200,
+        mainJobId: 20,
+        reason:
+          expected === "unknown"
+            ? "Selected scope differs from main; failure signatures not comparable"
+            : "Matching main job passed",
+      });
+    },
+  );
+
+  it("does not call a changed-scope lint failure new against a passed full main lint", async () => {
+    const lint = {
+      ...job,
+      name: "check-lint",
+      steps: [{ name: "Run changed lint", conclusion: "failure" }],
+    };
+    const classifier = failureClassifier({
+      mainJobs: [
+        {
+          ...lint,
+          id: 20,
+          conclusion: "success",
+          steps: [{ name: "Run check shard", conclusion: "success" }],
+        },
+      ],
+    });
+    expect(await classifier.classifyJob(lint)).toMatchObject({
+      class: "unknown",
+      reason: "Selected scope differs from main; failure signatures not comparable",
+    });
+  });
+
+  it("makes unverified scope visible without inventing a mismatch", async () => {
+    const classifier = failureClassifier({
+      mainJobs: [{ ...job, id: 20, conclusion: "success" }],
+    });
+    expect(await classifier.classifyJob(job)).toMatchObject({
+      class: "new",
+      reason: "Matching main job passed; selected scope not compared",
+    });
+  });
+
+  it.each([
     {
       name: "matching Node assertions",
       failure: job,
       expected: "pre-existing",
-      reason: "Failure signatures match main",
+      reason: "Failure signatures match main; selected scope not compared",
     },
     {
       name: "changed Node assertions",
@@ -306,14 +378,14 @@ describe("main failure attribution", () => {
       failure: { ...job, name: "build-artifacts" },
       expected: "pre-existing",
       reason:
-        "Job name only (signatures not compared); check failing tests against main before attribution",
+        "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
     },
     {
       name: "the same unparsed build timeout",
       failure: { ...job, name: "build-artifacts", conclusion: "timed_out" },
       expected: "pre-existing",
       reason:
-        "Job name only (signatures not compared); check failing tests against main before attribution",
+        "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
     },
   ])("classifies $name as $expected", async ({ failure, expected, reason, ...options }) => {
     const classifier = failureClassifier({

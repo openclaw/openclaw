@@ -37,7 +37,9 @@ every failed or timed-out job with the newest completed scheduled main CI run
 and publishes a **pre-existing**, **new**, or **unknown** classification in its
 summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify
 matched signatures or job-name-only matches. The existing known-main-red
-allowance and gate result stay unchanged. See
+allowance and gate result stay unchanged. Detected build-verifier or lint-mode
+scope differences are **unknown**; other reasons say when selected scope was
+not compared. See
 [job ordering and failure reporting](/ci/pipeline#fail-fast-order).
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane

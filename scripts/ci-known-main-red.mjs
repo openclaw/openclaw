@@ -1,4 +1,5 @@
 import { posix } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { isNodeTestEvidencePath, parseNodeFailureReport } from "./lib/ci-node-test-evidence.mjs";
 import { isStaticEvidencePath, parseStaticFailureReport } from "./lib/ci-static-check-evidence.mjs";
 
@@ -38,7 +39,8 @@ function client({ repository, token }) {
   if (repository !== "openclaw/openclaw" || !token) {
     throw new Error("Invalid main CI evidence context");
   }
-  return async (route, text = false) => {
+  const logs = new Map();
+  const request = async (route, text) => {
     const response = await fetch(`https://api.github.com/repos/${repository}${route}`, {
       headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10_000),
@@ -52,6 +54,62 @@ function client({ repository, token }) {
     }
     return text ? body : JSON.parse(body);
   };
+  return (route, text = false) => {
+    if (!text) {
+      return request(route, false);
+    }
+    if (!logs.has(route)) {
+      logs.set(route, request(route, true));
+    }
+    return logs.get(route);
+  };
+}
+
+function buildScope(log) {
+  const flags = [
+    "RUN_CHANNELS",
+    "RUN_DOCTOR_PLUGIN_INDEX",
+    "RUN_DISCORD_COMPONENT_PROOF",
+    "RUN_CORE_SUPPORT_BOUNDARY",
+    "RUN_GATEWAY_WATCH",
+    "RUN_SQLITE_SESSION_LIFECYCLE",
+    "RUN_TUI_PTY",
+  ];
+  const selected = new Map();
+  for (const line of stripVTControlCharacters(log).split("\n")) {
+    const match = /^(?:\d{4}-\d{2}-\d{2}T\S+ )? +([A-Z_]+): (true|false)\s*$/u.exec(line);
+    if (!match || !flags.includes(match[1])) {
+      continue;
+    }
+    if (selected.has(match[1])) {
+      return null;
+    }
+    selected.set(match[1], match[2]);
+  }
+  return selected.size === flags.length ? flags.map((flag) => selected.get(flag)).join(",") : null;
+}
+
+async function compareSelectedScope(api, job, mainJob) {
+  const lintMode = (entry) => {
+    const steps = entry.steps?.filter(
+      (step) => step.conclusion !== "skipped" && staticCheck(entry.name, step.name) === "oxlint",
+    );
+    return steps?.length === 1 ? steps[0].name === "Run changed lint" : null;
+  };
+  const currentLint = lintMode(job);
+  const mainLint = lintMode(mainJob);
+  if (currentLint !== null && mainLint !== null && currentLint !== mainLint) {
+    return false;
+  }
+  if (job.name !== "build-artifacts") {
+    return null;
+  }
+  const [current, previous] = await Promise.all(
+    [job, mainJob].map(async (entry) =>
+      buildScope(await api(`/actions/jobs/${entry.id}/logs`, true)),
+    ),
+  );
+  return current !== null && previous !== null ? current === previous : null;
 }
 
 function scheduledRun(run, repository) {
@@ -182,8 +240,24 @@ export function createMainFailureClassifier(options) {
       if (mainJob.status !== "completed") {
         return { ...result, reason: "Matching main job is incomplete" };
       }
+      let scopeMatches = null;
+      if (["success", "failure", "timed_out"].includes(mainJob.conclusion)) {
+        try {
+          scopeMatches = await compareSelectedScope(api, job, mainJob);
+        } catch {
+          // Older or unavailable logs cannot establish a selected-scope comparison.
+        }
+      }
+      if (scopeMatches === false) {
+        return {
+          ...result,
+          reason: "Selected scope differs from main; failure signatures not comparable",
+        };
+      }
+      const reason = (text) =>
+        scopeMatches === null ? `${text}; selected scope not compared` : text;
       if (mainJob.conclusion === "success") {
-        return { ...result, class: "new", reason: "Matching main job passed" };
+        return { ...result, class: "new", reason: reason("Matching main job passed") };
       }
       if (!["failure", "timed_out"].includes(mainJob.conclusion)) {
         return { ...result, reason: "Matching main job has no comparable result" };
@@ -204,8 +278,9 @@ export function createMainFailureClassifier(options) {
         return {
           ...result,
           class: "pre-existing",
-          reason:
+          reason: reason(
             "Job name only (signatures not compared); check failing tests against main before attribution",
+          ),
         };
       }
       if (job.conclusion === "timed_out" || mainJob.conclusion === "timed_out") {
@@ -230,7 +305,9 @@ export function createMainFailureClassifier(options) {
         return {
           ...result,
           class: same ? "pre-existing" : "new",
-          reason: same ? "Failure signatures match main" : "Failure signatures differ from main",
+          reason: reason(
+            same ? "Failure signatures match main" : "Failure signatures differ from main",
+          ),
         };
       } catch {
         return { ...result, reason: "Failure signatures unavailable" };
