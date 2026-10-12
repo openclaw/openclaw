@@ -73,9 +73,9 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
     const releaseShared = createDeferredCore();
     const releaseWork = createDeferredCore();
     const started = createDeferredCore<GatewayServer>();
-    const exited = createDeferredCore<number>();
     const completeBoot = vi.fn();
     let exitCode: number | undefined;
+    let running: Promise<number> | undefined;
     let startCount = 0;
     let closing: Promise<unknown> | undefined;
     let activeWork: Promise<void> | undefined;
@@ -94,7 +94,7 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
         }
         vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
         const previousStops = new Set(process.listeners("SIGINT"));
-        void runGatewayLoop({
+        running = runGatewayLoop({
           lockPort: port,
           start: async (options) => {
             startCount += 1;
@@ -106,10 +106,10 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
             return next;
           },
           completeBoot,
-        })
+        });
+        void running
           .then((code) => {
             exitCode = code;
-            exited.resolve(code);
           })
           .catch(started.reject);
         server = await started.promise;
@@ -210,7 +210,7 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
         expect(pluginSawOpenDatabase).toBe(true);
       }
       if (mode === "restart") {
-        await exited.promise;
+        await running;
         expect(exitCode).toBe(0);
         expect(completeBoot).not.toHaveBeenCalledWith(
           expect.objectContaining({ outcome: "forced_stop" }),
@@ -254,8 +254,8 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
       if (mode === "restart" && exitCode === undefined && stop) {
         await nextTurn();
         stop("SIGINT");
-        await exited.promise;
       }
+      await Promise.allSettled([running]);
       await fixture.cleanup();
       setLoggerOverride(null);
       resetGatewayRestartStateForInProcessRestart();

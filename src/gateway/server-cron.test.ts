@@ -8,7 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
-import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
+import { AgentDeletionCommitUncertainError } from "../agents/agent-deletion-errors.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -252,11 +252,6 @@ vi.mock("../agents/embedded-agent.js", () => ({
 
 vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
-}));
-
-vi.mock("../agents/agent-lifecycle-registry.js", () => ({
-  AgentDeletionAuthorityRollbackError: class extends AggregateError {},
-  AgentDeletionCommitUncertainError: class extends Error {},
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({

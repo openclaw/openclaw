@@ -31,7 +31,6 @@ import {
   type GatewayRunSignalContext,
   type GatewayRunSignalRequest,
 } from "./run-loop-request.js";
-import { createGatewayRestartRuntimePreparation } from "./run-loop-runtime-preparation.js";
 import {
   resolveGatewayShutdownDrainBudget,
   resolveGatewayShutdownBudget,
@@ -140,7 +139,6 @@ export async function runGatewayLoop(params: {
   const processInstanceId = randomUUID();
   const getManagedUpdateOwner = () =>
     (pendingStartupRequest ?? activeRestartRequest)?.restartIntent?.successorOwner;
-  const restartRuntime = createGatewayRestartRuntimePreparation(eagerLifecycleRuntime, gatewayLog);
 
   const cleanupSignals = () => {
     signals.retire();
@@ -165,7 +163,6 @@ export async function runGatewayLoop(params: {
     runtime: eagerLifecycleRuntime,
     logger: gatewayLog,
     updateSuccessor,
-    restartRuntime,
     getSignals: () => signals,
     getHost: () => hostLifecycle,
     getRequest: () => pendingStartupRequest ?? activeRestartRequest,
@@ -262,9 +259,6 @@ export async function runGatewayLoop(params: {
     alreadyCancelledOwner?: GatewayRestartIntent["successorOwner"],
   ): Promise<void> => {
     await signals.drain();
-    if (restartRuntime.pending) {
-      await restartRuntime.release();
-    }
     if (foregroundUpdateClosed) {
       return finishLoopAfterCleanup(1);
     }
@@ -489,7 +483,6 @@ export async function runGatewayLoop(params: {
         signals.active && !forcedExitStarted && activeRestartRequest === handoffRequest;
       let handoff: Awaited<ReturnType<typeof eagerLifecycleRuntime.writeGatewayRestartHandoff>> =
         null;
-      const runtimePreparation = restartRuntime.current;
       try {
         handoff = await eagerLifecycleRuntime.writeGatewayRestartHandoff(
           {
@@ -498,7 +491,6 @@ export async function runGatewayLoop(params: {
             processInstanceId,
             supervisorMode: supervisorMode ?? "external",
             restartTrace: restartTrace.captureGatewayRestartTraceHandoff(),
-            ...(runtimePreparation ? { runtimePreparation } : {}),
           },
           () => {
             if (!handoffIsCurrent()) {
@@ -509,10 +501,6 @@ export async function runGatewayLoop(params: {
       } catch (error) {
         if (handoffIsCurrent()) {
           throw error;
-        }
-      } finally {
-        if (runtimePreparation) {
-          await restartRuntime.release(runtimePreparation);
         }
       }
       if (forcedExitStarted || !signals.active) {
@@ -605,7 +593,6 @@ export async function runGatewayLoop(params: {
         ["signal", acceptedRequest.signal],
       ]);
     }
-    const preparedRuntime = restartRuntime.prepare(acceptedRequest, restartDecision);
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
     let shutdownDeadline: number | undefined;
     let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
@@ -868,10 +855,9 @@ export async function runGatewayLoop(params: {
         forceActiveRestartExit = null;
       }
     });
-    const completion = restartRuntime.settle(shutdownOperation, preparedRuntime);
-    cleanup.retain(completion);
+    cleanup.retain(shutdownOperation);
     if (acceptedRequest.action === "stop") {
-      acceptedStartupOperations.retainStopCompletion(completion);
+      acceptedStartupOperations.retainStopCompletion(shutdownOperation);
     }
   };
   const flushPendingStartupRequest = (opts: { allowMissingServer?: boolean } = {}) => {
@@ -1273,7 +1259,6 @@ export async function runGatewayLoop(params: {
   const failures = await cleanup.settleFinalResources({
     retireSignals: () => signals.retire(),
     drainSignals: () => signals.drain(),
-    releaseRestartRuntime: () => restartRuntime.release(),
     closeTerminalServer: async () => {
       if (server) {
         await server.close({ reason: "gateway stopping", retainSharedState: true });

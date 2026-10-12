@@ -14,18 +14,20 @@ import { registerConfigCli } from "./config-cli.js";
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   let snapshot: ReturnType<typeof actual.loadPluginMetadataSnapshot> | undefined;
+  const resolveSnapshot = (params: Parameters<typeof actual.resolvePluginMetadataSnapshot>[0]) => {
+    snapshot ??= actual.loadPluginMetadataSnapshot({
+      ...params,
+      pluginIds: ["codex", "discord", "openclaw-mem0"],
+      pluginIdScope: undefined,
+    });
+    return snapshot;
+  };
   return {
     ...actual,
-    resolvePluginMetadataSnapshot: (
-      params: Parameters<typeof actual.resolvePluginMetadataSnapshot>[0],
-    ) => {
-      snapshot ??= actual.loadPluginMetadataSnapshot({
-        ...params,
-        pluginIds: ["codex", "discord", "openclaw-mem0"],
-        pluginIdScope: undefined,
-      });
-      return snapshot;
-    },
+    resolvePluginMetadataSnapshot: resolveSnapshot,
+    resolvePluginMetadataSnapshotAsync: async (
+      params: Parameters<typeof actual.resolvePluginMetadataSnapshotAsync>[0],
+    ) => resolveSnapshot(params),
   };
 });
 

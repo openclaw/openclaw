@@ -60,7 +60,6 @@ export function createGatewayRunCleanup(
     async settleFinalResources(operations: {
       retireSignals: () => void;
       drainSignals: () => Promise<void>;
-      releaseRestartRuntime: () => Promise<void> | undefined;
       closeTerminalServer: () => Promise<void>;
       retireHost: () => Promise<void> | undefined;
       closeSharedState: () => Promise<void>;
@@ -76,7 +75,6 @@ export function createGatewayRunCleanup(
         operations.retireSignals,
         operations.drainSignals,
         joinCleanup,
-        operations.releaseRestartRuntime,
         operations.closeTerminalServer,
         operations.retireHost,
         joinCleanup,

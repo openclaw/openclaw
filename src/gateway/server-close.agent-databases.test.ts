@@ -597,8 +597,8 @@ it.skipIf(process.platform !== "linux")(
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const started = createDeferredCore<GatewayServer>();
-    const exited = createDeferredCore<number>();
-    const exit = vi.fn((code: number) => exited.resolve(code));
+    const exit = vi.fn();
+    let running: Promise<number> | undefined;
     const closeBroker = vi.spyOn(SqliteWorkerBroker.prototype, "close");
     let bootId: string | undefined;
     let shared: ReturnType<typeof openOpenClawStateDatabase>["db"] | undefined;
@@ -636,7 +636,7 @@ it.skipIf(process.platform !== "linux")(
         source: "systemd fixture TimeoutStopUSec",
       });
       const port = await fixture.reservePort();
-      void runGatewayLoop({
+      running = runGatewayLoop({
         lockPort: port,
         beginBoot: (startedAtMs) => {
           bootId = recordGatewayBootStart(fixture.state.env, startedAtMs);
@@ -650,9 +650,8 @@ it.skipIf(process.platform !== "linux")(
           started.resolve(server);
           return server;
         },
-      })
-        .then(exit)
-        .catch(started.reject);
+      });
+      void running.then(exit, started.reject);
       const server = await started.promise;
       await nextTurn();
       stop = process.listeners("SIGTERM").find((listener) => !previousStops.has(listener));
@@ -762,7 +761,7 @@ it.skipIf(process.platform !== "linux")(
       operation.complete();
       release.resolve();
       await closing;
-      await expect(exited.promise).resolves.toBe(0);
+      await expect(running).resolves.toBe(0);
       expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
         outcome: "planned_restart",
         reason: expect.stringMatching(/restart \(SIGTERM: gateway\.restart\)$/),
@@ -805,8 +804,8 @@ it.skipIf(process.platform !== "linux")(
       vi.useRealTimers();
       if (!exit.mock.calls.length && stop) {
         stop("SIGTERM");
-        await exited.promise;
       }
+      await Promise.allSettled([running]);
       unregister?.();
       await fixture.cleanup();
       resetGatewayWorkAdmission();

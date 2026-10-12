@@ -1,6 +1,6 @@
 import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
-import { parentPort, workerData } from "node:worker_threads";
+import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
 import { flushLogger } from "../logging/logger.js";
@@ -543,20 +543,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   if (complete) {
     scheduleWorkerIdleGc();
   }
-}
-
-// Preparation has no actor, native locator, input, or admission grant.
-const runtimeData: unknown = workerData;
-if (isRecord(runtimeData) && runtimeData.sqliteRuntimePreparation !== undefined) {
-  const source = runtimeData.sqliteRuntimePreparation;
-  if (
-    !isRecord(source) ||
-    typeof source.moduleUrl !== "string" ||
-    (source.sourceLoaderUrl !== undefined && typeof source.sourceLoaderUrl !== "string")
-  ) {
-    throw new Error("SQLite runtime preparation is invalid");
-  }
-  await loadBackendModule(source.moduleUrl, source.sourceLoaderUrl);
 }
 
 // The broker sends one request at a time, including module initialization.

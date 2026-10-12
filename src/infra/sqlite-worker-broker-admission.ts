@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,7 +8,6 @@ import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
-import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
@@ -134,21 +132,6 @@ function validateSqliteWorkerModuleUrl(moduleUrl: URL): void {
   if (moduleUrl.protocol !== "file:" || moduleUrl.search || moduleUrl.hash) {
     throw new Error("SQLite worker backend must be a static local module URL");
   }
-}
-
-export function captureSqliteWorkerRuntime(moduleUrl: URL) {
-  validateSqliteWorkerModuleUrl(moduleUrl);
-  const modulePath = realpathSync(fileURLToPath(moduleUrl));
-  if (!/\.[cm]?[jt]s$/.test(modulePath) || !statSync(modulePath).isFile()) {
-    throw new Error("SQLite worker backend must identify a JavaScript or TypeScript file");
-  }
-  return {
-    moduleUrl: pathToFileURL(modulePath).href,
-    carrierUrl: resolveRuntimeProcessEntrypointUrl("sqliteStore"),
-    ...(runtimeNeedsTypeScriptLoader(modulePath)
-      ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
-      : {}),
-  };
 }
 
 export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqliteWorkerOpen) {

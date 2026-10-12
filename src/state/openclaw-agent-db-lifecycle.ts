@@ -3,7 +3,6 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
-import { disposeNodeSqliteDependents } from "../infra/kysely-sync-cache-state.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { readSqliteDatabaseSiblingWriteRevision } from "../infra/sqlite-database-admission.js";
@@ -29,15 +28,13 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { releaseAgentCreationClaimHandle } from "./agent-creation-claim.js";
-import { releaseAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
+import { createAgentDatabaseHandleCloser } from "./openclaw-agent-db-close.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
   OpenClawAgentDatabaseOwnerInspection,
 } from "./openclaw-agent-db-contract.js";
 import {
-  readOpenClawAgentDatabaseIdentity,
   findOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
 } from "./openclaw-agent-db-identity.js";
@@ -66,7 +63,6 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
@@ -134,6 +130,8 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
     retainedCloses: new Set(),
   }),
 );
+
+export const closeCachedOpenClawAgentDatabase = createAgentDatabaseHandleCloser(cache);
 
 export function registerAgentDatabaseHandle(
   database: OpenClawAgentDatabase,
@@ -401,62 +399,6 @@ export async function closeMaintenanceAgentDatabase(
   if (cache.incognito.has(database)) {
     cache.generation += 1;
   }
-}
-
-export function closeCachedOpenClawAgentDatabase(
-  database: OpenClawAgentDatabase,
-  options: { eviction?: boolean } = {},
-): void {
-  // Eviction must stay cheap: PASSIVE skips waiting on concurrent readers,
-  // whose drained TRUNCATE checkpoints blocked the event loop for seconds.
-  const lease = cache.leases.get(database.path);
-  const alreadyClosed = !database.db.isOpen;
-  const priorCheckpointError = database.walMaintenance.health?.state === "error";
-  let clean: { path: string; identity: string } | undefined;
-  let retainRuntimeProof: boolean;
-  try {
-    disposeNodeSqliteDependents(database.db);
-    const checkpointed = database.walMaintenance.close(
-      options.eviction ? { checkpointMode: "PASSIVE" } : undefined,
-    );
-    if (
-      checkpointed &&
-      !cache.failures.has(database.path) &&
-      isOpenClawAgentDatabasePathCurrent(database)
-    ) {
-      const { identity } = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof identity === "string") {
-        clean = { path: database.path, identity };
-      }
-    }
-    // A reader-pinned WAL is healthy; only restart proof needs a completed checkpoint.
-    retainRuntimeProof =
-      !cache.failures.has(database.path) &&
-      (alreadyClosed
-        ? !priorCheckpointError
-        : database.walMaintenance.health?.state === "blocked" &&
-          isOpenClawAgentDatabasePathCurrent(database));
-    if (database.db.isOpen) {
-      database.db.close();
-    }
-  } catch (error) {
-    if (lease) {
-      clearOpenClawAgentIntegrityVerification(database.path, lease.env);
-    }
-    throw error;
-  }
-  if (lease) {
-    releaseOpenClawAgentDatabaseLease(
-      lease.leaseId,
-      { env: lease.env, initializationAgentPaths: [database.path] },
-      clean ?? (retainRuntimeProof ? "uncheckpointed" : undefined),
-    );
-    cache.leases.delete(database.path);
-  }
-  releaseAgentDeletionDatabaseCleanup(database);
-  releaseAgentCreationClaimHandle(database);
-  cache.idleTimers.get(database.db)?.[Symbol.dispose]();
-  cache.idleTimers.delete(database.db);
 }
 
 /** A lifecycle scope closes its exact connection and retains its borrow until disposal succeeds. */

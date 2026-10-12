@@ -462,7 +462,6 @@ it.each([
         .get();
       database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
       closeCachedOpenClawAgentDatabase(database, { eviction: true });
-      expect(database.walMaintenance.health?.state).toBe("blocked");
       expect(database.db.isOpen).toBe(false);
       expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
     } finally {

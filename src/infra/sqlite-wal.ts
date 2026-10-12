@@ -482,8 +482,7 @@ export function configureSqliteWalMaintenance(
     close: (closeOptions) => {
       void beginClose();
       if (invalidated || isSqliteWalWorkerMaintained(db)) {
-        // Worker retirement already checkpoints before releasing its native handle.
-        // A host close cannot certify a clean seal, including after an interrupted drain.
+        // Worker retirement owns the explicit final checkpoint.
         return false;
       }
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
