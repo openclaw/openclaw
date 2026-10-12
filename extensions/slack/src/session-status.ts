@@ -63,7 +63,7 @@ export async function setSlackSessionStatus(params: {
     const status = recognizedSessionStatus(response.status);
     const agentStatus = recognizedSessionStatus(response.agent_status);
     logVerbose(
-      `slack session status: requested=${params.status} accepted=${Boolean(response.ok)}` +
+      `slack session status: requested=${params.status} accepted=${response.ok ? "true" : "false"}` +
         (status ? ` status=${status}` : "") +
         (agentStatus ? ` agent_status=${agentStatus}` : ""),
     );
