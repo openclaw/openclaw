@@ -410,6 +410,12 @@ The same repair handles `ENOENT` when the recorded handoff lease database is
 missing, for example after a reboot clears a temporary filesystem. Its storage
 owner recreates the lease database, and repair acquires fresh update ownership
 before closing an untouched obsolete preparation as `recovery-lease-missing`.
+A recorded lease directory now owned by another local user is also treated as
+missing. Repair acquires ownership in the current user's private temporary
+directory without reading, creating, or changing files in the other user's
+directory. New managed-update leases always use the per-user temporary root,
+so their location does not depend on who creates the shared `/tmp/openclaw`
+directory first.
 A missing or changed lease never permits discarding an unfinished rollback.
 The installed package, launchers, and retained recovery evidence keep the same
 protections. Repair then continues through Doctor and plugin convergence;

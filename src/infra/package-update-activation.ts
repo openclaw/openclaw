@@ -50,10 +50,20 @@ import {
   captureManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
+
+function isForeignLeaseDirectory(databasePath: string): boolean {
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    return false;
+  }
+  const directory = fs.lstatSync(path.dirname(databasePath), { throwIfNoEntry: false });
+  return directory?.isDirectory() === true && directory.uid !== uid;
+}
 
 function inspectPackageActivationLease({
   databasePath,
@@ -61,6 +71,10 @@ function inspectPackageActivationLease({
   parentIdentity,
 }: PackageActivationRecord["descriptor"]["authority"]) {
   let current: ReturnType<typeof captureManagedUpdateLeaseDatabaseIdentity> | undefined;
+  // Historical receipts do not grant access to another user's replacement directory.
+  if (isForeignLeaseDirectory(databasePath)) {
+    return { current, changed: true, foreignDirectory: true };
+  }
   try {
     current = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
   } catch (error) {
@@ -71,6 +85,7 @@ function inspectPackageActivationLease({
   return {
     current,
     changed: !isDeepStrictEqual(current, { databasePath, databaseIdentity, parentIdentity }),
+    foreignDirectory: false,
   };
 }
 
@@ -372,7 +387,11 @@ async function settlePackageActivation(
   }
   const currentDatabase =
     lease.current ??
-    (await prepareManagedHandoffLeaseDatabaseIdentity(originalAuthority.databasePath));
+    (await prepareManagedHandoffLeaseDatabaseIdentity(
+      lease.foreignDirectory
+        ? resolveManagedUpdateLeaseDatabasePath()
+        : originalAuthority.databasePath,
+    ));
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
@@ -527,7 +546,9 @@ export async function runPackageActivationRecovery(
     ? {
         ...initial.descriptor.authority,
         ...(await prepareManagedHandoffLeaseDatabaseIdentity(
-          initial.descriptor.authority.databasePath,
+          isForeignLeaseDirectory(initial.descriptor.authority.databasePath)
+            ? resolveManagedUpdateLeaseDatabasePath()
+            : initial.descriptor.authority.databasePath,
         )),
       }
     : initial.descriptor.authority;
