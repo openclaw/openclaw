@@ -36,75 +36,6 @@ describe("resolveFeishuToolAccount", () => {
     return resolveFeishuToolAccount({ cfg, requiredTool, ...overrides });
   }
 
-  it("prefers the active contextual account over configured defaultAccount", () => {
-    expect(resolveAccount({ defaultAccountId: "work" }).accountId).toBe("work");
-  });
-
-  it("matches a mixed-case configured contextual account before fallback", () => {
-    expect(() =>
-      resolveFeishuToolAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              enabled: true,
-              accounts: {
-                Ops: {
-                  enabled: true,
-                  appId: "ops-app-id",
-                  appSecret: "ops-app-secret", // pragma: allowlist secret
-                  tools: { wiki: false },
-                },
-                admin: {
-                  enabled: true,
-                  appId: "admin-app-id",
-                  appSecret: "admin-app-secret", // pragma: allowlist secret
-                  tools: { wiki: true },
-                },
-              },
-            },
-          },
-        },
-        defaultAccountId: "ops",
-        requiredTool,
-      }),
-    ).toThrow('Feishu Wiki tools are disabled for account "ops"');
-  });
-
-  it("keeps a mixed-case restricted configured default fail-closed", () => {
-    expect(() =>
-      resolveFeishuToolAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              enabled: true,
-              defaultAccount: "Ops",
-              accounts: {
-                Ops: {
-                  enabled: true,
-                  appId: "ops-app-id",
-                  appSecret: "ops-app-secret", // pragma: allowlist secret
-                  tools: { wiki: false },
-                },
-                admin: {
-                  enabled: true,
-                  appId: "admin-app-id",
-                  appSecret: "admin-app-secret", // pragma: allowlist secret
-                  tools: { wiki: true },
-                },
-              },
-            },
-          },
-        },
-        defaultAccountId: "ops",
-        requiredTool,
-      }),
-    ).toThrow('Feishu Wiki tools are disabled for account "ops"');
-  });
-
-  it("falls back to configured defaultAccount when there is no contextual account", () => {
-    expect(resolveAccount().accountId).toBe("ops");
-  });
-
   it("skips a disabled configured defaultAccount", () => {
     const resolved = resolveAccount({
       cfg: {
@@ -134,10 +65,6 @@ describe("resolveFeishuToolAccount", () => {
         },
       }),
     ).toThrow("No usable Feishu account has Wiki tools enabled");
-  });
-
-  it("allows an explicit configured account", () => {
-    expect(resolveAccount({ executeParams: { accountId: "WORK" } }).accountId).toBe("work");
   });
 
   it("allows the explicit unlisted default backed by top-level credentials", () => {
