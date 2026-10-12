@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -19,6 +20,16 @@ it.each(["none", "cleanup", "after-open", "during-open"] as const)(
     const failDuringOpen = failure === "during-open";
     const failAfterOpen = failure === "after-open" || failDuringOpen;
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionFile = state.path("cache-creation.jsonl");
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          id: "usage",
+          parentId: null,
+          message: { role: "assistant", usage: { input: 1, output: 1, totalTokens: 2 } },
+        })}\n`,
+      );
       const exercise = async () => {
         const agentId = "main";
         const sessionKey = "agent:main:competing-creation";
@@ -73,7 +84,7 @@ it.each(["none", "cleanup", "after-open", "during-open"] as const)(
           const refresh = refreshCostUsageCacheForAgent({
             agentId,
             env: state.env,
-            sessionFiles: [],
+            sessionFiles: [sessionFile],
           });
           if (failCleanup) {
             await expect(refresh).rejects.toMatchObject({
