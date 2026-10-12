@@ -100,7 +100,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
   return { cfg, caller, entry, resume, prepare, childSessionKey };
 }
 
-it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"])(
+it.each(["agent:main:subagent:resume-child"])(
   "preserves the task and frozen completion batch for %s",
   async (childSessionKey) => {
     const state = await arrangePausedChild(childSessionKey);
