@@ -641,8 +641,15 @@ describe("irc client inbound CTCP", () => {
       ":scanner!ctcp@scanner.example PRIVMSG bot :\u0001VERSION\u0001",
       ":alice!a@example.com PRIVMSG bot :\u0001PING 1760000000\u0001",
       ":alice!a@example.com PRIVMSG #ops :\u0001TIME\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001version\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001pInG 123\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001time",
+      ":alice!a@example.com PRIVMSG bot :\u0001",
       ":alice!a@example.com PRIVMSG bot :\u0001ACTION waves\u0001",
+      ":alice!a@example.com PRIVMSG bot :\u0001action waves\u0001",
       ":alice!a@example.com PRIVMSG bot :hello",
+      ":alice!a@example.com PRIVMSG bot :VERSION",
+      ":alice!a@example.com PRIVMSG bot :hello\u0001",
     ];
     const server = await startIrcTestServer((socket) => {
       onIrcTestLine(socket, (line) => {
@@ -675,7 +682,7 @@ describe("irc client inbound CTCP", () => {
         },
       });
       await withTimeout(done.promise, 2000, "IRC inbound CTCP lines");
-      expect(dispatched).toEqual(inbound.slice(3));
+      expect(dispatched).toEqual(inbound.slice(7));
       client.quit("test complete");
     } finally {
       await server.close();
