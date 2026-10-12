@@ -274,102 +274,13 @@ Retain these additional fields:
   stay blocked.
 - `aggregate`: the CI gate's `jobId`, `causedBy` (all admitted failed-job IDs),
   `reason`, and `evidence` names establishing the downstream failure.
-- `cancellation`, only when sibling jobs were cancelled: their exhaustive
-  `jobIds`, the same `causedBy` root IDs, `reason`, and `evidence` names, plus the
-  successful `pr-fail-fast` job's `jobId` and cancellation-step number `step`.
-  This records inspected cancellation provenance, never passing coverage.
 
-A cancelled job that actually failed its Node test step can remain an independently
-attributed root. Add `failedStep: { number: 18, workflowJob:
-"checks-node-core-test-nondist-shard" }` to that job's existing `failures` entry,
-using its actual step number. Keep all observed cases, source paths, and independent
-baseline artifacts. The verifier requires the matching current GitHub Actions
-check-run/head/suite/timestamps, complete terminal steps, exactly one failed
-`Run Node test shard`, successful cleanup, and only successful or skipped other
-steps. The unchanged tested workflow must retain the audited Node shard entrypoint
-and matrix owner without `continue-on-error`. Matrix membership remains an inspected
-attestation, not an inference from the job name. The retained `failedStep` proof
-includes its cancelled job conclusion and actual step; exclude that root from
-collateral `cancellation.jobIds`, and include it in the aggregate's complete root
-list. Matrix cancellation names it only when it is an inspected causal member.
-Extra failed steps, absent or changed qualification, and mismatched sources refuse
-admission. This does not qualify the underlying test failure by itself.
-
-The same failure entry can bind a cancelled `check-prod-types` job with
-`failedStep: { number: 16, workflowJob: "check-shard" }`, using the actual step
-number. This route recognizes only the audited `Run check shard` command and its
-task/matrix bindings. Every declared workflow step must appear at its source
-position; all step timestamps must be ordered within the job and cleanup must
-succeed. The retained proof includes the full steps and cancelled conclusion.
-Matrix membership and the underlying type failure still require independent
-inspection. The same source, security, review, and exhaustive cancellation gates
-apply.
-
-An explicitly attributed Node job that exhausted its execution deadline may appear
-as `cancelled` in GitHub's job API. Keep it in `failures`, with the actual observed
-cases and incomplete coverage recorded. The verifier requires the matching live
-GitHub Actions check-run, complete deadline/cancellation annotations, consistent
-head, suite and timestamps, an elapsed deadline, one cancelled Node test step,
-no additional failed steps, and unchanged workflow source. It retains the cancelled
-status and deadline evidence; it does not classify this root as fail-fast collateral.
-Manual cancellation and missing or contradictory deadline evidence remain refused.
-
-The inspected historical `check-additional-extension-package-boundary` row also
-qualifies its 20-minute deadline. It must retain the audited additional-check
-command, matrix wiring and budget in the unchanged tested/baseline workflow.
-A successful shard requires only the deadline annotation; a cancelled shard
-requires both deadline and operation-cancelled annotations. Both require complete,
-ordered terminal steps, the expected shard ordinal, bounded timestamps reaching
-the deadline, successful cleanup, and no other failed or cancelled step. Preserve
-any unfinished receipt or canary coverage in its independent failure attribution.
-
-Current `openclaw/openclaw` PR reruns do not use native matrix fail-fast: every
-Node matrix leg can finish, preserving the remaining proof for inherited-red admin
-landing. This also applies to fork PRs targeting `openclaw/openclaw`; the workflow
-repository, not the head repository, owns this policy. The first-attempt monitor
-is unchanged. Native matrix fail-fast remains enabled only for PRs running in
-other repositories.
-
-Historical runs still use their tested workflow's policy, including the former
-expression that enabled native fail-fast on canonical PR reruns. For a run whose
-tested workflow and attempt/repository context enable native fail-fast, use
-`cancellation.kind: "matrix-fail-fast"` and
-`workflowJob: "checks-node-core-test-nondist-shard"` instead of monitor `jobId`/`step`.
-Its `causedBy` must name a nonempty, unique subset of independently admitted
-failed roots that actually caused this matrix cancellation. Add `members`, the
-exact `{ jobId, name }` bindings for those causal roots and every cancelled row.
-Other independently attributed failures remain in the aggregate's exhaustive
-`causedBy` list, without being misclassified as Node matrix members. Retain the tested workflow blob locally. The verifier requires
-that workflow to match the baseline, use the existing preflight matrix/name wiring,
-enable PR fail-fast, and have no `continue-on-error`. GitHub's job API omits matrix
-ownership; membership and cancellation cause remain explicitly inspected operator
-attestations supported by the named artifacts, not facts inferred from prefixes.
-Either mechanism refuses cancelled jobs with failed steps or missing step evidence;
-those cannot be hidden as collateral cancellation. The successful monitor route
-has one narrowly qualified historical exception: the Discord attachment uploader
-ran after cancellation skipped its entire built-artifact producer. This does not
-apply to matrix-only cancellation, test/cleanup failures, upload transport errors,
-or a producer that ran and failed or was cancelled.
-
-For that exact shape, add one `cancellation.secondaryFailures` entry with
-`kind: "missing-artifact-after-skipped-producer"`, numeric `jobId`, failed upload
-`step`, skipped `producerStep`, `log` (an existing artifact name), `reason`, and
-`evidence` names including that log. Keep this job in the exhaustive cancelled
-`jobIds`; do not add it to `failures` or either `causedBy` root list.
-
-The log must be the complete retained `gh run view --job --log` output with job,
-step, and timestamp columns, including multiline continuations and final cleanup.
-Its existing artifact SHA-256 is rechecked. The verifier binds the unique live
-build/producer/upload step names and numbers, successful monitor, cancelled build,
-skipped producer, and upload timing. It requires the tested workflow to equal the
-baseline, the reviewed historical producer body digest, and exact pinned uploader,
-selection, paths, and missing-file error policy. The log must identify the tested
-checkout/workflow and show only build cancellation followed by the absence of
-both declared JSON/log outputs. Other error annotations or failed steps block.
-The producer digest recognizes this inspected skipped-output contract; it grants
-no authority and does not evaluate arbitrary shell code. Source/log provenance
-and causal interpretation remain inspected attestations. This retains the
-secondary failure explicitly without turning cancellation into passing coverage.
+Read the failure classification table in `pr-failure-report` or
+`openclaw/ci-gate`. Failures marked **pre-existing** need no further attribution;
+**new** and **unknown** failures still require the existing investigation and
+landing rules. All planned PR jobs finish after a sibling failure, so cancelled
+jobs are not proof of passing coverage. The table does not change gate semantics
+or authorize an admin landing by itself.
 
 The tool verifies live run/attempt/PR/head identities, complete job accounting,
 the current effective GitHub Actions gate check-run, and source/artifact hashes.

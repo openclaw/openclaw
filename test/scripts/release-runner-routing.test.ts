@@ -135,7 +135,7 @@ describe("release runner reservation", () => {
           const ordinary = { ...context, eventName, ...(release ? {} : { releaseGate: true }) };
           if (
             name === "ci" &&
-            ((jobName === "pr-fail-fast" && eventName !== "pull_request") ||
+            ((jobName === "pr-failure-report" && eventName !== "pull_request") ||
               jobName === "check-extension-package-boundary")
           ) {
             expect(

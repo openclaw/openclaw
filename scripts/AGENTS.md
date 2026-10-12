@@ -191,36 +191,13 @@ The original conflict-resolution route permits only
 pending/skipped `openclaw/ci-gate`. An explicitly approved `pre-existing-failure`
 attribution instead binds the current failed attempt, effective gate check-run,
 tested merge/base, unchanged failure inputs, and inspected qualification artifacts.
-Every failed job and fail-fast cancellation must be accounted for; cancelled
-coverage stays unrun. Current `openclaw/openclaw` PR reruns let every Node matrix
-leg finish; only PRs in other workflow repositories use native matrix fail-fast.
-Historical runs retain their tested workflow's cancellation policy, so the matrix
-attribution route still verifies that exact expression and run context.
-An independently attributed cancelled Node test,
-`check-prod-types`, or real-Gateway UI root can use
-`failures[].failedStep: { number, workflowJob }`, with
-`checks-node-core-test-nondist-shard`, `check-shard`, or
-`checks-ui-e2e-real-gateway`, respectively.
-Admission binds its live check-run, complete steps, single failed execution step,
-timestamps, and unchanged audited workflow. The production-type and UI routes also
-match every declared source step and its ordered timeline. The UI route permits
-only its explicit optional runner setup/cleanup pair and requires the successful
-private-QA build before its audited test entrypoint. Other steps must
-succeed or be skipped through successful cleanup.
-Retain the cancelled conclusion in the root proof; this is not passing coverage.
-A collateral cancelled job's failed step remains blocking except for
-the explicitly qualified historical skipped-producer/missing-artifact case in
-the landing workflow. Its secondary evidence stays under cancellation, never
-in the causal root list; test, cleanup, and upload transport failures remain blocked.
+Read the `pr-failure-report` / `openclaw/ci-gate` classification table.
+Failures marked pre-existing need no further attribution; new and unknown
+failures retain the existing investigation and landing rules. Planned PR jobs
+finish after sibling failures; cancellation is not passing coverage.
 The review retains `tests.result: "fail"` with exact
 `tests.preExistingCi` head/run/attempt attribution. Ordinary merge admission refuses
 that review; the confirmed admin route must verify the same failed attempt.
-Without a failed-step binding, an attributed cancelled Node root requires its
-matching live GitHub Actions check-run and complete deadline/cancellation annotations,
-consistent head/suite/timestamps, elapsed deadline, one cancelled test step, no
-additional failed steps, and unchanged workflow. Retain that cancelled status in
-the root proof; it is not fail-fast collateral or passing coverage. Manual or
-unverified cancellation remains refused.
 Branch-caused or unattributed failures, other required checks, security, and
 required reviews remain blocking.
 Exact-head `github_pending` preparation remains pending. GraphQL owns

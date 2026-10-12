@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createKnownMainRed } from "../../scripts/ci-known-main-red.mjs";
+import {
+  createKnownMainRed,
+  createMainFailureClassifier,
+} from "../../scripts/ci-known-main-red.mjs";
+import { reportPrFailures } from "../../scripts/ci-pr-failure-report.mjs";
 
 const repository = "openclaw/openclaw";
 const headSha = "a".repeat(40);
@@ -98,7 +102,45 @@ const completeLintReport = (message = "unused import") => {
   ].join("\n");
 };
 
-function classify(
+function failureClassifier(
+  options: {
+    mainJobs?: (typeof job)[];
+    runs?: (typeof mainRun)[];
+    mainReport?: string;
+    prReport?: string;
+    unavailable?: string;
+  } = {},
+) {
+  const runs = options.runs ?? [mainRun];
+  const latest = runs.toSorted((a, b) => b.run_number - a.run_number)[0];
+  const api = vi.fn(async (url: string) => {
+    const path = new URL(url).pathname.replace(`/repos/${repository}`, "");
+    if (path === options.unavailable) {
+      return new Response("Unavailable", { status: 503 });
+    }
+    if (path === "/actions/workflows/ci.yml/runs") {
+      return new Response(JSON.stringify({ workflow_runs: runs }));
+    }
+    if (path === `/actions/runs/${latest?.id}/attempts/1/jobs`) {
+      const jobs = (options.mainJobs ?? [{ ...job, id: 20 }]).map((entry) => ({
+        ...entry,
+        run_id: latest!.id,
+      }));
+      return new Response(JSON.stringify({ total_count: jobs.length, jobs }));
+    }
+    if (path === "/actions/jobs/20/logs") {
+      return new Response(options.mainReport ?? report());
+    }
+    if (path === "/actions/jobs/10/logs") {
+      return new Response(options.prReport ?? report());
+    }
+    throw new Error(`Unexpected reporting request ${path}`);
+  });
+  vi.stubGlobal("fetch", api);
+  return { api, ...createMainFailureClassifier({ repository, token: "synthetic-token" }) };
+}
+
+function gateFixture(
   options: {
     changed?: string[];
     headRepository?: string;
@@ -122,7 +164,17 @@ function classify(
   const api = vi.fn(async (url: string) => {
     const path = new URL(url).pathname.replace(`/repos/${repository}`, "");
     let body: unknown;
-    if (path === "/actions/workflows/ci.yml/runs") {
+    if (path === "/actions/runs/100") {
+      body = {
+        ...mainRun,
+        id: 100,
+        event: "pull_request",
+        head_sha: headSha,
+        head_repository: { full_name: options.headRepository ?? repository },
+      };
+    } else if (path === "/actions/runs/100/attempts/1/jobs") {
+      body = { total_count: 1, jobs: [failureJob] };
+    } else if (path === "/actions/workflows/ci.yml/runs") {
       body = {
         workflow_runs: [
           {
@@ -187,15 +239,179 @@ function classify(
     pullRequestNumber: 7,
     runId: 100,
     runAttempt: 1,
-  }).classifyJob(failureJob);
+  });
 }
+
+const classify = (options: Parameters<typeof gateFixture>[0] = {}) =>
+  gateFixture(options).classifyJob(options.failureJob ?? job);
 
 afterEach(() => vi.unstubAllGlobals());
 
 const known = async (options: Parameters<typeof classify>[0] = {}) =>
   (await classify(options)).known;
 
+describe("main failure attribution", () => {
+  it.each([
+    { name: "matching Node assertions", failure: job, expected: "pre-existing" },
+    {
+      name: "changed Node assertions",
+      failure: job,
+      prReport: report("startup > rejects the session"),
+      expected: "new",
+    },
+    {
+      name: "only a subset of main assertions",
+      failure: job,
+      mainReport: report() + report("startup > rejects the session"),
+      expected: "new",
+    },
+    {
+      name: "matching static types",
+      failure: typeJob,
+      mainReport: typeReport(),
+      prReport: typeReport(),
+      expected: "pre-existing",
+    },
+    {
+      name: "changed static types",
+      failure: typeJob,
+      mainReport: typeReport(),
+      prReport: typeReport(typeDiagnostic.replace("TS2367", "TS2554")),
+      expected: "new",
+    },
+    {
+      name: "matching legacy lint diagnostics",
+      failure: lintJob,
+      mainReport: lintReport,
+      prReport: lintReport,
+      expected: "pre-existing",
+    },
+    {
+      name: "a Node setup failure without signatures",
+      failure: { ...job, steps: [{ name: "Prepare workspace", conclusion: "failure" }] },
+      expected: "unknown",
+    },
+    { name: "missing assertions", failure: job, prReport: "truncated log", expected: "unknown" },
+    {
+      name: "a timeout in a signature-capable job",
+      failure: { ...job, conclusion: "timed_out" },
+      expected: "unknown",
+    },
+    {
+      name: "the same unparsed build failure",
+      failure: { ...job, name: "build-artifacts" },
+      expected: "pre-existing",
+    },
+    {
+      name: "the same unparsed build timeout",
+      failure: { ...job, name: "build-artifacts", conclusion: "timed_out" },
+      expected: "pre-existing",
+    },
+  ])("classifies $name as $expected", async ({ failure, expected, ...options }) => {
+    const classifier = failureClassifier({
+      ...options,
+      mainJobs: [{ ...failure, id: 20 }],
+    });
+    expect(await classifier.classifyJob(failure)).toMatchObject({
+      job: failure.name,
+      conclusion: failure.conclusion,
+      class: expected,
+      mainRunId: 200,
+      mainJobId: 20,
+    });
+  });
+
+  it.each([
+    { name: "passed", conclusion: "success", expected: "new" },
+    { name: "cancelled", conclusion: "cancelled", expected: "unknown" },
+    { name: "skipped", conclusion: "skipped", expected: "unknown" },
+    { name: "timed out", conclusion: "timed_out", expected: "unknown" },
+    { name: "unfinished", conclusion: "failure", status: "in_progress", expected: "unknown" },
+  ])("uses the matching main job that $name", async ({ conclusion, status, expected }) => {
+    const classifier = failureClassifier({
+      mainJobs: [{ ...job, id: 20, conclusion, status: status ?? "completed" }],
+    });
+    expect(await classifier.classifyJob(job)).toMatchObject({
+      class: expected,
+      mainRunId: 200,
+      mainJobId: 20,
+    });
+  });
+
+  it.each([
+    { name: "another shard", mainJobs: [{ ...job, id: 20, name: `${job.name}0` }] },
+    {
+      name: "duplicate job names",
+      mainJobs: [
+        { ...job, id: 20 },
+        { ...job, id: 21 },
+      ],
+    },
+    { name: "no main run", runs: [] },
+    { name: "unavailable main inventory", unavailable: "/actions/runs/200/attempts/1/jobs" },
+  ])("does not guess with $name", async (options) => {
+    expect(await failureClassifier(options).classifyJob(job)).toMatchObject({
+      class: "unknown",
+      mainRunId: options.name === "no main run" ? null : 200,
+      mainJobId: null,
+    });
+  });
+
+  it("keeps the comparable job link when its logs are unavailable", async () => {
+    const classifier = failureClassifier({ unavailable: "/actions/jobs/20/logs" });
+    expect(await classifier.classifyJob(job)).toEqual({
+      job: job.name,
+      conclusion: "failure",
+      class: "unknown",
+      mainRunId: 200,
+      mainJobId: 20,
+      reason: "Failure signatures unavailable",
+    });
+  });
+
+  it("pins the newest completed scheduled run and its inventory once for all rows", async () => {
+    const classifier = failureClassifier({
+      runs: [mainRun, { ...mainRun, id: 201, run_number: 101 }],
+    });
+    const results = await Promise.all([
+      classifier.classifyJob(job),
+      classifier.classifyJob({ ...job, id: 11, name: "not-planned-on-main" }),
+    ]);
+    expect(results.map((result) => result.mainRunId)).toEqual([201, 201]);
+    expect(results.map((result) => result.class)).toEqual(["pre-existing", "unknown"]);
+    expect(
+      classifier.api.mock.calls.filter(([url]) => new URL(url).pathname.endsWith("/runs")),
+    ).toHaveLength(1);
+    expect(
+      classifier.api.mock.calls.filter(([url]) => new URL(url).pathname.endsWith("/jobs")),
+    ).toHaveLength(1);
+  });
+});
+
 describe("known hourly main failures", () => {
+  it.each([false, true])(
+    "keeps report attribution separate from gate eligibility (changed=%s)",
+    async (changed) => {
+      gateFixture({ changed: [changed ? file : "src/channels/unrelated.ts"] });
+      const result = await reportPrFailures({
+        repository,
+        headRepository: repository,
+        token: "synthetic-token",
+        headSha,
+        pullRequestNumber: 7,
+        runId: 100,
+        runAttempt: 1,
+      });
+      expect(result.failures[0]).toMatchObject({
+        class: "pre-existing",
+        mainRunId: 200,
+        mainJobId: 20,
+      });
+      expect(result.knownMainRed).toBe(!changed);
+      expect(result.failureJobId).toBe(changed ? "10" : "");
+    },
+  );
+
   it("distinguishes different assertion details after the same headline", async () => {
     const detailed = report().replace(
       "Test Files 1 failed",
