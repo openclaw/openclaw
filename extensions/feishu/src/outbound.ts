@@ -424,6 +424,7 @@ function withFeishuOutboundSendContext(adapter: ChannelOutboundAdapter): Channel
 
 export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendContext({
   deliveryMode: "direct",
+  preferFinalAssistantVisibleText: true,
   chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
