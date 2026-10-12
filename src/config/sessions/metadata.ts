@@ -6,8 +6,6 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
@@ -16,7 +14,6 @@ import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { resolveGroupSessionKey } from "./group.js";
 import {
   mergeSessionOrigin,
-  projectLastRoutePatch,
   projectSessionMetaPatch,
   type PreparedSessionMetaPatch,
 } from "./metadata-projection.js";
@@ -114,30 +111,4 @@ export function prepareSessionMetaPatch(params: {
       sourceChannel === INTERNAL_MESSAGE_CHANNEL ||
       (sourceChannel != null && isInternalNonDeliveryChannel(sourceChannel)),
   };
-}
-
-/**
- * Derives the last-route/delivery patch for an inbound routing update. Route
- * updates must not refresh activity timestamps; idle/daily reset evaluation
- * relies on updatedAt from actual session turns (#49515). Shared by the file
- * store and the SQLite accessor so both backends apply one routing policy.
- */
-export function deriveLastRoutePatch(params: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-  route?: ChannelRouteRef;
-  deliveryContext?: DeliveryContext;
-  ctx?: MsgContext;
-  groupResolution?: GroupKeyResolution | null;
-  existing: SessionEntry | undefined;
-  sessionKey: string;
-}): Partial<SessionEntry> {
-  return projectLastRoutePatch({
-    ...params,
-    metadata: params.ctx
-      ? prepareSessionMetaPatch({ ctx: params.ctx, groupResolution: params.groupResolution })
-      : undefined,
-  });
 }
