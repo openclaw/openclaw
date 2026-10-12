@@ -10,7 +10,10 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { assignOptionalNumberAttrs } from "./service-attributes.js";
-import { normalizeOtelContentValue, normalizeOtelErrorMessage } from "./service-content-normalization.js";
+import {
+  normalizeOtelContentValue,
+  normalizeOtelErrorMessage,
+} from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
 
