@@ -14,9 +14,6 @@ export async function readCronStoreStatePathAsync(
   if (!result) {
     return undefined;
   }
-  if (!result.ok || result.type !== "cron.store") {
-    throw new Error(result.ok ? "Unexpected cron store path reply" : result.message);
-  }
   const value: unknown = result.row ? JSON.parse(result.row.value_json) : undefined;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

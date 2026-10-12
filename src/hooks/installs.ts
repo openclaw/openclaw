@@ -32,9 +32,6 @@ export async function readHookInstallsAsync(
   if (!result) {
     return {};
   }
-  if (!result.ok || result.type !== "hooks.internal.installs") {
-    throw new Error(result.ok ? "Unexpected hook installs reply" : result.message);
-  }
   // SAFETY: The hook-install owner writes this key as Record<string, HookInstallRecord>.
   return result.row ? (JSON.parse(result.row.value_json) as Record<string, HookInstallRecord>) : {};
 }
