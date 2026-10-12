@@ -15,7 +15,7 @@ import {
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
-import { commitPresence } from "../../../infra/system-presence.js";
+import { commitPresence, listSystemPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
@@ -120,10 +120,14 @@ export async function sendGatewayHello(
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
-  while (sessionRowProjection?.needsMembershipPreparation()) {
-    await sessionRowProjection.prepareMembership();
-    if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
-      throw new Error("Gateway connection closed before hello");
+  if (
+    listSystemPresence({ includeConnectionId: connId }).some((row) => row.watchedSessions?.length)
+  ) {
+    while (sessionRowProjection?.needsMembershipPreparation()) {
+      await sessionRowProjection.prepareMembership();
+      if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
+        throw new Error("Gateway connection closed before hello");
+      }
     }
   }
   const snapshot = buildGatewaySnapshot({

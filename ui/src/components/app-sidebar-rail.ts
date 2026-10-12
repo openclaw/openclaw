@@ -95,47 +95,41 @@ export function renderSidebarRail(host: AppSidebarRenderHost) {
       ${renderSidebarAgentCard(host)}
       <div class="sidebar-rail__views">
         ${views.map(
-          (view) => html`<openclaw-tooltip
-            .content=${host.navigationView === view.id ? `${view.label} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})` : view.label}
+          (view) => html`<button
+            type="button"
+            class="sidebar-rail__button"
+            title=${host.navigationView === view.id ? `${view.label} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})` : view.label}
+            data-navigation-view=${view.id}
+            aria-label=${view.label}
+            aria-pressed=${String(host.navigationView === view.id)}
+            @click=${() => {
+              const active = host.navigationView === view.id;
+              host.navigationView = view.id;
+              if (view.id === "online") {
+                host.teamOnlineExpanded = true;
+                if (host.collapsedSessionSections.has("online")) {
+                  host.toggleSection("online");
+                }
+              }
+              if (!isMobileNavLayout() && (active || host.navigationCollapsed)) {
+                host.onToggleSidebar?.();
+              }
+            }}
           >
-            <button
-              type="button"
-              class="sidebar-rail__button"
-              data-navigation-view=${view.id}
-              aria-label=${view.label}
-              aria-pressed=${String(host.navigationView === view.id)}
-              @click=${() => {
-                const active = host.navigationView === view.id;
-                host.navigationView = view.id;
-                if (view.id === "online") {
-                  host.teamOnlineExpanded = true;
-                  if (host.collapsedSessionSections.has("online")) {
-                    host.toggleSection("online");
-                  }
-                }
-                if (!isMobileNavLayout() && (active || host.navigationCollapsed)) {
-                  host.onToggleSidebar?.();
-                }
-              }}
-            >
-              ${view.icon}
-            </button>
-          </openclaw-tooltip>`,
+            ${view.icon}
+          </button>`,
         )}
       </div>
-      <openclaw-tooltip
-        .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+      <button
+        type="button"
+        class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
+        title=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+        aria-label=${t("chat.openCommandPalette")}
+        ?disabled=${!host.onOpenPalette}
+        @click=${() => host.onOpenPalette?.()}
       >
-        <button
-          type="button"
-          class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
-          aria-label=${t("chat.openCommandPalette")}
-          ?disabled=${!host.onOpenPalette}
-          @click=${() => host.onOpenPalette?.()}
-        >
-          ${icons.search}
-        </button>
-      </openclaw-tooltip>
+        ${icons.search}
+      </button>
       <div
         class="sidebar-rail__pins ${host.sessionOrganizer.sidebarZoneDragActive ? "sidebar-rail__pins--drag-active" : ""}"
         aria-label=${t("nav.customize")}
@@ -268,6 +262,7 @@ function renderRailPin(
   return html`<div
     class="sidebar-rail__pin ${drop?.entry === serialized ? `sidebar-zone-entry--drop-${drop.position}` : ""}"
     data-sidebar-entry=${serialized}
+    title=${label}
     draggable=${String(!host.sidebarSnapshot)}
     @contextmenu=${openMenu}
     @keydown=${openMenu}
@@ -317,7 +312,7 @@ function renderRailPin(
     @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragOver(event, serialized)}
     @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
   >
-    <openclaw-tooltip .content=${label}>${content}</openclaw-tooltip>
+    ${content}
   </div>`;
 }
 

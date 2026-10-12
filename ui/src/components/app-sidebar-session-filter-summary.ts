@@ -1,7 +1,9 @@
 import { html, nothing } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
+import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
@@ -43,40 +45,59 @@ function renderSidebarOwnerPicker(
       : ownerId
         ? (owner?.label ?? ownerId)
         : t("sessionsView.allOwners");
-  return renderPicker({
-    id: "sidebar-session-owner-title",
-    className: "sidebar-session-owner-filter",
-    label: t("sessionsView.owners"),
-    value: host.sessionInvolvingMeFilterActive
-      ? "involving-me"
-      : ownerId
-        ? `owner:${ownerId}`
-        : "all",
-    disabled: Boolean(host.sidebarSnapshot),
-    searchable: "always",
-    sheet: isMobileNavLayout(),
-    showOptionTooltips: false,
-    renderLeading: (option) => {
-      const optionOwner = owners.find((entry) => `owner:${entry.id}` === option.value);
-      return optionOwner ? renderSessionOwnerAvatar(optionOwner) : nothing;
-    },
-    options: [
-      { value: "all", label: t("sessionsView.allOwners") },
-      { value: "involving-me", label: t("sessionsView.involvingMe") },
-      ...owners.map((entry) => ({
-        value: `owner:${entry.id}`,
-        label: entry.id === selfId ? t("chat.sidebar.mySessions") : (entry.label ?? entry.id),
-      })),
-      ...(ownerId && !owners.some((entry) => entry.id === ownerId)
-        ? [{ value: `owner:${ownerId}`, label }]
-        : []),
+  const sheet = isMobileNavLayout();
+  return guard(
+    [
+      host,
+      ...owners.flatMap((entry) => [
+        entry.id,
+        entry.label,
+        entry.avatarUrl,
+        entry.identity ? sessionParticipantIdentityKey(entry.identity) : null,
+      ]),
+      ownerId,
+      selfId,
+      host.sessionInvolvingMeFilterActive,
+      Boolean(host.sidebarSnapshot),
+      sheet,
+      i18n.getLocale(),
     ],
-    onChange: (value) =>
-      host.setSessionOwnerFilter(
-        value.startsWith("owner:") ? value.slice("owner:".length) : null,
-        value === "involving-me",
-      ),
-  });
+    () =>
+      renderPicker({
+        id: "sidebar-session-owner-title",
+        className: "sidebar-session-owner-filter",
+        label: t("sessionsView.owners"),
+        value: host.sessionInvolvingMeFilterActive
+          ? "involving-me"
+          : ownerId
+            ? `owner:${ownerId}`
+            : "all",
+        disabled: Boolean(host.sidebarSnapshot),
+        searchable: "always",
+        sheet,
+        showOptionTooltips: false,
+        renderLeading: (option) => {
+          const optionOwner = owners.find((entry) => `owner:${entry.id}` === option.value);
+          return optionOwner ? renderSessionOwnerAvatar(optionOwner) : nothing;
+        },
+        options: [
+          { value: "all", label: t("sessionsView.allOwners") },
+          { value: "involving-me", label: t("sessionsView.involvingMe") },
+          ...owners.map((entry) => ({
+            value: `owner:${entry.id}`,
+            label: entry.id === selfId ? t("chat.sidebar.mySessions") : (entry.label ?? entry.id),
+          })),
+          ...(ownerId && !owners.some((entry) => entry.id === ownerId)
+            ? [{ value: `owner:${ownerId}`, label }]
+            : []),
+        ],
+        onChange: (value) =>
+          host.setSessionOwnerFilter(
+            value.startsWith("owner:") ? value.slice("owner:".length) : null,
+            value === "involving-me",
+          ),
+      }),
+  );
 }
 
 /** Only the panel's Status choice contributes to its filter indicator. */

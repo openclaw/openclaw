@@ -1,4 +1,8 @@
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveRecordedRequester,
+} from "./subagent-child-owner-match.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import {
   buildSubagentRunReadTopology,
@@ -76,7 +80,8 @@ export function listRunsForRequesterFromRuns(
         })) &&
       (!latestRuns ||
         latestRuns.getLatestSubagentRun(entry.childSessionKey, entry.childAgentId) === entry) &&
-      (!options?.requesterAgentId || entry.requesterAgentId === options.requesterAgentId) &&
+      (!options?.requesterAgentId ||
+        resolveRecordedRequester(entry) === options.requesterAgentId) &&
       (options?.requesterStorePath === undefined ||
         (entry.requesterStorePath ?? null) === options.requesterStorePath) &&
       (typeof lowerBound !== "number" || entry.createdAt >= lowerBound) &&
@@ -143,10 +148,11 @@ export function listRunsForControllerFromRuns<T extends SubagentRunReadRecord>(
   if (!key) {
     return [];
   }
+  const keyOwner = parseAgentSessionKey(key)?.agentId;
   return [...runs.values()].filter(
     (entry) =>
       resolveControllerSessionKey(entry) === key &&
-      (!controllerAgentId || entry.requesterAgentId === controllerAgentId),
+      (!controllerAgentId || (keyOwner ?? entry.requesterAgentId) === controllerAgentId),
   );
 }
 
@@ -187,14 +193,12 @@ export type LatestSubagentRunReadIndex<T extends SubagentRunReadRecord = Subagen
 export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(
   runs: Map<string, T>,
 ): LatestSubagentRunReadIndex<T> {
-  const latestRunByChildSessionKey = new Map<string, T>();
   const runsByChildSessionKey = new Map<string, T[]>();
   for (const entry of runs.values()) {
     const childSessionKey = entry.childSessionKey.trim();
     if (!childSessionKey) {
       continue;
     }
-    recordLatestSubagentRun(latestRunByChildSessionKey, childSessionKey, entry);
     const bucket = runsByChildSessionKey.get(childSessionKey) ?? [];
     bucket.push(entry);
     runsByChildSessionKey.set(childSessionKey, bucket);
@@ -202,11 +206,15 @@ export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunRea
   return {
     getLatestSubagentRun: (childSessionKey, childAgentId) => {
       const key = childSessionKey.trim();
-      return childAgentId === undefined
-        ? (latestRunByChildSessionKey.get(key) ?? null)
-        : (latestSubagentRun(runsByChildSessionKey.get(key) ?? [], (entry) =>
-            matchesSubagentChildSessionOwner(entry, key, childAgentId),
-          ) ?? null);
+      return (
+        latestSubagentRun(runsByChildSessionKey.get(key) ?? [], (entry) =>
+          matchesSubagentChildSessionOwner(
+            { childSessionKey: key, childAgentId: entry.childAgentId },
+            key,
+            childAgentId,
+          ),
+        ) ?? null
+      );
     },
   };
 }
@@ -483,7 +491,7 @@ export function listSwarmRunsForGroupFromRuns<T extends SubagentRunReadRecord>(
       entry.groupId === key &&
       (!requesterKey ||
         (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
-      (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+      (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId),
   );
 }
 
@@ -514,7 +522,7 @@ export function countActiveRunsForSessionFromRuns<T extends SubagentRunReadRecor
     if (ownerSessionKey !== key) {
       continue;
     }
-    if (options?.requesterAgentId && entry.requesterAgentId !== options.requesterAgentId) {
+    if (options?.requesterAgentId && resolveRecordedRequester(entry) !== options.requesterAgentId) {
       continue;
     }
     recordLatestSubagentRun(latestByChildSessionKey, entry.childSessionKey, entry);
@@ -551,7 +559,7 @@ function scopeRootDescendantsToRequesterAgent(
           ([, entry]) =>
             entry.requesterSessionKey !== rootSessionKey ||
             ((!rootRunIds || rootRunIds.has(entry.runId)) &&
-              (!requesterAgentId || entry.requesterAgentId === requesterAgentId) &&
+              (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId) &&
               (requesterStorePath === undefined ||
                 (entry.requesterStorePath ?? null) === requesterStorePath)),
         ),

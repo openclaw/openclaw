@@ -78,9 +78,10 @@ describe("worker turn execution", () => {
   ])("redacts blocked input before launch (%j)", async ({ recorderOwned, throws }) => {
     await seedActivePlacement();
     const input = turn("blocked-input");
+    const resolveTarget = vi.fn(() => ({ ...sessionTarget, sessionEntry: undefined }));
     const recorder = recorderOwned
       ? createUserTurnTranscriptRecorder({
-          target: { ...sessionTarget, sessionEntry: undefined },
+          target: resolveTarget,
           input: { text: input.prompt },
         })
       : undefined;
@@ -125,6 +126,9 @@ describe("worker turn execution", () => {
       expect(result.meta.error?.kind).toBe("hook_block");
       expect(result.meta.livenessState).toBe("blocked");
       expect(handler).toHaveBeenCalledOnce();
+      if (recorderOwned) {
+        expect(resolveTarget).toHaveBeenCalledOnce();
+      }
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
       expect(environments.startTunnel).not.toHaveBeenCalled();
       expect(runLocal).not.toHaveBeenCalled();

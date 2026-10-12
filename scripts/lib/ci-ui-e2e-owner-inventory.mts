@@ -830,7 +830,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/browser/browser-panel.ts",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
-      "ui/src/components/panel-empty-state.ts",
+      "ui/src/components/solid/panel-empty-state.tsx",
       "ui/src/components/panel-loading-skeleton.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",

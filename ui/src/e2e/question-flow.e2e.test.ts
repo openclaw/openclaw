@@ -557,6 +557,22 @@ suite.define(() => {
     );
     await screenshot(page, "08-secret-store-masked-input.png");
 
+    await secretInput.focus();
+    await page.keyboard.press("Tab");
+    const reveal = panel.getByRole("button", { name: "Show secret", exact: true });
+    expect(await reveal.evaluate((element) => element === document.activeElement)).toBe(true);
+    await page.keyboard.press("Enter");
+    expect(await secretInput.getAttribute("type")).toBe("text");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    const hide = panel.getByRole("button", { name: "Hide secret", exact: true });
+    expect(await hide.getAttribute("aria-pressed")).toBe("true");
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+    await screenshot(page, "08-secret-store-visible-input.png");
+    await page.keyboard.press("Space");
+    expect(await secretInput.getAttribute("type")).toBe("password");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
     expect(resolveRequest.params).toEqual({
@@ -647,13 +663,18 @@ suite.define(() => {
     );
     expect(await page.title()).toBe("Waiting for your answer — OpenClaw");
     await screenshot(page, "11-secret-store-ask-pending.png");
-    const secretInput = panel.locator('input[type="password"]');
+    const secretInput = panel.getByLabel("API key", { exact: true });
+    expect(await secretInput.getAttribute("type")).toBe("password");
     await secretInput.fill(fakeSecret);
     expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
     expect(await page.locator("body").evaluate((element) => element.innerHTML)).not.toContain(
       fakeSecret,
     );
     await screenshot(page, "12-secret-store-ask-masked-input.png");
+    await panel.getByRole("button", { name: "Show secret", exact: true }).click();
+    expect(await secretInput.getAttribute("type")).toBe("text");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    await screenshot(page, "12-secret-store-ask-visible-input.png");
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
 
     const resolveRequest = await gateway.waitForRequest("question.resolve");

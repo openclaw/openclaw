@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExpressionBuilder } from "kysely";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
@@ -12,6 +13,7 @@ import {
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   revokeSqliteDatabaseAdmissionsForPath,
@@ -67,6 +69,27 @@ const quarantineSchemaAdmission: SqliteDatabaseAdmissionKey<{
     return { version: value.version, integrityTable: value.integrityTable };
   },
 };
+
+type QuarantineDecision = OpenClawDatabaseQuarantine & { verifiedGenerationJson: string | null };
+
+function quarantineDecisionAdmission(
+  pathname: string,
+): SqliteDatabaseAdmissionKey<QuarantineDecision | null> {
+  return {
+    name: `openclaw.quarantine.decision:${path.resolve(pathname)}`,
+    read: (value) => (value === null || isQuarantineDecision(value) ? value : undefined),
+  };
+}
+
+function isQuarantineDecision(value: unknown): value is QuarantineDecision {
+  return (
+    isRecord(value) &&
+    (value.kind === "agent" || value.kind === "state") &&
+    typeof value.reason === "string" &&
+    typeof value.quarantinedAt === "number" &&
+    (value.verifiedGenerationJson === null || typeof value.verifiedGenerationJson === "string")
+  );
+}
 
 function resolveAgentIntegrityPath(pathname: string): string {
   try {
@@ -448,31 +471,55 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
   }
 }
 
-/** Read one authoritative quarantine decision without creating the store. */
+/** Runtime guards share the owner's decision; explicit repair may inspect disk. */
 function readOpenClawDatabaseQuarantine(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
 ): OpenClawDatabaseQuarantine | undefined {
   const storePath = resolveQuarantineStorePath(options.env ?? process.env);
-  // Clean installs pay one existence check. No directory or SQLite work.
+  const load = () => readPersistedQuarantineDecision(pathname, storePath, options.fresh) ?? null;
+  const decision = options.fresh
+    ? load()
+    : getOrLoadSqliteDatabaseAdmissionForPath(
+        storePath,
+        quarantineDecisionAdmission(pathname),
+        load,
+      );
+  return decision ? resolveQuarantineDecision(decision, pathname, storePath) : undefined;
+}
+
+function readPersistedQuarantineDecision(
+  pathname: string,
+  storePath: string,
+  fresh = false,
+): QuarantineDecision | undefined {
   if (!existsSync(storePath)) {
     return undefined;
   }
   const database = openSqliteReadOnlyDatabase(storePath, {
     timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
   });
-  let outcome: { value: OpenClawDatabaseQuarantine | undefined } | { error: unknown };
+  let outcome: { value: QuarantineDecision | undefined } | { error: unknown };
   try {
-    outcome = { value: readQuarantineDecision(database, pathname, storePath, options.fresh) };
+    outcome = { value: readQuarantineDecision(database, pathname, storePath, fresh) };
   } catch (error) {
     outcome = { error };
   }
   try {
     database.close();
   } catch (closeError) {
+    let quarantine: OpenClawDatabaseQuarantine | undefined;
+    let readError = "error" in outcome ? outcome.error : undefined;
+    if ("value" in outcome && outcome.value) {
+      try {
+        quarantine = resolveQuarantineDecision(outcome.value, pathname, storePath);
+      } catch (error) {
+        readError = error;
+      }
+    }
     throw new OpenClawQuarantineReadCleanupError(
-      "error" in outcome ? [outcome.error, closeError] : [closeError],
-      "value" in outcome ? outcome.value : undefined,
+      readError === undefined ? [closeError] : [readError, closeError],
+      quarantine,
     );
   }
   if ("error" in outcome) {
@@ -486,7 +533,7 @@ function readQuarantineDecision(
   pathname: string,
   storePath: string,
   fresh = false,
-): OpenClawDatabaseQuarantine | undefined {
+): QuarantineDecision | undefined {
   const userVersion = readQuarantineSchemaVersion(database, storePath, fresh);
   if (userVersion === 0) {
     return undefined;
@@ -512,10 +559,24 @@ function readQuarantineDecision(
   ) {
     throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
   }
-  if (typeof verifiedGenerationJson === "string") {
+  return {
+    kind: row.kind,
+    quarantinedAt: row.quarantined_at,
+    reason: row.reason,
+    verifiedGenerationJson:
+      typeof verifiedGenerationJson === "string" ? verifiedGenerationJson : null,
+  };
+}
+
+function resolveQuarantineDecision(
+  decision: QuarantineDecision,
+  pathname: string,
+  storePath: string,
+): OpenClawDatabaseQuarantine | undefined {
+  if (decision.verifiedGenerationJson !== null) {
     let verifiedGeneration: SqliteFileGeneration;
     try {
-      verifiedGeneration = parseSqliteFileGeneration(verifiedGenerationJson);
+      verifiedGeneration = parseSqliteFileGeneration(decision.verifiedGenerationJson);
     } catch {
       throw new Error(`OpenClaw quarantine store ${storePath} contains an invalid row.`);
     }
@@ -528,7 +589,11 @@ function readQuarantineDecision(
       return undefined;
     }
   }
-  return { kind: row.kind, quarantinedAt: row.quarantined_at, reason: row.reason };
+  return {
+    kind: decision.kind,
+    quarantinedAt: decision.quarantinedAt,
+    reason: decision.reason,
+  };
 }
 
 /** Runtime opens refuse recorded damage while tolerating a broken quarantine index. */
@@ -540,7 +605,6 @@ export function readOpenClawDatabaseQuarantineFailure(
   let quarantine: OpenClawDatabaseQuarantine | undefined;
   let cleanupFailure: OpenClawQuarantineReadCleanupError | undefined;
   try {
-    // A different process can record proven corruption after this process admitted the file.
     quarantine = readOpenClawDatabaseQuarantine(pathname, options);
   } catch (error) {
     if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
@@ -578,6 +642,7 @@ export function recordOpenClawDatabaseQuarantine(options: {
   const serializedGeneration = options.generation
     ? serializeSqliteFileGeneration(options.generation)
     : null;
+  const quarantinedAt = Date.now();
   try {
     const recorded = withQuarantineWriter(options.env ?? process.env, (database) =>
       runSqliteImmediateTransactionSync(
@@ -601,13 +666,19 @@ export function recordOpenClawDatabaseQuarantine(options: {
               path.resolve(options.path),
               options.kind,
               options.reason,
-              Date.now(),
+              quarantinedAt,
               VERSION,
               serializedGeneration,
             );
           if (options.kind === "agent") {
             invalidateAgentIntegrityVerification(database, options.path);
           }
+          publishSqliteDatabaseAdmission(database, quarantineDecisionAdmission(options.path), {
+            kind: options.kind,
+            quarantinedAt,
+            reason: options.reason,
+            verifiedGenerationJson: serializedGeneration,
+          });
           return true;
         },
         {
@@ -644,6 +715,7 @@ export function clearOpenClawDatabaseQuarantine(
           // The repair owner already published fresh runtime validation; only
           // the old durable clean-close receipt must be discarded here.
           invalidateAgentIntegrityVerification(database, pathname, "clear-receipt");
+          publishSqliteDatabaseAdmission(database, quarantineDecisionAdmission(pathname), null);
           return true;
         },
         {

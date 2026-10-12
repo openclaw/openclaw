@@ -2,7 +2,6 @@ import { cleanup, getByRole, render as renderSolid } from "@solidjs/testing-libr
 import { html, nothing, render, svg, type TemplateResult } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderPanelEmptyState } from "./panel-empty-state.ts";
 import {
   renderPanelLoadingSkeleton,
   type PanelLoadingSkeletonVariant,
@@ -105,12 +104,13 @@ describe("panel presentation bridges", () => {
   it("retains Lit default/named content through replacement and reconnect without hiding actions", async () => {
     const action = vi.fn();
     const view = (label: string, path: string) =>
-      renderPanelEmptyState({
-        icon: svg`<svg viewBox="0 0 24 24"><path d=${path}></path></svg>`,
-        heading: label,
-        description: "Choose a file to continue.",
-        action: html`<button type="button" @click=${action}>${label}</button>`,
-      });
+      html`<openclaw-panel-empty-state
+        .heading=${label}
+        .description=${"Choose a file to continue."}
+      >
+        ${svg`<svg viewBox="0 0 24 24"><path d=${path}></path></svg>`}
+        <span slot="action"><button type="button" @click=${action}>${label}</button></span>
+      </openclaw-panel-empty-state>`;
     const owner = mountLit(view("Add file", "M1 1h10"));
     const host = owner.querySelector("openclaw-panel-empty-state")!;
     await host.updateComplete;

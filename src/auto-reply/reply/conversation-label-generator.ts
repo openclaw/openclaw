@@ -165,6 +165,7 @@ async function runLabelAttempts(
         assertCurrent: params.assertCurrent,
         ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
         outputTextPolicy: "strict-visible",
+        thinkLevel: "off",
         answerTokenBudget: 4_096,
       });
       assertCurrent();

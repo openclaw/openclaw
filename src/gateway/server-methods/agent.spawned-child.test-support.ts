@@ -30,6 +30,15 @@ export const confirmedAcpMeta: SessionAcpMeta = {
   lastActivityAt: Date.now(),
 };
 
+export function mockGlobalSessionAgentRoster() {
+  const mocks = getAgentTestMocks();
+  mocks.listAgentIds.mockReturnValue(["main", "work"]);
+  mocks.loadConfigReturn = {
+    agents: { entries: { main: {}, work: {} } },
+    session: { scope: "global" },
+  };
+}
+
 export function nativeSubagentClient(): AgentHandlerArgs["client"] {
   const baseClient = requireValue(backendGatewayClient(), "expected backend client");
   return {

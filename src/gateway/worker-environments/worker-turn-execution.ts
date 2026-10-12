@@ -186,6 +186,7 @@ export async function executeWorkerTurn(
   assertContextCurrent();
   if (recorder && turn.suppressNextUserMessagePersistence !== true && !recorder.hasPersisted()) {
     const persisted = await recorder.persistApproved({
+      storageTarget: transcriptTarget,
       cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
     });
     if (persisted) {

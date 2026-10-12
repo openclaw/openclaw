@@ -269,6 +269,22 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/state/openclaw-quarantine-store.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "readOpenClawAgentIntegrityVerification.read",
+          "recordOpenClawAgentIntegrityVerification",
+          "invalidateAgentIntegrityVerification",
+          "markOpenClawAgentIntegrityClean",
+        ],
+        evidence:
+          "Integrity receipts belong to agent-database lease admission and final release: openclaw-agent-db-lease.ts consumes proof during claim, records completed admission, invalidates dead-owner proof, and certifies the last clean closer. openclaw-agent-db-lifecycle.ts revokes proof on failed disposal; openclaw-agent-schema-inspection.worker.ts also reads proof during boot inspection. These are startup/lock primitives, not ordinary quarantine-decision guards.",
+      },
+    ],
+  ],
+  [
     "src/secrets/store/secret-store-hidden-github.kernel.ts",
     [
       {
@@ -1225,7 +1241,7 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["recordMemorySessionTombstonesInDatabase", "hasMemorySessionTombstone"],
+        operations: ["recordMemorySessionTombstonesInDatabase", "readMemorySessionTombstones"],
         evidence:
           "memory-entry-origins.worker.ts -> memory-forget-kernel.ts owns tombstone writes; manager-publication.worker.ts owns every hasMemorySessionTombstone call, including the session.current predicate retained under workspace custody for shadow publication.",
       },
@@ -1300,9 +1316,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["conflictingSubagentRunVersions", "writeSubagentRunValuesInDatabase"],
+        operations: [
+          "conflictingSubagentRunVersions",
+          "conflictingSubagentRegistrationCohort",
+          "writeSubagentRunValuesInDatabase",
+        ],
         evidence:
-          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
+          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Registration cohort reads have only the registry persistence worker caller at subagent-registry.store.worker.ts:182. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
       },
     ],
   ],

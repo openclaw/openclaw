@@ -351,9 +351,9 @@ src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
-src/infra/postgres-sync/query-compiler.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
+src/infra/sql-query-compiler.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts

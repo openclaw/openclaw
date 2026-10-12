@@ -80,19 +80,29 @@ suite.define(() => {
           );
           await writeFile(path.join(proofDir, `subagent-${width}.png`), frame.png);
         }
+        // Capture the baseline with the layout check, before a reactive banner replacement.
+        let footerTop = 0;
         await expect
-          .poll(() =>
-            details.evaluate((element) => {
+          .poll(async () => {
+            const top = await details.evaluate((element) => {
               const bounds = element.getBoundingClientRect();
               const footer = element
                 .closest("openclaw-chat-pane")!
                 .querySelector(".agent-chat__disabled-banner--replacement")!
                 .getBoundingClientRect();
-              return (
-                bounds.height > 0 && bounds.bottom <= footer.top + 1 && footer.bottom <= innerHeight
-              );
-            }),
-          )
+              return bounds.height > 0 &&
+                footer.height > 0 &&
+                bounds.bottom <= footer.top + 1 &&
+                footer.bottom <= innerHeight
+                ? footer.top
+                : null;
+            });
+            if (top === null) {
+              return false;
+            }
+            footerTop = top;
+            return true;
+          })
           .toBe(true);
         expect(await details.evaluate((element) => getComputedStyle(element).overflowY)).toBe(
           "auto",
@@ -100,7 +110,6 @@ suite.define(() => {
         expect(
           await details.evaluate((element) => element.scrollHeight > element.clientHeight),
         ).toBe(true);
-        const footerTop = await notice.evaluate((element) => element.getBoundingClientRect().top);
         await details.hover();
         await page.mouse.wheel(0, 1000);
         await expect

@@ -16,6 +16,7 @@ import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
   readPreparedSessionEntryPublicationSource,
+  readPreparedSessionSharingChange,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import type {
   SessionActorHotState,
@@ -179,6 +180,8 @@ function ensureReplicaSubscription(): void {
             previousProjection
               ? { hasBoard: previousProjection.hasBoard }
               : undefined);
+          // Metadata receipts retain side-table facts when their writer did not change sharing.
+          const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
           cell.entry = freezeJsonSnapshot({
             target: cell.target,
             entry: structuredClone(prepared.fullEntry),
@@ -186,6 +189,8 @@ function ensureReplicaSubscription(): void {
             writeToken,
             snapshots: "full",
             projection,
+            members: sharingUnchanged ? previous?.members : undefined,
+            participants: sharingUnchanged ? previous?.participants : undefined,
           });
           cell.predicateColumns = deriveSessionPredicateColumns(JSON.stringify(prepared.fullEntry));
           cell.bytes = JSON.stringify(cell.entry).length * 2;
@@ -327,6 +332,12 @@ export function readSessionActorEntryFacts(
     members: state.members,
     participants: state.participants,
     snapshots,
+    projection: cell.snapshot
+      ? {
+          hasBoard: cell.snapshot.hasBoard,
+          activitySummaryWatermark: cell.snapshot.transcript.watermark,
+        }
+      : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
     predicateColumns: cell.predicateColumns,
@@ -517,7 +528,7 @@ export function createSessionActorReplica(
       throw new Error("Session actor replica is closed");
     }
     owned.pending += 1;
-    invalidate();
+    owned.reservation += 1;
     const selected = owned.reservation;
     const expectedGeneration = generation();
     let settled = false;
@@ -549,7 +560,8 @@ export function createSessionActorReplica(
         return undefined;
       }
       if (!accepts(owned.snapshot, owned.generation, token)) {
-        invalidate();
+        discard(owned);
+        forgetUnused(owned);
         return undefined;
       }
       touch(owned);
