@@ -29,7 +29,8 @@ const provider = buildOpenAIImageGenerationProvider({
   isProviderApiKeyConfiguredAsync: async () => true,
 });
 const servers: Server[] = [];
-const requests: Array<{ path: string; certificate: boolean; serverName: string | false }> = [];
+const requests: Array<{ path: string; certificate: boolean; serverName: string | false | null }> =
+  [];
 const originalCAs = getCACertificates("default");
 let providerOrigin: string;
 let imageOrigin: string;
@@ -96,7 +97,9 @@ beforeEach(() => {
 afterAll(async () => {
   for (const server of servers) {
     server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
   await releasePorts?.();
   setDefaultCACertificates(originalCAs);
