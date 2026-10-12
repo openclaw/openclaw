@@ -42,7 +42,7 @@ it.each(["active", "failed"] as const)(
               path: "/fixture/workspace",
             }),
           },
-          resolveGatewaySessionStoreTargetWithStore: () => target,
+          resolveGatewaySessionStoreTargetInWorker: async () => target,
           resolveCanonicalSessionEntryFromStoreKeys: () => entry,
         }) as never,
       cancelSessionWork: cancel,

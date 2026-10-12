@@ -1272,13 +1272,20 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   }
   const persistenceSnapshot =
     params.forceClear === true && params.sessionKey
-      ? tryLoadForceClearSessionSnapshot(
+      ? await tryLoadForceClearSessionSnapshot(
           params.sessionKey,
           agentId,
           embeddedRunHandle?.runId ??
             (replyOperation ? getAttachedBackend(replyOperation)?.runId : undefined),
         )
       : undefined;
+  // The snapshot read may yield; cancellation still belongs to the captured run.
+  if (
+    ACTIVE_EMBEDDED_RUNS.get(params.sessionId) !== embeddedRunHandle ||
+    resolveActiveReplyOperationForSessionId(params.sessionId) !== replyOperation
+  ) {
+    return { aborted: false, drained: false, forceCleared: false };
+  }
   const staleExpiryBarrier = isStuckRecovery ? createDeferredCore() : undefined;
   // Terminal recovery stamps expiry before cancellation can re-enter user abort.
   const expiredReplyRun =

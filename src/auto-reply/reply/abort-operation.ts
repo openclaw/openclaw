@@ -14,13 +14,13 @@ import {
 } from "../../agents/tools/sessions-helpers.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
-  loadSessionEntry,
   markSessionAbortTarget,
   resolveSessionAbortTarget,
   type SessionAbortTargetContext,
   type SessionAbortTargetIdentity,
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -135,21 +135,23 @@ export function prepareSessionRunTargetAbort(params: {
   };
 }
 
-function resolveStoredSessionId(params: {
+async function resolveStoredSessionId(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
   try {
-    return loadSessionEntry({
-      agentId: params.agentId,
-      clone: false,
-      sessionKey: params.sessionKey,
-      storePath,
-    })?.sessionId;
+    return (
+      await readSessionEntryInWorker({
+        agentId: params.agentId,
+        clone: false,
+        sessionKey: params.sessionKey,
+        storePath,
+      })
+    )?.sessionId;
   } catch {
     return undefined;
   }
@@ -262,7 +264,7 @@ export async function executeFastAbortRequest(
         throw new Error("The selected session changed before it could be stopped.");
       }
     };
-    const prepareTarget = (key: string) => {
+    const prepareTarget = async (key: string) => {
       const targetAgentId =
         key === resolvedTargetKey
           ? agentId
@@ -278,7 +280,7 @@ export async function executeFastAbortRequest(
         })[0]?.sessionId ??
         (key === resolvedTargetKey
           ? resolvedAbortTarget?.sessionId
-          : resolveStoredSessionId({ cfg, sessionKey: key, agentId: targetAgentId }));
+          : await resolveStoredSessionId({ cfg, sessionKey: key, agentId: targetAgentId }));
       const target = { key, agentId: targetAgentId, sessionId };
       return {
         abort: prepareSessionRunTargetAbort(target),
@@ -291,8 +293,10 @@ export async function executeFastAbortRequest(
       };
     };
     const preparedTargets = new Map(
-      [resolvedTargetKey, ...(commandSessionKey ? [commandSessionKey] : [])].map(
-        (key) => [key, prepareTarget(key)] as const,
+      await Promise.all(
+        [resolvedTargetKey, ...(commandSessionKey ? [commandSessionKey] : [])].map(
+          async (key) => [key, await prepareTarget(key)] as const,
+        ),
       ),
     );
     let authorized = false;
@@ -352,8 +356,10 @@ export async function executeFastAbortRequest(
             abortTargetKeys.includes(conversationBoundAcpTargetKey)
               ? commandSessionKey
               : undefined;
-          const targets = [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
-            (key) => preparedTargets.get(key) ?? prepareTarget(key),
+          const targets = await Promise.all(
+            [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
+              (key) => preparedTargets.get(key) ?? prepareTarget(key),
+            ),
           );
           assertCurrent();
           sealRootSelection();

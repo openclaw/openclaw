@@ -28,7 +28,10 @@ import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveSessionStoreKey,
+} from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
@@ -183,11 +186,19 @@ export async function handleChatAbortRequestWithLifecycle(
   const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
   const ops = createChatAbortOps(context);
 
-  const abortSession: Result<ReturnType<typeof loadSessionEntry>, unknown> = (() => {
+  const abortSession: Result<
+    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+    unknown
+  > = await (async () => {
     try {
       return {
         ok: true,
-        value: loadSessionEntry(canonicalAbortSessionKey, { agentId: abortAgentId }),
+        value: await loadGatewaySessionEntryReadOnlyInWorker({
+          excludeInternalEffects: true,
+          cfg: abortCfg,
+          key: canonicalAbortSessionKey,
+          agentId: abortAgentId,
+        }),
       };
     } catch (error) {
       return { ok: false, error };

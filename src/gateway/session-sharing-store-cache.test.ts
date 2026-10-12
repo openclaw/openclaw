@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sessionsConfig from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -18,7 +19,7 @@ import {
   canReceiveSessionEvent,
   invalidateSessionSharingSnapshot,
   resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
 } from "./session-sharing.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 
@@ -63,7 +64,14 @@ describe("session event authorization store work", () => {
         createdActor: { type: "human", source: "profile", id: "owner" } as const,
       };
       await sessionAccessor.upsertSessionEntryCore(scope, entry);
-      const target = resolveSessionSharingTarget({ cfg, ...scope, exactRead: true });
+      const reads = observeHostDataSql();
+      let target;
+      try {
+        target = await resolveSessionSharingTargetAsync({ cfg, ...scope });
+        expect(reads.queries).toEqual([]);
+      } finally {
+        reads.restore();
+      }
       if (!target) {
         throw new Error("prepared target was not created");
       }
@@ -83,6 +91,8 @@ describe("session event authorization store work", () => {
       expect(original.error).toBeNull();
       expect(original.authorization).toBeDefined();
       await sessionAccessor.upsertSessionEntryCore(scope, { ...entry, sessionId: "replacement" });
+      const refreshed = await resolveSessionSharingTargetAsync({ cfg, ...scope });
+      expect(refreshed?.entry.sessionId).toBe("replacement");
       expect(resolveSessionMutationAuthorization(params).error).toBeNull();
       const replacement = resolveSessionMutationAuthorization({ ...params, expectedTarget });
       expect(replacement.error).toMatchObject({

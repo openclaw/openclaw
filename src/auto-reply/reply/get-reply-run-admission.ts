@@ -11,7 +11,6 @@ import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -314,16 +313,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionId: string;
     sessionFile: string;
   } => {
-    // Working-set exact key first; disk alias resolve only when storePath known.
-    // No whole-map scan — that encodes the store layout the accessor hides.
+    // Admission and in-process publications own this turn’s working entry.
     const latestSessionEntry =
-      sessionStore && sessionKey
-        ? (sessionStore[sessionKey] ??
-          (storePath
-            ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
-            : undefined) ??
-          sessionEntry)
-        : sessionEntry;
+      sessionStore && sessionKey ? (sessionStore[sessionKey] ?? sessionEntry) : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
     rebindProvidedReplyOperation(latestSessionId);
     opts?.onSessionPrepared?.({
@@ -607,7 +599,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
         // The interrupted run may have changed goal or suggestion state while admission waited.
-        await refreshInboundContextAfterAdmissionWait();
+        refreshInboundContextAfterAdmissionWait();
         promptBodies = await rebuildPromptBodies();
       },
       resolveBusyState: resolveQueueBusyState,

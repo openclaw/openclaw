@@ -42,7 +42,7 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
   shouldSuppressAgentPromptPersistence,
@@ -280,11 +280,14 @@ export async function prepareAgentRunUserTurn(params: {
         trackInputCompletion: params.privateCompletion,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: () => {
+        target: async () => {
           params.assertCurrent();
-          const loaded = loadSessionEntry(params.resolvedSessionKey!, {
+          const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: params.cfgForAgent ?? params.cfg,
+            key: params.resolvedSessionKey!,
             agentId: params.activeSessionAgentId,
-            clone: false,
+            excludeInternalEffects: true,
+            assertActive: params.assertCurrent,
           });
           const latestEntry = loaded.entry;
           const loadedSessionId = latestEntry?.sessionId?.trim();

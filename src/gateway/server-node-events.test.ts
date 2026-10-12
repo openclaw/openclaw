@@ -20,6 +20,7 @@ import type { HealthSummary } from "./health/types.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const {
   buildSessionLookup,
@@ -581,6 +582,33 @@ describe("voice transcript events", () => {
 });
 
 describe("notifications changed events", () => {
+  it("does not enqueue a notification when pairing changes during session lookup", async () => {
+    const lookupStarted = createDeferred<void>();
+    const lookup = createDeferred<ReturnType<typeof buildSessionLookup>>();
+    let connectionCurrent = true;
+    vi.mocked(loadGatewaySessionEntryReadOnlyInWorker).mockImplementationOnce(async () => {
+      lookupStarted.resolve();
+      return lookup.promise;
+    });
+    const request = handleNodeEvent(
+      buildCtx(),
+      "node-revoked-during-lookup",
+      nodeEvent("notifications.changed", {
+        change: "posted",
+        key: "notif-revoked",
+        sessionKey: "agent:main:notice",
+      }),
+      { isConnectionCurrent: async () => connectionCurrent },
+    );
+    await lookupStarted.promise;
+    connectionCurrent = false;
+    lookup.resolve(buildSessionLookup("agent:main:notice"));
+
+    await expect(request).resolves.toEqual(eventResult("notifications.changed", "pairing_changed"));
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
   it("records non-delivery when a targetless notification has no system owner", async () => {
     const warn = vi.fn();
     runtimeMocks.resolveSystemMainSessionTarget.mockImplementationOnce(() => {
@@ -677,7 +705,6 @@ describe("notifications changed events", () => {
       }),
     );
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5", { agentId: undefined });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n5 key=notif-5)",
       {

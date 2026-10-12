@@ -212,9 +212,14 @@ vi.mock("./chat-attachments.js", async (importOriginal) => ({
 
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: runtimeMocks.loadSessionEntry,
   resolveGatewayModelSupportsImages: runtimeMocks.resolveGatewayModelSupportsImages,
   resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
+}));
+
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: vi.fn(async (params: { key: string }) =>
+    runtimeMocks.loadSessionEntry(params.key),
+  ),
 }));
 
 vi.mock("./ws-log.js", async (importOriginal) => ({

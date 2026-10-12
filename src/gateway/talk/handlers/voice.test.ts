@@ -192,7 +192,7 @@ describe("Talk voice RPC ownership", () => {
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     });
     // Calls retain the supplied alias; the backing runtime uses its canonical key.
-    sessionTarget = prepareTalkSessionTarget({}, "main");
+    sessionTarget = await prepareTalkSessionTarget({}, "main");
     browser = client("voice-browser");
     originalId = await createOrResumeClientVoiceSession({
       agentId: sessionTarget.agentId,

@@ -593,11 +593,27 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       } catch {
         preparationFailure = mentionInboxUnavailable(log);
       }
+      let prepared: Awaited<ReturnType<typeof policy.prepareContext>> | undefined;
+      try {
+        prepared = await policy.prepareContext(input);
+      } catch {
+        preparationFailure = mentionInboxUnavailable(log);
+      }
       // Current policy selection and response publication must not cross another await.
-      publish(preparationFailure ?? readOperation(() => policy.mentionable(client, input)));
+      publish(
+        preparationFailure ?? readOperation(() => policy.mentionable(client, input, prepared)),
+      );
     },
     validateRecipients: (...args: Parameters<typeof policy.validateRecipients>) =>
       readOperation(() => policy.validateRecipients(...args)),
+    async validateRecipientsAsync(client, input, profileIds) {
+      try {
+        const prepared = await policy.prepareContext(input);
+        return readOperation(() => policy.validateRecipients(client, input, profileIds, prepared));
+      } catch {
+        return mentionInboxUnavailable(log);
+      }
+    },
     list: (client) => legacy(client),
     dismiss: (client, ids) => legacy(client, ids),
     async listAsync(client, publish) {

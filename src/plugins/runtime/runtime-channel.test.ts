@@ -2,6 +2,9 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 
 const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn(async () => ({ status: "handled" })));
@@ -18,6 +21,29 @@ function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
   }
   return event;
 }
+
+it("warns about synchronous runtime timestamps while preserving the shipped result", async () => {
+  await withOpenClawTestState({ label: "runtime-channel-legacy-timestamp" }, async (state) => {
+    const scope = {
+      storePath: state.statePath("timestamp", "openclaw-agent.sqlite"),
+      sessionKey: "agent:main:legacy-timestamp",
+    };
+    replaceSessionEntrySync(scope, { sessionId: "legacy-timestamp", updatedAt: 60_000 });
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      const channel = createRuntimeChannel();
+      withPluginRuntimePluginScope({ pluginId: "legacy-runtime-timestamp-test" }, () => {
+        expect(channel.session.readSessionUpdatedAt(scope)).toBe(60_000);
+      });
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("readSessionUpdatedAtAsync"),
+        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+});
 
 describe("inbound dispatch", () => {
   it("keeps the complete deprecated turn object identical to inbound", () => {

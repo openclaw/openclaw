@@ -1,4 +1,5 @@
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import {
   isSameSessionObserverLifecycle,
@@ -14,7 +15,10 @@ import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 /** Retire same-run live health even when terminal observation cannot run the model. */
 export function createSessionObserverTerminalPublisher(params: {
   dormantRuns: Map<string, DormantSessionObserverRun>;
-  readSession: NonNullable<SessionObserverDeps["readSession"]>;
+  readSession: (
+    sessionKey: string,
+    agentId: string,
+  ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   persistDigest: NonNullable<SessionObserverDeps["persistDigest"]>;
   now: () => number;
   work: Pick<ReturnType<typeof createSessionObserverWork>, "withCurrent" | "closing" | "resetting">;

@@ -32,7 +32,11 @@ import {
 } from "./session-sharing-incognito.js";
 import { hiddenSessionNotFound } from "./session-sharing-policy.js";
 import { prepareSessionSharingSource } from "./session-sharing-source.js";
-import { prepareSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
+import {
+  prepareSessionSharing,
+  resolveSessionSharingTargetAsync,
+  resolveSessionSharingTarget,
+} from "./session-sharing.js";
 import { resolveRequestedSessionStoreTarget } from "./session-store-key.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
 
@@ -63,7 +67,7 @@ function companionTargetIsVisible(
   target: { sessionKey: string; agentId: string },
   client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
-  prepared?: { target: ReturnType<typeof resolveSessionSharingTarget> },
+  prepared?: { target: Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
 ): boolean {
   if (client?.connId && context.isConnectionActive?.(client.connId) === false) {
     return false;
@@ -126,7 +130,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         : binding && captureIncognitoSessionMutationFacts(binding, target.sessionKey, true);
       const initialSharingTarget = actorFacts
         ? actorFacts.readCurrent().target
-        : resolveSessionSharingTarget({ cfg: sourceCfg, ...sourceTargetScope });
+        : await resolveSessionSharingTargetAsync({ cfg: sourceCfg, ...sourceTargetScope });
       if (!companionTargetIsVisible(target, client, context, { target: initialSharingTarget })) {
         respond(false, undefined, hiddenSessionNotFound(target.sessionKey));
         return;
@@ -310,14 +314,19 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
   "sessions.companion.state": defineValidatedGatewayHandler(
     "sessions.companion.state",
     validateSessionsCompanionStateParams,
-    ({ params, respond, client, context }) => {
+    async ({ params, respond, client, context }) => {
       const { sessionKey, agentId } = params;
       const target = resolveCompanionTarget({ sessionKey, agentId }, context);
       if (!target.ok) {
         respond(false, undefined, target.error);
         return;
       }
-      if (!companionTargetIsVisible(target, client, context)) {
+      const sharingTarget = await resolveSessionSharingTargetAsync({
+        cfg: context.getRuntimeConfig(),
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+      });
+      if (!companionTargetIsVisible(target, client, context, { target: sharingTarget })) {
         respond(false, undefined, hiddenSessionNotFound(target.sessionKey));
         return;
       }

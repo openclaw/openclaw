@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createAgentAdmissionController } from "../../../gateway/agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "../../../gateway/agent-turn/agent-dedupe-lifecycle.js";
 import { runWithChatAbortExecution } from "../../../gateway/chat-abort-lifecycle-internal.js";
@@ -295,6 +296,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
       resolveGatewayContext,
       assertAllowed: () => {},
     });
+    let admissionEntry: SessionEntry | undefined = { sessionId, updatedAt: 1 };
     const nativeAdmission = createAgentAdmissionController({
       runId,
       lifecycleGeneration,
@@ -306,6 +308,10 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
       getRequestedSessionKey: () => sessionKey,
       getResolvedSessionKey: () => sessionKey,
       getResolvedSessionId: () => sessionId,
+      getSessionEntry: () => admissionEntry,
+      setSessionEntry: (entry) => {
+        admissionEntry = entry;
+      },
       getResolvedSessionAgentId: () => "main",
       getAgentId: () => "main",
       getSessionPersisted: () => true,

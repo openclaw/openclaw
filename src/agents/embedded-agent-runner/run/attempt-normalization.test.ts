@@ -14,8 +14,6 @@ import {
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
-  listSessionEntriesReadOnly: vi.fn(() => []),
-  loadSessionEntry: vi.fn(),
   patchSessionEntryCore:
     vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
   updateSessionEntry: vi.fn(async () => undefined),
@@ -40,12 +38,9 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionR
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: vi.fn(async () => undefined),
   ...sessionAccessorMocks,
-  loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntry,
 }));
 
 beforeEach(() => {
-  sessionAccessorMocks.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
-  sessionAccessorMocks.loadSessionEntry.mockReset();
   sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
   sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
   sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset().mockResolvedValue([]);
@@ -114,9 +109,9 @@ it.each([0, 2])(
 );
 
 describe("buildContextEngineCompactionSessionTarget", () => {
-  it("leaves the key absent when a marker has no stored mapping", () => {
+  it("leaves the key absent when a marker has no stored mapping", async () => {
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
         sessionId: "stale-outer-session",
       }),
@@ -127,9 +122,9 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("uses the explicit agent owner without inventing a session key", () => {
+  it("uses the explicit agent owner without inventing a session key", async () => {
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         agentId: "worker",
         config: {
           agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
@@ -145,8 +140,8 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("rejects a partial target that conflicts with the fixed-store owner", () => {
-    expect(() =>
+  it("rejects a partial target that conflicts with the fixed-store owner", async () => {
+    await expect(
       buildContextEngineCompactionSessionTarget({
         config: {
           agents: {
@@ -165,12 +160,12 @@ describe("buildContextEngineCompactionSessionTarget", () => {
           sessionKey: "global",
         },
       }),
-    ).toThrow(/belongs to "ops"/u);
+    ).rejects.toThrow(/belongs to "ops"/u);
   });
 
-  it("preserves an adopted session id without inventing a session key", () => {
+  it("preserves an adopted session id without inventing a session key", async () => {
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         sessionFile: "",
         sessionId: "previous-session",
         sessionTarget: {

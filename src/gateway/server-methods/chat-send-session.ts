@@ -52,7 +52,7 @@ import {
   withQualifiedGatewaySessionEntry,
 } from "../session-utils-store.js";
 import {
-  loadSessionEntry,
+  loadGatewaySessionEntryReadOnlyInWorker,
   prepareDeletedAgentSessionCheck,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -227,7 +227,12 @@ async function loadChatSendSessionContext(params: {
     "gateway.chat_send.load_session",
     () =>
       request.stopCommand
-        ? loadSessionEntry(sessionLoadKey, sessionLoadOptions, runtimeConfig)
+        ? loadGatewaySessionEntryReadOnlyInWorker({
+            excludeInternalEffects: true,
+            cfg: runtimeConfig,
+            key: sessionLoadKey,
+            ...sessionLoadOptions,
+          })
         : withGatewaySessionEntry(
             sessionLoadKey,
             sessionLoadOptions,
@@ -432,7 +437,7 @@ export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedC
 /** Validate a worker-prepared admission row against the qualified session source. */
 function assertCurrentChatSendSession(
   session: PreparedChatSendSession,
-  latest: ReturnType<typeof loadSessionEntry>,
+  latest: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
 ) {
   if (session.sessionRoutingChanged(latest.cfg)) {
     throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
@@ -612,10 +617,10 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
     sessionEntry: prepared.entry,
     commitGuard: () => {
       params.assertCurrent?.();
+      // The initialization CAS checks absence; the qualified target keeps its physical store.
       session.assertSessionTargetCurrent();
       prepared.assertSkillSelection();
       const currentConfig = context.getRuntimeConfig();
-      const current = loadSessionEntry(session.sessionLoadKey, session.sessionLoadOptions);
       const currentCreation = resolveOperatorSessionCreation(client);
       const currentModel = resolveSessionModelRef(currentConfig, undefined, agentId);
       const creationError = authorizeGatewaySessionCreation({
@@ -629,9 +634,6 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       if (
         creationError ||
         !hasGatewayAdminScope(client) ||
-        current.entry ||
-        current.storePath !== session.storePath ||
-        current.canonicalKey !== sessionKey ||
         session.sessionRoutingChanged(currentConfig) ||
         currentCreation.actor?.id !== prepared.entry.createdActor?.id ||
         resolveCreatorSandbox(currentConfig, currentCreation) !== prepared.entry.sandbox ||

@@ -14,7 +14,7 @@ import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -63,7 +63,7 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
           respond(false, undefined, requested.error);
           return;
         }
-        const target = resolveSessionSharingTarget({
+        const target = await resolveSessionSharingTargetAsync({
           cfg,
           sessionKey: params.sessionKey,
           agentId: requested.agentId,

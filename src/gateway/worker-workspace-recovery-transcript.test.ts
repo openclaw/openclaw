@@ -47,12 +47,10 @@ function loadSessionRuntime() {
 
 async function createHandlers(identity = IDENTITY) {
   const runtime = await loadSessionRuntime();
-  const target = runtime.resolveGatewaySessionStoreTargetWithStore({
+  const target = await runtime.resolveGatewaySessionStoreTargetInWorker({
     cfg: getRuntimeConfig(),
     key: identity.sessionKey,
     agentId: identity.agentId,
-    clone: false,
-    exactRead: true,
   });
   const entry = loadSessionEntryReadOnly({
     ...identity,
@@ -374,13 +372,14 @@ describe("worker workspace recovery transcript reporting", () => {
                   sessionTarget: {
                     ...IDENTITY,
                     storePath: (
-                      await loadSessionRuntime()
-                    ).resolveGatewaySessionStoreTargetWithStore({
-                      cfg: getRuntimeConfig(),
-                      key: IDENTITY.sessionKey,
-                      agentId: IDENTITY.agentId,
-                      clone: false,
-                    }).storePath,
+                      await (
+                        await loadSessionRuntime()
+                      ).resolveGatewaySessionStoreTargetInWorker({
+                        cfg: getRuntimeConfig(),
+                        key: IDENTITY.sessionKey,
+                        agentId: IDENTITY.agentId,
+                      })
+                    ).storePath,
                     expectedWriterRunId: "report-writer",
                   },
                   withTranscriptWrite: async (run) => await run(),

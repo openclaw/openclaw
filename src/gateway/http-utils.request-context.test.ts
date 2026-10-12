@@ -13,13 +13,13 @@ import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>();
   return {
     ...actual,
-    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
-      entry: sessionEntries.get(params.sessionKey),
-    }),
+    readResolvedSessionEntryInWorker: async (params: { sessionKey: string }) =>
+      sessionEntries.get(params.sessionKey),
   };
 });
 
@@ -33,8 +33,8 @@ const trustedRequestAuth = { trustDeclaredOperatorScopes: true };
 beforeEach(() => sessionEntries.clear());
 
 describe("resolveGatewayRequestContext", () => {
-  it("uses normalized x-openclaw-message-channel", () => {
-    const result = resolveGatewayRequestContext({
+  it("uses normalized x-openclaw-message-channel", async () => {
+    const result = await resolveGatewayRequestContext({
       req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),
       model: "openclaw",
       sessionPrefix: "openai",
@@ -43,8 +43,8 @@ describe("resolveGatewayRequestContext", () => {
     expect(result.messageChannel).toBe("custom-channel");
   });
 
-  it("includes session prefix and user in generated session key", () => {
-    const result = resolveGatewayRequestContext({
+  it("includes session prefix and user in generated session key", async () => {
+    const result = await resolveGatewayRequestContext({
       req: createReq(),
       model: "openclaw",
       user: "alice",
@@ -63,21 +63,21 @@ describe("resolveGatewayRequestContext", () => {
     "agent:main:cron:daily",
     "agent:main:acp:run-1",
     "agent:main:harness:codex:supervision:native-thread",
-  ])("rejects reserved internal session-key override %s", (sessionKey) => {
-    expect(() =>
+  ])("rejects reserved internal session-key override %s", async (sessionKey) => {
+    await expect(
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-session-key": sessionKey }),
         model: "openclaw",
         sessionPrefix: "openai",
       }),
-    ).toThrow(/reserved internal session namespaces/u);
+    ).rejects.toThrow(/reserved internal session namespaces/u);
   });
 
-  it("preserves an existing unlocked legacy harness-prefixed override", () => {
+  it("preserves an existing unlocked legacy harness-prefixed override", async () => {
     const sessionKey = "agent:main:harness:legacy-notes";
     sessionEntries.set(sessionKey, { sessionId: "legacy-session", modelSelectionLocked: false });
 
-    const result = resolveGatewayRequestContext({
+    const result = await resolveGatewayRequestContext({
       req: createReq({ "x-openclaw-session-key": sessionKey }),
       model: "openclaw",
       sessionPrefix: "openai",
@@ -86,7 +86,7 @@ describe("resolveGatewayRequestContext", () => {
     expect(result.sessionKey).toBe(sessionKey);
   });
 
-  it("rejects an existing locked harness-prefixed override", () => {
+  it("rejects an existing locked harness-prefixed override", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:native-thread";
     sessionEntries.set(sessionKey, {
       sessionId: "locked-session",
@@ -94,49 +94,49 @@ describe("resolveGatewayRequestContext", () => {
       modelSelectionLocked: true,
     });
 
-    expect(() =>
+    await expect(
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-session-key": sessionKey }),
         model: "openclaw",
         sessionPrefix: "openai",
       }),
-    ).toThrow(/reserved internal session namespaces/u);
+    ).rejects.toThrow(/reserved internal session namespaces/u);
   });
 
-  it("does not build session state for explicit unknown agent ids", () => {
-    expect(() =>
+  it("does not build session state for explicit unknown agent ids", async () => {
+    await expect(
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-agent-id": "missing-agent" }),
         model: "openclaw",
         sessionPrefix: "openai",
       }),
-    ).toThrow(/Unknown agent/);
+    ).rejects.toThrow(/Unknown agent/);
 
-    expect(() =>
+    await expect(
       resolveGatewayRequestContext({
         req: createReq(),
         model: "openclaw/missing-agent",
         sessionPrefix: "openai",
       }),
-    ).toThrow(/Unknown agent/);
+    ).rejects.toThrow(/Unknown agent/);
 
-    expect(() =>
+    await expect(
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-agent-id": "!!!" }),
         model: "openclaw",
         sessionPrefix: "openai",
       }),
-    ).toThrow("Unknown agent '!!!'.");
+    ).rejects.toThrow("Unknown agent '!!!'.");
   });
 
-  it("rejects invalid model syntax before accepting an explicit agent header", () => {
-    expect(() =>
+  it("rejects invalid model syntax before accepting an explicit agent header", async () => {
+    await expect(
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-agent-id": "main" }),
         model: "gpt-4o",
         sessionPrefix: "openai",
       }),
-    ).toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+    ).rejects.toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
   });
 });
 

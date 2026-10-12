@@ -168,6 +168,11 @@ export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessi
 
 /** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "getSessionEntry",
+    replacement: "getSessionEntryAsync",
+  });
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
@@ -377,6 +382,11 @@ function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "
 
 /** @deprecated Use readSessionUpdatedAtAsync. Removed at the next Plugin SDK major. */
 export function readSessionUpdatedAt(params: SessionStoreReadParams): number | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "readSessionUpdatedAt",
+    replacement: "readSessionUpdatedAtAsync",
+  });
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
 }
 

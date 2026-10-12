@@ -8,7 +8,7 @@ export type CliHistoryWriter = {
   authFingerprint: string;
   lifecycleRevision?: string;
   assertCurrent: () => void;
-  assertReadable: () => void;
+  assertReadable: () => void | Promise<void>;
 };
 
 export type CliHistoryWriterFacts = Pick<

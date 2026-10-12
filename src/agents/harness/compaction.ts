@@ -620,6 +620,10 @@ async function maybeCompactAgentHarnessSessionInGeneration(
         retainSourceAuthority,
       }),
     };
+    if (sourceAuthority.prepareDispatch) {
+      await sourceAuthority.prepareDispatch();
+    }
+    assertSourceCurrent();
     if (options.nativeCompactionRequest) {
       if (nativeCompaction) {
         // Registry ownership, not a public harness property or result, grants

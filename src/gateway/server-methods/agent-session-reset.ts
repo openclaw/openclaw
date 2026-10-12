@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -10,7 +11,7 @@ import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/a
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -172,16 +173,18 @@ export async function resolveBareSessionResetResult(params: {
   });
 }
 
-export function loadBareSessionResetDeliverySession(params: {
+export async function loadBareSessionResetDeliverySession(params: {
   sessionKey: string;
   agentId?: string;
-}): {
+}): Promise<{
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   agentId: string;
-} {
-  const loaded = loadSessionEntry(params.sessionKey, {
-    clone: false,
+}> {
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: getRuntimeConfig(),
+    key: params.sessionKey,
+    excludeInternalEffects: true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   return {

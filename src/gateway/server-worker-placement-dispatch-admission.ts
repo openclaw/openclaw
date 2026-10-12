@@ -421,7 +421,7 @@ export function createGatewayWorkerDispatchAdmission(
         signal?.throwIfAborted();
         sourceAuthorize?.();
         const runtime = await loadSessionRuntime();
-        const target = resolveWorkerPlacementSessionStoreTarget(
+        const target = await resolveWorkerPlacementSessionStoreTarget(
           runtime,
           getRuntimeConfig(),
           identity,

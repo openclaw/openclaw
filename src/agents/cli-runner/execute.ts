@@ -128,7 +128,7 @@ export async function executePreparedCliRun(
         ...inputContext,
         params: {
           ...inputContext.params,
-          assertCurrent: inputContext.cliHistoryWriter.assertReadable,
+          assertCurrent: inputContext.cliHistoryWriter.assertCurrent,
         },
       }
     : inputContext;

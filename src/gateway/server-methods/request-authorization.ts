@@ -447,7 +447,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
               return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
             });
           }, authorizeSessionAndConsume)
-        : params.method === "chat.send" && !sessionPolicy && !params.consumeSessionTurn
+        : !sessionPolicy && !params.consumeSessionTurn && !subscriptionAccessOnly
           ? {
               kind: "complete" as const,
               value: await resolveSessionMutationAuthorizationAsync({

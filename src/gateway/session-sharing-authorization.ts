@@ -34,6 +34,7 @@ import {
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
 export type SessionMutationAuthorizationParams = {
   client: GatewayClient | null;
@@ -46,6 +47,7 @@ export type SessionMutationAuthorizationParams = {
   sessionScope?: SessionOperatorScope;
   sessionRowRead?: SessionRowReadView;
   preparedSharing?: PreparedMutationSharing;
+  preparedTalkSessionTarget?: PreparedTalkSessionTarget;
   preparedProfiles?: PreparedSessionSharingProfiles;
 };
 

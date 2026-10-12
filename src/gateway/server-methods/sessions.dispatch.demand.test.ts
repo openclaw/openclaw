@@ -69,7 +69,7 @@ async function withDemandFixture(
     const sessionRuntime =
       await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
     dispatchTestMocks.resolveTarget.mockImplementation(
-      sessionRuntime.resolveGatewaySessionStoreTargetWithStore,
+      sessionRuntime.resolveGatewaySessionStoreTargetInWorker,
     );
     dispatchTestMocks.findLiveByOwner.mockImplementation((_kind: string, sessionKey: string) => ({
       id: sessionKey,

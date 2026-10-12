@@ -16,11 +16,10 @@ import {
   type SessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntryPatchCommitted } from "../config/sessions/session-entry-patch.types.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
@@ -81,6 +80,7 @@ const SYSTEM_PROMPT = [
 
 type Tracked = ActivitySummaryTarget & {
   sessionId: string;
+  entry: SessionEntry;
   lifecycleRevision?: string;
   storePath: string;
   readyAt: number;
@@ -102,7 +102,7 @@ class ActivitySummaryCancelledError extends Error {
 }
 
 export type SessionActivitySummaryService = {
-  ensure: (target: ActivitySummaryTarget) => ActivitySummaryView;
+  ensure: (target: ActivitySummaryTarget, entry: SessionEntry | undefined) => ActivitySummaryView;
   handleEvent: (event: SessionObserverEvent) => void;
   handleTranscript: (event: InternalSessionTranscriptUpdate) => void;
   handleLifecycle: (event: SessionLifecycleEvent) => void;
@@ -120,6 +120,7 @@ export function createSessionActivitySummaries(deps: {
   const states = new Map<string, Tracked>();
   const queue: Tracked[] = [];
   const running = new Set<Promise<void>>();
+  const admissions = new Set<Promise<unknown>>();
   const modelBackoffs = new Map<string, { until: number; failures: number }>();
   let pumpJob: GatewayScheduledJob | undefined;
   const owner = Symbol("activity-summary-owner");
@@ -134,13 +135,12 @@ export function createSessionActivitySummaries(deps: {
       agentId: target.agentId,
     }),
   });
-  const read = (target: ActivitySummaryTarget) => {
+  const read = async (target: ActivitySummaryTarget, storePath = scope(target).storePath) => {
     const projection = deps.getSessionRowProjection?.();
     if (projection?.sharingRevision) {
       return projection.sharingTarget(target)?.entry;
     }
-    // Startup and store-topology recovery have no current resident facts yet.
-    return loadSessionEntryReadOnly({ ...scope(target), projection: "list" });
+    return readSessionEntryReadOnlyInWorker({ ...scope(target), storePath, projection: "list" });
   };
   const current = (state: Tracked) =>
     !disposed &&
@@ -176,17 +176,20 @@ export function createSessionActivitySummaries(deps: {
     }
     setSessionActivitySummaryState(state, owner);
   };
-  const admit = (target: ActivitySummaryTarget): Tracked | undefined => {
-    if (
-      disposed ||
-      isCronSessionKey(target.key) ||
-      isSubagentSessionKey(target.key) ||
-      isIncognitoSessionKey(target.key) ||
-      !modelRef(target)
-    ) {
+  const canTrack = (target: ActivitySummaryTarget) =>
+    !disposed &&
+    !isCronSessionKey(target.key) &&
+    !isSubagentSessionKey(target.key) &&
+    !isIncognitoSessionKey(target.key) &&
+    Boolean(modelRef(target));
+  const admit = (
+    target: ActivitySummaryTarget,
+    entry: SessionEntry | undefined,
+    storePath = scope(target).storePath,
+  ): Tracked | undefined => {
+    if (!canTrack(target)) {
       return undefined;
     }
-    const entry = read(target);
     if (
       !entry?.sessionId ||
       entry.initializationPending ||
@@ -196,7 +199,6 @@ export function createSessionActivitySummaries(deps: {
     ) {
       return undefined;
     }
-    const storePath = scope(target).storePath;
     const key = activitySummaryScope(target);
     let state = states.get(key);
     if (
@@ -209,6 +211,7 @@ export function createSessionActivitySummaries(deps: {
       state = undefined;
     }
     if (state) {
+      state.entry = entry;
       return state;
     }
     if (states.size >= MAX_TRACKED) {
@@ -222,6 +225,7 @@ export function createSessionActivitySummaries(deps: {
     }
     state = {
       ...target,
+      entry,
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision,
       storePath,
@@ -256,7 +260,7 @@ export function createSessionActivitySummaries(deps: {
       throw new ActivitySummaryCancelledError();
     }
   };
-  const assertCurrentEntry = (state: Tracked, entry: ReturnType<typeof read>) => {
+  const assertCurrentEntry = (state: Tracked, entry: SessionEntry | undefined) => {
     if (
       !entry ||
       entry.initializationPending ||
@@ -267,10 +271,6 @@ export function createSessionActivitySummaries(deps: {
       throw new ActivitySummaryCancelledError();
     }
     return entry;
-  };
-  const assertCurrent = (state: Tracked, expectedModel: string) => {
-    assertCurrentOwner(state, expectedModel);
-    return assertCurrentEntry(state, read(state));
   };
   const schedule = (state: Tracked, immediate: boolean) => {
     if (!current(state)) {
@@ -300,8 +300,7 @@ export function createSessionActivitySummaries(deps: {
       state.calls >= MAX_CALLS_PER_HOUR ? state.windowStart + HOUR_MS : 0,
     );
     publish(state, "updating");
-    // Every admitted session occupies at most one queue entry. The tracked-session
-    // bound also bounds pending work, so a full Activity page cannot overflow it.
+    // The tracked-session bound also bounds the queue, with at most one entry per session.
     if (!queue.includes(state)) {
       queue.push(state);
     }
@@ -326,12 +325,13 @@ export function createSessionActivitySummaries(deps: {
         publish(state, "unavailable");
         return;
       }
-      const entry = assertCurrent(state, ref);
+      assertCurrentOwner(state, ref);
+      const entry = state.entry;
       const transcriptScope = { ...scope(state), sessionId: state.sessionId };
       const source = await readActivitySummarySource({
         scope: transcriptScope,
         previous: readSessionActivitySummary(entry),
-        assertCurrent: () => assertCurrent(state, ref),
+        assertCurrent: () => assertCurrentOwner(state, ref),
       });
       if (!source) {
         state.dirty = true;
@@ -369,7 +369,7 @@ export function createSessionActivitySummaries(deps: {
             if (controller.signal.aborted || state.controller !== controller) {
               throw controller.signal.reason ?? new ActivitySummaryCancelledError();
             }
-            assertCurrent(state, ref);
+            assertCurrentOwner(state, ref);
           };
           const execute = async () => {
             const prepared = await (deps.prepareModel ?? defaultPrepareModel)({
@@ -415,7 +415,7 @@ export function createSessionActivitySummaries(deps: {
           clearTimeout(timer);
         }
       }
-      assertCurrent(state, ref);
+      assertCurrentOwner(state, ref);
       if (omitted && text && !text.endsWith(OMISSION_NOTICE)) {
         text = `${truncateUtf16Safe(text, 449 - OMISSION_NOTICE.length)} ${OMISSION_NOTICE}`;
       }
@@ -460,6 +460,7 @@ export function createSessionActivitySummaries(deps: {
         state.dirty = true;
         return;
       }
+      state.entry = { ...state.entry, activitySummary: committed.activitySummary };
       assertCurrentOwner(state, ref);
       if (committedTranscript?.sessionId !== state.sessionId) {
         throw new Error("Activity recap patch omitted its transcript predicate receipt");
@@ -506,8 +507,7 @@ export function createSessionActivitySummaries(deps: {
                 ? Math.max(direct, parsed ?? 0)
                 : parsed;
             }) ?? 0;
-          // Long provider retry floors remain unavailable rather than being shortened
-          // into repeated billable attempts or overflowing native timers.
+          // Long provider retry floors cannot become repeated billable attempts or overflow timers.
           state.retryPending &&= Number.isFinite(retryAfter) && retryAfter <= HOUR_MS;
           delay = Math.max(computeBackoff(RETRY_BACKOFF, failures), retryAfter);
           modelBackoffs.set(ref, { until: now() + delay, failures });
@@ -522,8 +522,7 @@ export function createSessionActivitySummaries(deps: {
         });
       }
     } finally {
-      // Cancellation can precede provider settlement. Retain the slot and request identity
-      // until owned work settles so a timed-out prepare cannot escape the concurrency bound.
+      // Retain the slot until provider settlement, including after timeout or cancellation.
       await ownedWork?.catch(() => undefined);
       state.controller = undefined;
       state.inFlight = false;
@@ -581,13 +580,6 @@ export function createSessionActivitySummaries(deps: {
       running.add(work);
     }
   };
-  const request = (target: ActivitySummaryTarget) => {
-    const state = admit(target);
-    if (state) {
-      schedule(state, true);
-    }
-    return state;
-  };
   const eventTarget = (key?: string, agentId?: string): ActivitySummaryTarget | undefined => {
     const agentOwner = agentId ?? (key ? parseAgentSessionKey(key)?.agentId : undefined);
     return key && agentOwner
@@ -609,23 +601,53 @@ export function createSessionActivitySummaries(deps: {
       }
     }
   });
+  const ensure = (requested: ActivitySummaryTarget, entry: SessionEntry | undefined) => {
+    const target = eventTarget(requested.key, requested.agentId)!;
+    if (isCronSessionKey(target.key)) {
+      return { state: "unavailable" as const };
+    }
+    const state = admit(target, entry);
+    if (state) {
+      schedule(state, true);
+    }
+    const projected = projectSessionActivitySummary({ ...target, cfg: deps.getConfig(), entry });
+    if (!state && projected?.state !== "current") {
+      return { ...projected, state: "unavailable" as const };
+    }
+    return projected ?? { state: "updating" as const };
+  };
+  const trackAdmission = <T>(work: Promise<T>): Promise<T> => {
+    admissions.add(work);
+    void work.finally(() => admissions.delete(work)).catch(() => {});
+    return work;
+  };
+  const requestInBackground = (
+    target: ActivitySummaryTarget,
+    accept?: (state: Tracked) => boolean,
+  ) => {
+    if (!canTrack(target)) {
+      return;
+    }
+    const storePath = scope(target).storePath;
+    const consume = (entry: SessionEntry | undefined) => {
+      const state = admit(target, entry, storePath);
+      if (state && (!accept || accept(state))) {
+        schedule(state, !accept);
+      }
+    };
+    const projection = deps.getSessionRowProjection?.();
+    if (projection?.sharingRevision) {
+      consume(projection.sharingTarget(target)?.entry);
+      return;
+    }
+    void runInDetachedAsyncContext(() =>
+      trackAdmission(read(target, storePath).then(consume)),
+    ).catch((error: unknown) => {
+      log.debug("Activity recap admission failed", { error: formatErrorMessage(error) });
+    });
+  };
   return {
-    ensure(requested) {
-      const target = eventTarget(requested.key, requested.agentId)!;
-      if (isCronSessionKey(target.key)) {
-        return { state: "unavailable" };
-      }
-      const state = request(target);
-      const projected = projectSessionActivitySummary({
-        ...target,
-        cfg: deps.getConfig(),
-        entry: read(target),
-      });
-      if (!state && projected?.state !== "current") {
-        return { ...projected, state: "unavailable" };
-      }
-      return projected ?? { state: "updating" };
-    },
+    ensure,
     handleTranscript(event) {
       const target = eventTarget(
         event.target?.sessionKey ?? event.sessionKey,
@@ -634,16 +656,14 @@ export function createSessionActivitySummaries(deps: {
       if (!target || getAgentRunContext(event.runId ?? "")?.isHeartbeat) {
         return;
       }
-      const state = admit(target);
-      if (
-        !state ||
-        ((event.target?.sessionId ?? event.sessionId) &&
-          (event.target?.sessionId ?? event.sessionId) !== state.sessionId) ||
-        (event.lifecycleRevision && event.lifecycleRevision !== state.lifecycleRevision)
-      ) {
-        return;
-      }
-      schedule(state, false);
+      const sessionId = event.target?.sessionId ?? event.sessionId;
+      const lifecycleRevision = event.lifecycleRevision;
+      requestInBackground(
+        target,
+        (state) =>
+          (!sessionId || sessionId === state.sessionId) &&
+          (!lifecycleRevision || lifecycleRevision === state.lifecycleRevision),
+      );
     },
     handleEvent(event) {
       const runContext = getAgentRunContext(event.runId);
@@ -659,7 +679,7 @@ export function createSessionActivitySummaries(deps: {
         event.agentId ?? runContext?.agentId,
       );
       if (target) {
-        request(target);
+        requestInBackground(target);
       }
     },
     handleLifecycle(event) {
@@ -668,7 +688,7 @@ export function createSessionActivitySummaries(deps: {
       }
       const target = eventTarget(event.sessionKey, event.agentId);
       if (target) {
-        request(target);
+        requestInBackground(target);
       }
     },
     async dispose() {
@@ -681,6 +701,7 @@ export function createSessionActivitySummaries(deps: {
         drop(state);
       }
       queue.length = 0;
+      await Promise.allSettled(admissions);
       await Promise.allSettled(running);
     },
   };

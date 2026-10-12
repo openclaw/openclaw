@@ -678,7 +678,10 @@ export async function recordInboundSessionMeta(
 
 /** Updates last-route/delivery metadata without refreshing activity timestamps. */
 export async function updateSessionLastRoute(
-  params: UpdateSessionLastRouteParams & { assertCommitAllowed?: () => void },
+  params: UpdateSessionLastRouteParams & {
+    assertCommitAllowed?: () => void;
+    workerGuard?: SessionEntryPatchGuard;
+  },
 ): Promise<SessionEntry | null> {
   return await updateSessionLastRouteInScope(
     { sessionKey: params.sessionKey, storePath: params.storePath },

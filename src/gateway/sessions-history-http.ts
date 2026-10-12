@@ -52,9 +52,9 @@ import {
   resolveTranscriptPathForComparison,
   resolveTranscriptUpdatePathForComparison,
 } from "./session-transcript-path.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -248,13 +248,7 @@ async function serveAuthorizedSessionHistory(
         readSource: { agentId: actor.agentId, path: actor.path },
       };
     } else {
-      target = resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: sessionKey,
-        exactRead: true,
-        // Preserve configured-store initialization; retired and incognito targets stay read-only.
-        readOnly: false,
-      });
+      target = await resolveGatewaySessionStoreTargetInWorker({ cfg, key: sessionKey });
       entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
     }
   } catch (error) {

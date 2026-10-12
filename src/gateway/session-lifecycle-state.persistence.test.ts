@@ -16,6 +16,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   emitAgentEvent,
@@ -307,6 +308,7 @@ it.each(["success", "failed-write"])(
       context,
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
     };
+    let admissionEntry: SessionEntry | undefined = { sessionId, updatedAt: 1_000 };
     const admission = createAgentAdmissionController({
       ...admissionParams,
       dedupeLifecycle: createAgentDedupeLifecycle({
@@ -317,6 +319,10 @@ it.each(["success", "failed-write"])(
       getRequestedSessionKey: () => target.sessionKey,
       getResolvedSessionKey: () => target.sessionKey,
       getResolvedSessionId: () => sessionId,
+      getSessionEntry: () => admissionEntry,
+      setSessionEntry: (entry) => {
+        admissionEntry = entry;
+      },
       getResolvedSessionAgentId: () => "main",
       getAgentId: () => "main",
       getSessionPersisted: () => true,

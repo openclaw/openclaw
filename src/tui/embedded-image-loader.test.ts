@@ -2,7 +2,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import * as managedMedia from "../gateway/managed-image-attachments.js";
 import * as sessionAgent from "../gateway/session-request-agent.js";
-import * as sessions from "../gateway/session-utils.js";
+import * as sessions from "../gateway/session-utils-store-worker.js";
 import { loadEmbeddedImage } from "./embedded-image-loader.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -14,7 +14,7 @@ it("keeps a cancelled local image load pending until the thumbnail owner settles
     ok: true,
     agentId: "main",
   });
-  vi.spyOn(sessions, "loadGatewaySessionEntryReadOnly").mockReturnValue({
+  vi.spyOn(sessions, "loadGatewaySessionEntryReadOnlyInWorker").mockResolvedValue({
     cfg: {},
     agentId: "main",
     canonicalKey: sessionKey,

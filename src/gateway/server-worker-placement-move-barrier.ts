@@ -35,7 +35,7 @@ export async function runWorkerPlacementHandoff<T>(
   begin: (resolved: Awaited<ReturnType<typeof resolveWorkerPlacementSessionTarget>>) => Promise<T>,
 ): Promise<T> {
   const { sessionId, sessionKey, agentId, action, signal } = request;
-  const target = resolveWorkerPlacementSessionStoreTarget(
+  const target = await resolveWorkerPlacementSessionStoreTarget(
     sessionRuntime,
     getRuntimeConfig(),
     request,

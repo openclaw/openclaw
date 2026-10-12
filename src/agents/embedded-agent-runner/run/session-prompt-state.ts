@@ -41,7 +41,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   let activeSessionId = params.sessionId;
   let activeSessionFile = params.sessionFile;
   let activeSessionTarget: ContextEngineSessionTarget | undefined =
-    buildContextEngineCompactionSessionTarget({
+    await buildContextEngineCompactionSessionTarget({
       agentId: params.agentId ?? sessionAgentId,
       config: params.config,
       sessionFile: activeSessionFile,

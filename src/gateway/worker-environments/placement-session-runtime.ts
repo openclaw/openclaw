@@ -6,18 +6,24 @@ import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { resolveSessionConfiguredDefault } from "../../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { captureRuntimeStateEnvironment } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { resolveSessionSelectedModelRef } from "../session-utils-model-selection.js";
 import { createGatewaySessionEntryReader } from "../session-utils-store-lineage.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { resolveWorkerPlacementCapabilities } from "./placement-capabilities.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 
@@ -73,8 +79,76 @@ export async function resolveWorkerPlacementSessionRuntimeAsync(
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();
-  return resolveWorkerPlacementSessionRuntime({
+  const configured =
+    ownership?.modelRef ?? resolveSessionConfiguredDefault(params.cfg, params.agentId);
+  const storedOverride = ownership?.modelRef
+    ? null
+    : await resolveStoredModelOverrideAsync({
+        sessionEntry: params.entry,
+        sessionKey: params.sessionKey,
+        parentSessionKey: params.entry.parentSessionKey,
+        defaultProvider: configured.provider,
+        loadSessionEntry: async (key) => {
+          const metadata = captureSessionEntryMetadataRead({
+            sessionKey: key,
+            agentId: params.agentId,
+          });
+          if (metadata) {
+            return metadata.readCurrent();
+          }
+          if (key === "global" || key === "unknown") {
+            const target = await resolveGatewaySessionStoreTargetInWorker({
+              cfg: params.cfg,
+              agentId: params.agentId,
+              key: params.sessionKey,
+              assertActive: params.assertCurrent,
+            });
+            return await readSessionEntryReadOnlyInWorker({
+              agentId: target.readSource?.agentId ?? target.agentId,
+              storePath: target.readSource?.path ?? target.storePath,
+              sessionKey: key,
+            });
+          }
+          const agentId = parseAgentSessionKey(key)?.agentId ?? params.agentId;
+          const storedKey = resolveStoredSessionKeyForAgentStore({
+            cfg: params.cfg,
+            agentId,
+            sessionKey: key,
+            preserveQualifiedAddress: true,
+          });
+          const stored = await resolveGatewaySessionStoreTargetInWorker({
+            cfg: params.cfg,
+            agentId,
+            key: storedKey,
+            preserveQualifiedAddress: true,
+            assertActive: params.assertCurrent,
+          });
+          const entry = stored.store[storedKey];
+          if (entry || isIncognitoSessionKey(storedKey)) {
+            return entry;
+          }
+          const aliasKey = resolveStoredSessionKeyForAgentStore({
+            cfg: params.cfg,
+            agentId,
+            sessionKey: key,
+          });
+          if (aliasKey === storedKey) {
+            return undefined;
+          }
+          const aliased = await resolveGatewaySessionStoreTargetInWorker({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            key,
+            assertActive: params.assertCurrent,
+          });
+          return aliased.store[aliased.canonicalKey];
+        },
+      });
+  params.assertCurrent?.();
+  return resolveWorkerPlacementModelRuntime({
     ...params,
+    provider: storedOverride?.provider ?? configured.provider,
+    model: storedOverride?.model ?? configured.model,
     preparedRuntimeOwnership: ownership ?? null,
   });
 }

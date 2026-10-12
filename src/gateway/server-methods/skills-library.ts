@@ -45,6 +45,7 @@ import { prepareSessionSharingSource } from "../session-sharing-source.js";
 import {
   authorizeSessionSharingTarget,
   resolveSessionMutationAuthorization,
+  resolveSessionSharingTargetAsync,
   resolveSessionSharingTarget,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
@@ -102,14 +103,22 @@ export async function activateLibrarySelection(
     throw new SessionMutationAuthorizationChangedError(authorization.error);
   }
   const resolveTarget = () =>
-    resolveSessionSharingTarget({ cfg: context.getRuntimeConfig(), sessionKey: params.sessionKey });
+    resolveSessionSharingTarget({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+    });
   const selected =
     getSessionActorStorageBinding({ sessionKey: params.sessionKey }) ||
     captureIncognitoSessionBinding({ sessionKey: params.sessionKey })
       ? await selectedSession(options, params.sessionKey)
       : undefined;
   try {
-    const target = selected?.target ?? resolveTarget();
+    const target =
+      selected?.target ??
+      (await resolveSessionSharingTargetAsync({
+        cfg: context.getRuntimeConfig(),
+        sessionKey: params.sessionKey,
+      }));
     if (!target) {
       throw new SkillLibraryError("NOT_FOUND", "Session not found.");
     }
@@ -196,12 +205,14 @@ async function selectedSession(options: SkillLibraryRequestOwner, sessionKey: st
     ? captureSessionActorMutationFacts(memory, sessionKey, true)
     : binding && captureIncognitoSessionMutationFacts(binding, sessionKey, true);
   const assertRouting = captureSessionMutationRouting(sourceCfg);
-  const resolve = (): SessionSharingTarget => {
+  const resolve = (preparedTarget?: SessionSharingTarget | null): SessionSharingTarget => {
     const cfg = options.context.getRuntimeConfig();
     assertRouting(cfg);
     const target = actorFacts
       ? actorFacts.readCurrent().target
-      : resolveSessionSharingTarget({ cfg, sessionKey });
+      : preparedTarget === undefined
+        ? resolveSessionSharingTarget({ cfg, sessionKey })
+        : preparedTarget;
     if (!target) {
       throw new SkillLibraryError("NOT_FOUND", "Session not found.");
     }
@@ -225,7 +236,9 @@ async function selectedSession(options: SkillLibraryRequestOwner, sessionKey: st
       },
     };
   };
-  let target = resolve();
+  let target = resolve(
+    actorFacts ? undefined : await resolveSessionSharingTargetAsync({ cfg: sourceCfg, sessionKey }),
+  );
   const held =
     binding &&
     (await prepareSessionSharingSource(target, () => {

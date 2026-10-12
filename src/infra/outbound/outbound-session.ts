@@ -31,7 +31,6 @@ import {
   buildInboundSessionCreationStamp,
   inheritSessionCreationPolicy,
 } from "../../config/sessions/session-entry-provenance.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -237,8 +236,6 @@ type OutboundSessionEntryParams = {
   mirrorSessionKey?: string;
   creation?: MsgContext["SessionCreation"];
   sourceSessionKey?: string;
-  /** Revalidates caller-owned route authority at the final persistence boundary. */
-  assertCommitAllowed?: SessionSourceAssertion;
   workerGuard?: SessionEntryPatchGuard;
 };
 
@@ -357,7 +354,6 @@ async function persistOutboundSessionEntry(
     accountId: params.accountId ?? undefined,
     threadId: params.route.threadId,
     ctx,
-    ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
     ...(params.workerGuard ? { workerGuard: params.workerGuard } : {}),
   };
   const entry = prepared
@@ -384,7 +380,6 @@ async function persistOutboundSessionEntry(
         fallbackEntry,
         preserveActivity: true,
         workerGuard: params.workerGuard ?? {},
-        assertCommitAllowed: params.assertCommitAllowed,
       },
     );
   }

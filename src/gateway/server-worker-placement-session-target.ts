@@ -6,7 +6,10 @@ import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js
 import { createSessionEntryRevisionGuard } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { createSessionTranscriptOwnerPredicate } from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
 import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
-import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  readSessionEntriesFromStoreInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -21,6 +24,8 @@ import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-i
 import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import type * as sessionUtils from "./session-utils.js";
 import type { WithPreparedWorkerWorkspaceRecovery } from "./worker-environments/placement-reclaim-contract.js";
 import type {
@@ -43,14 +48,14 @@ export type WorkerPlacementSessionRuntime = {
     ) => Promise<Pick<ManagedWorktreeRecord, "id" | "ownerId" | "path"> | undefined>;
   };
   resolveCanonicalSessionEntryFromStoreKeys: typeof sessionUtils.resolveCanonicalSessionEntryFromStoreKeys;
-  resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
+  resolveGatewaySessionStoreTargetInWorker: typeof resolveGatewaySessionStoreTargetInWorker;
 };
 
-export function resolveWorkerPlacementSessionStoreTarget(
+export async function resolveWorkerPlacementSessionStoreTarget(
   runtime: WorkerPlacementSessionRuntime,
   cfg: OpenClawConfig,
   identity: Pick<WorkerSessionPlacementIdentity, "sessionKey" | "agentId">,
-): ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore> {
+): ReturnType<typeof resolveGatewaySessionStoreTargetInWorker> {
   const memory = getSessionActorStorageBinding(identity);
   if (memory) {
     const entry = memory.actor.snapshot(memory.authority)?.entry;
@@ -74,13 +79,12 @@ export function resolveWorkerPlacementSessionStoreTarget(
       store: entry ? { [identity.sessionKey]: entry } : {},
     };
   }
-  return runtime.resolveGatewaySessionStoreTargetWithStore({
+  return runtime.resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: identity.sessionKey,
     agentId: identity.agentId,
+    projection: "full",
     preserveQualifiedAddress: true,
-    clone: false,
-    exactRead: true,
   });
 }
 
@@ -263,7 +267,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   signal?: AbortSignal;
   run: (workspace: WorkerSessionWorkspace, assertCurrent: () => void) => T | Promise<T>;
 }): Promise<T> {
-  const target = resolveWorkerPlacementSessionStoreTarget(
+  const target = await resolveWorkerPlacementSessionStoreTarget(
     params.sessionRuntime,
     params.getConfig(),
     params,
@@ -327,15 +331,15 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
-  expectedTarget?: ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
+  expectedTarget?: Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>;
   expectedEntry?: Pick<
-    NonNullable<ReturnType<typeof loadSessionEntryReadOnly>>,
+    InternalSessionEntry,
     "lifecycleRevision" | "worktree" | "repositoryWorkspaceId"
   >;
   errorMessage: string;
   readTarget?: (
     cfg: OpenClawConfig,
-  ) => ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
+  ) => Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>;
 }) {
   const memory = getSessionActorStorageBinding(params);
   const actorBinding = memory ? undefined : captureIncognitoSessionBinding(params);
@@ -345,9 +349,9 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   const resolveTarget = (cfg: OpenClawConfig) =>
     params.readTarget?.(cfg) ??
     resolveWorkerPlacementSessionStoreTarget(params.sessionRuntime, cfg, params);
-  const initialTarget = actorBinding
+  const initialTarget = await (actorBinding
     ? resolveWorkerPlacementSessionStoreTarget(params.sessionRuntime, params.config, params)
-    : resolveTarget(params.config);
+    : resolveTarget(params.config));
   const initialEntry: InternalSessionEntry | undefined = memory
     ? memory.actor.snapshot(memory.authority)?.entry
     : actorBinding
@@ -406,7 +410,19 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     : undefined;
   const resolveBinding = (config = params.config) => {
     actorClaim?.assertCurrent();
-    const target = memory || actorBinding ? initialTarget : resolveTarget(config);
+    // Workspace and command effects need current ownership when no actor publishes it.
+    const target =
+      memory || actorBinding
+        ? initialTarget
+        : (params.readTarget?.(config) ??
+          resolveGatewaySessionStoreTargetWithStore({
+            cfg: config,
+            key: params.sessionKey,
+            agentId: params.agentId,
+            preserveQualifiedAddress: true,
+            clone: false,
+            exactRead: true,
+          }));
     const entry: InternalSessionEntry | undefined = memory
       ? memory.actor.snapshot(memory.authority)?.entry
       : actorBinding
@@ -503,8 +519,7 @@ export const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(a
       placementSessionRuntime.resolveWorkerPlacementSessionRuntimeAsync,
     resolveCanonicalSessionEntryFromStoreKeys:
       sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
-    resolveGatewaySessionStoreTargetWithStore:
-      sessionUtils.resolveGatewaySessionStoreTargetWithStore,
+    resolveGatewaySessionStoreTargetInWorker,
   };
 });
 
@@ -513,16 +528,14 @@ export async function prepareWorkerPlacementRepositoryManifestRefs(
 ): Promise<() => readonly string[] | null> {
   const memory = getSessionActorStorageBinding(placement);
   const metadata = memory ? undefined : captureSessionEntryMetadataRead(placement);
-  const readEntry = () =>
-    memory
-      ? memory.actor.snapshot(memory.authority)?.entry
-      : metadata
-        ? metadata.readCurrent()
-        : loadSessionEntryReadOnly({
-            ...placement,
-            storePath: resolveSessionStorePathForScope(placement),
-          });
-  const entry = readEntry();
+  const entry = memory
+    ? memory.actor.snapshot(memory.authority)?.entry
+    : metadata
+      ? metadata.readCurrent()
+      : await readSessionEntryReadOnlyInWorker({
+          ...placement,
+          storePath: resolveSessionStorePathForScope(placement),
+        });
   if (entry?.sessionId !== placement.sessionId) {
     return () => null;
   }
@@ -530,7 +543,14 @@ export async function prepareWorkerPlacementRepositoryManifestRefs(
     ? await getSessionRepositoryWorkspaceStore().prepare(entry.repositoryWorkspaceId)
     : undefined;
   return () => {
-    const current = readEntry();
+    const current = memory
+      ? memory.actor.snapshot(memory.authority)?.entry
+      : metadata
+        ? metadata.readCurrent()
+        : loadSessionEntryReadOnly({
+            ...placement,
+            storePath: resolveSessionStorePathForScope(placement),
+          });
     if (
       current?.sessionId !== placement.sessionId ||
       current.lifecycleRevision !== entry.lifecycleRevision ||

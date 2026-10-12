@@ -158,7 +158,7 @@ describe("realtime relay finalization", () => {
         connId: "conn-finalize",
         cfg,
         controlSource: "transcript",
-        sessionTarget: prepareTalkSessionTarget(cfg, "agent:main:main"),
+        sessionTarget: await prepareTalkSessionTarget(cfg, "agent:main:main"),
         provider: {
           id: "relay-test",
           label: "Relay Test",

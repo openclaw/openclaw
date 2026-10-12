@@ -79,6 +79,12 @@ export function createSessionObserverWork(params: {
     if (closing) {
       return;
     }
+    if (!params.deps.readSession) {
+      void runInDetachedAsyncContext(() => handleEventAsync(event, settledError)).catch(
+        reportError,
+      );
+      return;
+    }
     const reader =
       event.sessionKey && event.agentId
         ? captureSessionObserverRead(params.deps, event.sessionKey, event.agentId)
@@ -193,7 +199,7 @@ export function createSessionObserverWork(params: {
             reader.assertCurrent();
             return consume(session);
           })
-        : consume(params.readSession(sessionKey, agentId));
+        : captureSessionObserverRead(params.deps, sessionKey, agentId).withRead(consume);
     },
     refreshAfterReset(
       sessionKey: string,
@@ -236,12 +242,14 @@ export function createSessionObserverWork(params: {
           publish();
         }
       };
-      if (nativeEvent || !state.reader) {
+      if (nativeEvent) {
         state.reader?.assertCurrent();
         consume(params.readSession(state.sessionKey, state.agentId));
         return undefined;
       }
-      return acceptedWork.track(() => state.reader!.withRead(consume)).catch(reportError);
+      const reader =
+        state.reader ?? captureSessionObserverRead(params.deps, state.sessionKey, state.agentId);
+      return acceptedWork.track(() => reader.withRead(consume)).catch(reportError);
     },
     async getCompanionSnapshotAsync(this: void, sessionKey: string, selectedAgentId?: string) {
       if (closing) {

@@ -49,9 +49,11 @@ describe("session sandbox override", () => {
         sandboxRequired: false,
       });
       expect(
-        resolveSandboxRuntimeStatusesForPersistedSessions([
-          { cfg, agentId: "main", env: state.env, sessionKeys: [optional, required] },
-        ])[0],
+        (
+          await resolveSandboxRuntimeStatusesForPersistedSessions([
+            { cfg, agentId: "main", env: state.env, sessionKeys: [optional, required] },
+          ])
+        )[0],
       ).toMatchObject([
         { sandboxed: false, sandboxRequired: false },
         { sandboxed: true, sandboxRequired: true },

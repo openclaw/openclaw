@@ -126,7 +126,7 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
       connId: client.connId,
       cfg: kernel.cfgAtStart,
       controlSource: "delegation",
-      sessionTarget: prepareTalkSessionTarget(kernel.cfgAtStart, relayTarget.sessionKey),
+      sessionTarget: await prepareTalkSessionTarget(kernel.cfgAtStart, relayTarget.sessionKey),
       provider: {
         id: "close-test",
         label: "Close Test",

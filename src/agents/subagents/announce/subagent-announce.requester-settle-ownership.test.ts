@@ -114,9 +114,10 @@ function wakeParams() {
 }
 
 beforeEach(() => {
-  vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockReturnValue(() => ({
-    sessionId: "sess-main",
-  }));
+  vi.spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent").mockResolvedValue({
+    readCurrent: () => ({ sessionId: "sess-main" }),
+    release() {},
+  });
   vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
     readChildCompletionFindings(children, (runId) =>
       registryRuntimeMock.listSubagentRunsForRequester().find((entry) => entry.runId === runId),

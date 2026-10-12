@@ -518,7 +518,7 @@ describe("worker turn launcher terminal results", () => {
       placements,
       loadSessionRuntime: async () => ({
         managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetWithStore: () => ({
+        resolveGatewaySessionStoreTargetInWorker: async () => ({
           storePath: sessionTarget.storePath,
           canonicalKey: SESSION_KEY,
           storeKeys: [SESSION_KEY],

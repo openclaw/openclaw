@@ -115,6 +115,8 @@ type SpawnBaseInput = {
   cleanupOwnership?: "external";
   /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
   assertCurrent?: () => void;
+  /** Prepare async launch authority after queued scope admission and before replacing a live run. */
+  prepareSpawn?: () => Promise<void>;
   /** Revalidate launch policy at admission and immediately before each native launch attempt. */
   beforeSpawn?: () => void;
   runId?: string;

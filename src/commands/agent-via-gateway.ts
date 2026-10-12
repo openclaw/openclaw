@@ -845,18 +845,25 @@ async function agentViaGatewayCommand(
         ? undefined
         : classifySessionKeyShape(explicitSessionKey) === "agent"
           ? explicitSessionKey
-          : (await import("./agent/session.runtime.js")).resolveSessionKeyForRequest({
-              cfg,
-              agentId,
-              to: opts.to,
-              sessionId: opts.sessionId,
-              sessionKey: explicitSessionKey,
-            }).sessionKey;
+          : (
+              await (
+                await import("./agent/session.runtime.js")
+              ).resolveSessionKeyForRequest({
+                cfg,
+                agentId,
+                to: opts.to,
+                sessionId: opts.sessionId,
+                sessionKey: explicitSessionKey,
+              })
+            ).sessionKey;
   const abortSessionKey = deferRemoteSessionId
     ? undefined
     : deferExplicitRecipientSession
-      ? (await import("./agent/session.runtime.js")).resolveSessionKeyForRequest({ cfg, agentId })
-          .sessionKey
+      ? (
+          await (
+            await import("./agent/session.runtime.js")
+          ).resolveSessionKeyForRequest({ cfg, agentId })
+        ).sessionKey
       : sessionKey;
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();

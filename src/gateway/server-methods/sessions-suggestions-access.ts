@@ -27,13 +27,13 @@ import {
   createSessionListEntryFilter,
   resolveSessionSharingRole,
   prepareProjectedSessionSharing,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   resolveSessionVisibility,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-export function requireSuggestionTarget(params: {
+export async function requireSuggestionTarget(params: {
   context: GatewayRequestContext;
   sessionKey: string;
   agentId?: string;
@@ -45,7 +45,7 @@ export function requireSuggestionTarget(params: {
     params.respond(false, undefined, requestedAgent.error);
     return null;
   }
-  const target = resolveSessionSharingTarget({
+  const target = await resolveSessionSharingTargetAsync({
     cfg,
     sessionKey: params.sessionKey,
     agentId: requestedAgent.agentId,
@@ -65,7 +65,7 @@ export function requireVisibleSuggestionRole(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   client: GatewayClient | null;
   sessionKey: string;
-  target: ReturnType<typeof resolveSessionSharingTarget>;
+  target: Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>;
   respond: RespondFn;
   sharing?: ReturnType<typeof prepareProjectedSessionSharing>;
 }) {

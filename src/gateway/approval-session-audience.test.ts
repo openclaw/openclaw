@@ -39,9 +39,9 @@ vi.mock("../agents/subagents/registry/subagent-registry-state.js", () => ({
   prepareOptionalSubagentSessionListReadCache: () => prepareRegistryMock(),
   getSubagentSessionListReadSnapshotIdentity: () => registrySnapshotMock(),
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
-  loadSessionEntryReadOnly: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (scope: { sessionKey: string }) =>
+    loadSessionEntryMock(scope),
 }));
 
 beforeEach(() => {

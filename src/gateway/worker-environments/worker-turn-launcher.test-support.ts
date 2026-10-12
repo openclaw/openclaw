@@ -245,7 +245,7 @@ export function createWorkerTurnSessionRuntimeLoader() {
         lastActiveAt: 1,
       }),
     },
-    resolveGatewaySessionStoreTargetWithStore: () => ({
+    resolveGatewaySessionStoreTargetInWorker: async () => ({
       storePath: sessionTarget.storePath,
       canonicalKey: SESSION_KEY,
       storeKeys: [SESSION_KEY],

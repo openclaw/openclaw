@@ -1,3 +1,4 @@
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { resolveRequestedSessionAgentInput } from "./session-request-agent.js";
 import { withSessionSharingTarget } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
@@ -5,8 +6,10 @@ import { prepareSessionSharingProfiles } from "./session-sharing-read.js";
 import {
   resolveChatSendAuthorizationParams,
   resolveDirectSessionTargets,
+  resolveTalkSessionTargetInput,
 } from "./session-sharing-target-input.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
+import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
 /** Read participation in the worker while retaining its owner through authorization. */
 export async function resolveSessionMutationAuthorizationAsync(
@@ -26,8 +29,39 @@ export async function resolveSessionMutationAuthorizationAsync(
     }
     params = { ...params, requestParams: normalized.value };
   }
-  const targets = resolveDirectSessionTargets(params.method, params.requestParams);
-  if (params.method !== "chat.send" || targets.length !== 1) {
+  const talk = resolveTalkSessionTargetInput(
+    params.method,
+    params.requestParams,
+    params.client?.connId,
+  );
+  if (talk && !params.preparedTalkSessionTarget) {
+    try {
+      params = {
+        ...params,
+        preparedTalkSessionTarget:
+          talk.kind === "relay"
+            ? talk.target
+            : await prepareTalkSessionTarget(params.context.getRuntimeConfig(), talk.sessionKey),
+      };
+    } catch (error) {
+      return {
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          String(error instanceof Error ? error.message : error),
+        ),
+      };
+    }
+    params.assertInvocationCurrent?.();
+  }
+  const targets = params.preparedTalkSessionTarget
+    ? [
+        {
+          sessionKey: params.preparedTalkSessionTarget.canonicalKey,
+          agentId: params.preparedTalkSessionTarget.agentId,
+        },
+      ]
+    : resolveDirectSessionTargets(params.method, params.requestParams);
+  if (targets.length !== 1) {
     return resolveSessionMutationAuthorization(params);
   }
   const target = targets[0]!;

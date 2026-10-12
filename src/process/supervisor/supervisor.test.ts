@@ -319,6 +319,48 @@ describe("process supervisor", () => {
     await supervisor.shutdown();
   });
 
+  it.each(["ready", "revoked", "cancelled"] as const)(
+    "waits for async launch authority before replacing the active scope (%s)",
+    async (outcome) => {
+      const first = prepare(terminating());
+      const firstRun = await spawn({ scopeKey: "scope" });
+      const replacement = prepare();
+      const gate = createDeferred();
+      const pending = spawn({
+        runId: "replacement",
+        scopeKey: "scope",
+        replaceExistingScope: true,
+        prepareSpawn: () => gate.promise,
+      });
+      expect(child).toHaveBeenCalledOnce();
+      expect(first.killMock).not.toHaveBeenCalled();
+      if (outcome === "revoked") {
+        gate.reject(new Error("history owner changed"));
+        await expect(pending).rejects.toThrow("history owner changed");
+      } else {
+        if (outcome === "cancelled") {
+          supervisor.cancel("replacement");
+        }
+        gate.resolve();
+        const run = await pending;
+        if (outcome === "ready") {
+          expect(child).toHaveBeenCalledTimes(2);
+          expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
+          replacement.settle(0);
+        } else {
+          await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+        }
+        await run.wait();
+      }
+      if (outcome !== "ready") {
+        expect(child).toHaveBeenCalledOnce();
+        expect(first.killMock).not.toHaveBeenCalled();
+        first.settle(0);
+      }
+      await firstRun.wait();
+    },
+  );
+
   it.each([
     { mode: "child", argv: ["fixture"], resolveArgs: () => ["bad\0resolved"] },
     { mode: "child", argv: ["fixture"], argv0: "bad\0name" },

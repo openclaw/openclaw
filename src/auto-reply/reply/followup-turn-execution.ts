@@ -1,14 +1,5 @@
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { withOrderedSessionEntriesInWorker } from "../../config/sessions/session-entry-read-ordered.js";
-import {
-  captureSessionEntryReadScope,
-  isNativeSessionEntryRead,
-} from "../../config/sessions/session-entry-read-request.js";
-import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
@@ -96,45 +87,11 @@ export async function executeFollowupTurn(params: {
   const progressAllowed = () =>
     deliveryAllowed() &&
     (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
-  const verboseRead =
-    turn.session.kind === "session" && turn.session.storePath
-      ? captureSessionEntryReadScope({
-          storePath: turn.session.storePath,
-          sessionKey: turn.session.key,
-        })
-      : undefined;
-  const verboseReadScope = verboseRead?.scope;
-  const currentVerboseLevel = (prepared?: { entry: SessionEntry | undefined }): VerboseLevel => {
-    if (turn.queued.run.verboseLevelOverride !== undefined) {
-      return turn.queued.run.verboseLevelOverride;
-    }
-    const session = turn.session;
-    if (session.kind === "session" && session.storePath) {
-      try {
-        const loadedEntry = prepared
-          ? prepared.entry
-          : loadSessionEntryReadOnly({
-              storePath: session.storePath,
-              sessionKey: session.key,
-            });
-        const ownedEntry = session.current();
-        const loadedGenerationMatches =
-          loadedEntry !== undefined &&
-          ownedEntry !== undefined &&
-          loadedEntry.sessionId === ownedEntry.sessionId &&
-          loadedEntry.lifecycleRevision === ownedEntry.lifecycleRevision &&
-          loadedEntry.updatedAt >= ownedEntry.updatedAt;
-        if (loadedGenerationMatches) {
-          const level = loadedEntry.verboseLevel;
-          if (level === "off" || level === "on" || level === "full") {
-            return level;
-          }
-        }
-      } catch {
-        // A queued turn keeps its admitted snapshot when a read races store maintenance.
-      }
-    }
-    const level = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
+  const currentVerboseLevel = (): VerboseLevel => {
+    const level =
+      turn.queued.run.verboseLevelOverride ??
+      turn.session.current()?.verboseLevel ??
+      turn.queued.run.verboseLevel;
     return level === "on" || level === "full" ? level : "off";
   };
   const forceToolResultProgress = sourceOpts?.forceToolResultProgress === true;
@@ -159,59 +116,9 @@ export async function executeFollowupTurn(params: {
       options: sourceOpts,
       resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
       resolveVerboseProgressVisibilityAsync: async () => {
-        const assertCurrent = () => {
-          turn.operation.abortSignal.throwIfAborted();
-          turn.queued.operatorAuthority?.assertCurrent();
-          if (turn.operation.result) {
-            throw new Error("Follow-up progress owner has settled");
-          }
-        };
-        assertCurrent();
-        if (verboseReadScope?.storePath && turn.queued.run.verboseLevelOverride === undefined) {
-          if (isNativeSessionEntryRead(verboseReadScope, verboseRead?.agentId)) {
-            const visible = progressAllowed() && shouldEmitVerboseToolResult();
-            assertCurrent();
-            return visible;
-          }
-          try {
-            const visible = await withSessionStoreReaderInWorker(
-              { ...verboseReadScope, storePath: verboseReadScope.storePath },
-              (source) => {
-                const sessionKey = resolveSqliteSessionKey(
-                  verboseReadScope.sessionKey,
-                  source.logicalAgentId,
-                );
-                return withOrderedSessionEntriesInWorker(
-                  [
-                    {
-                      agentId: source.database.agentId,
-                      storePath: source.database.path,
-                      sessionKeys: [sessionKey],
-                      projection: "exact",
-                      env: source.database.env,
-                    },
-                  ],
-                  ([read]) => {
-                    read!.assertCurrent();
-                    assertCurrent();
-                    const entry = read!.result.entries.find(
-                      (item) => item.sessionKey === sessionKey,
-                    )?.entry;
-                    return progressAllowed() && currentVerboseLevel({ entry }) !== "off";
-                  },
-                  { readStore: (_input, consume) => consume(source) },
-                );
-              },
-              { backing: true, logical: { assertCurrent } },
-            );
-            assertCurrent();
-            return visible;
-          } catch {
-            // Match the existing maintenance fallback, but never swallow lost authority.
-          }
-        }
-        assertCurrent();
-        return progressAllowed() && currentVerboseLevel({ entry: undefined }) !== "off";
+        turn.operation.abortSignal.throwIfAborted();
+        turn.queued.operatorAuthority?.assertCurrent();
+        return progressAllowed() && shouldEmitVerboseToolResult();
       },
     });
   turn.operation.abortSignal.throwIfAborted();

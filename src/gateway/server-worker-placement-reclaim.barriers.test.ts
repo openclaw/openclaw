@@ -38,7 +38,7 @@ function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed
     },
     loadSessionRuntime: async () => ({
       managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetWithStore: () => target,
+      resolveGatewaySessionStoreTargetInWorker: async () => target,
       resolveCanonicalSessionEntryFromStoreKeys: () => entry,
     }),
     cancelSessionWork: cancel,

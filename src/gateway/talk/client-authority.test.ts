@@ -52,7 +52,7 @@ it.each([true, false])(
       await state.writeConfig(config);
       const client = sharingPolicyClient({ deviceId: "caller-device", scopes: ["operator.admin"] });
       client.connect.caps = ["tool-events", "task-suggestions"];
-      const sessionTarget = prepareTalkSessionTarget(config, "agent:main:main");
+      const sessionTarget = await prepareTalkSessionTarget(config, "agent:main:main");
       const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
       const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
       const runId = "talk-authority-run";

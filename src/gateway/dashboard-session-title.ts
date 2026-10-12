@@ -10,7 +10,8 @@ import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   sessionEntryCommitGuardOptions,
@@ -380,7 +381,7 @@ export async function generateWorktreeSessionTitle(
             claim?.assertCurrent();
           }
         })
-      : loadSessionEntry(scope);
+      : await readSessionEntryReadOnlyInWorker(scope);
     if (current?.sessionId !== params.sessionId) {
       throw new Error("Session changed while naming its worktree; retry from the current session.");
     }
@@ -470,7 +471,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       ? await (
           await import("../config/sessions/session-entry-read-runtime.js")
         ).readSessionEntryReadOnlyInWorker(scope, assertIncognitoCurrent)
-      : loadSessionEntry(scope);
+      : await readSessionEntryReadOnlyInWorker(scope);
     if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
       return false;
     }

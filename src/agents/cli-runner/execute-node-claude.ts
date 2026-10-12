@@ -192,6 +192,7 @@ export async function executeNodeClaudeRun(params: {
         nodeAbortController.abort();
         return hardTimeoutResult();
       }
+      await params.context.cliHistoryWriter?.assertReadable();
       assertCurrent();
       return await params.deps.invokeNodeClaudeCliRun({
         assertCurrent,

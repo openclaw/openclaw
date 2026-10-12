@@ -41,6 +41,9 @@ vi.mock("./server-methods/sessions-files.js", () => ({
 vi.mock("./session-utils.js", () => ({
   loadGatewaySessionEntryReadOnly: () => ({ entry: { sessionId: state.sessionId } }),
 }));
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async () => ({ entry: { sessionId: state.sessionId } }),
+}));
 vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   completeDeferredSessionMcpRuntimeRetirement: async () => false,
 }));

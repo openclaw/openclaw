@@ -139,16 +139,14 @@ async function runWithSessionWorkAdmission<T>(
           ? "kind" in source
             ? undefined
             : source.actor.sessions.readSharing(params.sessionKey)?.entry
-          : getSessionEntry({
-              storePath: params.storePath,
-              sessionKey: params.sessionKey,
-              readConsistency: "latest",
-            });
-        const changed = initialEntry
-          ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
-          : Boolean(currentEntry);
-        if (changed) {
-          throw session.createSessionWorkStartChangedError(params.sessionKey);
+          : initialEntry;
+        if (source) {
+          const changed = initialEntry
+            ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
+            : Boolean(currentEntry);
+          if (changed) {
+            throw session.createSessionWorkStartChangedError(params.sessionKey);
+          }
         }
         const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
         if (startError) {

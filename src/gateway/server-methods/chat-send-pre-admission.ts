@@ -15,7 +15,11 @@ import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  loadSessionEntry,
+  resolveGatewaySessionStoreTarget,
+} from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -337,7 +341,15 @@ export async function runChatSendPreAdmission(
       clientRunId,
       entry: currentEntry,
       persistedSessionKey: legacyKey ?? sessionKey,
-      reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
+      reloadEntry: async () =>
+        (
+          await loadGatewaySessionEntryReadOnlyInWorker({
+            excludeInternalEffects: true,
+            cfg,
+            key: sessionLoadKey,
+            ...sessionLoadOptions,
+          })
+        ).entry,
       storePath,
       recoveryRuntime: context.recoveryRuntime,
       warn,
@@ -569,7 +581,7 @@ export async function runChatSendPreAdmission(
     const { reconcileOrphanedGatewaySessionRecovery } =
       await import("../session-recovery-service.js");
     try {
-      const recoveryEntry = loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry;
+      const recoveryEntry = entry;
       if (recoveryEntry) {
         const comparison = await prepareChatSendRetryComparison({
           ...params,
@@ -624,7 +636,14 @@ export async function runChatSendPreAdmission(
           workerPlacementContext: resolveSessionWorkerPlacementContext(context),
         });
       }
-      durableEntry = loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry;
+      durableEntry = (
+        await loadGatewaySessionEntryReadOnlyInWorker({
+          excludeInternalEffects: true,
+          cfg,
+          key: sessionLoadKey,
+          ...sessionLoadOptions,
+        })
+      ).entry;
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
