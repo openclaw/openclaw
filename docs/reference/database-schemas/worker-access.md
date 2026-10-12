@@ -57,11 +57,17 @@ Scheduled cron runs reuse the job and receipt loaded by their queue transaction
 when claiming and activating work. Activation commits ownership and start time
 together. Isolated preparation persists skills with the pre-run metadata, and
 continuation synchronization includes its selected CLI provider in the same
-write. Transcript existence is read only when resume fields need reconciliation.
+write. The first unchanged embedded candidate reuses the successfully persisted
+pre-run model and harness plus its initialized continuation; failed preparation
+writes, CLI candidates, fallbacks, and later prompt attempts still persist before
+execution. Transcript existence is read only when resume fields need reconciliation.
 Duplicate-run exclusion, delivery settlement, and run-history retention keep
 their existing owners and semantics.
 The watchdog reuses write-invalidated scheduler rows and live local receipt
 ownership. Running contexts do not trigger queue drains; queued rows still do.
+After scheduled completion, committed job rows determine whether schedule repair
+is needed before dispatching a maintenance sweep. Manual runs retain their
+expired-slot and cadence repair.
 
 Managed outgoing media cleanup uses the same retained session reader as media
 serving. Durable session discovery and entry reads execute in the existing
