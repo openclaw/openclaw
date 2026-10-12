@@ -554,8 +554,7 @@ export function readExactSessionEntriesWithLifecycle(
               )?.entry;
               const selection = request.transcript;
               const transcriptEntry = selection
-                ? selected.value.find(({ sessionKey }) => sessionKey === selection.sessionKey)
-                    ?.entry
+                ? selected.value.find((row) => row.sessionKey === selection.sessionKey)?.entry
                 : undefined;
               const transcript = selection
                 ? transcriptEntry
