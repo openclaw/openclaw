@@ -302,10 +302,7 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
       await fixture.waitForOutput("http-closed:1");
-      expect(
-        await withTestTimeout(fixture.closed, 15_000, "failed close retired its native deadline"),
-        fixture.output(),
-      ).toEqual([null, "SIGKILL"]);
+      expect(await fixture.closed, fixture.output()).toEqual([null, "SIGKILL"]);
       expect(fixture.output()).toContain("resource:retained");
       expect(fixture.output()).toContain("loop-returned:1");
       expect(fixture.output()).not.toContain("natural-exit");
