@@ -12,6 +12,7 @@ import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
+import { CURRENT_MESSAGE_MARKER } from "./history.js";
 
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const ROOM_EVENT_PARTICIPATION_RULE =
@@ -222,16 +223,21 @@ export function buildReplyPromptEnvelope(
         : mediaNote
       : base.transcriptBody;
 
-  const sourceContext = [
+  const sourceContext: RuntimeContextFragment[] = [
     params.threadContextNote,
     ...(params.systemEventBlocks ?? []),
     appendChannelPromptContext("", params.sessionCtx.ChannelPromptContext),
-  ].filter((text): text is string => Boolean(text?.trim()));
+  ]
+    .filter((text): text is string => Boolean(text?.trim()))
+    .map((text) => ({ kind: "conversation-data", text }));
+  // Thread notes end with free-form message text; without a closing label the
+  // user turn reads as part of the thread instead of the request to answer.
+  // Room events keep their stay-silent directive instead of a respond label.
+  if (params.threadContextNote?.trim() && params.inboundEventKind !== "room_event") {
+    sourceContext.push({ kind: "runtime-instruction", text: CURRENT_MESSAGE_MARKER });
+  }
   const currentInboundContext = sourceContext.length
-    ? appendCurrentInboundContext(
-        base.currentInboundContext,
-        sourceContext.map((text) => ({ kind: "conversation-data", text })),
-      )
+    ? appendCurrentInboundContext(base.currentInboundContext, sourceContext)
     : base.currentInboundContext;
   const annotateBody = (body: string) =>
     annotateInterSessionPromptText(prependMediaNote(body), params.sessionCtx.InputProvenance);
