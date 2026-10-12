@@ -41,7 +41,7 @@ export type ResolvedGitHubToolIdentity =
 export function isInvalidGitHubToolIdentity(
   identity: ResolvedGitHubToolIdentity,
 ): identity is InvalidGitHubToolIdentity {
-  return "invalidSelection" in identity && identity.invalidSelection === true;
+  return "invalidSelection" in identity && identity.invalidSelection;
 }
 
 export function isConfiguredGitHubToolIdentity(
@@ -69,9 +69,18 @@ export function unavailableGitHubIdentityFacts(
   };
 }
 
+/** Non-credential token overlay. Empty values are ignored by GitHub CLI and fall through to the keyring. */
+export const INVALID_GITHUB_SELECTION_EXEC_ENV: Readonly<Record<string, string>> = {
+  GH_ENTERPRISE_TOKEN: INVALID_GITHUB_SELECTION_EXEC_TOKEN,
+  GH_TOKEN: INVALID_GITHUB_SELECTION_EXEC_TOKEN,
+  GITHUB_ENTERPRISE_TOKEN: INVALID_GITHUB_SELECTION_EXEC_TOKEN,
+  GITHUB_TOKEN: INVALID_GITHUB_SELECTION_EXEC_TOKEN,
+};
+
 /** A profile directory that is never created, so credential launch fails closed. */
 export function unavailableGitHubExecProfileDir(): string {
-  return path.join(os.tmpdir(), `openclaw-invalid-github-${randomBytes(8).toString("hex")}`);
+  const name = "openclaw-invalid-github-" + randomBytes(8).toString("hex");
+  return path.join(os.tmpdir(), name);
 }
 
 function isGitHubCliExecutable(token: string | undefined): boolean {

@@ -8,6 +8,10 @@ import {
 import { applyPathPrepend, findPathKey, normalizePathPrepend } from "../../infra/path-prepend.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { resolveSessionAgentIdStrict } from "../agent-scope.js";
+import {
+  INVALID_GITHUB_SELECTION_EXEC_ENV,
+  unavailableGitHubExecProfileDir,
+} from "../github-invalid-selection.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -65,9 +69,20 @@ export function prepareAgentHarnessEnvironment(params: {
     agentId: params.agentId ?? "main",
   });
   const localProcessEnv = installationTargetEnv(params.installationTarget);
+  // Empty token scrubs are not enough: GitHub CLI treats them as unset and can
+  // use the runtime user's stored account. Native adapters consume these maps.
+  const unavailableProfileDir = identity.invalidGitHubSelection
+    ? unavailableGitHubExecProfileDir()
+    : undefined;
   return Object.freeze({
-    credentialScrubEnv: Object.freeze({ ...identity.credentialScrubEnv }),
-    localIdentityEnv: Object.freeze({ ...identity.localIdentityEnv }),
+    credentialScrubEnv: Object.freeze({
+      ...identity.credentialScrubEnv,
+      ...(unavailableProfileDir ? INVALID_GITHUB_SELECTION_EXEC_ENV : {}),
+    }),
+    localIdentityEnv: Object.freeze({
+      ...identity.localIdentityEnv,
+      ...(unavailableProfileDir ? { GH_CONFIG_DIR: unavailableProfileDir } : {}),
+    }),
     localGitConfigParameters: identity.localGitConfigParameters,
     managedLocalIdentity: identity.managedLocalIdentity,
     ...(localProcessEnv ? { localProcessEnv } : {}),

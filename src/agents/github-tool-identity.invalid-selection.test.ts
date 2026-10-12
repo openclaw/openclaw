@@ -7,8 +7,14 @@ import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js
 const processMocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
 const oauthMocks = vi.hoisted(() => ({ inspect: vi.fn() }));
 
-vi.mock("../process/exec.js", () => ({ runCommandBuffered: processMocks.runCommandBuffered }));
-vi.mock("./github-oauth-records.js", () => ({ inspectGitHubOAuthRecord: oauthMocks.inspect }));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runCommandBuffered: processMocks.runCommandBuffered,
+}));
+vi.mock("./github-oauth-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./github-oauth-records.js")>()),
+  inspectGitHubOAuthRecord: oauthMocks.inspect,
+}));
 
 import { INVALID_GITHUB_PROFILE_SELECTION_MESSAGE } from "./github-invalid-selection.js";
 import {
