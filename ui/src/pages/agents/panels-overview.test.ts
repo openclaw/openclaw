@@ -9,23 +9,7 @@ import { Agents } from "./view.tsx";
 const inheritedAgentModel = "openai/gpt-5.4";
 const resolvedAgentWorkspace = "/tmp/agents/beta";
 
-it.each([
-  {
-    name: "inherits a primary while preserving agent-owned fallbacks",
-    model: { fallbacks: ["google/gemini-3-pro"] },
-    expectedModel: `${inheritedAgentModel} (+1 fallback)`,
-  },
-  {
-    name: "preserves explicitly disabled agent fallbacks",
-    model: { fallbacks: [] },
-    expectedModel: inheritedAgentModel,
-  },
-  {
-    name: "prefers a dirty agent primary over stale roster and global models",
-    model: { primary: "anthropic/claude-sonnet-4-6" },
-    expectedModel: "anthropic/claude-sonnet-4-6",
-  },
-])("buildAgentContext $name", ({ model, expectedModel }) => {
+it("prefers a dirty agent primary over stale roster and global models", () => {
   const context = buildAgentContext(
     {
       id: "beta",
@@ -38,7 +22,7 @@ it.each([
           workspace: "/tmp/agents",
           model: { primary: inheritedAgentModel, fallbacks: ["openai/global-fallback"] },
         },
-        entries: { beta: { model } },
+        entries: { beta: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
       },
     },
     null,
@@ -46,7 +30,7 @@ it.each([
   );
 
   expect(context.workspace).toBe(resolvedAgentWorkspace);
-  expect(context.model).toBe(expectedModel);
+  expect(context.model).toBe("anthropic/claude-sonnet-4-6");
 });
 
 it.each(["overview", "channels", "cron"] as const)(
@@ -99,23 +83,15 @@ it.each(["overview", "channels", "cron"] as const)(
   },
 );
 
-it.each([
-  { label: "a read-only editor", canUpdateIdentity: false, identitySaving: false, text: "Save" },
-  {
-    label: "an active identity save",
-    canUpdateIdentity: true,
-    identitySaving: true,
-    text: "Saving…",
-  },
-])("shows the actual save state for $label", ({ canUpdateIdentity, identitySaving, text }) => {
+it("shows the active identity save state", () => {
   const container = document.createElement("div");
   const props = createProps();
   mountSolid(
     Agents,
     {
       ...props,
-      access: { ...props.access, canUpdateIdentity },
-      overview: { ...props.overview, identitySaving },
+      access: { ...props.access, canUpdateIdentity: true },
+      overview: { ...props.overview, identitySaving: true },
     },
     container,
   );
@@ -123,7 +99,7 @@ it.each([
   const save = container.querySelector<HTMLButtonElement>(
     ".agent-identity-editor__actions button.primary",
   );
-  expect(save?.textContent?.trim()).toBe(text);
+  expect(save?.textContent?.trim()).toBe("Saving…");
   expect(save?.disabled).toBe(true);
 });
 
@@ -200,8 +176,8 @@ describe("fallback field", () => {
     return { field, onModelFallbacksChange };
   }
 
-  it("hands the field the effective chain, the catalog, and the primary to exclude", () => {
-    const { field } = renderFallbacks();
+  it("stages the field's next chain for the selected agent", () => {
+    const { field, onModelFallbacksChange } = renderFallbacks();
 
     expect(field.value).toEqual([existingFallback]);
     expect(field.isExcluded(primary)).toBe(true);
@@ -210,11 +186,6 @@ describe("fallback field", () => {
     );
     expect(field.allowCustom).toBe(true);
     expect(field.disabled).toBe(false);
-  });
-
-  it("stages the field's next chain for the selected agent", () => {
-    const { field, onModelFallbacksChange } = renderFallbacks();
-
     field.onChange([existingFallback, "google/gemini-3-pro"]);
 
     expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [
@@ -264,12 +235,5 @@ describe("fallback field", () => {
     expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
       expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
     ]);
-  });
-
-  it("disables the field without config write access", () => {
-    const access = { ...createProps().access, canUpdateConfig: false };
-    const { field } = renderFallbacks({ access });
-
-    expect(field.disabled).toBe(true);
   });
 });

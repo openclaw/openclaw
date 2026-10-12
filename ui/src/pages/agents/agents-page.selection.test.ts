@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts";
+import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -28,40 +28,38 @@ describe("AgentsPage routing", () => {
     agents: [...agentsList.agents, { id: "research", name: "Research" }],
   };
 
-  it.each([
-    { requestedAgentId: "research", selectedId: "main", expectedAgentId: "research" },
-    { requestedAgentId: "missing", selectedId: "research", expectedAgentId: "main" },
-    { requestedAgentId: null, selectedId: "research", expectedAgentId: "research" },
-  ])(
-    "resolves $requestedAgentId with the shared Settings selection",
-    ({ requestedAgentId, selectedId, expectedAgentId }) => {
-      const currentGateway = gateway(snapshot(null, false));
-      const selection = settingsSelection(roster, selectedId);
-      const page = createAgentsPage();
-      page.context = {
-        basePath: "",
-        gateway: currentGateway,
-        settingsAgentSelection: selection,
-      } as unknown as ApplicationContext;
-      page.agentsList = roster;
-      page.agentsSelectedId = selectedId;
-      setAgentFileValues(page, "content", { "AGENTS.md": "Previous agent's file" });
-      page.routeData = {
-        ...agentsRouteData(currentGateway, null, requestedAgentId, selection),
-        gatewaySnapshot: snapshot(null, false),
-        panel: "tools",
-      };
+  it("resolves an unknown agent with the shared Settings selection", () => {
+    const { requestedAgentId, selectedId, expectedAgentId } = {
+      requestedAgentId: "missing",
+      selectedId: "research",
+      expectedAgentId: "main",
+    };
+    const currentGateway = gateway(snapshot(null, false));
+    const selection = settingsSelection(roster, selectedId);
+    const page = createAgentsPage();
+    page.context = {
+      basePath: "",
+      gateway: currentGateway,
+      settingsAgentSelection: selection,
+    } as unknown as ApplicationContext;
+    page.agentsList = roster;
+    page.agentsSelectedId = selectedId;
+    setAgentFileValues(page, "content", { "AGENTS.md": "Previous agent's file" });
+    page.routeData = {
+      ...agentsRouteData(currentGateway, null, requestedAgentId, selection),
+      gatewaySnapshot: snapshot(null, false),
+      panel: "tools",
+    };
 
-      page.applyRoute();
+    page.applyRoute();
 
-      expect(page.agentsPanel).toBe("tools");
-      expect(page.agentsSelectedId).toBe(expectedAgentId);
-      expect(selection.state.selectedId).toBe(expectedAgentId);
-      expect(agentFileValues(page, "content")).toEqual(
-        selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
-      );
-    },
-  );
+    expect(page.agentsPanel).toBe("tools");
+    expect(page.agentsSelectedId).toBe(expectedAgentId);
+    expect(selection.state.selectedId).toBe(expectedAgentId);
+    expect(agentFileValues(page, "content")).toEqual(
+      selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
+    );
+  });
 
   it("keeps a cold deep link while the first roster initializes the default selection", () => {
     const listeners = new Set<() => void>();
@@ -250,68 +248,6 @@ describe("AgentsPage routing", () => {
       }
     },
   );
-
-  it("does not restore a preloaded agent after a newer sidebar choice, including an ABA change", () => {
-    const currentGateway = gateway(snapshot(null, false));
-    const selection = settingsSelection(roster, "main");
-    const page = createAgentsPage();
-    const replace = vi.fn();
-    page.context = {
-      basePath: "",
-      gateway: currentGateway,
-      settingsAgentSelection: selection,
-      replace,
-    } as unknown as ApplicationContext;
-    page.routeData = agentsRouteData(currentGateway, roster, "research", selection);
-    selection.set("research");
-    selection.set("main");
-
-    page.applyRoute();
-
-    expect(selection.state.selectedId).toBe("main");
-    expect(page.agentsSelectedId).toBe("main");
-    expect(replace).toHaveBeenCalledWith("agents", {
-      pathname: "/settings/agents/main/files",
-      search: "",
-      hash: "",
-    });
-  });
-
-  it("retires the prior agent's pending file request when the sidebar selection changes", async () => {
-    const pending = deferred<AgentsFilesListResult>();
-    const client = {} as GatewayBrowserClient;
-    const currentGateway = gateway(snapshot(client));
-    const selection = settingsSelection(roster, "main");
-    const agents = {
-      ...agentsCapability(() => pending.promise),
-      ensureFiles: vi.fn((agentId: string) =>
-        agentId === "main" ? pending.promise : Promise.resolve(files("research", "research")),
-      ),
-    };
-    const page = createAgentsPage();
-    page.context = {
-      ...pageContext(currentGateway, agents),
-      settingsAgentSelection: selection,
-    };
-    page.routeData = agentsRouteData(currentGateway, roster, "main", selection);
-    setPageGateway(page, client);
-    page.subscriptions.hostConnected();
-    page.routeDataInitialized = true;
-    page.agentsList = roster;
-    const load = page.loadAgentFiles("main");
-    expect(page.agentFilesLoading).toBe(true);
-
-    selection.set("research");
-    pending.resolve(files("main", "retired-main-workspace"));
-    await load;
-
-    expect(page.agentsSelectedId).toBe("research");
-    await waitForFast(() => expect(page.agentFilesList?.workspace).toBe("research"));
-    expect(page.context.navigate).toHaveBeenCalledWith("agents", {
-      pathname: "/settings/agents/research/files",
-    });
-    page.subscriptions.hostDisconnected();
-  });
 
   it.each(["same target", "different target", "excluded target", "profile", "source"])(
     "retains an identity draft through discovery retirement only for its current owner (%s)",

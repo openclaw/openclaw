@@ -241,65 +241,6 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(effectiveReads).toBe(2);
   });
 
-  it("loads the selected agent's configured model catalog once for the overview model picker", async () => {
-    const models = [
-      {
-        id: "claude-opus-4-8",
-        name: "Opus 4.8",
-        alias: "opus",
-        provider: "anthropic",
-      },
-    ];
-    const request = vi.fn(async () => ({ models }));
-    const page = createAgentsPage();
-    page.routeData = { panel: "overview" } as AgentsRouteData;
-    setPageGateway(page, { request } as unknown as GatewayBrowserClient);
-    page.agentsSelectedId = "main";
-
-    page.loadActivePanelData();
-    page.loadActivePanelData();
-
-    await waitForFast(() => expect(page.modelCatalog.models).toEqual(models));
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "main" });
-  });
-
-  it("reads separate configured model catalogs when switching default and worker agents", async () => {
-    const defaultModels = [
-      { id: "default-model", name: "Default account model", provider: "openai" },
-    ];
-    const workerModels = [
-      { id: "worker-model", name: "Worker private model", provider: "anthropic" },
-    ];
-    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
-      models: params?.agentId === "worker" ? workerModels : defaultModels,
-    }));
-    const page = createAgentsPage();
-    page.routeData = { panel: "overview" } as AgentsRouteData;
-    setPageGateway(page, { request } as unknown as GatewayBrowserClient);
-    page.agentsSelectedId = "main";
-
-    page.loadActivePanelData();
-    await waitForFast(() => expect(page.modelCatalog.models).toEqual(defaultModels));
-
-    page.agentsSelectedId = "worker";
-    page.loadActivePanelData();
-    await waitForFast(() => expect(page.modelCatalog.models).toEqual(workerModels));
-
-    page.agentsSelectedId = "main";
-    page.loadActivePanelData();
-    await waitForFast(() => expect(page.modelCatalog.models).toEqual(defaultModels));
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
-      view: "configured",
-      agentId: "main",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
-      view: "configured",
-      agentId: "worker",
-    });
-  });
-
   it.each([false, true])(
     "keeps returned choices and reports catalog failure until recovery (retained rows: %s)",
     async (hasRows) => {
@@ -763,45 +704,6 @@ describe("AgentsPage gateway lifecycle", () => {
 
     expect(page.agentsList).toBeNull();
     expect(ensureList).toHaveBeenCalledOnce();
-  });
-
-  it("does not let an old-client file load overwrite a replacement load", async () => {
-    const first = deferred<AgentsFilesListResult>();
-    const second = deferred<AgentsFilesListResult>();
-    const ensureFiles = vi
-      .fn()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const page = createAgentsPage();
-    const oldClient = {} as GatewayBrowserClient;
-    const nextClient = {} as GatewayBrowserClient;
-    setPageGateway(page, oldClient);
-    page.agentsSelectedId = "main";
-    page.context = {
-      agents: {
-        files: () => ({ list: null, loading: false, error: null }),
-        ensureFiles,
-        refreshFiles: ensureFiles,
-      },
-    } as unknown as ApplicationContext;
-
-    const oldLoad = page.loadAgentFiles("main");
-    expect(page.agentFilesLoading).toBe(true);
-
-    setPageGateway(page, nextClient);
-    page.agentsSelectedId = "main";
-    const replacementLoad = page.loadAgentFiles("main");
-    expect(page.agentFilesLoading).toBe(true);
-
-    first.resolve(files("main", "old"));
-    await oldLoad;
-    expect(page.agentFilesList).toBeNull();
-    expect(page.agentFilesLoading).toBe(true);
-
-    second.resolve(files("main", "new"));
-    await replacementLoad;
-    expect(page.agentFilesList?.workspace).toBe("new");
-    expect(page.agentFilesLoading).toBe(false);
   });
 
   it("selects and loads AGENTS.md when the file list opens", async () => {

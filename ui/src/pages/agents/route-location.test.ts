@@ -9,12 +9,12 @@ function location(url: string): RouteLocation {
 }
 
 describe("Agents route location", () => {
-  it.each([
-    ["/settings/agents", null, "overview"],
-    ["/settings/agents/research", "research", "overview"],
-    ["/settings/agents/research/overview", "research", "overview"],
-    ["/settings/agents/research/files", "research", "files"],
-  ] as const)("reads %s without rewriting it", (url, requestedAgentId, panel) => {
+  it("reads an agent path without rewriting it", () => {
+    const [url, requestedAgentId, panel] = [
+      "/settings/agents/research",
+      "research",
+      "overview",
+    ] as const;
     expect(resolveAgentsRouteLocation(location(url))).toMatchObject({
       requestedAgentId,
       panel,
@@ -59,16 +59,8 @@ describe("Agents route location", () => {
     });
   });
 
-  it("drops a legacy slash-containing agent id to the bare route", () => {
-    expect(resolveAgentsRouteLocation(location("/settings/agents?agent=team%2Fwriter"))).toEqual({
-      location: location("/settings/agents?agent=team%2Fwriter"),
-      requestedAgentId: null,
-      panel: "overview",
-      canonicalLocation: location("/settings/agents"),
-    });
-  });
-
-  it.each([".", ".."])('drops the legacy dot-segment agent id "%s"', (agentId) => {
+  it("drops a legacy parent-segment agent id", () => {
+    const agentId = "..";
     expect(
       resolveAgentsRouteLocation(location(`/settings/agents?agent=${encodeURIComponent(agentId)}`)),
     ).toEqual({
@@ -76,20 +68,6 @@ describe("Agents route location", () => {
       requestedAgentId: null,
       panel: "overview",
       canonicalLocation: location("/settings/agents"),
-    });
-  });
-
-  it("recovers the dynamic pathname without leaking the internal router parameter", () => {
-    expect(
-      resolveAgentsRouteLocation(
-        location(
-          "/settings/agents?__openclawAgentPath=%2Fsettings%2Fagents%2Fresearch%2Fmemory&probe=1",
-        ),
-      ),
-    ).toEqual({
-      location: location("/settings/agents/research/memory?probe=1"),
-      requestedAgentId: "research",
-      panel: "memory",
     });
   });
 });

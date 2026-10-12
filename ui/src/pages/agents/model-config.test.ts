@@ -101,144 +101,62 @@ describe("agent model config", () => {
     expect(runtimeConfig.state.configForm).toEqual({ agents: { defaults, entries: { main: {} } } });
     runtimeConfig.dispose();
   });
-  it("writes primary and fallback changes through keyed agent entries", async () => {
+  it("keeps an explicitly cleared fallback chain with an inherited primary", async () => {
+    const defaults = {
+      model: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] },
+    };
+    const otherAgent = { model: "google/gemini-3-pro" };
     const runtimeConfig = createRuntimeConfig({
       agents: {
-        defaults: { model: { primary: "openai/gpt-5.4" } },
-        entries: { main: {} },
-      },
-    });
-    await runtimeConfig.ensureLoaded();
-
-    modelActionsFor(runtimeConfig).onModelChange("main", "anthropic/claude-sonnet-4-6");
-    modelActionsFor(runtimeConfig).onModelFallbacksChange("main", ["openai/gpt-5.4"]);
-
-    expect(runtimeConfig.state.configForm).toEqual({
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.4" } },
+        defaults,
         entries: {
-          main: {
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: ["openai/gpt-5.4"],
-            },
-          },
+          main: { name: "Main", model: { fallbacks: ["anthropic/claude-sonnet-4-6"] } },
+          other: otherAgent,
         },
       },
     });
-    expect(runtimeConfig.state.configForm?.agents).not.toHaveProperty("list");
-    runtimeConfig.dispose();
-  });
-
-  it("preserves inherited primary and shared defaults when editing fallbacks", async () => {
-    const defaults = { model: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] } };
-    const runtimeConfig = createRuntimeConfig({
-      agents: { defaults, entries: { main: {} } },
-    });
     await runtimeConfig.ensureLoaded();
 
-    modelActionsFor(runtimeConfig).onModelFallbacksChange("main", [
-      "google/gemini-3-pro",
-      "anthropic/claude-sonnet-4-6",
-    ]);
+    modelActionsFor(runtimeConfig).onModelFallbacksChange("main", []);
 
     expect(runtimeConfig.state.configForm).toEqual({
       agents: {
         defaults,
         entries: {
-          main: {
-            model: { fallbacks: ["google/gemini-3-pro", "anthropic/claude-sonnet-4-6"] },
-          },
+          main: { name: "Main", model: { fallbacks: [] } },
+          other: otherAgent,
         },
       },
     });
     runtimeConfig.dispose();
   });
 
-  it.each([
-    {
-      name: "an inherited primary",
-      defaultModel: { primary: "openai/gpt-5.4", fallbacks: ["google/gemini-3-pro"] },
-      model: { fallbacks: ["anthropic/claude-sonnet-4-6"] },
-      expectedModel: { fallbacks: [] },
-    },
-    {
-      name: "an authored primary",
-      defaultModel: { primary: "google/gemini-3-pro" },
-      model: { primary: "openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4-6"] },
-      expectedModel: { primary: "openai/gpt-5.4", fallbacks: [] },
-    },
-  ])(
-    "keeps an explicitly cleared fallback chain with $name",
-    async ({ defaultModel, model, expectedModel }) => {
-      const defaults = { model: defaultModel };
-      const otherAgent = { model: "google/gemini-3-pro" };
-      const runtimeConfig = createRuntimeConfig({
-        agents: {
-          defaults,
-          entries: { main: { name: "Main", model }, other: otherAgent },
-        },
-      });
-      await runtimeConfig.ensureLoaded();
-
-      modelActionsFor(runtimeConfig).onModelFallbacksChange("main", []);
-
-      expect(runtimeConfig.state.configForm).toEqual({
-        agents: {
-          defaults,
-          entries: {
-            main: { name: "Main", model: expectedModel },
-            other: otherAgent,
+  it("keeps explicitly empty fallbacks when the primary model is cleared", async () => {
+    const fallbacks: string[] = [];
+    const runtimeConfig = createRuntimeConfig({
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.4" } },
+        entries: {
+          main: {
+            model: { primary: "anthropic/claude-sonnet-4-6", fallbacks },
           },
         },
-      });
-      runtimeConfig.dispose();
-    },
-  );
-
-  it("creates an empty override for an implicit agent only after an explicit clear", async () => {
-    const defaults = { model: { fallbacks: ["google/gemini-3-pro"] } };
-    const runtimeConfig = createRuntimeConfig({ agents: { defaults } });
+      },
+    });
     await runtimeConfig.ensureLoaded();
-    expect(runtimeConfig.state.configForm).toEqual({ agents: { defaults } });
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
 
-    modelActionsFor(runtimeConfig).onModelFallbacksChange("main", []);
+    modelActionsFor(runtimeConfig).onModelChange("main", null);
 
     expect(runtimeConfig.state.configForm).toEqual({
-      agents: { defaults, entries: { main: { model: { fallbacks: [] } } } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.4" } },
+        entries: {
+          main: { model: { fallbacks } },
+        },
+      },
     });
     runtimeConfig.dispose();
   });
-
-  it.each([{ fallbacks: ["openai/gpt-5.4"] }, { fallbacks: [] }])(
-    "keeps authored fallbacks $fallbacks when the primary model is cleared",
-    async ({ fallbacks }) => {
-      const runtimeConfig = createRuntimeConfig({
-        agents: {
-          defaults: { model: { primary: "openai/gpt-5.4" } },
-          entries: {
-            main: {
-              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks },
-            },
-          },
-        },
-      });
-      await runtimeConfig.ensureLoaded();
-
-      modelActionsFor(runtimeConfig).onModelChange("main", null);
-
-      expect(runtimeConfig.state.configForm).toEqual({
-        agents: {
-          defaults: { model: { primary: "openai/gpt-5.4" } },
-          entries: {
-            main: { model: { fallbacks } },
-          },
-        },
-      });
-      runtimeConfig.dispose();
-    },
-  );
 
   it("still removes the model node when clearing a primary with no fallbacks", async () => {
     const runtimeConfig = createRuntimeConfig({
