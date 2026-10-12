@@ -9,7 +9,7 @@ import plugin from "./index.js";
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+  ensureAuthProfileStoreAsync: vi.fn(async () => ({ version: 1, profiles: {} })),
 }));
 
 function registerProvider() {

@@ -1,14 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, getOwner, onCleanup, runWithOwner, Show } from "solid-js";
+import {
+  createMarkdownRef,
+  type MarkdownContentValue,
+} from "../../../components/markdown-dom-ref.ts";
 import type { MarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import {
-  type MarkdownDomMedia,
-  MarkdownDomReconciler,
-} from "../../../lib/markdown-dom-reconciler.ts";
+import type { MarkdownDomMedia } from "../../../lib/markdown-dom-reconciler.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { mountLitContent } from "../../../lit/solid-content.tsx";
@@ -23,22 +24,6 @@ import {
 export type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
-
-export function renderSolidMessageJson(
-  json: MarkdownJson,
-  messageKey: string,
-  options: MessageTextOptions,
-  markdownOptions: MarkdownRenderOptions,
-) {
-  return (
-    <MessageJson
-      json={json}
-      messageKey={messageKey}
-      options={options}
-      markdownOptions={markdownOptions}
-    />
-  );
-}
 
 export function MessageJson(props: {
   json: MarkdownJson;
@@ -67,26 +52,6 @@ export type MessageMarkdownProps = {
   duplicateSuffix?: DuplicateSuffix;
   media?: MarkdownMedia;
 };
-
-export function renderSolidMessageMarkdown(
-  markdown: string,
-  messageKey: string,
-  options: MessageTextOptions,
-  markdownOptions: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  media?: MarkdownMedia,
-) {
-  return (
-    <MessageMarkdown
-      markdown={markdown}
-      messageKey={messageKey}
-      options={options}
-      markdownOptions={markdownOptions}
-      duplicateSuffix={duplicateSuffix}
-      media={media}
-    />
-  );
-}
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
   const presentation = createMemo(() =>
@@ -218,14 +183,6 @@ function DisclosureContent(props: {
   );
 }
 
-export type MarkdownContentValue =
-  | string
-  | {
-      messageKey: string;
-      source: string;
-      parts: readonly [string, string];
-    };
-
 type MarkdownContentProps = {
   content: MarkdownContentValue;
   media?: MarkdownMedia;
@@ -234,29 +191,22 @@ type MarkdownContentProps = {
 
 /** Both transcript text and legacy slots share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
+  const solidOwner = getOwner();
   const fragment = document.createDocumentFragment();
-  const owner = new MarkdownDomReconciler(fragment);
-  createEffect(
-    () => [props.content, props.media, props.incremental] as const,
-    ([content, media, incremental]) => {
-      const renderer: MarkdownDomMedia | undefined = media && {
-        prefix: media.prefix,
-        render(index, container) {
-          const item = media.items[index];
-          if (!item) {
-            return undefined;
-          }
-          return mountLitContent(media.render(item, index), container);
-        },
-      };
-      if (typeof content === "string") {
-        owner.updateHtml(content, renderer, incremental);
-      } else {
-        owner.update(content.messageKey, content.source, content.parts, renderer);
-      }
-    },
-  );
-  onCleanup(() => owner.dispose());
+  const markdown = createMarkdownRef(() => {
+    const media = props.media;
+    const renderer: MarkdownDomMedia | undefined = media && {
+      prefix: media.prefix,
+      render(index, container) {
+        const item = media.items[index];
+        return item
+          ? runWithOwner(solidOwner, () => mountLitContent(media.render(item, index), container))
+          : undefined;
+      },
+    };
+    return { content: props.content, media: renderer, incremental: props.incremental };
+  });
+  markdown(fragment);
   return Array.from(fragment.childNodes);
 }
 

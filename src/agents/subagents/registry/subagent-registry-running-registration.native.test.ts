@@ -57,7 +57,7 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
         ],
         workerData: {
           ...options?.workerData,
-          testRegistrationPath: context.admission.databasePath,
+          testRegistrationPath: database.db.location(),
           testRegistrationBegin: nativeBegin.buffer,
         },
       }),

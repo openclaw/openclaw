@@ -1228,6 +1228,12 @@ describe("promoteAuthProfileInOrder", () => {
         };
         saveAuthProfileStore(store, agentDir);
         expect(reloadSharedAuthStoreOwnership().location).toBe("legacy-main");
+        replaceRuntimeAuthProfileStoreSnapshots([
+          {
+            agentDir,
+            store: { ...store, profiles: { ...store.profiles, [profileId]: replacement } },
+          },
+        ]);
         const beforeRemove = vi.fn(async () => {
           expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(original);
           if (replaceDuringCleanup) {

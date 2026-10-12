@@ -15,7 +15,7 @@ it("invalidates public t for lazy fallback registration without replacing active
   const originalGerman = await loadLazyLocaleTranslation("de");
   const widget = en.board.widget;
   const originalWidget = { ...widget };
-  const labels: string[][] = [];
+  const labels: (readonly string[])[] = [];
   let dispose = () => {};
   try {
     i18n.registerTranslation("de", { board: { widget: { websiteOpen: "Webseite öffnen" } } });

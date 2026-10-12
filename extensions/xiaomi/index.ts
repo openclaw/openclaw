@@ -301,10 +301,12 @@ export default definePluginEntry({
         },
         ...XIAOMI_PROVIDER_HOOKS,
         resolveUsageAuth: async (ctx) => {
-          const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-            providerIds: [provider.id],
-            envDirect: [ctx.env[provider.envVar]],
-          });
+          const apiKey = (
+            await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+              providerIds: [provider.id],
+              envDirect: [ctx.env[provider.envVar]],
+            })
+          )?.[0];
           return apiKey ? { token: apiKey } : null;
         },
         fetchUsageSnapshot: async () => ({

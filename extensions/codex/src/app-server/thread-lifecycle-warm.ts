@@ -323,7 +323,7 @@ export async function tryReuseCodexLiveThread(
       pluginAppsConfigPatch,
       prebuiltFinalConfigPatch.configPatch,
     );
-    const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
+    const resumeParams = await lifecycleTiming.measure("warm-thread-resume-params", () =>
       options.buildResumeParams(binding, resumeAuthProfileId, resumeConfig),
     );
     options.assertInferenceConfig(

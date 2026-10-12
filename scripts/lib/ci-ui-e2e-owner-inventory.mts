@@ -553,7 +553,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-flow.reactions.e2e.test.ts",
     ["chat", "profile"],
-    ["ui/src/pages/chat/components/chat-message-reactions.ts"],
+    ["ui/src/pages/chat/components/chat-message-reaction-chips-view.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/chat-flow.session-start.e2e.test.ts",
@@ -610,7 +610,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-mermaid-load-errors.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/markdown-mermaid.ts"],
+    ["ui/src/components/markdown-mermaid.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/chat-metadata-observation.e2e.test.ts",

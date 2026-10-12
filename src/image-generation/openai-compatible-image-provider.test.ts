@@ -10,6 +10,7 @@ const {
   assertOkOrThrowHttpErrorMock,
   createProviderOperationDeadlineMock,
   isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsyncMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   resolveApiKeyForProviderMock,
@@ -23,6 +24,7 @@ const {
     label: params.label,
   })),
   isProviderApiKeyConfiguredMock: vi.fn(() => true),
+  isProviderApiKeyConfiguredAsyncMock: vi.fn(async () => true),
   postJsonRequestMock: vi.fn<typeof import("../plugin-sdk/provider-http.js").postJsonRequest>(),
   postMultipartRequestMock:
     vi.fn<typeof import("../plugin-sdk/provider-http.js").postMultipartRequest>(),
@@ -45,8 +47,10 @@ const {
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
+// mock-isolation: Provider request tests supply auth readiness without host credential reads.
 vi.mock("../plugins/provider-auth-availability.js", () => ({
   isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -151,6 +155,7 @@ describe("OpenAI-compatible image provider helper", () => {
     assertOkOrThrowHttpErrorMock.mockClear();
     createProviderOperationDeadlineMock.mockClear();
     isProviderApiKeyConfiguredMock.mockClear();
+    isProviderApiKeyConfiguredAsyncMock.mockClear();
     postJsonRequestMock.mockReset();
     postMultipartRequestMock.mockReset();
     resolveApiKeyForProviderMock.mockReset();
@@ -160,7 +165,7 @@ describe("OpenAI-compatible image provider helper", () => {
     sanitizeConfiguredModelProviderRequestMock.mockClear();
   });
 
-  it("checks config-backed auth under the credential owner, not its HTTP config alias", () => {
+  it("checks config-backed auth under the credential owner, not its HTTP config alias", async () => {
     const provider = createProvider({ providerConfigKey: "different-http-provider" });
     const cfg = {
       models: {
@@ -181,6 +186,12 @@ describe("OpenAI-compatible image provider helper", () => {
 
     expect(provider.isConfigured?.({ cfg, agentDir: "/tmp/agent" })).toBe(true);
     expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
+      provider: "sample",
+      cfg,
+      agentDir: "/tmp/agent",
+    });
+    expect(await provider.isConfiguredAsync?.({ cfg, agentDir: "/tmp/agent" })).toBe(true);
+    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith({
       provider: "sample",
       cfg,
       agentDir: "/tmp/agent",

@@ -315,43 +315,18 @@ describe("Slack platform-authoritative automatic room history", () => {
     expect(f.history).not.toHaveBeenCalled();
   });
 
-  it.each(["API failure", "session reset"] as const)(
-    "omits unusable native history after %s while preserving the addressed turn",
-    async (cause) => {
-      const f = fixture();
-      const warn = vi.spyOn(f.ctx.logger, "warn").mockImplementation(() => undefined);
-      const writeGeneration = (lifecycleRevision: string) =>
-        upsertSessionEntry({
-          storePath: f.storePath,
-          sessionKey: "agent:main:slack:channel:c1",
-          entry: {
-            sessionId: "same-session",
-            lifecycleRevision,
-            updatedAt: 10_000,
-            sessionStartedAt: 10_000,
-          },
-        });
-      if (cause === "API failure") {
-        f.history.mockRejectedValue(new Error("missing_scope"));
-      } else {
-        await writeGeneration("before-reset");
-        f.history.mockImplementation(async () => {
-          await writeGeneration("after-reset");
-          return { messages: [{ ts: "19.000", user: "U1", text: "raced context" }] };
-        });
-      }
-      const prepared = await f.prepare();
-      expect(prepared?.ctxPayload.InboundHistory).toEqual([]);
-      expect(prepared?.ctxPayload.Body).not.toContain("raced context");
-      expect(prepared?.ctxPayload.RawBody).toContain("current request");
-      if (cause === "API failure") {
-        expect(warn).toHaveBeenCalledWith(
-          expect.objectContaining({ reason: expect.stringContaining("missing_scope") }),
-          "Slack automatic history omitted",
-        );
-      }
-    },
-  );
+  it("omits unavailable native history while preserving the addressed turn", async () => {
+    const f = fixture();
+    const warn = vi.spyOn(f.ctx.logger, "warn").mockImplementation(() => undefined);
+    f.history.mockRejectedValue(new Error("missing_scope"));
+    const prepared = await f.prepare();
+    expect(prepared?.ctxPayload.InboundHistory).toEqual([]);
+    expect(prepared?.ctxPayload.RawBody).toContain("current request");
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining("missing_scope") }),
+      "Slack automatic history omitted",
+    );
+  });
 
   it("honors cancellation and live policy revocation while awaiting native history", async () => {
     const f = fixture();

@@ -9,15 +9,13 @@ import {
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureSessionEntryReadScope } from "../../config/sessions/session-entry-read-request.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -26,6 +24,7 @@ import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyRunVerbosity } from "./get-reply.types.js";
+import { prepareSessionVerboseLevelReader } from "./session-verbose-level.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
 
@@ -34,7 +33,7 @@ type HarnessDefaultCandidate = {
   model?: string;
 };
 
-export function createShouldEmitVerboseProgress(params: {
+export async function createShouldEmitVerboseProgress(params: {
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
@@ -43,56 +42,23 @@ export function createShouldEmitVerboseProgress(params: {
   assertCurrent?: () => void;
 }) {
   let runVerbosity: ReplyRunVerbosity | undefined;
-  const scope =
-    params.sessionKey && params.storePath
-      ? captureSessionEntryReadScope({
-          agentId: params.agentId,
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-          clone: false,
-        }).scope
-      : undefined;
-  const resolveCurrentExplicitLevel = () => {
-    if (params.sessionKey && params.storePath) {
-      try {
-        const entry = loadSessionEntryReadOnly({
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-          clone: false,
-        });
-        return normalizeVerboseLevel(entry?.verboseLevel ?? "");
-      } catch {
-        // Ignore transient store read failures and fall back to the current dispatch snapshot.
-      }
-    }
-    return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
-  };
+  const readVerboseLevel = await prepareSessionVerboseLevelReader({
+    scope:
+      params.sessionKey && params.storePath
+        ? { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey }
+        : undefined,
+    initialLevel: params.initialExplicitLevel,
+    assertCurrent: params.assertCurrent,
+  });
   const resolveLevel = (explicit: () => VerboseLevel | undefined) =>
     runVerbosity?.verboseLevelOverride ??
     explicit() ??
     runVerbosity?.resolvedVerboseLevel ??
     normalizeVerboseLevel(params.fallbackLevel) ??
     "off";
-  const resolveLevelAsync = async () => {
-    params.assertCurrent?.();
-    let explicit = normalizeVerboseLevel(params.initialExplicitLevel ?? "");
-    if (scope) {
-      try {
-        const entry = await readSessionEntryReadOnlyInWorker(scope, params.assertCurrent);
-        explicit = normalizeVerboseLevel(entry?.verboseLevel ?? "");
-      } catch {
-        // Preserve the dispatch fallback on read failure, never on lost caller authority.
-      }
-    }
-    params.assertCurrent?.();
-    return resolveLevel(() => explicit);
-  };
   const shouldEmitAsync = async (full: boolean) => {
-    const level = await resolveLevelAsync();
     params.assertCurrent?.();
+    const level = resolveLevel(readVerboseLevel);
     return full ? level === "full" : level !== "off";
   };
   return {
@@ -100,8 +66,8 @@ export function createShouldEmitVerboseProgress(params: {
       // A reused queued dispatcher must clear the previous turn's explicit choice.
       runVerbosity = settings;
     },
-    shouldEmit: () => resolveLevel(resolveCurrentExplicitLevel) !== "off",
-    shouldEmitFull: () => resolveLevel(resolveCurrentExplicitLevel) === "full",
+    shouldEmit: () => resolveLevel(readVerboseLevel) !== "off",
+    shouldEmitFull: () => resolveLevel(readVerboseLevel) === "full",
     shouldEmitAsync: () => shouldEmitAsync(false),
     shouldEmitFullAsync: () => shouldEmitAsync(true),
   };
@@ -121,7 +87,7 @@ export function resolveTurnModelOverride(
  * derive the same session-stable delivery mode or CLI session bindings
  * ping-pong across turn kinds (#121485).
  */
-export function resolveVisibleRepliesPolicy(params: {
+export async function resolveVisibleRepliesPolicy(params: {
   cfg: OpenClawConfig;
   chatType?: string;
   ctx: FinalizedMsgContext;
@@ -130,22 +96,22 @@ export function resolveVisibleRepliesPolicy(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): {
+}): Promise<{
   configuredVisibleReplies?: "automatic" | "message_tool";
   harnessDefaultVisibleReplies?: "automatic" | "message_tool";
-} {
+}> {
   const isGroup = params.chatType === "group" || params.chatType === "channel";
   const configuredVisibleReplies = isGroup
     ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
     : params.cfg.messages?.visibleReplies;
   const harnessDefaultVisibleReplies =
     configuredVisibleReplies === undefined && !isGroup
-      ? resolveHarnessSourceVisibleRepliesDefault(params)
+      ? await resolveHarnessSourceVisibleRepliesDefault(params)
       : undefined;
   return { configuredVisibleReplies, harnessDefaultVisibleReplies };
 }
 
-function resolveHarnessSourceVisibleRepliesDefault(params: {
+async function resolveHarnessSourceVisibleRepliesDefault(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
@@ -153,7 +119,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): HarnessSourceVisibleRepliesDefault | undefined {
+}): Promise<HarnessSourceVisibleRepliesDefault | undefined> {
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return undefined;
   }
@@ -199,7 +165,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     const channelModelCandidate = channelModelOverride
       ? resolveModelCandidate(channelModelOverride.model)
       : undefined;
-    const storedModelRef = resolveStoredModelOverride({
+    const storedModelRef = await resolveStoredModelOverrideAsync({
       loadSessionEntry: (sessionKey) => {
         const agentId = resolveSessionAgentId({
           sessionKey,
@@ -207,12 +173,11 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
           fallbackAgentId: params.sessionAgentId,
         });
         const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-        return loadSessionEntryReadOnly({
+        return readSessionEntryReadOnlyInWorker({
           agentId,
           storePath,
           sessionKey,
           readConsistency: "latest",
-          clone: false,
         });
       },
       sessionEntry: params.entry,

@@ -26,10 +26,12 @@ import { readCronRunReceiptCurrentFactsInDatabase } from "../store/run-receipt-r
 import {
   assertCronRunReceiptCurrentFacts,
   CronRunReceiptRevisionError,
+} from "../store/run-receipt-store.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
+} from "../store/run-receipt-store.test-support.js";
 import { mutateCronRuntimeRowsInDatabase } from "../store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";

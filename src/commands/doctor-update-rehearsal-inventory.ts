@@ -353,6 +353,13 @@ export async function inspectPreparedDoctorRehearsal(params: {
       registeredDatabases: registered,
     }),
   ];
+  // Plugin collectors read their configured roots. Admit copied roots first so
+  // no collector reads through an unsafe link; deferred external roots stay unread.
+  for (const root of configuredMigrationRoots) {
+    if (within(stateDir, root.path)) {
+      inspectPath(root.path);
+    }
+  }
   const resourceWarnings: PluginDoctorMigrationBackupWarning[] = [];
   const pluginScope = await preparePluginDoctorMigrationBackupResources({
     config,

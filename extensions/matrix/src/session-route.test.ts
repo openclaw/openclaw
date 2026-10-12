@@ -153,7 +153,9 @@ async function resolveUserRouteForCurrentSession(params: {
   });
 }
 
-function expectCurrentDmRoomRoute(route: ReturnType<typeof resolveMatrixOutboundSessionRoute>) {
+function expectCurrentDmRoomRoute(
+  route: Awaited<ReturnType<typeof resolveMatrixOutboundSessionRoute>>,
+) {
   const currentRoute = expectRoute(route);
   expect(currentRoute.sessionKey).toBe(currentDmSessionKey);
   expect(currentRoute.baseSessionKey).toBe(currentDmSessionKey);
@@ -166,7 +168,7 @@ function expectCurrentDmRoomRoute(route: ReturnType<typeof resolveMatrixOutbound
 }
 
 function expectFallbackUserRoute(
-  route: ReturnType<typeof resolveMatrixOutboundSessionRoute>,
+  route: Awaited<ReturnType<typeof resolveMatrixOutboundSessionRoute>>,
   params?: {
     userId?: string;
   },
@@ -183,7 +185,7 @@ function expectFallbackUserRoute(
   expect(fallbackRoute.recipientSessionExact).toBe(false);
 }
 
-function expectRoute(route: ReturnType<typeof resolveMatrixOutboundSessionRoute>) {
+function expectRoute(route: Awaited<ReturnType<typeof resolveMatrixOutboundSessionRoute>>) {
   if (!route) {
     throw new Error("Expected Matrix route");
   }
@@ -251,8 +253,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expectCurrentDmRoomRoute(route);
   });
 
-  it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", () => {
-    const route = resolveMatrixOutboundSessionRoute({
+  it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", async () => {
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       target: "room:!ops:example.org",
@@ -280,9 +282,9 @@ describe("resolveMatrixOutboundSessionRoute", () => {
       replyToId: "$ReplyChild:Example.Org",
       expectedThreadId: "$ReplyChild:Example.Org",
     },
-  ])("$name", ({ threadId, replyToId, expectedThreadId }) => {
+  ])("$name", async ({ threadId, replyToId, expectedThreadId }) => {
     const route = expectRoute(
-      resolveMatrixOutboundSessionRoute({
+      await resolveMatrixOutboundSessionRoute({
         cfg: {},
         agentId: "main",
         target: "room:!ops:example.org",
@@ -297,9 +299,9 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     );
   });
 
-  it("claims a room version 12 room id (no :server suffix) as canonical when DMs are room-scoped", () => {
+  it("claims a room version 12 room id (no :server suffix) as canonical when DMs are room-scoped", async () => {
     // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs.
-    const route = resolveMatrixOutboundSessionRoute({
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: { channels: { matrix: perRoomDmMatrixConfig } },
       agentId: "main",
       target: "room:!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70",
@@ -310,14 +312,14 @@ describe("resolveMatrixOutboundSessionRoute", () => {
 
   it("resolves per-room DM metadata from the base key when currentSessionKey has a thread suffix", async () => {
     const storedSession = createStoredDirectDmSession();
-    const route = resolveUserRoute({
+    const route = await resolveUserRoute({
       cfg: await createMatrixRouteConfig({
         [currentDmSessionKey]: storedSession,
       }),
       accountId: "ops",
       target: "@alice:example.org",
     });
-    const threadedRoute = resolveMatrixOutboundSessionRoute({
+    const threadedRoute = await resolveMatrixOutboundSessionRoute({
       cfg: await createMatrixRouteConfig({
         [route?.baseSessionKey ?? currentDmSessionKey]: storedSession,
       }),
@@ -339,8 +341,8 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(dmThreadRoute.threadId).toBe("$DmRoot:Example.Org");
   });
 
-  it('does not recover currentSessionKey threads for shared dmScope "main" DMs', () => {
-    const route = resolveMatrixOutboundSessionRoute({
+  it('does not recover currentSessionKey threads for shared dmScope "main" DMs', async () => {
+    const route = await resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       target: "@alice:example.org",
