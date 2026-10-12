@@ -286,7 +286,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     ]);
     mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(entries);
     const census = await createManagedWorktreeOwnerPolicy({}, () => now).prepareOwners(
-      [...entries.keys()].map((ownerId) => ({ ...cleanupRecord, ownerId })),
+      Array.from(entries.keys(), (ownerId) => ({ ...cleanupRecord, ownerId })),
     );
     expect(
       ["live", "idle", "archived", "missing"].map((id) => census.readOwnerState?.("session", id)),
@@ -297,11 +297,13 @@ describe("createManagedWorktreeOwnerPolicy", () => {
   it.each(["failed", "missing"])(
     "defers unreadable or missing cleanup preparation (%s)",
     async (result) => {
-      if (result === "failed")
+      if (result === "failed") {
         mocks.readResolvedSessionEntriesInWorker.mockRejectedValue(
           new Error("unavailable session store"),
         );
-      else mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(new Map());
+      } else {
+        mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(new Map());
+      }
       const policy = createManagedWorktreeOwnerPolicy({});
       const census = await policy.prepareOwners([cleanupRecord]);
       expect(census.readOwnerState?.("session", cleanupRecord.ownerId)).toBe("active");
@@ -313,11 +315,11 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     "preserves live placement protection (%s)",
     async (kind) => {
       const key = cleanupRecord.ownerId;
-      if (kind === "unknown-placement")
+      if (kind === "unknown-placement") {
         mocks.getMany.mockImplementation(() => {
           throw new Error("unreadable placement");
         });
-      else
+      } else {
         mocks.getMany.mockReturnValue(
           new Map([
             [
@@ -332,6 +334,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
             ],
           ]),
         );
+      }
       const policy = createManagedWorktreeOwnerPolicy({});
       await policy.withOwnerCleanup(cleanupRecord, async () => {
         expect(policy.readOwnerState("session", key)).toBe("active");
@@ -368,12 +371,15 @@ describe("createManagedWorktreeOwnerPolicy", () => {
         expect(policy.readOwnerState("session", key)).toBe("retired");
         placements.push({ ...placement, sessionId: "unrelated", sessionKey: `${key}:other` });
         expect(policy.readOwnerState("session", key)).toBe("retired");
-        if (change === "added") placements.push({ ...placement, sessionId: "new-related" });
-        else if (change === "removed") placements.splice(0, 1);
-        else
+        if (change === "added") {
+          placements.push({ ...placement, sessionId: "new-related" });
+        } else if (change === "removed") {
+          placements.splice(0, 1);
+        } else {
           mocks.listForReconcile.mockImplementation(() => {
             throw new Error("unreadable placements");
           });
+        }
         expect(policy.readOwnerState("session", key)).toBe("active");
       });
     },

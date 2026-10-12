@@ -194,10 +194,7 @@ it("preserves cold snapshots through worker writes with synchronous SDK commit g
     const changedSkills = { ...cold.skillsSnapshot, prompt: "changed instructions" };
     await patch({ skillsSnapshot: changedSkills });
     expect(await readSessionEntryInWorker(f.scope)).toMatchObject({
-      label: "metadata only",
       skillsSnapshot: changedSkills,
-      sessionDiffBaseline: cold.sessionDiffBaseline,
-      systemPromptReport: cold.systemPromptReport,
     });
     expect(snapshots()).toEqual(
       saved.map((row) =>

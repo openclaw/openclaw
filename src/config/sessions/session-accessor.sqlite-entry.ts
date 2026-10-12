@@ -459,10 +459,7 @@ async function patchSqliteSessionEntrySnapshot(
     return result.entry;
   }
   let wrote = false;
-  const workerPatch = (
-    preparedSource: PreparedSessionSourceAuthority,
-    assertSourceAtCommit?: () => void,
-  ) =>
+  const workerPatch = (source: PreparedSessionSourceAuthority, assertSource?: () => void) =>
     patchSessionEntryInWorker({
       database: { ...databaseOptions, path: databasePath },
       databaseIdentity:
@@ -473,10 +470,10 @@ async function patchSqliteSessionEntrySnapshot(
       guard: options.workerGuard,
       assertCommitAllowed: () => {
         options.assertCommitAllowed?.();
-        assertSourceAtCommit?.();
+        assertSource?.();
       },
       shouldCommit: options.shouldCommit,
-      preparedSource,
+      preparedSource: source,
       retainedExecution: options.retainedExecution,
       reduction:
         typeof params.update === "function"
