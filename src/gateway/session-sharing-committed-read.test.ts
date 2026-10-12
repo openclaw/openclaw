@@ -24,6 +24,7 @@ import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSharingTarget } from "./session-sharing-policy.js";
@@ -52,7 +53,14 @@ describe("committed session mutation authorization", () => {
     async (mode) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         ensureUserProfilesSchema({});
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        const profileCatalog = await prepareUserProfileCatalog();
+        const releaseForeground = retainSessionListForegroundWork();
+        using _ = {
+          [Symbol.dispose]() {
+            releaseForeground();
+            profileCatalog.release();
+          },
+        };
         const cfg = rolePolicyConfig();
         if (mode === "fixed") {
           cfg.session = { store: state.statePath("legacy", "sessions.json") };
