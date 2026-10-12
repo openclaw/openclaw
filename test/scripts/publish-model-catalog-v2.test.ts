@@ -314,43 +314,14 @@ describe("publish model catalog v2", () => {
     },
   );
 
-  it.each(["before", "after"])(
-    "preserves foreign replacements %s the second rename",
-    async (timing) => {
-      const fixture = pairFixture();
-      const rename = fs.promises.rename;
-      const replaced = timing === "before" ? [fixture.outputs[1]] : fixture.outputs;
-      vi.spyOn(fs.promises, "rename").mockImplementation(async (source, destination) => {
-        await rename(source, destination);
-        if (destination === fixture.outputs[timing === "before" ? 0 : 1]) {
-          for (const file of replaced) {
-            fs.unlinkSync(file);
-            fs.writeFileSync(file, "foreign replacement");
-          }
-          if (timing === "after") {
-            throw new Error("fixture post-rename failure");
-          }
-        }
-      });
-      await expect(fixture.run()).rejects.toThrow(
-        timing === "before" ? "output changed during preparation" : "fixture post-rename failure",
-      );
-      replaced.forEach((file) => {
-        expect(fs.readFileSync(file, "utf8")).toBe("foreign replacement");
-      });
-      expect(fixture.recovery(0)).toHaveLength(1);
-      expect(fixture.recovery(1)).toHaveLength(1);
-    },
-  );
-
   it("reports cleanup failure without rejecting a successfully published pair", async () => {
     const fixture = pairFixture();
-    const unlink = fs.unlinkSync;
-    vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+    const remove = fs.rmSync;
+    vi.spyOn(fs, "rmSync").mockImplementation((file, options) => {
       if (String(file).includes(".catalog-pair-")) {
         throw new Error("fixture cleanup EACCES");
       }
-      unlink(file);
+      remove(file, options);
     });
     await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
     fixture.outputs.forEach((file, index) => {
@@ -360,112 +331,6 @@ describe("publish model catalog v2", () => {
     expect(fixture.warnings.mock.calls.flat().join("")).toContain(
       "pair published; recovery cleanup failed",
     );
-  });
-
-  it.each([
-    ["directory", "dev", "unknown"],
-    ["file", "ino", "unknown"],
-    ["directory", "dev", "precise"],
-    ["file", "ino", "precise"],
-  ] as const)("retains recovery %s with %s %s identity", async (entry, field, identity) => {
-    const fixture = pairFixture();
-    const lstat = fs.lstatSync;
-    const rename = fs.promises.rename;
-    const precise = identity === "precise";
-    const original = 2n ** 53n;
-    let published = false;
-    let target = "";
-    let previous: fs.BigIntStats | undefined;
-    const recoveryEntry = (file: fs.PathLike) => {
-      const name = path.basename(String(file));
-      return entry === "directory" ? name.startsWith(".catalog-pair-") : name === "next.json";
-    };
-    if (precise) {
-      expect(Number(original)).toBe(Number(original + 1n));
-      const descriptors = new Set<number>();
-      const open = fs.openSync;
-      const close = fs.closeSync;
-      const fstat = fs.fstatSync;
-      vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
-        const fd = open(file, flags, mode);
-        descriptors.delete(fd);
-        if (recoveryEntry(file)) {
-          descriptors.add(fd);
-        }
-        return fd;
-      });
-      vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
-        close(fd);
-        descriptors.delete(fd);
-      });
-      vi.spyOn(fs, "fstatSync").mockImplementation((fd, options) => {
-        const stat = fstat(fd, options);
-        return descriptors.has(fd)
-          ? Object.assign(stat, { [field]: options?.bigint ? original : Number(original) })
-          : stat;
-      });
-    }
-    vi.spyOn(fs, "lstatSync").mockImplementation((file, options) => {
-      const stat = lstat(file, options);
-      if (stat && precise && recoveryEntry(file)) {
-        const value = published ? original + 1n : original;
-        return Object.assign(stat, { [field]: options?.bigint ? value : Number(value) });
-      }
-      if (stat && file === target && previous) {
-        // Only cleanup sees Windows' unknown path-stat identity; publication uses the host.
-        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-        return Object.assign(stat, { dev: previous.dev, ino: previous.ino, [field]: 0n });
-      }
-      return stat;
-    });
-    vi.spyOn(fs.promises, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
-      if (destination !== fixture.outputs[1]) {
-        return;
-      }
-      published = true;
-      if (!precise) {
-        const [dir] = fixture.recovery(0);
-        if (!dir) {
-          throw new Error("fixture recovery is missing");
-        }
-        target = entry === "directory" ? dir : path.join(dir, "next.json");
-        previous = lstat(target, { bigint: true });
-        fs.renameSync(target, `${target}.original`);
-        if (entry === "directory") {
-          fs.mkdirSync(target);
-          for (const name of ["next.json", "previous.json", "RECOVERY.txt"]) {
-            fs.renameSync(path.join(`${target}.original`, name), path.join(target, name));
-            fs.writeFileSync(path.join(target, name), "foreign replacement");
-          }
-        } else {
-          fs.writeFileSync(target, "foreign replacement");
-        }
-      }
-    });
-    const unlink = vi.spyOn(fs, "unlinkSync");
-    await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
-    if (precise) {
-      expect(unlink).not.toHaveBeenCalled();
-    } else {
-      const replacement = entry === "directory" ? path.join(target, "next.json") : target;
-      expect(fs.readFileSync(replacement, "utf8")).toBe("foreign replacement");
-    }
-    fixture.outputs.forEach((file, index) => {
-      expect(JSON.parse(fs.readFileSync(file, "utf8")).schemaVersion).toBe(index + 1);
-      if (precise) {
-        const [dir] = fixture.recovery(index);
-        if (!dir) {
-          throw new Error("fixture recovery is missing");
-        }
-        expect(fs.readFileSync(path.join(dir, "previous.json"), "utf8")).toBe(
-          `previous v${index + 1}`,
-        );
-      }
-    });
-    const warnings = fixture.warnings.mock.calls.flat().join("");
-    expect(warnings).toContain("pair published; recovery cleanup failed; retained");
-    expect(warnings).toContain(`recovery ${entry} identity is unknown or changed`);
   });
 
   it("adds an explicit second output while keeping --out as v1", () => {

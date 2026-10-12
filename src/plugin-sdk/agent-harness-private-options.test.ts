@@ -26,6 +26,12 @@ type HostToolsOptions = Parameters<
 type HostTestAttempt = Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["attempt"];
 
 describe("agent harness private options", () => {
+  it("accepts the optional host run trigger for tool presentation", () => {
+    expectTypeOf<Pick<AgentHarnessToolSurfaceRuntimeParams, "trigger">>().toEqualTypeOf<{
+      trigger?: AgentHarnessAttemptParamsV2["trigger"];
+    }>();
+  });
+
   it("keeps Side chat controls out of every public attempt and tool-surface input", () => {
     type PublicInputs = {
       attempt: AgentHarnessAttemptParams;

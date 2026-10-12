@@ -21,6 +21,7 @@ import {
   publishUserProfileAliasChange,
   readUserProfileVersion,
 } from "./user-profile-events.js";
+import { isUserProfileCatalogReady, readUserProfileIdentity } from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   UserChannelIdentity,
@@ -262,6 +263,32 @@ export async function prepareUserProfileRoleAuthority(
   return prepareUserProfileAuthority(profileId, options, "authority", options.includeProfile);
 }
 
+/** Reuse retained canonical role facts; standalone callers read existing storage off-thread. */
+export async function prepareUserProfileRolePolicyAuthority(
+  profileId: string,
+  options: IdentityOptions = {},
+) {
+  return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
+    const source = { path: context.admission.databasePath };
+    if (isUserProfileCatalogReady(source)) {
+      const profile = readUserProfileIdentity(profileId, source);
+      return (
+        profile && {
+          profileId: profile.profileId,
+          role: profile.role,
+          githubLogin: profile.githubLogin ?? null,
+        }
+      );
+    }
+    return runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({ type: "userProfiles.roleAuthority.resolve", input: { profileId } }),
+      { existingOnly: true },
+    );
+  });
+}
+
 export async function prepareUserProfileSelectionAuthority(
   profileId: string,
   options: IdentityOptions = {},
@@ -276,36 +303,57 @@ async function prepareUserProfileAuthority(
   dependency: "authority" | "identity",
   includeProfile?: boolean,
 ) {
+  return prepareUserProfileAuthorityRead(
+    profileId,
+    options,
+    dependency,
+    async (context) => {
+      const reply = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        {
+          type: "userProfiles.authority.resolve",
+          profileId,
+          ...(includeProfile ? { includeProfile } : {}),
+        },
+      );
+      if (!reply) {
+        return undefined;
+      }
+      if (!reply.ok || reply.type !== "userProfiles.authority.resolve") {
+        throw new Error("Profile authority reader returned an unexpected result");
+      }
+      return reply.profile;
+    },
+    includeProfile,
+  );
+}
+
+async function prepareUserProfileAuthorityRead<Profile extends { profileId: string }>(
+  profileId: string,
+  options: IdentityOptions,
+  dependency: "authority" | "identity",
+  readProfile: (
+    context: ReturnType<typeof captureAuthorityContext>,
+  ) => Promise<Profile | undefined>,
+  includeProfile?: boolean,
+) {
   const context = captureAuthorityContext(options);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const read = await captureUserProfileAuthorityRead(context.admission, undefined, dependency);
     const profileRevision = readUserProfileVersion();
-    const reply = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      {
-        type: "userProfiles.authority.resolve",
-        profileId,
-        ...(includeProfile ? { includeProfile } : {}),
-      },
-    );
+    const profile = await readProfile(context);
     context.admission.assertCurrent();
-    if (!reply) {
-      return undefined;
-    }
-    if (!reply.ok || reply.type !== "userProfiles.authority.resolve") {
-      throw new Error("Profile authority reader returned an unexpected result");
-    }
-    if (!reply.profile) {
+    if (!profile) {
       return undefined;
     }
     if (includeProfile && profileRevision !== readUserProfileVersion()) {
       continue;
     }
-    const sourceProfiles = [profileId, reply.profile.profileId];
+    const sourceProfiles = [profileId, profile.profileId];
     const isCurrent = read.bind(sourceProfiles);
     if (isCurrent) {
       return {
-        ...reply.profile,
+        ...profile,
         isCurrent: includeProfile
           ? () => isCurrent() && profileRevision === readUserProfileVersion()
           : isCurrent,

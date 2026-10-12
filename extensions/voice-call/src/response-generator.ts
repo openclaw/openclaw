@@ -270,7 +270,7 @@ export async function generateVoiceResponse(
         await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
         const now = Date.now();
-        let sessionEntry = agentRuntime.session.getSessionEntry({
+        let sessionEntry = await agentRuntime.session.getSessionEntryAsync({
           storePath,
           sessionKey: resolvedSessionKey,
         });
@@ -283,7 +283,7 @@ export async function generateVoiceResponse(
         }
         if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
           sessionEntry =
-            (await agentRuntime.session.patchSessionEntry({
+            (await agentRuntime.session.prepareSessionEntryPatch({
               storePath,
               sessionKey: resolvedSessionKey,
               replaceEntry: true,
@@ -291,7 +291,7 @@ export async function generateVoiceResponse(
                 sessionId: crypto.randomUUID(),
                 updatedAt: now,
               },
-              update: (entry) => {
+              prepare: (entry) => {
                 const next = entry.sessionId
                   ? { ...entry }
                   : {

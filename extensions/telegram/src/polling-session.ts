@@ -451,13 +451,6 @@ export class TelegramPollingSession {
       void stopWorker();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
-    // Fail closed when the spool stops making progress: keeping any claim live would
-    // prevent a healthy process from recovering a wedged drain.
-    const stopBot = () => {
-      return Promise.resolve(bot.stop())
-        .then(() => undefined)
-        .catch(() => undefined);
-    };
     const clearForceCycleTimer = () => {
       if (!forceCycleTimer) {
         return;
@@ -570,7 +563,13 @@ export class TelegramPollingSession {
       await waitForGracefulStop(() => ingressMonitor.stop());
       // Accepted replay writes and introductions keep ownership after transport grace expires.
       await ingressMonitor.waitForDeferredClaims();
-      await waitForGracefulStop(stopBot);
+      // Fail closed when the spool stops making progress: keeping any claim live would
+      // prevent a healthy process from recovering a wedged drain.
+      await waitForGracefulStop(() =>
+        Promise.resolve(bot.stop())
+          .then(() => undefined)
+          .catch(() => undefined),
+      );
     }
   }
 }

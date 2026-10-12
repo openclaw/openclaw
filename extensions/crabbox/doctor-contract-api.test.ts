@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
@@ -48,7 +48,11 @@ afterEach(() => {
 });
 
 function openStore<T>(options: OpenKeyedStoreOptions) {
-  return createPluginStateKeyedStoreForTests<T>("crabbox", { ...options, env });
+  return createPluginStateKeyedStoreV2ForTests<T>(
+    "crabbox",
+    { ...options, env },
+    { assertCurrent() {} },
+  );
 }
 
 function legacyImages() {
@@ -249,20 +253,22 @@ describe("Crabbox warm-profile Doctor migration", () => {
     ).toEqual(Object.fromEntries(rows.map((row, index) => [String(index), row])));
   });
 
-  it.each(["changed", "write-failed"])(
+  it.each(["changed", "write-failed", "metadata-conflict"])(
     "preserves paid ownership when publication is %s",
     async (failure) => {
       const store = legacyImages();
       await store.register("profile", image);
       const newer = { ...image, operation: { type: "retire", checkpointId: "chk_new_obligation" } };
-      const update = store.update!.bind(store);
-      vi.spyOn(store, "update").mockImplementationOnce(async (key, callback, options) => {
-        if (failure === "write-failed") {
-          throw new Error("write unavailable");
-        }
-        await store.register(key, newer);
-        return update(key, callback, options);
-      });
+      const compareAndApply = store.compareAndApply.bind(store);
+      const publication = vi
+        .spyOn(store, "compareAndApply")
+        .mockImplementationOnce(async (...args) => {
+          if (failure === "write-failed") {
+            throw new Error("write unavailable");
+          }
+          await store.register(args[0], failure === "changed" ? newer : image, { ttlMs: 60_000 });
+          return compareAndApply(...args);
+        });
       const context: PluginDoctorStateMigrationContext = { openPluginStateKeyedStore: openStore };
       vi.spyOn(context, "openPluginStateKeyedStore").mockImplementation((options) =>
         options.namespace === "warm-images" ? store : openStore(options),
@@ -270,9 +276,20 @@ describe("Crabbox warm-profile Doctor migration", () => {
 
       const result = await migration.migrateLegacyState(input(context));
 
-      expect(result.changes).toEqual([]);
-      expect(result.warnings).toHaveLength(1);
-      expect(await store.lookup("profile")).toEqual(failure === "changed" ? newer : image);
+      if (failure === "metadata-conflict") {
+        expect(result.changes).toHaveLength(1);
+        expect(result.warnings).toEqual([]);
+        expect(await store.lookup("profile")).toMatchObject({
+          version: 3,
+          image: { checkpointId: image.checkpointId },
+        });
+        expect(publication).toHaveBeenCalledTimes(2);
+      } else {
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toHaveLength(1);
+        expect(await store.lookup("profile")).toEqual(failure === "changed" ? newer : image);
+        expect(publication).toHaveBeenCalledOnce();
+      }
     },
   );
 });

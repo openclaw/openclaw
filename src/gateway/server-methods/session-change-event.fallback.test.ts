@@ -61,7 +61,7 @@ it("coalesces prepared keyless refreshes without repeating prepared facts", asyn
   }
 });
 
-it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
+it.each(["ready", "preparation", "canonical deferral"] as const)(
   "publishes private repository facts or refreshes subscribers after %s preparation",
   async (failure) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -166,11 +166,7 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
       try {
         await sessions.refresh({ agentId: "main", force: true });
         const initialReads = request.mock.calls.length;
-        if (failure === "capture") {
-          vi.spyOn(projection, "capture").mockImplementationOnce(() => {
-            throw new Error("synthetic capture failure");
-          });
-        } else if (failure === "preparation") {
+        if (failure === "preparation") {
           vi.spyOn(projection, "withPreparedExactRows").mockRejectedValueOnce(
             new Error("synthetic preparation failure"),
           );
@@ -299,9 +295,9 @@ it.each(ownerCases)(
   async ({ cfg, sessionKey, canonicalKey }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const projection = createSessionRowProjectionFixture({ cfg, agentId: "ops", store: {} });
-      vi.spyOn(projection, "capture").mockImplementation(() => {
-        throw new Error("synthetic capture failure");
-      });
+      vi.spyOn(projection, "withPreparedExactRows").mockRejectedValue(
+        new Error("synthetic preparation failure"),
+      );
       const broadcaster = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
       const broadcast = vi.fn(broadcaster.broadcastToConnIds);
       const lease = createPluginRuntimeCapabilityLease("fallback-scope");

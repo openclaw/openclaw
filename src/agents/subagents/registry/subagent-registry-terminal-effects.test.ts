@@ -30,6 +30,38 @@ beforeEach(() => {
   vi.mocked(persistSubagentSessionTiming).mockResolvedValue(undefined);
 });
 
+it("qualifies a completed child's raw session with its recorded agent", async () => {
+  const entry = createRunEntry({
+    childSessionKey: "global",
+    childAgentId: "alpha",
+    expectsCompletionMessage: false,
+  });
+  const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
+  const controller = createLifecycleControllerFixture(
+    { entry, cleanupBrowserSessionsForLifecycleEnd },
+    {
+      callGateway: async () => {
+        throw new Error("Unexpected Gateway call");
+      },
+      cleanupBrowserSessionsForLifecycleEnd,
+      ownersByEntry: new Map(),
+    },
+  );
+  vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
+  await controller.completeSubagentRun({
+    runId: entry.runId,
+    endedAt: 4_000,
+    outcome: { status: "ok" },
+    reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    triggerCleanup: true,
+  });
+  expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionKeys: ["agent:alpha:global"],
+    }),
+  );
+});
+
 it.for(["queued", "pre-commit"] as const)(
   "retires a superseded session while its browser cleanup claim waits (%s)",
   async (barrier, { signal }) => {

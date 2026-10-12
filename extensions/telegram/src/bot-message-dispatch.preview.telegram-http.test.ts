@@ -23,6 +23,60 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     waitForBotApiCall,
   } = http;
 
+  it.each([
+    ["partial", ""],
+    ["block", ""],
+    ["partial", "[bot] "],
+    ["block", "[bot] "],
+  ] as const)(
+    "appends explicit chunks and replaces each final in %s mode with prefix %s",
+    async (mode, prefix) => {
+      const first = "This answer starts here and has enough text to preview. ";
+      const chunk = "The next sentence belongs to the same answer. ";
+      const finalText = "The authoritative final replaces the streamed draft.";
+      await dispatchProgressTurn(async () => undefined, {
+        mode,
+        toolProgress: false,
+        cfg: { messages: { responsePrefix: prefix.trimEnd() } },
+        producer: async ({ dispatcher }) => {
+          dispatcher.sendBlockReply({ text: first, textMode: "delta" });
+          await dispatcher.waitForIdle();
+          dispatcher.sendBlockReply({ text: chunk, textMode: "delta" });
+          await dispatcher.waitForIdle();
+          dispatcher.sendBlockReply({ text: first, textMode: "delta" });
+          await dispatcher.waitForIdle();
+          expect([...visibleMessages.values()]).toEqual([
+            (prefix + first + chunk + first).trimEnd(),
+          ]);
+          dispatcher.sendFinalReply({ text: finalText });
+          dispatcher.sendFinalReply({ text: "Separate status." });
+          return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+        },
+      });
+      expect([...visibleMessages.values()]).toEqual([
+        prefix + finalText,
+        prefix + "Separate status.",
+      ]);
+    },
+  );
+
+  it("preserves accumulated ACP answer chunks when a final status notice follows", async () => {
+    const first = "First ACP answer chunk with enough text for a preview. ";
+    const second = "Second ACP answer chunk completes the answer.";
+    await dispatchProgressTurn(async () => undefined, {
+      mode: "partial",
+      toolProgress: false,
+      producer: async ({ dispatcher }) => {
+        dispatcher.sendBlockReply({ text: first, textMode: "delta" });
+        dispatcher.sendBlockReply({ text: second, textMode: "delta" });
+        await dispatcher.waitForIdle();
+        dispatcher.sendFinalReply({ text: "Session ids resolved.", isStatusNotice: true });
+        return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+      },
+    });
+    expect([...visibleMessages.values()]).toEqual([first + second, "Session ids resolved."]);
+  });
+
   it("keeps the same preview after one HTTP 502 edit failure", async () => {
     const initial = "The initial answer is visible while the remaining work completes.";
     const updated = `${initial} More details are ready.`;
@@ -574,6 +628,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         );
         const card = [...visibleMessages.values()][0] ?? "";
         expect(card.match(/Exec/gu)).toHaveLength(1);
+        expect(card).toContain("🛠️ Exec");
         expect(card).toContain("failed");
       },
       {
@@ -657,37 +712,65 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     },
   );
 
-  it("delivers verbose tool output separately from transient commentary", async () => {
-    const mode = "progress";
-    const toolProgress = true;
-    const verbose = "full";
-    await dispatchProgressTurn(
-      async (options) => {
-        await options?.onItemEvent?.({
-          kind: "preamble",
-          itemId: "verbose-commentary",
-          phase: "end",
-          progressText: "Inspecting the requested files",
-        });
-        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "stdout" });
-        await options?.onToolResult?.({
-          text: "fixture stdout line one\nfixture stdout line two",
-        });
-      },
-      {
-        mode,
-        toolProgress,
-        cfg: { agents: { defaults: { verboseDefault: verbose } } },
-        finalReply: { text: "Inspection complete." },
-      },
-    );
-    const sends = acceptedCalls.filter((call) => call.method === "sendMessage");
-    expect(
-      sends.filter((call) => String(call.fields.text).includes("fixture stdout")),
-    ).toHaveLength(1);
-    expect(sends.filter((call) => call.fields.text === "Inspecting the requested files")).toEqual(
-      [],
-    );
-    expect([...visibleMessages.values()]).toContain("Inspection complete.");
-  });
+  it.each([
+    { verbose: "on", mode: "progress", toolProgress: undefined, visible: true, preamble: true },
+    { verbose: "full", mode: "progress", toolProgress: undefined, visible: true, preamble: true },
+    { verbose: "off", mode: "progress", toolProgress: undefined, visible: false, preamble: true },
+    { verbose: "on", mode: "progress", toolProgress: false, visible: false, preamble: true },
+    { verbose: "full", mode: "progress", toolProgress: true, visible: true, preamble: true },
+    { verbose: "on", mode: "partial", toolProgress: undefined, visible: true, preamble: true },
+    { verbose: "on", mode: "off", toolProgress: undefined, visible: false, preamble: true },
+    { verbose: "on", mode: "progress", toolProgress: undefined, visible: true, preamble: false },
+  ] as const)(
+    "keeps verbose $verbose diagnostics separate from $mode drafts (toolProgress=$toolProgress, preamble=$preamble)",
+    async ({ verbose, mode, toolProgress, visible, preamble }) => {
+      const diagnostic =
+        verbose === "full" ? "fixture stdout line one\nfixture stdout line two" : "Exec";
+      await dispatchProgressTurn(
+        async (options) => {
+          if (preamble) {
+            await options?.onItemEvent?.({
+              kind: "preamble",
+              itemId: "verbose-commentary",
+              phase: "end",
+              progressText: "Inspecting the requested files",
+            });
+          }
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "stdout" });
+          await options?.onToolResult?.({ text: diagnostic });
+          if (mode === "progress") {
+            await vi.advanceTimersByTimeAsync(2_000);
+          }
+        },
+        {
+          mode,
+          toolProgress: true,
+          telegramCfg: {
+            streaming: { mode, progress: { toolProgress }, preview: { toolProgress } },
+          },
+          cfg: { agents: { defaults: { verboseDefault: verbose } } },
+          finalReply: { text: "Inspection complete." },
+        },
+      );
+      expect([...visibleMessages.values()].filter((text) => text === diagnostic)).toHaveLength(
+        visible ? 1 : 0,
+      );
+      expect([...visibleMessages.values()]).toContain("Inspection complete.");
+      if (mode === "progress") {
+        expect(
+          acceptedCalls.some((call) =>
+            String(call.fields.text).includes("Inspecting the requested files"),
+          ),
+        ).toBe(preamble);
+        expect([...visibleMessages.values()]).not.toContain("Inspecting the requested files");
+        if (!preamble) {
+          expect(
+            acceptedCalls
+              .filter((call) => call.method === "sendMessage")
+              .map((call) => call.fields.text),
+          ).toEqual([diagnostic, "Inspection complete."]);
+        }
+      }
+    },
+  );
 });

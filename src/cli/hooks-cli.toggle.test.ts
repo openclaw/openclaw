@@ -11,6 +11,7 @@ import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
+  foreignOwner: false,
   callGateway: vi.fn(),
   buildWorkspaceHookStatus: vi.fn(),
   getRuntimeConfig: vi.fn(),
@@ -22,6 +23,27 @@ const mocks = vi.hoisted(() => ({
   resolveConfiguredAgentId: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   tryResolveLegacyCompatibilityAgentId: vi.fn(),
+}));
+
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  readActiveGatewayLockIdentity: async () =>
+    mocks.foreignOwner ? { pid: 12345, port: 18789, ownerId: "synthetic-owner" } : null,
+  acquireGatewayLock: async () => ({ assertCurrent() {}, release: async () => {} }),
+}));
+// mock-isolation: Keep physical database custody outside the hook command fixture.
+vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-state-owner.js")>()),
+  captureGatewayStateOwner: () => undefined,
+  tryBorrowGatewayStateOwner: () => undefined,
+}));
+// mock-isolation: The real ownership guard runs against synthetic config effects.
+vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
+  createOpenClawDatabaseMaintenanceScope: () => ({
+    run: async (run: () => Promise<unknown>) => run(),
+    close: async () => {},
+  }),
 }));
 
 const capture = createCliRuntimeCapture();
@@ -190,6 +212,7 @@ function configureExplicitFleet() {
 describe("hooks CLI metadata config keys", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.foreignOwner = false;
     capture.resetRuntimeCapture();
     mocks.callGateway.mockRejectedValue(createGatewayCloseError());
     mocks.buildWorkspaceHookStatus.mockReturnValue(report);
@@ -210,6 +233,17 @@ describe("hooks CLI metadata config keys", () => {
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     readConfigMachineStateMock.mockReturnValue(undefined);
   });
+
+  it.each(["enable", "disable"])(
+    "refuses hook %s while the Gateway owns state",
+    async (command) => {
+      mocks.foreignOwner = true;
+      await expect(
+        createHooksProgram().parseAsync(["hooks", command, "display-name"], { from: "user" }),
+      ).rejects.toThrow("stop the Gateway");
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects the ambiguous hook identifier shared-key without mutation", async () => {
     mocks.buildWorkspaceHookStatus.mockReturnValue({

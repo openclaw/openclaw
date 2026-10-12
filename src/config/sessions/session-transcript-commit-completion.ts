@@ -7,6 +7,7 @@ import type {
 export function completeSessionTranscriptCommit(
   messages: readonly TranscriptMessageAppendResult<unknown>[],
   onMessageCommitted: SessionTranscriptTurnPersistOptions["onMessageCommitted"],
+  turn?: Parameters<NonNullable<SessionTranscriptTurnPersistOptions["onMessageCommitted"]>>[2],
 ): Promise<void> | undefined {
   if (!onMessageCommitted) {
     return undefined;
@@ -25,7 +26,7 @@ export function completeSessionTranscriptCommit(
   };
   try {
     for (const message of messages) {
-      onMessageCommitted(message, accept);
+      onMessageCommitted(message, accept, turn);
     }
   } catch (error) {
     failed = true;

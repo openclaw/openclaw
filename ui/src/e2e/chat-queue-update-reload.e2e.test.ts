@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   installMockGateway,
   createControlUiMockSameOriginGatewayScript,
@@ -7,6 +8,7 @@ import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Queued correction update recovery",
   trackBrowserContexts: true,
@@ -70,7 +72,7 @@ suite.define(() => {
         });
         await gateway.setOnline(true);
         if (cachedSplit) {
-          await page.getByRole("button", { name: "Open split view", exact: true }).click();
+          await selectChatLayoutAction(page, "Open split view");
           await page
             .locator(".chat-split-view__cell")
             .first()
@@ -96,7 +98,7 @@ suite.define(() => {
           .toBe(0);
         if (split) {
           if (!cachedSplit) {
-            await page.getByRole("button", { name: "Open split view", exact: true }).click();
+            await selectChatLayoutAction(page, "Open split view");
           }
           await page
             .locator(".chat-split-view__cell")
@@ -134,7 +136,8 @@ suite.define(() => {
           fullPage: true,
         });
         if (otherPage) {
-          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
           await page.waitForURL((url) => url.pathname.endsWith("/agents"));
         }
         await page.getByRole("button", { name: "Review edit", exact: true }).click();
@@ -366,7 +369,7 @@ suite.define(() => {
       );
       const composer = ".agent-chat__composer-combobox textarea";
       await privatePane.locator(composer).waitFor();
-      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      await selectChatLayoutAction(page, "Open split view");
       await page.locator(".chat-split-view__cell").first().locator(composer).click();
       await page
         .locator(`[data-session-key="${ordinaryKey}"] a.sidebar-recent-session__link`)

@@ -84,6 +84,9 @@ type RouteReplyParams = {
   deliveryIntentId?: string;
   /** Model/session context for response-prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
+  /** Private producer authority revalidated at the final outbound adapter handoff. */
+  assertCurrent?: () => void;
+  beforeDeliver?: () => Promise<void>;
 };
 
 type RouteReplyResult = {
@@ -116,8 +119,7 @@ function summarizeVisibleRouteReplyDelivery(
   // Durable results may prove delivery through a receipt or alternate identity
   // when messageId is empty. Provider success sentinels prove delivery but are
   // not editable IDs; explicit suppression sentinels prove neither.
-  let delivered = false;
-  let lastVisibleMessageId: string | undefined;
+  let delivery: Pick<RouteReplyResult, "delivered" | "messageId"> | undefined;
   for (let index = results.length - 1; index >= 0; index -= 1) {
     const result = results[index];
     if (!result) {
@@ -127,20 +129,12 @@ function summarizeVisibleRouteReplyDelivery(
     if (messageId === "skipped" || messageId === "suppressed") {
       continue;
     }
-    if (!delivered) {
-      delivered = true;
-      if (!messageId) {
-        lastVisibleMessageId = result.messageId;
-      }
-    }
+    delivery ??= { delivered: true, messageId: messageId ? undefined : result.messageId };
     if (messageId && messageId !== "unknown" && messageId !== "ok") {
       return { delivered: true, messageId: result.messageId };
     }
   }
-  return {
-    delivered,
-    messageId: delivered ? lastVisibleMessageId : undefined,
-  };
+  return delivery ?? { delivered: false, messageId: undefined };
 }
 
 /** Routes to the originating channel; shared sessions may have a different last channel. */
@@ -333,6 +327,9 @@ async function routeReplyOperation(
       threadId: resolvedThreadId,
       session: outboundSession,
       signal: abortSignal,
+      onPlatformSendDispatch: params.beforeDeliver,
+      assertDirectAdapterHandoff: params.assertCurrent,
+      ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
       ...(params.deliveryIntentId
         ? {
             deliveryIntentId: params.deliveryIntentId,

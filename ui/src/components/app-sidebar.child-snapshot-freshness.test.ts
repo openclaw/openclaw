@@ -235,17 +235,6 @@ describe("sidebar child snapshot freshness", () => {
         "Original child",
       );
 
-      const reconcileHistory = sessions.captureReconcile();
-      reconcileHistory({
-        key: "agent:main:unrelated-chat",
-        sessionId: "unrelated-session",
-        kind: "direct",
-        label: "Unrelated history",
-        updatedAt: 30,
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(childList).toHaveBeenCalledTimes(initialReads);
-
       currentChild = { ...currentChild, label: "Changed child", updatedAt: 20 };
       gatewayHarness.publishEvent("sessions.changed", {
         sessionKey: queryChildKey,

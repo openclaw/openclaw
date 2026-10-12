@@ -1,3 +1,4 @@
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -41,7 +42,7 @@ import {
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
-const UpdateDatabaseBackupSchema = z.object({
+export const UpdateDatabaseBackupSchema = z.object({
   directory: z.string(),
   databases: z.array(
     z.object({
@@ -83,22 +84,22 @@ type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
 async function inspectRestorableDatabaseFiles(
   databases: readonly string[],
-  previous?: ReadonlyMap<string, Awaited<ReturnType<typeof fs.lstat>>>,
+  previous?: ReadonlyMap<string, BigIntStats>,
 ) {
-  const identities = new Map<string, Awaited<ReturnType<typeof fs.lstat>>>();
+  const identities = new Map<string, BigIntStats>();
   for (const database of databases) {
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
       const file = `${database}${suffix}`;
       let info;
       try {
-        info = await fs.lstat(file);
+        info = await fs.lstat(file, { bigint: true });
       } catch (error) {
         if (suffix && hasNodeErrorCode(error, "ENOENT")) {
           continue;
         }
         throw error;
       }
-      if (!info.isFile() || info.nlink !== 1) {
+      if (!info.isFile() || info.nlink !== 1n) {
         throw new Error(
           `Update database rollback requires a regular file with one link: ${file}. Resolve database aliases before retrying; the databases have not been migrated.`,
         );
@@ -254,13 +255,15 @@ export async function createUpdateDatabaseBackupInProcess(
   // Compare the same admitted dialect; absent metadata must not become an inventory change.
   const inspectionPlan = input.inspectionPlan;
   const includeOwners = inspectionPlan.files.some(([, database]) => database.owners !== undefined);
-  const inventory = await canonicalDatabaseInventory(
-    inspectionPlan,
-    includeOwners,
-    input.additionalPaths,
-    input.additionalFiles,
-    input.excludedDatabasePaths,
-  );
+  const inventoryFor = (plan: InspectionPlan) =>
+    canonicalDatabaseInventory(
+      plan,
+      includeOwners,
+      input.additionalPaths,
+      input.additionalFiles,
+      input.excludedDatabasePaths,
+    );
+  const inventory = await inventoryFor(inspectionPlan);
   const identities = await inspectRestorableDatabaseFiles(inventory.present);
   const warnings = await checkDatabaseBackupSpace(directory, inventory.present);
   const { buildBackupArchivePath } = await import("../commands/backup-shared.js");
@@ -316,13 +319,7 @@ export async function createUpdateDatabaseBackupInProcess(
       sizeBytes: snapshot.sizeBytes,
     });
   }
-  const current = await canonicalDatabaseInventory(
-    await discoverUpdateStateSchemaInspectionInProcess(input),
-    includeOwners,
-    input.additionalPaths,
-    input.additionalFiles,
-    input.excludedDatabasePaths,
-  );
+  const current = await inventoryFor(await discoverUpdateStateSchemaInspectionInProcess(input));
   if (JSON.stringify(current) !== JSON.stringify(inventory)) {
     throw new Error("Update database inventory changed during backup; retry after writers stop.");
   }
@@ -364,7 +361,7 @@ export async function createUpdateDatabaseBackup({
     const backupRoot = path.resolve(input.backupRoot);
     const directory = `${backupRoot}.databases`;
     await createPrivateSqliteDirectory(directory);
-    const identity = await fs.lstat(directory);
+    const identity = await fs.lstat(directory, { bigint: true });
     try {
       const sourceEnv = input.env ?? process.env;
       const worker = { nodeRunner, timeoutMs, signal, sourceEnv, stagingRoot: directory };
@@ -422,7 +419,7 @@ export async function createUpdateDatabaseBackup({
         UpdateDatabaseBackupSchema,
       );
       rehearsal?.assertCurrent();
-      if (!sameFileIdentity(identity, await fs.lstat(directory))) {
+      if (!sameFileIdentity(identity, await fs.lstat(directory, { bigint: true }))) {
         throw new Error(`Database backup directory changed during capture: ${directory}.`);
       }
       requireDirectorySync(await syncDirectory(path.dirname(directory)), "Database backup parent");

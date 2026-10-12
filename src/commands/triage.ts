@@ -459,7 +459,7 @@ export async function triageCommand(
     const args =
       handoff.agent === "claude"
         ? [claudeSafeMode ? "--safe-mode" : "-p", prompt]
-        : handoff.agent === "qwen"
+        : handoff.agent === "qwen" || handoff.agent === "agy"
           ? ["--prompt-interactive", prompt]
           : handoff.agent === "opencode" || handoff.agent === "kimi"
             ? ["--prompt", prompt]

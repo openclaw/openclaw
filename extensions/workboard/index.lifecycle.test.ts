@@ -1,5 +1,4 @@
 import { fileURLToPath } from "node:url";
-import { Command } from "commander";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
@@ -81,28 +80,6 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
       await lifecycle.dispose?.();
     }
   };
-  const run = async (...args: string[]): Promise<unknown> => {
-    const program = new Command().exitOverride();
-    for (const registration of captured.cliRegistrars) {
-      await registration.register({
-        program,
-        parentPath: [],
-        config: {},
-        logger: captured.api.logger,
-      });
-    }
-    const chunks: string[] = [];
-    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      chunks.push(String(chunk));
-      return true;
-    });
-    try {
-      await program.parseAsync(["workboard", ...args, "--json"], { from: "user" });
-      return JSON.parse(chunks.join(""));
-    } finally {
-      write.mockRestore();
-    }
-  };
   const call = async (method: string, params = {}) => {
     const handler = methods.get(method);
     if (!handler) {
@@ -113,7 +90,7 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
     const [ok, payload, error] = respond.mock.calls[0] ?? [];
     return { ok, payload, error };
   };
-  return { cleanup, dispose, run, start, stop, warn, emit, call };
+  return { cleanup, dispose, start, stop, warn, emit, call };
 }
 
 describe("Workboard registration cleanup", () => {
@@ -158,7 +135,11 @@ describe("Workboard registration cleanup", () => {
         const retire = () => (action === "dispose" ? first.dispose() : first.cleanup({ reason }));
         try {
           await first.start();
-          await first.run("create", "Retained card");
+          expect(
+            await first.call("workboard.cards.create", { title: "Retained card" }),
+          ).toMatchObject({
+            ok: true,
+          });
           for (const context of [
             { reason: "reset" as const },
             { reason: "delete" as const },
@@ -166,30 +147,44 @@ describe("Workboard registration cleanup", () => {
             { reason, runId: "other-run" },
           ]) {
             await first.cleanup(context);
-            await expect(first.run("list")).resolves.toMatchObject({
-              cards: [expect.objectContaining({ title: "Retained card" })],
+            expect(await first.call("workboard.cards.list")).toMatchObject({
+              ok: true,
+              payload: { cards: [expect.objectContaining({ title: "Retained card" })] },
             });
           }
 
           expect(vi.getTimerCount()).toBeGreaterThan(0);
           await retire();
-          await expect(first.run("list")).rejects.toThrow("workboard store is closed.");
+          expect(await first.call("workboard.cards.list")).toMatchObject({
+            ok: false,
+            error: { message: "workboard store is closed." },
+          });
           await vi.advanceTimersByTimeAsync(60_000);
           expect(first.warn).not.toHaveBeenCalled();
           expect(vi.getTimerCount()).toBe(0);
           await second.start();
-          await expect(second.run("create", "Fresh card")).resolves.toMatchObject({
-            card: { title: "Fresh card" },
+          expect(
+            await second.call("workboard.cards.create", { title: "Fresh card" }),
+          ).toMatchObject({
+            ok: true,
+            payload: { card: { title: "Fresh card" } },
           });
-          await expect(second.run("list")).resolves.toMatchObject({
-            cards: expect.arrayContaining([
-              expect.objectContaining({ title: "Retained card" }),
-              expect.objectContaining({ title: "Fresh card" }),
-            ]),
+          expect(await second.call("workboard.cards.list")).toMatchObject({
+            ok: true,
+            payload: {
+              cards: expect.arrayContaining([
+                expect.objectContaining({ title: "Retained card" }),
+                expect.objectContaining({ title: "Fresh card" }),
+              ]),
+            },
           });
           await retire();
           second.emit.mockClear();
-          await second.run("create", "After repeated retirement");
+          expect(
+            await second.call("workboard.cards.create", { title: "After repeated retirement" }),
+          ).toMatchObject({
+            ok: true,
+          });
           expect(second.emit).toHaveBeenCalled();
         } finally {
           await first.stop();

@@ -8,20 +8,34 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
-import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
-import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
-import type { AuthProfileCredential, OAuthCredential } from "../auth-profiles/types.js";
+import { createOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
+import { noteCommittedSharedAuthStoreOwnership } from "../auth-profiles/path-resolve.js";
 import {
-  createPreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerTask,
-  type PreparedModelWorkerResult,
-} from "../prepared-model-catalog-worker.js";
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+} from "../auth-profiles/persisted.js";
+import {
+  deletePersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../auth-profiles/sqlite.js";
+import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+} from "../auth-profiles/types.js";
+import { createPreparedModelCatalogWorkerInput } from "../prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
   PROVIDER_ID,
 } from "../prepared-model-catalog-worker.test-support.js";
+import type {
+  PreparedModelCatalogWorkerTask,
+  PreparedModelWorkerResult,
+} from "../prepared-model-catalog-worker.types.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 
 type HeldCatalogOAuthRefresh = {
@@ -31,18 +45,31 @@ type HeldCatalogOAuthRefresh = {
   releaseResponse: () => void;
   closeWorker: () => Promise<void>;
   readCredential: () => AuthProfileCredential | undefined;
+  readPeerStore: () => AuthProfileStore | null;
+  readEmptyStore: () => AuthProfileStore | null;
+  readConflictingCredential: () => AuthProfileCredential | undefined;
+  original: OAuthCredential;
+  conflictingFence?: OAuthCredential;
   rotated: OAuthCredential;
   refreshCalls: () => number;
+  discoveryStarted: () => boolean;
+  readRefreshFailure: () => string;
 };
 
 /** Owns a real catalog worker and a held loopback token exchange in private auth storage. */
 export async function withHeldCatalogOAuthRefresh(
-  params: { makeTempDir: (prefix: string) => string; signal: AbortSignal },
+  params: {
+    makeTempDir: (prefix: string) => string;
+    signal: AbortSignal;
+    sharedStatePeers?: "empty" | "matching" | "conflicting";
+  },
   run: (fixture: HeldCatalogOAuthRefresh) => Promise<void>,
 ): Promise<void> {
   const { makeTempDir, signal } = params;
   const fixture = await createCatalogFixture(makeTempDir, 0);
   const profileId = `${PROVIDER_ID}:oauth`;
+  const discoveryMarker = path.join(fixture.root, "oauth-discovery-started");
+  const refreshFailure = path.join(fixture.root, "oauth-refresh-failure");
   const credential: OAuthCredential = {
     type: "oauth",
     provider: PROVIDER_ID,
@@ -57,6 +84,18 @@ export async function withHeldCatalogOAuthRefresh(
     refresh: "rotated-refresh-not-real",
     expires: Date.now() + 600_000,
   };
+  const peerDir = path.join(fixture.env.OPENCLAW_STATE_DIR!, "agents", "a-historical", "agent");
+  const emptyDir = path.join(fixture.env.OPENCLAW_STATE_DIR!, "agents", "b-empty", "agent");
+  const conflictingDir = path.join(
+    fixture.env.OPENCLAW_STATE_DIR!,
+    "agents",
+    "z-conflicting",
+    "agent",
+  );
+  const conflictingFence =
+    params.sharedStatePeers === "conflicting"
+      ? createOAuthRefreshFence({ profileId, credential })
+      : undefined;
   const portClaim = await acquireTestPortBlock({ offsets: [0], signal });
   const started = createDeferredCore();
   let response: ServerResponse | undefined;
@@ -85,12 +124,20 @@ api.registerProvider({
     return await response.json();
   },
   catalog: { order: "simple", async run(ctx) {
+    require("node:fs").writeFileSync(${JSON.stringify(discoveryMarker)}, "");
     const { resolveApiKeyForProvider } = require("openclaw/plugin-sdk/provider-auth-runtime");
-    await resolveApiKeyForProvider({
+    let auth;
+    try {
+      auth = await resolveApiKeyForProvider({
       provider: ${JSON.stringify(PROVIDER_ID)}, cfg: ctx.config,
       agentDir: ctx.agentDir, workspaceDir: ctx.workspaceDir,
       profileId: ${JSON.stringify(profileId)}, lockedProfile: true
-    });
+      });
+    } catch (error) {
+      require("node:fs").writeFileSync(${JSON.stringify(refreshFailure)}, String(error));
+      throw error;
+    }
+    if (auth.apiKey !== ${JSON.stringify(rotated.access)}) throw new Error("Catalog did not receive the rotated OAuth credential");
     return { provider: { api: "openai-completions", baseUrl: "https://oauth.invalid/v1",
       models: [{ id: "oauth-model", name: "OAuth model" }] } };
   } }
@@ -104,7 +151,31 @@ api.registerProvider({
       },
       async () => {
         const authStore = { version: 1, profiles: { [profileId]: credential } };
-        saveAuthProfileStore(authStore, fixture.agentDir);
+        if (params.sharedStatePeers) {
+          writeConfigMachineState(
+            "auth.sharedStore",
+            { location: "state-db" },
+            { env: fixture.env },
+          );
+          noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+          writePersistedAuthProfileStoreRaw(authStore);
+          // Existing empty DBs and unconfigured historical peers must participate in discovery
+          // without forcing a new store or preventing the shared owner from refreshing.
+          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, fixture.agentDir);
+          if (params.sharedStatePeers !== "empty") {
+            writePersistedAuthProfileStoreRaw(authStore, peerDir);
+          }
+          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, emptyDir);
+          deletePersistedAuthProfileStoreRaw(emptyDir);
+          if (conflictingFence) {
+            writePersistedAuthProfileStoreRaw(
+              { version: 1, profiles: { [profileId]: conflictingFence } },
+              conflictingDir,
+            );
+          }
+        } else {
+          saveAuthProfileStore(authStore, fixture.agentDir);
+        }
         const metadata = loadPluginMetadataSnapshot({
           config: fixture.config,
           env: fixture.env,
@@ -168,8 +239,11 @@ api.registerProvider({
               await Promise.race([
                 started.promise,
                 pending.then((result) => {
+                  const failure = fs.existsSync(refreshFailure)
+                    ? `; OAuth resolution failed: ${fs.readFileSync(refreshFailure, "utf8")}`
+                    : "";
                   throw new Error(
-                    `catalog completed without refreshing OAuth: ${JSON.stringify(result)}`,
+                    `catalog completed without refreshing OAuth: ${JSON.stringify(result)}${failure}`,
                   );
                 }),
               ]);
@@ -178,9 +252,20 @@ api.registerProvider({
             releaseResponse,
             closeWorker: () => pool!.close(),
             readCredential: () =>
-              loadPersistedAuthProfileStore(fixture.agentDir)?.profiles[profileId],
+              (params.sharedStatePeers
+                ? loadPersistedSharedAuthProfileStore(fixture.env)
+                : loadPersistedAuthProfileStore(fixture.agentDir)
+              )?.profiles[profileId],
+            readPeerStore: () => loadPersistedAuthProfileStore(peerDir),
+            readEmptyStore: () => loadPersistedAuthProfileStore(emptyDir),
+            readConflictingCredential: () =>
+              loadPersistedAuthProfileStore(conflictingDir)?.profiles[profileId],
+            original: credential,
+            conflictingFence,
             rotated,
             refreshCalls: () => refreshCalls,
+            discoveryStarted: () => fs.existsSync(discoveryMarker),
+            readRefreshFailure: () => fs.readFileSync(refreshFailure, "utf8"),
           });
         } finally {
           releaseResponse();

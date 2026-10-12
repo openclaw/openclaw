@@ -1796,7 +1796,7 @@ private func pendingHandoffDiagnostic(
         #expect(appModel.activeGatewayConnectConfig?.stableID != duringResolutionConfig.stableID)
     }
 
-    @Test @MainActor func `trusted certificate keeps device auth route scoped`() async {
+    @Test @MainActor func `trusted certificate keeps device auth route scoped`() async throws {
         let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "127.0.0.1"
@@ -1811,7 +1811,20 @@ private func pendingHandoffDiagnostic(
 
         await controller.connectManual(host: host, port: 1, useTLS: true)
         await controller.acceptPendingTrustPrompt(controller.pendingTrustPrompt)
-        await waitUntil(timeout: .seconds(1)) { appModel.activeGatewayConnectConfig != nil }
+        try #require(controller.pendingTrustPrompt == nil)
+        // Trust acceptance queues ingress and permission work; await its owner, including failure.
+        while controller.hasPendingConnectionHandoff {
+            try Task.checkCancellation()
+            let changed = AsyncStream<Void>.makeStream()
+            withObservationTracking {
+                _ = controller.hasPendingConnectionHandoff
+            } onChange: {
+                changed.continuation.finish()
+            }
+            if controller.hasPendingConnectionHandoff {
+                for await _ in changed.stream {}
+            }
+        }
 
         #expect(appModel.activeGatewayConnectConfig?.stableID == stableID)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == stableID)

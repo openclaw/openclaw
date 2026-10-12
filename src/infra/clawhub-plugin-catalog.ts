@@ -133,6 +133,7 @@ function readOptionalNonNegativeNumber(
   value: Record<string, unknown>,
   field: string,
   context: string,
+  kind: "number" | "integer" = "number",
 ): number | undefined {
   const candidate = value[field];
   if (candidate === undefined || candidate === null) {
@@ -140,6 +141,9 @@ function readOptionalNonNegativeNumber(
   }
   if (typeof candidate !== "number" || !Number.isFinite(candidate) || candidate < 0) {
     throw new Error(`Malformed ClawHub ${context}: expected ${field} to be non-negative.`);
+  }
+  if (kind === "integer" && !Number.isInteger(candidate)) {
+    throw new Error(`Malformed ClawHub ${context}: expected ${field} to be an integer.`);
   }
   return candidate;
 }
@@ -150,18 +154,6 @@ function readOptionalBoolean(
   context: string,
 ): boolean | undefined {
   return value[field] == null ? undefined : readRequiredBoolean(value, field, context);
-}
-
-function readOptionalRank(
-  value: Record<string, unknown>,
-  field: string,
-  context: string,
-): number | undefined {
-  const candidate = readOptionalNonNegativeNumber(value, field, context);
-  if (candidate !== undefined && !Number.isInteger(candidate)) {
-    throw new Error(`Malformed ClawHub ${context}: expected ${field} to be an integer.`);
-  }
-  return candidate;
 }
 
 function parseCatalogPackage(
@@ -190,8 +182,8 @@ function parseCatalogPackage(
   const verificationTier = readClawHubStringField(value, "verificationTier", context);
   const featured = readOptionalBoolean(value, "featured", context);
   const trending = readOptionalBoolean(value, "trending", context);
-  const featuredRank = readOptionalRank(value, "featuredRank", context);
-  const trendingRank = readOptionalRank(value, "trendingRank", context);
+  const featuredRank = readOptionalNonNegativeNumber(value, "featuredRank", context, "integer");
+  const trendingRank = readOptionalNonNegativeNumber(value, "trendingRank", context, "integer");
   const downloads = stats
     ? readOptionalNonNegativeNumber(stats, "downloads", `${context} stats`)
     : undefined;

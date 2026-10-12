@@ -195,7 +195,7 @@ openclaw message send --channel slack --target channel:C123 \
 ```
 
 Slack also renders explicit table blocks natively. Other channels receive the
-caption and every row as deterministic text:
+caption and every row in a fixed text format:
 
 ```bash
 openclaw message send --channel slack --target channel:C123 \

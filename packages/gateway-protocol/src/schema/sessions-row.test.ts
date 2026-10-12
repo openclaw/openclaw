@@ -38,6 +38,8 @@ describe("SessionRowSchema", () => {
       restartRecoveryStatus: "tombstoned",
       permissionMode: "workspace",
       sandboxMode: "off",
+      communication: { receive: "ask" },
+      effectiveCommunication: { send: "always", receive: "ask" },
       sessionRoot: "/workspace/project",
     };
     const roundTripped = structuredClone(row);

@@ -159,7 +159,7 @@ type FrameFields = {
   stateVersionFragment: string;
 };
 type FrameBase = FrameFields & {
-  payloadFragment: string;
+  payloadFragment: "" | Buffer;
 };
 type PreparedFrames = {
   fields?: FrameFields;
@@ -176,14 +176,18 @@ const MAX_RECIPIENT_PROFILE_FIELD_BYTES =
 function frameWithSequence(
   base: FrameFields,
   seq: number,
-  payload: string,
+  payload: string | Buffer,
   recipientProfileId?: string,
-): string {
+): string | Buffer {
   const recipient =
     recipientProfileId === undefined
       ? ""
       : `,"recipientProfileId":${JSON.stringify(recipientProfileId)}`;
-  return `{"type":"event","event":${base.eventJSON}${payload},"seq":${seq}${base.stateVersionFragment}${recipient}}`;
+  const prefix = `{"type":"event","event":${base.eventJSON}`;
+  const suffix = `,"seq":${seq}${base.stateVersionFragment}${recipient}}`;
+  return typeof payload === "string"
+    ? `${prefix}${payload}${suffix}`
+    : Buffer.concat([Buffer.from(prefix), payload, Buffer.from(suffix)]);
 }
 
 export function createGatewayBroadcaster(params: {
@@ -272,7 +276,7 @@ export function createGatewayBroadcaster(params: {
         metadataInvalidation !== undefined ||
         isSessionReadInvalidation(event, payload, isTargeted));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
-    let presenceFragments: Map<SystemPresence[], string> | undefined;
+    let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
     let projectSession:
       | ((client: GatewayWsClient) => SessionEventProjection | undefined)
       | undefined;
@@ -282,7 +286,7 @@ export function createGatewayBroadcaster(params: {
     let lastFrameSequence = 0;
     let lastFrameRecipientProfileId: string | undefined;
     let lastFrame: string | Buffer | undefined;
-    let lastPayloadFragment: string | undefined;
+    let lastPayloadFragment: string | Buffer | undefined;
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -296,18 +300,14 @@ export function createGatewayBroadcaster(params: {
       });
     const frameBaseFor = (value: unknown): FrameBase => ({
       ...getFrameFields(),
-      payloadFragment:
-        value === payload && metadataInvalidation !== undefined
-          ? metadataInvalidation
-          : presencePayload
-            ? ""
-            : serializeFrameField("payload", value),
+      payloadFragment: presencePayload
+        ? ""
+        : Buffer.from(
+            value === payload && metadataInvalidation !== undefined
+              ? metadataInvalidation
+              : serializeFrameField("payload", value),
+          ),
     });
-    // Lazy so filtered-out broadcasts (zero eligible clients) never pay
-    // JSON.stringify for the payload.
-    const getFrameBase = () => {
-      return (frames.snapshot ??= frameBaseFor(payload));
-    };
     const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
@@ -562,7 +562,7 @@ export function createGatewayBroadcaster(params: {
       const getDeliveryFrameBase = () =>
         useDelta && projection
           ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
-          : getFrameBase();
+          : (frames.snapshot ??= frameBaseFor(payload));
       let frame: string | Buffer;
       let delivered: (() => void) | undefined;
       try {
@@ -587,7 +587,9 @@ export function createGatewayBroadcaster(params: {
           sessionProjectionPrepared = true;
         }
         const base = skipSourcePayload ? getFrameFields() : getDeliveryFrameBase();
-        let payloadFragment = skipSourcePayload ? "" : getDeliveryFrameBase().payloadFragment;
+        let payloadFragment: string | Buffer = skipSourcePayload
+          ? ""
+          : getDeliveryFrameBase().payloadFragment;
         if (presencePayload) {
           // Presence contains session references. Only the connection owner's
           // recipient projection may cross this boundary; never send the raw roster.
@@ -601,7 +603,8 @@ export function createGatewayBroadcaster(params: {
             Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
           const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
           payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
-          if (reusable && cached === undefined) {
+          if (reusable && typeof payloadFragment === "string") {
+            payloadFragment = Buffer.from(payloadFragment);
             (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
           }
         }
@@ -625,21 +628,16 @@ export function createGatewayBroadcaster(params: {
         const recipientProfileId =
           (c.connect.role ?? "operator") === "operator" ? c.preparedRecipientProfileId : undefined;
         if (
-          !presencePayload &&
           !projectSession &&
           lastFrame !== undefined &&
-          lastPayloadFragment === payloadFragment &&
           lastFrameSequence === nextSeq &&
-          lastFrameRecipientProfileId === recipientProfileId
+          lastFrameRecipientProfileId === recipientProfileId &&
+          lastPayloadFragment === payloadFragment
         ) {
           frame = lastFrame;
         } else {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          if (!presencePayload && !projectSession) {
-            // Share UTF-8 bytes too: ws otherwise encodes the same string for every socket.
-            if (!retained && (targetConnIds?.size ?? params.clients.size) > 1) {
-              frame = Buffer.from(frame);
-            }
+          if (!projectSession) {
             lastFrameSequence = nextSeq;
             lastFrameRecipientProfileId = recipientProfileId;
             lastPayloadFragment = payloadFragment;

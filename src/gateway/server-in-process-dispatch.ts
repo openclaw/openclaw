@@ -68,12 +68,6 @@ function resolveDispatchDeadlineMs(timeoutMs?: number): number | undefined {
   return Date.now() + resolveSafeTimeoutDelayMs(timeoutMs);
 }
 
-function resolveRemainingDispatchTimeoutMs(deadlineMs?: number): number | undefined {
-  return deadlineMs === undefined
-    ? undefined
-    : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
-}
-
 function resolveDispatchAbortError(method: string, signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
@@ -98,10 +92,11 @@ async function waitForDispatch<T>(
 ): Promise<T> {
   let releaseDeadline: (() => void) | undefined;
   try {
-    if (signal?.aborted) {
-      throw resolveDispatchAbortError(method, signal);
-    }
-    const remainingTimeoutMs = resolveRemainingDispatchTimeoutMs(deadlineMs);
+    throwIfGatewayDispatchAborted(method, signal);
+    const remainingTimeoutMs =
+      deadlineMs === undefined
+        ? undefined
+        : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
     if (remainingTimeoutMs === undefined && !signal) {
       return await promise;
     }
@@ -247,15 +242,17 @@ export async function dispatchGatewayRequestInProcessRaw(
     throw error;
   }
 
-  firstResponse = await waitForDispatch(
-    method,
-    first.promise,
-    deadlineMs,
-    options.signal,
-    options.onSignalAbort,
-    undefined,
-    options.timeoutMs,
-  );
+  const waitForResponse = (response: Promise<GatewayMethodDispatchResponse>) =>
+    waitForDispatch(
+      method,
+      response,
+      deadlineMs,
+      options.signal,
+      options.onSignalAbort,
+      undefined,
+      options.timeoutMs,
+    );
+  firstResponse = await waitForResponse(first.promise);
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (!firstResponse.ok || options.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
@@ -268,15 +265,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     return finalResponse;
   }
   final = createDeferredCore<GatewayMethodDispatchResponse>();
-  return await waitForDispatch(
-    method,
-    final.promise,
-    deadlineMs,
-    options.signal,
-    options.onSignalAbort,
-    undefined,
-    options.timeoutMs,
-  );
+  return await waitForResponse(final.promise);
 }
 
 export async function dispatchGatewayRequestInProcess<T>(

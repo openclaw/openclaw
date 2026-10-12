@@ -29,6 +29,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentCheckInternal } from "../../config/sessions/session-entry-current-check.js";
 import {
   publishSystemEventStoreConfig,
   resolvePhysicalSessionStorePath,
@@ -39,6 +40,7 @@ import {
   type ExecRequestIdentity,
   type ExecRequestOwner,
 } from "../../infra/exec-request-context.js";
+import { captureSessionEntryCurrentCheckAsync } from "../../plugin-sdk/session-binding-runtime.js";
 import {
   getConversationSession,
   normalizeSessionDeliveryState,
@@ -332,11 +334,24 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
               true,
             ));
         expect(ordinaryCommand.cancellationRequested).not.toBe(true);
+        let staleCurrent: NonNullable<
+          HandleCommandsParams["opts"]
+        >["isCommandTargetCurrent"] = () => false;
+        if (phase === "running") {
+          const current = await captureSessionEntryCurrentCheckAsync({
+            agentId: "main",
+            storePath: state.storePath,
+            sessionKey,
+          });
+          staleCurrent = Object.assign(async () => false, {
+            sessionSource: current.source,
+          });
+        }
         await expect(
           pathKind === "fast"
-            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent: () => false })
+            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent: staleCurrent })
             : handleStopCommand(
-                { ...state.params, opts: { isCommandTargetCurrent: () => false } },
+                { ...state.params, opts: { isCommandTargetCurrent: staleCurrent } },
                 true,
               ),
         ).rejects.toThrow("selected session changed");
@@ -750,10 +765,20 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     operation.complete();
   });
 
-  it.each(["session", "writer"] as const)(
+  it.each(["session", "writer", "prepared writer"] as const)(
     "skips stale abort bookkeeping after waiting for a replacement %s",
     async (replacement) => {
       const state = await setupStop();
+      if (replacement === "prepared writer") {
+        const current = await captureSessionEntryCurrentCheckInternal({
+          agentId: "main",
+          storePath: state.storePath,
+          sessionKey,
+          matchGeneration: false,
+        });
+        state.isCommandTargetCurrent = current.isCurrent;
+        state.params.opts = { isCommandTargetCurrent: current.isCurrent };
+      }
       const entered = createDeferred();
       const release = createDeferred();
       const nextOwner =

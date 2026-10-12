@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqlite-initial-entry.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import * as readiness from "../config/sessions/session-canonical-validation-readiness.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -16,8 +17,8 @@ import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-aut
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as rowFacts from "./session-row-database-facts.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import * as rowFacts from "./session-row-projection-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
@@ -127,6 +128,7 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
       );
     }
     database.db.exec("UPDATE session_nodes SET entry_valid = 1; COMMIT");
+    markCanonicalSessionValidationPending(database);
     await readiness.certifySessionCanonicalValidationPending({ agentId: "main" });
     const releaseForeground = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
@@ -140,6 +142,10 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
       await projection.ensureMaterialized();
       database.db.exec(`UPDATE session_nodes SET entry_json = entry_json || ' '
         WHERE session_key != 'agent:main:clean'; UPDATE session_nodes SET entry_valid = 1`);
+      markCanonicalSessionValidationPending(
+        database,
+        Array.from({ length: 1000 }, (_, i) => `agent:main:dirty-${i}`),
+      );
       // Reopening creates an unadmitted reader, as after startup or idle reader retirement.
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       sessionChanges.emitBatch(

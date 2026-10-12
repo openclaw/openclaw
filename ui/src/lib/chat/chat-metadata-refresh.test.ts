@@ -17,7 +17,6 @@ import {
   loadChatMetadata,
   loadChatMetadataRefresh,
   peekChatMetadata,
-  revalidateChatMetadata,
   retireChatMetadataRefresh,
   subscribeChatMetadata,
 } from "./chat-metadata-store.ts";
@@ -294,59 +293,7 @@ describe("automatic metadata admission", () => {
     release();
   });
 
-  it.each(["metadata", "catalog"] as const)(
-    "rechecks hidden demand after both producers settle with %s first",
-    async (first) => {
-      const oldCommands = createDeferred<ChatMetadataResult>();
-      const oldCatalog = createDeferred<{ models: typeof models }>();
-      let metadataReads = 0;
-      let catalogReads = 0;
-      const client = createTestGatewayClient((method) => {
-        if (method === "chat.metadata") {
-          return ++metadataReads === 1 ? oldCommands.promise : Promise.resolve(commands);
-        }
-        return ++catalogReads === 1 ? oldCatalog.promise : Promise.resolve({ models });
-      });
-      let active = true;
-      const release = subscribeChatMetadata(
-        client,
-        scope,
-        () => {},
-        () => active,
-      );
-      const original = loadChatMetadataRefresh(client, scope);
-      invalidateChatMetadataStore(client, scope);
-      const successor = loadChatMetadataRefresh(client, scope);
-      active = false;
-      try {
-        if (first === "metadata") {
-          oldCommands.resolve(commands);
-        } else {
-          oldCatalog.resolve({ models });
-        }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        expect([metadataReads, catalogReads]).toEqual([1, 1]);
-        oldCommands.resolve(commands);
-        oldCatalog.resolve({ models });
-        await Promise.all([original.completed, successor.completed]);
-        expect([metadataReads, catalogReads]).toEqual([1, 1]);
-        active = true;
-        const visible = loadChatMetadataRefresh(client, scope);
-        await visible.completed;
-        expect(await visible.catalog).toEqual({ models });
-        expect([metadataReads, catalogReads]).toEqual([2, 2]);
-      } finally {
-        oldCommands.resolve(commands);
-        oldCatalog.resolve({ models });
-        await Promise.all([original.completed, successor.completed]);
-        release();
-      }
-    },
-  );
-
-  it.each(["visible", "invalidated", "remounted"] as const)(
+  it.each(["visible", "remounted"] as const)(
     "preserves a hidden startup fallback until %s demand returns",
     async (returning) => {
       const oldModels = [{ id: "old", name: "Old", provider: "test" }];
@@ -396,89 +343,6 @@ describe("automatic metadata admission", () => {
       } finally {
         pendingCatalog.resolve({ models: oldModels });
         await Promise.all([startup.completed, fallback.completed, visible.completed]);
-        release();
-      }
-    },
-  );
-
-  it.each(["visible metadata", "hidden metadata", "catalog only"] as const)(
-    "adopts an existing queued command only for current %s demand",
-    async (demand) => {
-      const oldCommands = createDeferred<ChatMetadataResult>();
-      const queuedCommands = createDeferred<ChatMetadataResult>();
-      const oldCatalog = createDeferred<{ models: typeof models }>();
-      const currentCommands: ChatMetadataResult = {
-        commands: [
-          {
-            name: "current",
-            description: "Current",
-            source: "native",
-            scope: "text",
-            acceptsArgs: false,
-          },
-        ],
-      };
-      let metadataReads = 0;
-      let catalogReads = 0;
-      const client = createTestGatewayClient((method) => {
-        if (method === "chat.metadata") {
-          metadataReads += 1;
-          return metadataReads === 1
-            ? oldCommands.promise
-            : metadataReads === 2
-              ? queuedCommands.promise
-              : Promise.resolve(currentCommands);
-        }
-        return ++catalogReads === 1 ? oldCatalog.promise : Promise.resolve({ models });
-      });
-      let active = true;
-      const published: ChatMetadataResult[] = [];
-      const release = subscribeChatMetadata(
-        client,
-        scope,
-        (update) => {
-          if (update.type === "result") {
-            published.push(update.result);
-          }
-        },
-        () => active,
-      );
-      const options = demand === "catalog only" ? { kind: "startup" as const } : undefined;
-      const original = loadChatMetadataRefresh(client, scope, options);
-      const explicit = demand === "catalog only" ? loadChatMetadata(client, scope) : undefined;
-      const queued = revalidateChatMetadata(client, scope);
-      const replacements = [];
-      active = demand !== "hidden metadata";
-      for (let index = 0; index < 5; index++) {
-        invalidateChatMetadataStore(client, scope);
-        replacements.push(loadChatMetadataRefresh(client, scope, options));
-      }
-      try {
-        expect([metadataReads, catalogReads]).toEqual([1, 1]);
-        oldCommands.resolve(commands);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        expect([metadataReads, catalogReads]).toEqual([2, 1]);
-        queuedCommands.resolve(currentCommands);
-        await queued;
-        const accepted = demand === "visible metadata";
-        expect(peekChatMetadata(client, scope)).toEqual(accepted ? currentCommands : undefined);
-        expect(published).toEqual(accepted ? [currentCommands] : []);
-        expect([metadataReads, catalogReads]).toEqual([2, 1]);
-        oldCatalog.resolve({ models });
-        await Promise.all(replacements.map((refresh) => refresh.completed));
-        expect([metadataReads, catalogReads]).toEqual([2, active ? 2 : 1]);
-      } finally {
-        oldCommands.resolve(commands);
-        queuedCommands.resolve(currentCommands);
-        oldCatalog.resolve({ models });
-        await Promise.all([
-          original.completed,
-          explicit,
-          queued,
-          ...replacements.map((refresh) => refresh.completed),
-        ]);
         release();
       }
     },

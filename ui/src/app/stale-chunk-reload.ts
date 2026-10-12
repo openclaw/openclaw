@@ -3,15 +3,16 @@
 // A gateway update replaces `dist/control-ui` in place, so a document loaded before the
 // update still references the old hashed chunk URLs; the first visit to a lazy
 // route after the update 404s and the dynamic import rejects ("Importing a
-// module script failed"). Secure-context browsers recover through the service
-// worker registered in main.ts (prior-build chunk caches + reload broadcast),
-// but WKWebView (macOS/iOS apps) and plain-HTTP LAN origins never register a
-// service worker, so reloading against the freshly served index.html is the
-// only recovery path there.
+// module script failed"). Reload the freshly served document in every browser,
+// including WKWebView and plain-HTTP LAN origins without a service worker.
+// Worker update announcements use this same guarded recovery; unsaved work
+// blocks automatic reloads and leaves the Reload banner available.
 import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
+import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
@@ -33,8 +34,11 @@ type StaleChunkReloadDeps = {
   canReload?: () => boolean;
 };
 
-type ReloadAttempt = { attemptedAt: number; active: number; ready?: Promise<void> };
-type RecoveryState = [attemptsByBuild: Map<string, ReloadAttempt>, pendingBuildId: string | null];
+type RecoveryState = {
+  buildId: string | null;
+  attemptedAt: number;
+  pending?: Promise<boolean>;
+};
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
 const unavailableStorage = {};
@@ -61,7 +65,15 @@ function probeControlUiDocument(): Promise<boolean> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DOCUMENT_PROBE_TIMEOUT_MS);
     try {
-      const response = await fetch(window.location.href, {
+      // Session links reject HEAD; probe the serving document without session query data.
+      const url = new URL(window.location.href);
+      const [routeBasePath, resourceBasePath] = resolveControlUiPaths(url.pathname);
+      // Vite serves its own document while Gateway resources use the development proxy.
+      const documentBasePath = configuredUiDevGateway() ? routeBasePath : resourceBasePath;
+      url.pathname = `${documentBasePath}/index.html`;
+      url.search = "";
+      url.hash = "";
+      const response = await fetch(url.href, {
         method: "HEAD",
         cache: "no-store",
         signal: controller.signal,
@@ -122,61 +134,44 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   }
   const now = Date.now();
   const storageIdentity = storage ?? unavailableStorage;
-  const recovery = recoveryByStorage.get(storageIdentity) ?? [
-    new Map<string, ReloadAttempt>(),
-    buildId,
-  ];
-  const attemptsByBuild = recovery[0];
-  const currentTarget = recovery[1];
+  let recovery = recoveryByStorage.get(storageIdentity);
   // A generic chunk failure cannot replace the server build already being
   // recovered. Only the Gateway owns a new target artifact and retry lifetime.
   if (
     deps.buildId === undefined &&
-    currentTarget !== null &&
-    currentTarget !== buildId &&
-    (attemptsByBuild.get(currentTarget)?.active ?? 0) > 0
+    recovery &&
+    recovery.buildId !== buildId &&
+    (recovery.buildId === null || recovery.pending)
   ) {
     return false;
   }
-  for (const [attemptedBuildId, attempt] of attemptsByBuild) {
-    if (attempt.active === 0 && now - attempt.attemptedAt >= ATTEMPT_COOLDOWN_MS) {
-      attemptsByBuild.delete(attemptedBuildId);
-    }
-  }
-  const previous = attemptsByBuild.get(buildId);
-  // Replacement connections may join during a retry delay, not only while a
-  // HEAD request is pending. Each waiter retains its own connection authority.
-  if (previous && (previous.active === 0 || recovery[1] !== buildId)) {
+  if (
+    recovery?.buildId === buildId &&
+    !recovery.pending &&
+    now - recovery.attemptedAt < ATTEMPT_COOLDOWN_MS
+  ) {
     return false;
   }
-  const attempt = previous ?? { attemptedAt: now, active: 0 };
-  if (!previous && deps.buildId !== undefined) {
-    // Sample once per target so reconnecting owners join the same wait instead of postponing it.
-    const delayMs = Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS);
-    if (delayMs > 0) {
-      attempt.ready = sleepWithAbort(delayMs);
-    }
-  }
-  attempt.active += 1;
-  attemptsByBuild.set(buildId, attempt);
-  recovery[1] = buildId;
-  recoveryByStorage.set(storageIdentity, recovery);
-  try {
-    if (attempt.ready) {
-      await attempt.ready;
-    }
-    if (
-      !(await waitForReachableControlUiDocument(
+  if (recovery?.buildId !== buildId || !recovery.pending) {
+    const target: RecoveryState = { buildId, attemptedAt: now };
+    recoveryByStorage.set(storageIdentity, target);
+    const wait = () =>
+      waitForReachableControlUiDocument(
         { timeoutMs: deps.buildId === undefined ? 0 : undefined },
-        () =>
-          deps.canReload?.() !== false && canReloadControlUiDocument() && recovery[1] === buildId,
-      ))
-    ) {
+        () => recoveryByStorage.get(storageIdentity) === target && canReloadControlUiDocument(),
+      );
+    const delayMs =
+      deps.buildId === undefined ? 0 : Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS);
+    target.pending = delayMs > 0 ? sleepWithAbort(delayMs).then(wait) : wait();
+    recovery = target;
+  }
+  try {
+    if (!(await recovery.pending)) {
       return false;
     }
   } finally {
-    attempt.active -= 1;
-    attempt.attemptedAt = Date.now();
+    recovery.pending = undefined;
+    recovery.attemptedAt = Date.now();
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
   // build would reload forever. When storage is unavailable or rejects the
@@ -185,12 +180,13 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   if (
     !canReloadControlUiDocument() ||
     deps.canReload?.() === false ||
-    recovery[1] !== buildId ||
+    recoveryByStorage.get(storageIdentity) !== recovery ||
+    recovery.buildId !== buildId ||
     !persistGuardBuildId(storage, buildId)
   ) {
     return false;
   }
-  recovery[1] = null;
+  recovery.buildId = null;
   reload();
   return true;
 }
@@ -255,16 +251,16 @@ export async function retryStaleChunkReloadWhenReachable(
   const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
   const storageIdentity = storage ?? unavailableStorage;
   const reload = deps.reload ?? reloadControlUiDocument;
-  const recovery = recoveryByStorage.get(storageIdentity) ?? [
-    new Map<string, ReloadAttempt>(),
-    CONTROL_UI_BUILD_INFO.buildId,
-  ];
+  const recovery = recoveryByStorage.get(storageIdentity) ?? {
+    buildId: CONTROL_UI_BUILD_INFO.buildId,
+    attemptedAt: Date.now(),
+  };
   recoveryByStorage.set(storageIdentity, recovery);
-  const buildId = recovery[1];
+  const buildId = recovery.buildId;
   if (buildId === null) {
     return false;
   }
-  recovery[1] = null;
+  recovery.buildId = null;
   persistGuardBuildId(storage, buildId);
   reload();
   return true;

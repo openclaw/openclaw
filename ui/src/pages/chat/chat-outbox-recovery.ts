@@ -130,7 +130,7 @@ class ChatOutboxRecovery extends LitElement {
     }
     this.requestUpdate();
   }
-  private async recover(entry: RecoveryEntry) {
+  private async changeRecovery(entry: RecoveryEntry, action: "restore" | "discard") {
     const host = this.host;
     const owner = this.owner();
     if (!host || !owner || this.busy) {
@@ -140,23 +140,55 @@ class ChatOutboxRecovery extends LitElement {
     const client = host.client;
     const sessionId = host.currentSessionId;
     const connectionEpoch = host.connectionEpoch;
+    const restoring = action === "restore";
     const isCurrent = () =>
       this.isConnected &&
       this.host === host &&
       this.identity === identity &&
       host.client === client &&
-      host.currentSessionId === sessionId &&
+      (!restoring || host.currentSessionId === sessionId) &&
       host.connectionEpoch === connectionEpoch &&
       JSON.stringify(this.owner()) === JSON.stringify(owner) &&
-      !host.chatMessage &&
-      !host.chatGoalDraftMode &&
-      !host.chatReplyTarget &&
-      !host.chatAttachments.length &&
-      !host.chatQueue.length;
+      (!restoring ||
+        (!host.chatMessage &&
+          !host.chatGoalDraftMode &&
+          !host.chatReplyTarget &&
+          !host.chatAttachments.length &&
+          !host.chatQueue.length));
     this.busy = true;
     this.error = "";
     this.requestUpdate();
     try {
+      if (!restoring) {
+        const confirmed = await showConfirmDialog({
+          title: t("chat.outboxRecoveryDeleteTitle"),
+          message: t("chat.outboxRecoveryDeleteConfirm"),
+          details: this.details(entry),
+          confirmLabel: t("chat.outboxRecoveryDelete"),
+          danger: true,
+        });
+        if (!confirmed || !isCurrent()) {
+          return;
+        }
+        const result =
+          "id" in entry
+            ? discardChatOutboxRecovery(host, entry, isCurrent)
+            : (await (await draftStore).discardDurableComposerRecovery(owner, entry, isCurrent))
+                .status;
+        if (!isCurrent()) {
+          return;
+        }
+        if (result === "discarded") {
+          await this.refresh();
+        } else {
+          this.error = t(
+            result === "conflict"
+              ? "chat.outboxRecoveryDeleteConflict"
+              : "chat.outboxRecoveryStorageFailed",
+          );
+        }
+        return;
+      }
       if (!isCurrent()) {
         this.error = t("chat.outboxRecoveryConflict");
         return;
@@ -217,7 +249,9 @@ class ChatOutboxRecovery extends LitElement {
         );
       }
     } catch {
-      this.error = t("chat.outboxRecoveryStorageFailed");
+      if (restoring || isCurrent()) {
+        this.error = t("chat.outboxRecoveryStorageFailed");
+      }
     } finally {
       this.busy = false;
       this.requestUpdate();
@@ -244,8 +278,7 @@ class ChatOutboxRecovery extends LitElement {
     if (attachments.length) {
       return t("chat.outboxRecoveryAttachments", { files: attachments.join(", ") });
     }
-    const goal = "id" in entry ? entry.session.goalMode : entry.goalMode;
-    const reply = "id" in entry ? entry.session.replyTarget : entry.replyTarget;
+    const { goalMode: goal, replyTarget: reply } = "id" in entry ? entry.session : entry;
     if (goal) {
       return t("chat.outboxRecoveryGoal");
     }
@@ -265,8 +298,7 @@ class ChatOutboxRecovery extends LitElement {
   private details(entry: RecoveryEntry) {
     const session = "id" in entry ? entry.session : null;
     const text = "id" in entry ? entry.session.draft : entry.text;
-    const goal = "id" in entry ? entry.session.goalMode : entry.goalMode;
-    const reply = "id" in entry ? entry.session.replyTarget : entry.replyTarget;
+    const { goalMode: goal, replyTarget: reply } = "id" in entry ? entry.session : entry;
     const attachmentNames = "id" in entry ? [] : entry.attachmentNames;
     return [
       text?.trim(),
@@ -290,62 +322,6 @@ class ChatOutboxRecovery extends LitElement {
     ]
       .filter(Boolean)
       .join("\n\n");
-  }
-  private async discard(entry: RecoveryEntry) {
-    const host = this.host;
-    const owner = this.owner();
-    if (!host || !owner || this.busy) {
-      return;
-    }
-    const identity = this.identity;
-    const client = host.client;
-    const epoch = host.connectionEpoch;
-    const isCurrent = () =>
-      this.isConnected &&
-      this.host === host &&
-      this.identity === identity &&
-      host.client === client &&
-      host.connectionEpoch === epoch &&
-      JSON.stringify(this.owner()) === JSON.stringify(owner);
-    this.busy = true;
-    this.error = "";
-    this.requestUpdate();
-    try {
-      const confirmed = await showConfirmDialog({
-        title: t("chat.outboxRecoveryDeleteTitle"),
-        message: t("chat.outboxRecoveryDeleteConfirm"),
-        details: this.details(entry),
-        confirmLabel: t("chat.outboxRecoveryDelete"),
-        danger: true,
-      });
-      if (!confirmed || !isCurrent()) {
-        return;
-      }
-      const result =
-        "id" in entry
-          ? discardChatOutboxRecovery(host, entry, isCurrent)
-          : (await (await draftStore).discardDurableComposerRecovery(owner, entry, isCurrent))
-              .status;
-      if (!isCurrent()) {
-        return;
-      }
-      if (result === "discarded") {
-        await this.refresh();
-      } else {
-        this.error = t(
-          result === "conflict"
-            ? "chat.outboxRecoveryDeleteConflict"
-            : "chat.outboxRecoveryStorageFailed",
-        );
-      }
-    } catch {
-      if (isCurrent()) {
-        this.error = t("chat.outboxRecoveryStorageFailed");
-      }
-    } finally {
-      this.busy = false;
-      this.requestUpdate();
-    }
   }
   private renderEntry(entry: RecoveryEntry) {
     const scope = parseStoredChatOutboxScope("id" in entry ? entry.sourceScopeKey : entry.scopeKey);
@@ -393,20 +369,18 @@ class ChatOutboxRecovery extends LitElement {
           : nothing
       }
       <div class="chat-outbox-recovery__actions">
-        <button
-          class="btn btn--sm"
-          ?disabled=${this.busy || !this.owner()}
-          @click=${() => void this.recover(entry)}
-        >
-          ${t("chat.outboxRecoveryRestore")}
-        </button>
-        <button
-          class="btn btn--sm"
-          ?disabled=${this.busy || !this.owner()}
-          @click=${() => void this.discard(entry)}
-        >
-          ${t("chat.outboxRecoveryDelete")}
-        </button>
+        ${(
+          [
+            ["chat.outboxRecoveryRestore", () => void this.changeRecovery(entry, "restore")],
+            ["chat.outboxRecoveryDelete", () => void this.changeRecovery(entry, "discard")],
+          ] as const
+        ).map(
+          ([label, action]) => html`
+            <button class="btn btn--sm" ?disabled=${this.busy || !this.owner()} @click=${action}>
+              ${t(label)}
+            </button>
+          `,
+        )}
       </div>
     </div>`;
   }

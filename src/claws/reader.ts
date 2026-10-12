@@ -459,18 +459,20 @@ export async function readClawManifestFile(
       "$.workspace",
     );
   }
+  const resolvedSource = sourceResult.source;
+  const sourceIdentity = {
+    kind: resolvedSource.kind,
+    name: resolvedSource.name,
+    version: resolvedSource.version,
+    packageRoot: resolvedSource.packageRoot,
+    manifestPath: resolvedSource.manifestPath,
+  };
   const allowLegacyDynamicToolProfile =
     options.allowLegacyDynamicToolProfile === true ||
     (options.authorizeLegacyDynamicToolProfile
       ? await options.authorizeLegacyDynamicToolProfile({
           manifest: parsed.manifest,
-          source: {
-            kind: sourceResult.source.kind,
-            name: sourceResult.source.name,
-            version: sourceResult.source.version,
-            packageRoot: sourceResult.source.packageRoot,
-            manifestPath: sourceResult.source.manifestPath,
-          },
+          source: { ...sourceIdentity },
         })
       : false);
   const profile = await readClawOpenClawProfile({
@@ -492,13 +494,8 @@ export async function readClawManifestFile(
   if (!snapshot.ok) {
     return snapshot;
   }
-  const resolvedSource = sourceResult.source;
   const source: ClawSourceIdentity = {
-    kind: resolvedSource.kind,
-    name: resolvedSource.name,
-    version: resolvedSource.version,
-    packageRoot: resolvedSource.packageRoot,
-    manifestPath: resolvedSource.manifestPath,
+    ...sourceIdentity,
     integrityKind: "development-snapshot",
     integrity: snapshot.integrity,
     byteLength: snapshot.byteLength,

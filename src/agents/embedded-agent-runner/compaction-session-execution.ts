@@ -184,10 +184,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const extensionFactories = buildEmbeddedExtensionFactories({
       cfg: params.config,
       sessionManager,
-      provider,
-      modelId,
+      workspaceDir: effectiveWorkspace,
       model: effectiveModel,
-      contextTokenBudget,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey ?? sandboxSessionKey,
@@ -260,8 +258,13 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         });
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
-          (tokensAfter, tokensBefore) =>
-            recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
+          (tokensAfter, tokensBefore, details) =>
+            recordCompaction({
+              tokensBefore,
+              tokensAfter,
+              compactionKind: "context-engine",
+              details,
+            }),
           assertActive,
         );
         session.setBaseSystemPrompt(systemPromptText.trim());
@@ -277,6 +280,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
           config: params.config,
           thinkLevel,
+          modelCallUrgency:
+            params.trigger === "manual" ? "foreground" : (params.modelCallUrgency ?? "background"),
         });
         const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
           extraParams: effectiveExtraParams,
@@ -454,6 +459,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               context: { systemPrompt: systemPromptText, messages: session.messages },
               sessionManager,
               extraParams: effectiveExtraParams,
+              requestBudget: accountingRecorder?.requestBudget,
               customInstructions: params.customInstructions,
               config: params.config,
               onUsage: recordUsage,

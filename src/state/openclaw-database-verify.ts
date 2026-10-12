@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { hasRevokedOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import type { OpenClawDatabaseVerifyTarget } from "./openclaw-database-verify.worker.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -18,9 +19,9 @@ type IntegrityCheckRequest = {
 };
 type IntegrityCheckQueue = {
   paths: Map<string, IntegrityCheckRequest>;
-  subscribers: Set<() => void>;
+  wake?: () => void;
   releases: Set<Promise<void>>;
-  active?: object;
+  active?: boolean;
 };
 const integrityCheckQueues = resolveGlobalSingleton(
   Symbol.for("openclaw.databaseIntegrityChecks"),
@@ -31,16 +32,31 @@ function integrityCheckQueue(env: NodeJS.ProcessEnv): IntegrityCheckQueue {
   const key = path.resolve(resolveOpenClawStateSqlitePath(env));
   let queue = integrityCheckQueues.get(key);
   if (!queue) {
-    queue = { paths: new Map(), subscribers: new Set(), releases: new Set() };
+    queue = { paths: new Map(), releases: new Set() };
     integrityCheckQueues.set(key, queue);
   }
   return queue;
 }
 
-function wakeSubscribers(queue: IntegrityCheckQueue): void {
-  for (const wake of queue.subscribers) {
-    wake();
+/** Deferral belongs to a running verifier, never a queue without a consumer. */
+export function captureOpenClawDatabaseIntegrityVerifier(database: {
+  databasePath: string;
+  environment: NodeJS.ProcessEnv;
+}): (() => void) | undefined {
+  if (hasRevokedOpenClawAgentDatabaseValidation(database.databasePath)) {
+    return undefined;
   }
+  const queue = integrityCheckQueues.get(
+    path.resolve(resolveOpenClawStateSqlitePath(database.environment)),
+  );
+  const owner = queue?.wake;
+  return owner && queue
+    ? () => {
+        if (queue.wake !== owner) {
+          throw new Error("Agent admission lost its background integrity verifier");
+        }
+      }
+    : undefined;
 }
 
 function enqueueCheck(
@@ -85,7 +101,7 @@ export function requestOpenClawAgentDatabaseIntegrityCheck(
     proof: options.proof,
     release: options.release,
   });
-  wakeSubscribers(queue);
+  queue.wake?.();
 }
 
 /** Consume requested agent checks for the listening Gateway. */
@@ -94,11 +110,13 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
 } {
   const env = { ...options.env };
   const queue = integrityCheckQueue(env);
-  const owner = {};
+  // One Gateway owns this queue; overlapping verifier instances are unsupported.
+  if (queue.wake) {
+    throw new Error("A database integrity verifier is already running for this state directory");
+  }
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let activeWorker: ChildProcess | undefined;
   let activeRun: Promise<void> | undefined;
-  let claimedChecks = new Map<string, IntegrityCheckRequest>();
   let stopPromise: Promise<void> | undefined;
   let stopped = false;
   const controller = new AbortController();
@@ -126,18 +144,17 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       if (stopped || queue.active || queue.paths.size === 0) {
         return;
       }
-      queue.active = owner;
+      queue.active = true;
       activeRun = inOwnerContext(run).finally(() => {
         activeRun = undefined;
-        queue.active = undefined;
-        wakeSubscribers(queue);
+        queue.active = false;
+        queue.wake?.();
       });
     }, 0);
     timer.unref?.();
   };
   const run = async () => {
     const checks = new Map(queue.paths);
-    claimedChecks = checks;
     queue.paths.clear();
     try {
       const { applyOpenClawDatabaseVerificationResults, runDatabaseVerifyWorker } =
@@ -174,19 +191,16 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       }
     } finally {
       activeWorker = undefined;
-      for (const [pathname, check] of checks) {
-        if (queue.paths.get(pathname) !== check) {
-          releaseCheck(queue, check);
-        }
+      for (const check of checks.values()) {
+        releaseCheck(queue, check);
       }
-      claimedChecks.clear();
       await Promise.all(queue.releases);
     }
   };
 
-  // Publishers and retiring peers must not lend their request or Gateway context.
+  // Publishers must not lend their request context to the Gateway verifier.
   const wake = () => inOwnerContext(schedule);
-  queue.subscribers.add(wake);
+  queue.wake = wake;
   wake();
   return {
     stop: () => {
@@ -195,22 +209,11 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       }
       stopped = true;
       controller.abort(new Error("database integrity verifier stopped"));
-      queue.subscribers.delete(wake);
-      if (queue.subscribers.size === 0) {
-        for (const check of queue.paths.values()) {
-          releaseCheck(queue, check);
-        }
-        queue.paths.clear();
-      } else {
-        // Replay before yielding so a later final stop can still discard this work.
-        for (const [pathname, check] of claimedChecks) {
-          // A newer full request carries its own writer's publication authority.
-          if (queue.paths.get(pathname)?.check !== "full") {
-            enqueueCheck(queue, pathname, check);
-          }
-        }
-        wakeSubscribers(queue);
+      queue.wake = undefined;
+      for (const check of queue.paths.values()) {
+        releaseCheck(queue, check);
       }
+      queue.paths.clear();
       if (timer) {
         clearTimeout(timer);
         timer = undefined;

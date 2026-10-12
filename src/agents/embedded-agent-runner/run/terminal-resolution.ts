@@ -247,7 +247,6 @@ export async function resolveEmbeddedRunTerminal(input: {
   const intentionalTerminalCompletion =
     !terminalAborted &&
     !terminalTimedOut &&
-    payloadCount === 0 &&
     resolveSettledToolBatchEvidence(attempt).intentionalTermination;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
@@ -476,6 +475,7 @@ async function completeEmbeddedRun(
           message: formatErrorMessage(
             projectAgentRunAttemptTerminal(input.attempt.terminal).promptError ??
               input.terminalState.outcome.error ??
+              input.incompleteTurnText ??
               "Agent couldn't generate a response.",
           ),
           fallbackSafe: input.incompleteTurnFallbackSafe ?? false,
@@ -497,17 +497,23 @@ async function completeEmbeddedRun(
           incompleteTurnText,
         });
   // Cancellation belongs to the runtime owner, not the last model tool-call message.
-  const stopReason = terminalAborted
-    ? input.terminalState.outcome.stopReason
-    : error
-      ? undefined
-      : input.attempt.clientToolCalls
-        ? "tool_calls"
-        : input.attempt.yieldDetected
-          ? "end_turn"
-          : (input.attemptAssistant?.stopReason as string | undefined);
+  const stopReason =
+    terminalAborted || terminalTimedOut
+      ? input.terminalState.outcome.stopReason
+      : error
+        ? "error"
+        : input.attempt.clientToolCalls
+          ? "tool_calls"
+          : input.attempt.yieldDetected
+            ? "end_turn"
+            : (input.attemptAssistant?.stopReason as string | undefined);
+  input.setTerminalLifecycleMeta({
+    replayInvalid,
+    livenessState,
+    stopReason,
+    ...(!error ? { yielded: input.attempt.yieldDetected === true } : {}),
+  });
   if (error) {
-    input.setTerminalLifecycleMeta({ replayInvalid, livenessState });
     if (input.authProfileId) {
       try {
         await input.maybeMarkAuthProfileFailure({
@@ -601,14 +607,6 @@ async function completeEmbeddedRun(
             : input.attempt.yieldDetected && !yieldHasContinuation
               ? [setReplyPayloadMetadata({ text: YIELD_DIAGNOSTIC_TEXT }, { hostNotice: true })]
               : input.payloadsForTerminalPath;
-  if (!error) {
-    input.setTerminalLifecycleMeta({
-      replayInvalid,
-      livenessState,
-      stopReason,
-      yielded: input.attempt.yieldDetected === true,
-    });
-  }
   return {
     action: "complete",
     result: {
@@ -626,6 +624,7 @@ async function completeEmbeddedRun(
         finalAssistantRawText: input.prepared.finalAssistantRawText,
         replayInvalid,
         livenessState,
+        stopReason,
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
         ...(error
           ? { error }
@@ -641,7 +640,6 @@ async function completeEmbeddedRun(
               ...(input.intentionalTerminalCompletion
                 ? { intentionalTerminalCompletion: "tool-batch" as const }
                 : {}),
-              stopReason,
               pendingToolCalls: input.attempt.clientToolCalls?.map((call) => ({
                 id: randomBytes(5).toString("hex").slice(0, 9),
                 name: call.name,

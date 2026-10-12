@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -114,7 +115,7 @@ async function cancellationLoadFixture(
     },
     revokeSessionAuthority: vi.fn(),
   });
-  const harness = createHarness(database, placements, {
+  const harness = await createHarness(database, placements, {
     workspacePath: root,
     runReclaimPreparation: barriers.runReclaimPreparation,
     runReclaimBarrier: barriers.runReclaimBarrier,
@@ -571,15 +572,17 @@ it.each([
     const stopping = Promise.resolve()
       .then(async () => {
         if (action === "archive") {
-          return await prepareSessionWorkerPlacementStop({
-            ...REQUEST,
-            action,
-            context: {
-              workerSessionPlacementService: placements,
-              workerPlacementDispatchService: coordinated,
-              workerEnvironmentService: harness.environments,
-            },
-          }).stop();
+          return await (
+            await prepareSessionWorkerPlacementStop({
+              ...REQUEST,
+              action,
+              context: {
+                workerSessionPlacementService: placements,
+                workerPlacementDispatchService: coordinated,
+                workerEnvironmentService: harness.environments,
+              },
+            })
+          ).stop();
         }
         return await coordinated.reclaim(REQUEST);
       })
@@ -770,7 +773,7 @@ it.each([
         expect.soft(await moving).toMatchObject({ state: "local" });
         expect(localGenerations.size).toBe(1);
         expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
-        expect.soft(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+        expect.soft(await f.placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
         expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
@@ -833,22 +836,17 @@ it.each([
       assertWorkerLifetime: assertLifetime,
       assertWorkerGrant: assertCaller,
     });
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (destroyed && request.stage === stage) {
-            admissionReached = true;
-            if (change === "caller") {
-              allowed = false;
-            } else {
-              f.entry.lifecycleRevision = "replacement";
-            }
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      if (destroyed && request.stage === stage) {
+        admissionReached = true;
+        if (change === "caller") {
+          allowed = false;
+        } else {
+          f.entry.lifecycleRevision = "replacement";
+        }
+      }
+      admit(request, grant);
+    });
     try {
       await expect(f.coordinated.reclaim(REQUEST, authorize)).rejects.toThrow(
         change === "caller"
@@ -858,7 +856,7 @@ it.each([
       expect(admissionReached).toBe(true);
       expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
       expect(f.placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-      expect(f.placements.getPlacementMove(REQUEST.sessionId)?.operationId).toBe(
+      expect((await f.placements.getPlacementMoveAsync(REQUEST.sessionId))?.operationId).toBe(
         begun.intent.operationId,
       );
     } finally {

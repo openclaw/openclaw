@@ -114,6 +114,7 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
         workspaceDir,
         loadRuntimePlugins: true,
         runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
+        allowGatewaySubagentBinding: true,
       },
       { catalogMode: "static" },
     );

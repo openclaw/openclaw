@@ -4,26 +4,62 @@ import { resolveRuntimeFacadeModuleLocation } from "../../../plugin-sdk/facade-r
 import type { PluginStateNativeBindingCodec } from "../../../plugin-state/plugin-state-native-binding.types.js";
 import { capturePluginStateNativeBindingStore } from "../../../plugin-state/plugin-state-store.native-binding.js";
 import { validateKey } from "../../../plugin-state/plugin-state-store.validation.js";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { AgentHarnessSessionDeletionMutation } from "../types.js";
 import {
   createNativeSessionBindingLeases,
+  createNativeSessionBindingLeasesV2,
   type NativeSessionBindingLeaseConfig,
   type NativeSessionBindingLeaseOptions,
   type NativeSessionBindingRecord,
   type NativeSessionBindingStateStore,
+  type NativeSessionBindingStateStoreV2,
 } from "./binding-leases.js";
+import { createNativeSessionBindingNativeSettlement } from "./binding-native-settlement.js";
 import {
   bindNativeSessionDeletionParticipant,
   type NativeSessionDeletionParticipant,
 } from "./deletion-participant.js";
 
-/** Shared binding coordination; backend callbacks retain native ownership and retention policy. */
+/**
+ * @deprecated Use createNativeSessionBindingLifecycleV2; removed in the next Plugin SDK major.
+ */
 export function createNativeSessionBindingLifecycle<TRecord extends NativeSessionBindingRecord>(
   state: NativeSessionBindingStateStore<TRecord>,
   options: NativeSessionBindingLifecycleOptions<TRecord>,
 ) {
-  const leases = createNativeSessionBindingLeases(state, options);
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "createNativeSessionBindingLifecycle",
+    replacement: "createNativeSessionBindingLifecycleV2",
+    compatibility:
+      "The legacy adapter retains synchronous transaction-local mutation and settlement.",
+  });
+  return createNativeSessionBindingLifecycleOwner({ version: 1, state }, options);
+}
+
+/** Worker-owned binding coordination with an audited native deletion participant. */
+export function createNativeSessionBindingLifecycleV2<TRecord extends NativeSessionBindingRecord>(
+  state: NativeSessionBindingStateStoreV2<TRecord>,
+  options: NativeSessionBindingLifecycleOptions<TRecord> & {
+    workerCodec: PluginStateNativeBindingCodec;
+  },
+) {
+  return createNativeSessionBindingLifecycleOwner({ version: 2, state }, options);
+}
+
+function createNativeSessionBindingLifecycleOwner<TRecord extends NativeSessionBindingRecord>(
+  source:
+    | { version: 1; state: NativeSessionBindingStateStore<TRecord> }
+    | { version: 2; state: NativeSessionBindingStateStoreV2<TRecord> },
+  options: NativeSessionBindingLifecycleOptions<TRecord>,
+) {
+  const { state } = source;
+  const leases =
+    source.version === 1
+      ? createNativeSessionBindingLeases(source.state, options)
+      : createNativeSessionBindingLeasesV2(source.state, options);
   const exclusiveContext = new AsyncLocalStorage<boolean>();
   let activeMutations = 0;
   let pendingExclusiveOperations = 0;
@@ -100,7 +136,7 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
       store?.options.pluginId === options.workerCodec
         ? options.workerCodec
         : undefined;
-    const source =
+    const workerSource =
       workerCodec && store
         ? captureOpenClawStateWorkerContext({ env: store.options.env })
         : undefined;
@@ -118,7 +154,12 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
       value?: Omit<TRecord, "lease">,
       owner?: ReturnType<typeof leases.owner>,
     ) => {
-      if (!store || !source || !workerCodec || !source.admission.identity.key.startsWith("file:")) {
+      if (
+        !store ||
+        !workerSource ||
+        !workerCodec ||
+        !workerSource.admission.identity.key.startsWith("file:")
+      ) {
         return mutation;
       }
       const custody = new Set<object>();
@@ -143,10 +184,10 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
           rollbackChanged: options.errors.rollbackChanged,
           predicate: owner ? { kind: "leased", token: owner.token, value } : { kind: "absent" },
         },
-        source: source.admission.identity,
+        source: workerSource.admission.identity,
         assertCurrent() {
-          source.admission.assertCurrent();
-          source.maintenanceScope?.assertAdmission();
+          workerSource.admission.assertCurrent();
+          workerSource.maintenanceScope?.assertAdmission();
           store.assertCurrent?.();
           deletion.assertCurrent();
           if (owner?.failure || owner?.phase === "closed") {
@@ -176,21 +217,53 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
           }
         },
       };
+      if (source.version === 2) {
+        participant.nativeMutation = createNativeSessionBindingNativeSettlement({
+          plan: participant.binding!,
+          env: store.options.env,
+          assertCurrent: () => participant.assertCurrent(),
+          settle: (outcome) => participant.settle(outcome),
+        });
+      }
       return bindNativeSessionDeletionParticipant(mutation, participant);
     };
-    const deleteIf = state.deleteIf?.bind(state);
-    if (!deleteIf) {
+    if (
+      source.version === 2 &&
+      (!store || !workerSource || !workerSource.admission.identity.key.startsWith("file:"))
+    ) {
+      throw new Error("Native session binding deletion requires a worker-owned plugin-state store");
+    }
+    const legacyState = source.version === 1 ? source.state : undefined;
+    const deleteIf = legacyState?.deleteIf?.bind(legacyState);
+    if (legacyState && !deleteIf) {
       throw new Error(options.errors.conditionalDeletionRequired);
     }
+    const workerMutation: AgentHarnessSessionDeletionMutation = {
+      commit() {
+        throw new Error(
+          "Native session binding deletion must commit through its worker participant",
+        );
+      },
+      rollback() {
+        throw new Error(
+          "Native session binding deletion must roll back through its worker participant",
+        );
+      },
+    };
     return await withMutation(async () => {
       deletion.assertCurrent();
-      if (state.lookup(key) === undefined) {
+      const initial = await state.lookup(key);
+      deletion.assertCurrent();
+      if (initial === undefined) {
+        if (!legacyState) {
+          return await run(undefined, bindParticipant(workerMutation));
+        }
         let active = true;
         try {
           const mutation: AgentHarnessSessionDeletionMutation = {
             commit() {
               deletion.assertCurrent();
-              if (!active || state.lookup(key) !== undefined) {
+              if (!active || legacyState.lookup(key) !== undefined) {
                 throw new Error(options.errors.deletionChanged);
               }
             },
@@ -205,12 +278,16 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
         key,
         async () => {
           const owner = leases.owner(key)!;
-          const stored = options.readRecord(state.lookup(key));
+          const stored = options.readRecord(await state.lookup(key));
+          deletion.assertCurrent();
           deletion.assertRecordCurrent(stored);
           if (!stored) {
             throw new Error(options.errors.deletionChanged);
           }
           const { lease: _lease, ...expectedValue } = stored;
+          if (!legacyState) {
+            return await run(stored, bindParticipant(workerMutation, expectedValue, owner));
+          }
           let deleted: TRecord | undefined;
           let active = true;
           const assertActive = () => {
@@ -227,7 +304,7 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
                   return;
                 }
                 let removed: TRecord | undefined;
-                const applied = deleteIf(key, (raw) => {
+                const applied = deleteIf!(key, (raw) => {
                   const parsed = options.readRecord(raw);
                   const { lease, ...value } = parsed ?? {};
                   if (
@@ -263,7 +340,7 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
                     expiresAt: Date.now() + options.lease.staleMs,
                   },
                 };
-                if (!state.registerIfAbsent(key, restored)) {
+                if (!legacyState.registerIfAbsent(key, restored)) {
                   throw new Error(options.errors.rollbackChanged);
                 }
                 deleted = undefined;
@@ -281,7 +358,7 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
   };
 
   return {
-    captureLeaseAssertion: leases.captureLeaseAssertion,
+    captureLeaseAssertion: leases.captureLeaseAssertion.bind(leases),
     transact: leases.transact,
     withLease: leases.withLease,
     hasLease: leases.hasLease,
@@ -314,4 +391,5 @@ type NativeSessionBindingDeletionOptions<TRecord extends NativeSessionBindingRec
 export type {
   NativeSessionBindingLeaseOptions,
   NativeSessionBindingStateStore,
+  NativeSessionBindingStateStoreV2,
 } from "./binding-leases.js";

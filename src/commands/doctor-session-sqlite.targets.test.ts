@@ -9,15 +9,13 @@ import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sq
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";

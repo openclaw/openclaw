@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerPlacementReclaimBarriers,
   WorkerReclaimPlacement,
@@ -262,14 +262,12 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                         journal,
                         stagedResult: {
                           ref: reclaimResultRef,
-                          record: (ref) => {
+                          record: (ref, workspaceId) => {
                             assertCurrent();
                             return placements.recordStagedWorkspaceResult(
                               reclaimClaim,
                               ref,
-                              workspace.kind === "repository"
-                                ? workspace.repository.workspaceId
-                                : undefined,
+                              workspaceId,
                               assertCurrent,
                             );
                           },

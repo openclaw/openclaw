@@ -61,8 +61,8 @@ export function createReplySessionEntryHandle(params: {
       !generationFence ||
       !sessionStore ||
       (storedEntry &&
-        ((storedEntry === generationFence.expectedStoreEntry && !matchesGeneration(storedEntry)) ||
-          (matchesGeneration(storedEntry) && currentEntry.updatedAt >= storedEntry.updatedAt)))
+        (storedEntry === generationFence.expectedStoreEntry || matchesGeneration(storedEntry)) &&
+        (!matchesGeneration(storedEntry) || currentEntry.updatedAt >= storedEntry.updatedAt))
     ) {
       entries[sessionKey] = currentEntry;
     }
@@ -73,7 +73,7 @@ export function createReplySessionEntryHandle(params: {
     if (
       generationFence &&
       matchesGeneration(storedEntry) &&
-      (!currentEntry || storedEntry.updatedAt >= currentEntry.updatedAt)
+      (!matchesGeneration(currentEntry) || storedEntry.updatedAt >= currentEntry.updatedAt)
     ) {
       currentEntry = storedEntry;
     }
@@ -81,49 +81,38 @@ export function createReplySessionEntryHandle(params: {
   };
 
   const replaceCurrent = (entry: SessionEntry, adopt = false): void => {
-    if (!generationFence) {
-      currentEntry = entry;
-      if (sessionKey) {
-        entries[sessionKey] = entry;
-      }
-      return;
-    }
     const storedEntry = sessionKey ? entries[sessionKey] : undefined;
-    const storedMatchesOwned = matchesGeneration(storedEntry);
-    let nextEntry = entry;
-    if (adopt) {
-      const storedMatchesAdopted = Boolean(
-        storedEntry &&
-        storedEntry.sessionId === entry.sessionId &&
-        storedEntry.lifecycleRevision === entry.lifecycleRevision,
-      );
+    if (adopt && generationFence) {
+      const storedMatchesAdopted =
+        storedEntry?.sessionId === entry.sessionId &&
+        storedEntry.lifecycleRevision === entry.lifecycleRevision;
       if (
         (sessionStore && sessionKey && !storedEntry && generationFence.expectedStoreEntry) ||
-        (storedEntry && !storedMatchesOwned && !storedMatchesAdopted)
+        (storedEntry && !matchesGeneration(storedEntry) && !storedMatchesAdopted)
       ) {
         throw new ReplySessionGenerationInvalidatedError(
           "Follow-up session generation was replaced during admission",
         );
       }
-      if (storedMatchesAdopted && storedEntry && storedEntry.updatedAt >= entry.updatedAt) {
-        nextEntry = storedEntry;
-      }
-      ownedSessionId = nextEntry.sessionId;
-      ownedLifecycleRevision = nextEntry.lifecycleRevision;
-    } else if (!matchesGeneration(nextEntry)) {
+      ownedSessionId = entry.sessionId;
+      ownedLifecycleRevision = entry.lifecycleRevision;
+    }
+    if (!matchesGeneration(entry)) {
       return;
     }
-    if (adopt || !currentEntry || nextEntry.updatedAt >= currentEntry.updatedAt) {
-      currentEntry = nextEntry;
-    }
+    const latest = current();
+    currentEntry =
+      generationFence && matchesGeneration(latest) && latest.updatedAt > entry.updatedAt
+        ? latest
+        : entry;
     if (
       sessionKey &&
-      (adopt
-        ? !storedEntry || storedMatchesOwned || nextEntry !== storedEntry
-        : (!storedEntry && !generationFence.expectedStoreEntry) ||
-          (storedMatchesOwned && storedEntry && nextEntry.updatedAt >= storedEntry.updatedAt))
+      (!generationFence ||
+        adopt ||
+        (!storedEntry && !generationFence.expectedStoreEntry) ||
+        matchesGeneration(storedEntry))
     ) {
-      entries[sessionKey] = nextEntry;
+      entries[sessionKey] = currentEntry;
     }
   };
 
@@ -142,29 +131,31 @@ export function createReplySessionEntryHandle(params: {
       if (!generationFence || !sessionKey) {
         return entries;
       }
-      const view = { ...entries, ...(currentEntry ? { [sessionKey]: currentEntry } : {}) };
-      return new Proxy(view, {
-        get: (target, key) => (key === sessionKey ? current() : Reflect.get(target, key)),
-        set(target, key, entry: SessionEntry | undefined) {
-          if (key !== sessionKey) {
-            return Reflect.set(target, key, entry);
-          }
-          if (!entry) {
+      // Legacy preflight writers must publish through the same session owner.
+      return new Proxy(
+        { ...entries },
+        {
+          get: (target, key) => (key === sessionKey ? current() : Reflect.get(target, key)),
+          set(target, key, entry: SessionEntry | undefined) {
+            if (key !== sessionKey) {
+              return Reflect.set(target, key, entry);
+            }
+            if (entry) {
+              replaceCurrent(entry, !matchesGeneration(entry));
+            } else {
+              handle.clearCurrent();
+            }
+            return true;
+          },
+          deleteProperty(target, key) {
+            if (key !== sessionKey) {
+              return Reflect.deleteProperty(target, key);
+            }
             handle.clearCurrent();
-          } else {
-            replaceCurrent(entry, !matchesGeneration(entry));
-          }
-          return true;
+            return true;
+          },
         },
-        deleteProperty(target, key) {
-          if (key !== sessionKey) {
-            return Reflect.deleteProperty(target, key);
-          }
-          // A stale owner may clear only its generation, never a concurrent replacement.
-          handle.clearCurrent();
-          return true;
-        },
-      });
+      );
     },
   };
 

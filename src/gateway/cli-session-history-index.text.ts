@@ -6,12 +6,17 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { readCliImageTurnContext } from "../agents/cli-image-turn-correlation.js";
-import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import {
+  readRoutedPromptView,
+  stripCliPromptDecorations,
+} from "./cli-session-history.prompt-text.js";
 
-// Claude records CLI-injected @cache-path suffixes as user text.
+// Claude records CLI-injected @cache-path suffixes as user text. Keep the
+// stored content intact; this normalized view is only for proving a redundant
+// imported row against the local turn that owns the durable media facts.
 function stripTrailingCliImageMentions(text: string): {
   text: string;
   stripped: boolean;
@@ -33,11 +38,14 @@ function stripTrailingCliImageMentions(text: string): {
 export function extractComparableText(
   record: Record<string, unknown>,
   role: string | undefined,
+  imported: boolean,
 ): {
   hasCliImageMentions: boolean;
   cliImageTurnKey?: string;
   text?: string;
-  driftNoteText?: string;
+  undecoratedText?: string;
+  scopedKey?: string;
+  cleanedRoutedKey?: string;
 } {
   const parts: string[] = [];
   const text = readStringValue(record.text);
@@ -68,22 +76,36 @@ export function extractComparableText(
   }
   const meta = asOptionalRecord(record["__openclaw"]);
   const isClaudeImport =
-    role === "user" && normalizeOptionalString(meta?.importedFrom) === "claude-cli";
+    imported && role === "user" && normalizeOptionalString(meta?.importedFrom) === "claude-cli";
   const stripResult = isClaudeImport
     ? stripTrailingCliImageMentions(joined)
     : { text: joined, stripped: false };
   const normalizeText = (value: string) => {
-    const visible = stripInlineDirectiveTagsForDisplay(
-      role === "user" ? stripInboundMetadata(value) : value,
-    ).text;
+    const visible = stripInlineDirectiveTagsForDisplay(value).text;
     return visible.replace(/\s+/g, " ").trim();
   };
   const normalized = normalizeText(stripResult.text);
-  const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
-  const driftNoteText =
-    withoutDriftNote !== rawText
-      ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
-      : undefined;
+  const withoutDecorations = isClaudeImport ? stripCliPromptDecorations(rawText) : rawText;
+  const cleanText = normalizeText(
+    role === "user"
+      ? stripInboundMetadata(
+          isClaudeImport
+            ? stripTrailingCliImageMentions(withoutDecorations.trim()).text
+            : withoutDecorations,
+        )
+      : withoutDecorations,
+  );
+  const undecoratedText = cleanText !== normalized ? cleanText : undefined;
+  const routed =
+    role === "user" ? readRoutedPromptView(record.provenance, joined, isClaudeImport) : undefined;
+  const routedBody =
+    routed &&
+    normalizeText(
+      stripInboundMetadata(
+        isClaudeImport ? stripTrailingCliImageMentions(routed.body.trim()).text : routed.body,
+      ),
+    );
+  const originalRoutedBody = routed && normalizeText(routed.originalBody);
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
@@ -91,6 +113,13 @@ export function extractComparableText(
       ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
       : {}),
     ...(normalized ? { text: normalized } : {}),
-    ...(driftNoteText ? { driftNoteText } : {}),
+    ...(undecoratedText && !routed ? { undecoratedText } : {}),
+    ...(routed && routedBody && routedBody !== originalRoutedBody
+      ? { cleanedRoutedKey: JSON.stringify([routed.sender, routedBody]) }
+      : {}),
+    // Null scope compares ordinary text; routed bodies retain their sender boundary.
+    ...(role === "user" && (routedBody || cleanText)
+      ? { scopedKey: JSON.stringify([routed?.sender ?? null, originalRoutedBody ?? cleanText]) }
+      : {}),
   };
 }

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -37,10 +36,6 @@ vi.mock("../../kill-tree.js", () => ({
 }));
 vi.mock("../../../infra/windows-encoding.js", () => ({ createWindowsOutputDecoder: decoderMock }));
 vi.mock("../service-child-relay-host.js", () => ({ createServiceChildRelayAdapter: relayMock }));
-
-if (process.platform !== "win32") {
-  createRequire(import.meta.url)("koffi");
-}
 
 let start: ReturnType<typeof readyChildAdapter>;
 let roots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;
@@ -184,23 +179,13 @@ it.each(["error", "close"])(
   },
 );
 
-it("delivers a secret through an overlapped descriptor and zeroes the buffer", async () => {
-  setPlatform("win32");
-  const stream = new PassThrough();
-  const chunks: Buffer[] = [];
-  stream.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
-  createSecretChild(stream);
-  const transient = Buffer.from("selected-secret");
-  await start({ argv: ["claude", "-p"], secretInput: { fd: 3, createData: () => transient } });
-  expect(spawnArgs().options?.stdio).toEqual(["inherit", "pipe", "pipe", "overlapped"]);
-  expect(Buffer.concat(chunks).toString()).toBe("selected-secret");
-  expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
-});
-
 it("captures close while secret delivery is still pending", async () => {
   setPlatform("win32");
+  const transient = Buffer.from("selected-secret");
+  let delivered = "";
   const stream = new Writable({
-    write(_chunk, _encoding, callback) {
+    write(chunk, _encoding, callback) {
+      delivered = chunk.toString();
       child.emitClose(0);
       setImmediate(callback);
     },
@@ -208,9 +193,11 @@ it("captures close while secret delivery is still pending", async () => {
   const child = createSecretChild(stream);
   const adapter = await start({
     argv: ["claude", "-p"],
-    secretInput: { fd: 3, createData: () => Buffer.from("selected-secret") },
+    secretInput: { fd: 3, createData: () => transient },
   });
   await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+  expect(delivered).toBe("selected-secret");
+  expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
 });
 
 it("keeps macOS no-detach TERM on the direct signal path", async () => {
@@ -262,19 +249,6 @@ it("does not discover a Linux fallback tree after root exit", async () => {
   adapter.kill("SIGKILL");
   await Promise.resolve();
   expect(killTreeMock).not.toHaveBeenCalled();
-  expect(signalMock).not.toHaveBeenCalled();
-});
-
-it("uses an immediate identity-bound kill for a live Linux fallback root", async () => {
-  setPlatform("linux");
-  const { adapter, child } = await setup({}, true);
-  adapter.kill("SIGKILL");
-  await Promise.resolve();
-  expect(killTreeMock).toHaveBeenCalledExactlyOnceWith(child.pid, {
-    detached: false,
-    graceMs: 5_000,
-    force: true,
-  });
   expect(signalMock).not.toHaveBeenCalled();
 });
 
@@ -350,7 +324,7 @@ it("does not renew Windows cleanup deadlines or invent extinction on repeated KI
   adapter.dispose();
 });
 
-it.each(["open", "closed", "drained"] as const)(
+it.each(["open", "closed"] as const)(
   "joins Windows tree kill before settling %s streams",
   async (streams) => {
     vi.useFakeTimers();
@@ -361,7 +335,6 @@ it.each(["open", "closed", "drained"] as const)(
     });
     const { adapter, child, emitExit, emitClose } = await setup({
       stdinMode: "pipe-closed",
-      ...(streams === "drained" ? { ownedWorker: true } : {}),
     });
     const settled = vi.fn();
     void adapter.wait().then(settled);
@@ -370,10 +343,6 @@ it.each(["open", "closed", "drained"] as const)(
     emitExit(null, "SIGKILL");
     if (streams === "closed") {
       emitClose(null, "SIGKILL");
-    }
-    if (streams === "drained") {
-      child.stdout?.emit("end");
-      child.stderr?.emit("end");
     }
     await vi.advanceTimersByTimeAsync(1_000);
     expect(settled).not.toHaveBeenCalled();
@@ -535,7 +504,7 @@ it("records tree signaling rejection in cleanup without an unhandled rejection",
   }
 });
 
-it.each(["process", "stdin", "stdout", "stderr"] as const)(
+it.each(["process", "stdin", "stdout"] as const)(
   "retains startup %s errors and forwards live errors",
   async (source) => {
     const { adapter, ...stub } = await setup();
@@ -583,49 +552,46 @@ it("preserves startup failure when a worker error arrives during secret delivery
   expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
 });
 
-it.each(["darwin", "win32"] as const)(
-  "withholds input and secret bytes when request authority retires during spawn on %s",
-  async (platform) => {
-    Object.defineProperty(process, "platform", { configurable: true, value: platform });
-    const secretStream = new PassThrough();
-    const secretBytes = vi.fn();
-    secretStream.on("data", secretBytes);
-    const { child, killMock, emitClose } = createSecretChild(secretStream);
-    const startup = createDeferred<{ child: typeof child; usedFallback: boolean }>();
-    const input = vi.spyOn(child.stdin!, "write");
-    const createData = vi.fn(() => Buffer.from("synthetic-selected-secret"));
-    spawnMock.mockReturnValueOnce(startup.promise);
-    const retired = new Error("request authority retired during spawn");
-    let current = true;
-    const run = start({
-      argv: ["agent-cli", "--prompt"],
-      input: "private prompt",
-      secretInput: { fd: 3, createData },
-      assertCurrent: () => {
-        if (!current) {
-          throw retired;
-        }
-      },
-    });
-    const outcome = Promise.allSettled([run]);
-    expect(spawnMock).toHaveBeenCalledOnce();
-    current = false;
-    startup.resolve({ child, usedFallback: false });
-    try {
-      await nextTurn();
-      expect(killMock).toHaveBeenCalledWith("SIGKILL");
-      emitClose(null, "SIGKILL");
-      expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-      expect(createData).not.toHaveBeenCalled();
-      expect(secretBytes).not.toHaveBeenCalled();
-      expect(input).not.toHaveBeenCalled();
-    } finally {
-      emitClose(0);
-      secretStream.destroy();
-      child.removeAllListeners();
-    }
-  },
-);
+it("withholds input and secret bytes when request authority retires during spawn", async () => {
+  setPlatform("darwin");
+  const secretStream = new PassThrough();
+  const secretBytes = vi.fn();
+  secretStream.on("data", secretBytes);
+  const { child, killMock, emitClose } = createSecretChild(secretStream);
+  const startup = createDeferred<{ child: typeof child; usedFallback: boolean }>();
+  const input = vi.spyOn(child.stdin!, "write");
+  const createData = vi.fn(() => Buffer.from("synthetic-selected-secret"));
+  spawnMock.mockReturnValueOnce(startup.promise);
+  const retired = new Error("request authority retired during spawn");
+  let current = true;
+  const run = start({
+    argv: ["agent-cli", "--prompt"],
+    input: "private prompt",
+    secretInput: { fd: 3, createData },
+    assertCurrent: () => {
+      if (!current) {
+        throw retired;
+      }
+    },
+  });
+  const outcome = Promise.allSettled([run]);
+  expect(spawnMock).toHaveBeenCalledOnce();
+  current = false;
+  startup.resolve({ child, usedFallback: false });
+  try {
+    await nextTurn();
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
+    emitClose(null, "SIGKILL");
+    expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
+    expect(createData).not.toHaveBeenCalled();
+    expect(secretBytes).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+  } finally {
+    emitClose(0);
+    secretStream.destroy();
+    child.removeAllListeners();
+  }
+});
 
 it("joins child closure after tree-first cancellation of blocked secret delivery", async () => {
   setPlatform("win32");

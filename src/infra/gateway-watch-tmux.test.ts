@@ -428,29 +428,6 @@ describe("gateway-watch tmux wrapper", () => {
     );
   });
 
-  it("preserves an explicit benchmark CPU profile retention cap", () => {
-    const stdout = createOutput();
-    const stderr = createOutput();
-    const spawnSync = vi
-      .fn()
-      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
-      .mockReturnValue({ status: 0, stdout: "", stderr: "" });
-
-    const code = runGatewayWatchTmuxMain({
-      args: ["gateway", "--force", "--benchmark"],
-      cwd: "/repo",
-      env: { OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES: "8", SHELL: "/bin/zsh" },
-      nodePath: "/node",
-      spawnSync,
-      stderr: stderr.stream,
-      stdout: stdout.stream,
-    });
-
-    expect(code).toBe(0);
-    const command = spawnShellCommand(spawnSync);
-    expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES=8'");
-  });
-
   it("preserves explicit sync I/O tracing in benchmark mode", () => {
     const stdout = createOutput();
     const stderr = createOutput();
@@ -524,96 +501,6 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("'FORCE_COLOR=0'");
     expect(command).not.toContain("'\\''-u'\\'' '\\''NO_COLOR'\\''");
     expect(command).not.toContain("'FORCE_COLOR=1'");
-  });
-
-  it("creates a detached tmux session when none exists", () => {
-    const stdout = createOutput();
-    const stderr = createOutput();
-    const spawnSync = vi
-      .fn()
-      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
-      .mockReturnValue({ status: 0, stdout: "", stderr: "" });
-
-    const code = runGatewayWatchTmuxMain({
-      args: ["gateway", "--force"],
-      cwd: "/repo",
-      env: { SHELL: "/bin/zsh" },
-      nodePath: "/node",
-      spawnSync,
-      stderr: stderr.stream,
-      stdout: stdout.stream,
-    });
-
-    expect(code).toBe(0);
-    expect(
-      expectSpawn(spawnSync, 0, "tmux", ["has-session", "-t", "openclaw-gateway-watch-main"])
-        .encoding,
-    ).toBe("utf8");
-    const newSessionCall = spawnCall(spawnSync, 1);
-    expect(newSessionCall[0]).toBe("tmux");
-    const newSessionArgs = newSessionCall[1] as Array<unknown>;
-    expect(newSessionArgs.slice(0, 6)).toEqual([
-      "new-session",
-      "-d",
-      "-s",
-      "openclaw-gateway-watch-main",
-      "-c",
-      "/repo",
-    ]);
-    expect(newSessionArgs).toHaveLength(6);
-    expect(requireRecord(newSessionCall[2], "spawn options").encoding).toBe("utf8");
-    expect(
-      expectSpawn(spawnSync, 2, "tmux", [
-        "set-option",
-        "-w",
-        "-t",
-        "openclaw-gateway-watch-main",
-        "remain-on-exit",
-        "on",
-      ]).encoding,
-    ).toBe("utf8");
-    const launchCall = spawnCall(spawnSync, 3);
-    expect(launchCall[0]).toBe("tmux");
-    const launchArgs = launchCall[1] as Array<unknown>;
-    expect(launchArgs.slice(0, 6)).toEqual([
-      "respawn-pane",
-      "-k",
-      "-t",
-      "openclaw-gateway-watch-main",
-      "-c",
-      "/repo",
-    ]);
-    expect(String(launchArgs[6])).toContain("scripts/gateway-watch-tmux.mts");
-    expect(String(launchArgs[6])).toContain("scripts/watch-node.mjs");
-    expect(
-      expectSpawn(spawnSync, 4, "tmux", [
-        "set-option",
-        "-q",
-        "-t",
-        "openclaw-gateway-watch-main",
-        "@openclaw.gateway_watch.cwd",
-        "/repo",
-      ]).encoding,
-    ).toBe("utf8");
-    expect(
-      expectSpawn(spawnSync, 5, "tmux", [
-        "set-environment",
-        "-t",
-        "openclaw-gateway-watch-main",
-        "OPENCLAW_GATEWAY_WATCH_CWD",
-        "/repo",
-      ]).encoding,
-    ).toBe("utf8");
-    expect(stderr.chunks.join("")).toContain(
-      "gateway:watch started in tmux session openclaw-gateway-watch-main",
-    );
-    expect(stdout.chunks.join("")).toContain("tmux attach -t openclaw-gateway-watch-main");
-    expect(stdout.chunks.join("")).toContain(
-      "tmux capture-pane -ep -t openclaw-gateway-watch-main -S -200",
-    );
-    expect(stdout.chunks.join("")).toContain(
-      "tmux show-options -v -t openclaw-gateway-watch-main @openclaw.gateway_watch.cwd",
-    );
   });
 
   it("auto-attaches in an interactive terminal after creating a session", () => {

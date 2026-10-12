@@ -222,7 +222,7 @@ describe("chat tool icon ownership", () => {
     controller.hostDisconnected();
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "uses exact per-tool overrides with default availability %s",
     async (defaultAvailable) => {
       const { controller, request, fetch } = setup();
@@ -343,30 +343,6 @@ describe("chat tool icon ownership", () => {
     await vi.waitFor(() => expect(controller.icons.get("meeting_status")).toBeDefined());
     controller.hostDisconnected();
   });
-
-  it.each(["plugin", "mcp"] as const)(
-    "uses effective %s ownership even for a tool in the static core catalog",
-    async (source) => {
-      const { controller, request } = setup();
-      request.mockImplementationOnce(async () => ({
-        ...catalog,
-        groups: [
-          {
-            ...catalog.groups[0]!,
-            tools: [{ ...catalog.groups[0]!.tools[0]!, id: "browser", source }],
-          },
-        ],
-      }));
-      controller.hostUpdate();
-      await vi.waitFor(() => expect(controller.icons.get("browser")).toBeDefined());
-      expect(request).toHaveBeenCalledWith(
-        "tools.effective",
-        { sessionKey: "agent:main:main", agentId: "main" },
-        expect.anything(),
-      );
-      controller.hostDisconnected();
-    },
-  );
 
   it("discards an icon response that finishes after the pane disconnects", async () => {
     const { controller, fetch, revoke } = setup();

@@ -12,10 +12,6 @@ import {
   SANDBOX_HOST_PATH,
 } from "../agents/sandbox-host.js";
 import type { PluginBoardWidgetContentKind } from "../plugins/board-widget-content-kind.types.js";
-import {
-  capturePluginRegistryLifecycleEpoch,
-  isPluginRegistryLifecycleEpochActive,
-} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 
@@ -63,16 +59,15 @@ export function createSandboxHostHttpServer(
   tlsOptions?: TlsOptions,
   resolvePluginRegistry?: () => PluginRegistry,
 ): HttpServer {
-  // One activation owns each prepared map; reactivation cannot revive stale readers.
-  const readersByEpoch = new WeakMap<object, Map<string, PublicResourceReader>>();
+  // Public static assets may finish an in-flight read across plugin reloads.
+  const readersByRegistry = new WeakMap<PluginRegistry, Map<string, PublicResourceReader>>();
   const serveResource = async (req: IncomingMessage, res: ServerResponse) => {
     const registry = resolvePluginRegistry?.();
-    const epoch = registry ? capturePluginRegistryLifecycleEpoch(registry) : undefined;
-    if (!registry || !epoch || (req.method !== "GET" && req.method !== "HEAD")) {
+    if (!registry || (req.method !== "GET" && req.method !== "HEAD")) {
       respondPlainText(res, 404, "Not Found");
       return;
     }
-    let readers = readersByEpoch.get(epoch);
+    let readers = readersByRegistry.get(registry);
     if (!readers) {
       readers = new Map();
       for (const { definition } of registry.boardWidgetContentKinds.values()) {
@@ -83,16 +78,12 @@ export function createSandboxHostHttpServer(
           }
         }
       }
-      readersByEpoch.set(epoch, readers);
+      readersByRegistry.set(registry, readers);
     }
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     const reader = readers.get(pathname);
     const resource = reader ? await reader(pathname) : undefined;
-    if (
-      !resource ||
-      resolvePluginRegistry?.() !== registry ||
-      !isPluginRegistryLifecycleEpochActive(registry, epoch)
-    ) {
+    if (!resource) {
       respondPlainText(res, 404, "Not Found");
       return;
     }

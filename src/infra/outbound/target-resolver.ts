@@ -103,10 +103,7 @@ export function formatTargetDisplay(params: {
     return display;
   }
 
-  if (!trimmedTarget) {
-    return trimmedTarget;
-  }
-  if (trimmedTarget.startsWith("#") || trimmedTarget.startsWith("@")) {
+  if (!trimmedTarget || trimmedTarget.startsWith("#") || trimmedTarget.startsWith("@")) {
     return trimmedTarget;
   }
 
@@ -115,13 +112,7 @@ export function formatTargetDisplay(params: {
     ? trimmedTarget.slice(channelPrefix.length)
     : trimmedTarget;
 
-  if (/^channel:/i.test(withoutProvider)) {
-    return `#${withoutProvider.replace(/^channel:/i, "")}`;
-  }
-  if (/^user:/i.test(withoutProvider)) {
-    return `@${withoutProvider.replace(/^user:/i, "")}`;
-  }
-  return withoutProvider;
+  return withoutProvider.replace(/^channel:/i, "#").replace(/^user:/i, "@");
 }
 
 function detectTargetKind(
@@ -199,14 +190,8 @@ async function getDirectoryEntries(params: {
       return [];
     }
     const runtime = params.runtime ?? defaultRuntime;
-    const fn =
-      params.kind === "user"
-        ? useLive
-          ? (directory.listPeersLive ?? directory.listPeers)
-          : directory.listPeers
-        : useLive
-          ? (directory.listGroupsLive ?? directory.listGroups)
-          : directory.listGroups;
+    const method = params.kind === "user" ? "listPeers" : "listGroups";
+    const fn = useLive ? (directory[`${method}Live`] ?? directory[method]) : directory[method];
     if (!fn) {
       return [];
     }
@@ -239,19 +224,15 @@ export async function resolveChannelTarget(params: {
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
   const raw = params.input.trim();
-  if (!raw) {
-    const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
-    return {
-      ok: false,
-      error: missingTargetError(
-        plugin?.meta?.label ?? params.channel,
-        plugin?.messaging?.targetResolver?.hint,
-      ),
-    };
-  }
   const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
+  if (!raw) {
+    return {
+      ok: false,
+      error: missingTargetError(providerLabel, hint),
+    };
+  }
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
   const normalizedInput = resolveNormalizedTargetInput(params.channel, raw, plugin);
   const normalized = normalizedInput?.normalized ?? raw;

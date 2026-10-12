@@ -80,7 +80,7 @@ export default {
       },
     },
     {
-      files: ["**/*.ts"],
+      files: ["**/*.{ts,tsx}"],
       customSyntax: "postcss-lit",
     },
   ],

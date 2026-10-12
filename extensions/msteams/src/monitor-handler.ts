@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { formatUnknownError } from "./errors.js";
@@ -17,8 +18,14 @@ export async function isMSTeamsInvokeAuthorized(params: {
   invokeKind: "feedback" | "signin" | "card action";
 }): Promise<boolean> {
   const { context, deps, invokeKind } = params;
+  const cfg = deps.readConfig?.() ?? deps.cfg;
+  const account = resolveMSTeamsAccountConfig(cfg, deps.accountId);
+  if (account.enabled === false || (account.appId && account.appId !== deps.appId)) {
+    return false;
+  }
   const resolved = await resolveMSTeamsSenderAccess({
-    cfg: deps.cfg,
+    cfg,
+    accountId: deps.accountId,
     activity: context.activity,
   });
   const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;
@@ -78,7 +85,9 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
   const handleMembersAdded = async (ctx: MSTeamsTurnContext) => {
     const membersAdded = ctx.activity?.membersAdded ?? [];
     const botId = ctx.activity?.recipient?.id;
-    const msteamsCfg = deps.cfg.channels?.msteams;
+    const msteamsCfg = deps.cfg.channels?.msteams
+      ? resolveMSTeamsAccountConfig(deps.cfg, deps.accountId)
+      : undefined;
 
     for (const member of membersAdded) {
       if (member.id === botId) {

@@ -58,7 +58,17 @@ const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
 const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
 
 function getSessionsSendTool(options?: Parameters<typeof createOpenClawTools>[0]) {
-  const tool = createOpenClawTools(options).find((candidate) => candidate.name === "sessions_send");
+  const tool = createOpenClawTools(
+    options?.config
+      ? {
+          ...options,
+          config: {
+            ...options.config,
+            session: { ...options.config.session, store: testState.sessionStorePath },
+          },
+        }
+      : options,
+  ).find((candidate) => candidate.name === "sessions_send");
   if (!tool) {
     throw new Error("missing sessions_send tool");
   }
@@ -81,7 +91,11 @@ async function writeConfig(config: OpenClawConfig) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(config)}\n`, "utf-8");
+  const fixtureConfig = {
+    ...config,
+    session: { ...config.session, store: testState.sessionStorePath },
+  };
+  await fs.writeFile(configPath, `${JSON.stringify(fixtureConfig)}\n`, "utf-8");
 }
 
 async function emitLifecycleAssistantReply(params: {

@@ -1,7 +1,9 @@
-import "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import { html, svg } from "lit";
+import "@awesome.me/webawesome/dist/components/popover/popover.js";
+import type { JSX as SolidJSX } from "@solidjs/web";
+import { html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
+import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import emojiDefinitions from "markdown-it-emoji/lib/data/full.mjs";
 import { t } from "../i18n/index.ts";
@@ -49,6 +51,12 @@ export class AgentEmojiPicker extends OpenClawLightDomElement {
   @state() private query = "";
   private readonly triggerId = `agent-emoji-trigger-${generateUUID()}`;
 
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    // A pending Web Awesome update must not resolve an ID against a detached Element root.
+    this.querySelector<WaPopover>("wa-popover")?.removeAttribute("for");
+  }
+
   private select(emoji: string) {
     if (this.disabled || !emoji.trim()) {
       return;
@@ -79,7 +87,7 @@ export class AgentEmojiPicker extends OpenClawLightDomElement {
       <wa-popover
         ${ref(syncPopoverLabel)}
         class="agent-emoji-picker__popover"
-        for=${this.triggerId}
+        for=${live(this.isConnected ? this.triggerId : nothing)}
         placement="bottom-end"
         without-arrow
         @wa-hide=${(event: Event) => {
@@ -134,4 +142,16 @@ export class AgentEmojiPicker extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-agent-emoji-picker")) {
   customElements.define("openclaw-agent-emoji-picker", AgentEmojiPicker);
+}
+
+type AgentEmojiPickerAttributes = SolidJSX.HTMLAttributes<AgentEmojiPicker> & {
+  [Key in keyof AgentEmojiPicker as `prop:${Key & string}`]?: AgentEmojiPicker[Key];
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-agent-emoji-picker": AgentEmojiPickerAttributes;
+    }
+  }
 }

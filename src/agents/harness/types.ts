@@ -185,6 +185,8 @@ type AgentHarnessIsolatedCompletionParams = {
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
   outputTextPolicy?: "strict-visible";
+  /** Report inference dispatch through settlement, excluding preparation and cleanup. */
+  onRequestComplete?: (durationMs: number) => void;
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -408,10 +410,21 @@ export type AgentHarnessSessionDeletionParams = {
   assertCurrent: () => void;
 };
 
+/**
+ * Direct, unbound commit/rollback callbacks are deprecated and will be removed
+ * in the next Plugin SDK major. Use createNativeSessionBindingLifecycleV2 for
+ * reversible stored bindings or createNativeSessionCommitFinalizer for
+ * commit-only cleanup from openclaw/plugin-sdk/agent-harness-session-runtime.
+ * Factory-produced participants remain supported by this contract.
+ */
 export type AgentHarnessSessionDeletionMutation = {
-  /** Synchronously remove only the prepared owner's state at the session commit edge. */
+  /**
+   * @deprecated Opaque callbacks run after durable session commit. Use
+   * createNativeSessionBindingLifecycleV2 for stored bindings or
+   * createNativeSessionCommitFinalizer for cleanup.
+   */
   commit: () => void;
-  /** Restore only that removal when the authoritative session transaction rolls back. */
+  /** @deprecated Opaque callbacks no longer run before commit, so their rollback is unused. */
   rollback: () => void;
 };
 
@@ -463,6 +476,8 @@ type AgentHarnessContract<
   autoSelection?: { providerIds: readonly string[] };
   /** Declares host-owned remote execution and its exact paired-device requirements. */
   cloudPlacement?: { mode: "remote-exec"; devicePlacement?: DevicePlacementRequirement };
+  /** Provider-managed workspace presentation, not Gateway worker placement or readiness. */
+  workspaceEnvironment?: { kind: "provider-hosted"; label: string };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.
@@ -489,7 +504,10 @@ type AgentHarnessContract<
   /** OpenClaw tool capabilities an indivisible native surface requires from effective profiles. */
   conversationToolPolicyNativeTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
-  /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
+  /**
+   * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removed in the next Plugin SDK major.
+   */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;
     agentId?: string;
@@ -500,6 +518,19 @@ type AgentHarnessContract<
     readPreviousSessionId?: () => string | undefined;
     assertCurrent: () => void;
   }): AgentHarnessSessionRuntimeOwnership | undefined;
+  /** Worker-backed private ownership read, without discovery or native connection setup. */
+  resolveSessionRuntimeOwnershipAsync?(params: {
+    version: 2;
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    storePath?: string;
+    /** Latest predecessor of this exact physical session; valid only during this invocation. */
+    readPreviousSessionId: () => Promise<string | undefined>;
+    /** Revalidate the retained caller after awaited work and before returning ownership. */
+    assertCurrent: () => void;
+  }): Promise<AgentHarnessSessionRuntimeOwnership | undefined>;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   /**

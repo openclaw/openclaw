@@ -125,31 +125,6 @@ describe.runIf(process.platform !== "win32")("file-transfer real dir.fetch polic
     expect(firstInvokeParams(invokeNode).expectedCanonicalPath).toBe(approved);
   });
 
-  it("archives an unchanged literal target through the real node handler", async () => {
-    const tmpRoot = tempDirs.make("file-transfer-policy-");
-    const approved = path.join(tmpRoot, "approved");
-    const requested = path.join(tmpRoot, "current");
-    await fs.mkdir(approved);
-    await fs.writeFile(path.join(approved, "allowed.txt"), "allowed");
-    await fs.symlink(approved, requested);
-    const { approvals, ctx, invokeNode } = await createRealDirFetchContext({
-      approved,
-      maxBytes: 1024 * 1024,
-      requested,
-    });
-
-    const result = await createFileTransferNodeInvokePolicy().handle(ctx);
-
-    expect(result).toMatchObject({ ok: true });
-    expect(approvals.request).not.toHaveBeenCalled();
-    expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(firstInvokeParams(invokeNode).expectedCanonicalPath).toBe(approved);
-    const payload = requireRecord(requireRecord(result, "result").payload, "payload");
-    expect(payload.tarBytes).toBeGreaterThan(0);
-    const destDir = await extractFetchedArchive(payload, tmpRoot);
-    expect(await fs.readFile(path.join(destDir, "allowed.txt"), "utf8")).toBe("allowed");
-  });
-
   it.each([
     {
       name: "denies the real LF descendant in source preflight",

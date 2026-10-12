@@ -6,6 +6,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import {
   publicationMethods,
   publicationOptions,
@@ -66,6 +67,7 @@ suite.define(() => {
         .poll(() => page.locator(".link-reader-hovercard").textContent())
         .toContain("Merged");
       await page.keyboard.press("Escape");
+      await openDetailsPullRequests(page);
       if (captureUiProof) {
         await writeFile(
           path.join(suite.artifactDir, "merged-pr-discovery.png"),
@@ -100,6 +102,7 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "chat");
+      await openDetailsPullRequests(page);
       const key = await waitForWatchedSessionKey(gateway);
       const repository = { owner: "synthetic", repo: "publication-demo" };
       const emit = (status: "ready" | "unavailable", state: "open" | "merged" = "open") =>
@@ -182,6 +185,7 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "chat");
+      await openDetailsPullRequests(page);
       const key = await waitForWatchedSessionKey(gateway);
       await page.getByText(failure.nextAction, { exact: true }).waitFor({ state: "attached" });
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
@@ -307,6 +311,7 @@ suite.define(() => {
         );
       }
       await page.reload();
+      await openDetailsPullRequests(page);
       const reloadedKey = await waitForWatchedSessionKey(gateway);
       await gateway.waitForRequest("sessions.github.options");
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
@@ -406,6 +411,7 @@ suite.define(() => {
         return key;
       };
       await page.goto(suite.server.baseUrl + "chat");
+      await openDetailsPullRequests(page);
       const key = await showBranch();
       const optionsRequest = await gateway.waitForRequest("sessions.github.options");
       const target = optionsRequest.params as { sessionKey: string; agentId?: string };
@@ -442,6 +448,7 @@ suite.define(() => {
         after: watchedBefore,
       });
       await showBranch();
+      await openDetailsPullRequests(page);
       await gateway.waitForRequest("sessions.github.options", { after: beforeReconnect });
       await page.getByRole("link", { name: "Open PR", exact: true }).waitFor();
       if (captureUiProof) {

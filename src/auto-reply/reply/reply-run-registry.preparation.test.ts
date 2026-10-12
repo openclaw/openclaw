@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
@@ -12,7 +11,6 @@ import {
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -83,10 +81,40 @@ async function createPolicyOperation(
   return { operation, fingerprint, policyKey, policyEntry };
 }
 
+function attachPreparedNativeBackend(
+  operation: ReturnType<typeof createTestReplyOperation>,
+  fingerprint: string | undefined,
+  beforePreparation?: () => void,
+) {
+  const authority = createNativeSessionBindingAuthority([], () => {});
+  const effect = vi.fn();
+  operation.attachBackend({
+    kind: "embedded",
+    cancel() {},
+    toolAuthorityFingerprint: fingerprint,
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => true,
+      async queueMessage() {
+        throw new Error("Expected prepared steering");
+      },
+      async queueMessageAsync(_text, options, preparation) {
+        beforePreparation?.();
+        await authority.withPreparedCurrent!(() => {
+          effect();
+          options?.onQueueAccepted?.(true);
+        }, [preparation]);
+      },
+    },
+  });
+  operation.setPhase("running");
+  return effect;
+}
+
 it.each(["worker", "compatibility"] as const)(
   "retains supplied %s source policy alongside an overlay through final native admission",
   async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const source = await createPolicyOperation("source");
       const target = await createPolicyOperation("target");
       const assertSourcePolicy = (fingerprint: string | undefined) => {
@@ -106,26 +134,7 @@ it.each(["worker", "compatibility"] as const)(
       if (kind === "worker") {
         bindWorkerToolPreparation(sourcePreparation);
       }
-      const authority = createNativeSessionBindingAuthority([], () => {});
-      const effect = vi.fn();
-      target.operation.attachBackend({
-        kind: "embedded",
-        cancel() {},
-        toolAuthorityFingerprint: target.fingerprint,
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
-          async queueMessage() {
-            throw new Error("Expected the prepared companion");
-          },
-          queueMessageAsync: async (_text, options, preparation) =>
-            authority.withPreparedCurrent!(() => {
-              effect();
-              options?.onQueueAccepted?.(true);
-            }, [preparation]),
-        },
-      });
-      target.operation.setPhase("running");
+      const effect = attachPreparedNativeBackend(target.operation, target.fingerprint);
       const entered = createDeferred();
       const resume = createDeferred();
       const read = sessionReads.withSessionEntriesFromStoresInWorker;
@@ -156,18 +165,9 @@ it.each(["worker", "compatibility"] as const)(
           "Native admission was not reached",
         );
         calls?.expectIdle();
-        const foreign = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-        );
-        try {
-          foreign
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(source.policyKey);
-        } finally {
-          foreign.close();
-        }
+        await updateSessionEntry({ agentId: "main", sessionKey: source.policyKey }, () => ({
+          sandboxMode: undefined,
+        }));
         calls?.clear();
         resume.resolve();
         expect((await attempt.outcome).status).toBe(kind === "worker" ? "rejected" : "failed");
@@ -237,29 +237,10 @@ it.each([
             : {}),
         },
       );
-      const authority = createNativeSessionBindingAuthority([], () => {});
-      const effect = vi.fn();
       let atBackend = false;
-      operation.attachBackend({
-        kind: "embedded",
-        cancel() {},
-        toolAuthorityFingerprint: fingerprint,
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
-          async queueMessage() {
-            throw new Error("Expected prepared steering");
-          },
-          async queueMessageAsync(_text, options, preparation) {
-            atBackend = true;
-            await authority.withPreparedCurrent!(() => {
-              effect();
-              options?.onQueueAccepted?.(true);
-            }, [preparation]);
-          },
-        },
+      const effect = attachPreparedNativeBackend(operation, fingerprint, () => {
+        atBackend = true;
       });
-      operation.setPhase("running");
       const entered = createDeferred();
       const resume = createDeferred();
       const project = operation.projectToolAuthorityFingerprintAsync;

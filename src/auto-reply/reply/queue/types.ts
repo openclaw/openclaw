@@ -31,6 +31,7 @@ import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ThinkLevel, TraceLevel, VerboseLevel } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
+import type { SessionEventExecution } from "../session-event-contract.js";
 
 export type { QueueDropPolicy } from "../../../config/types.queue.js";
 
@@ -94,10 +95,12 @@ export class FollowupRunDeferredError extends Error {
 // Leaf contracts only: get-reply.types.ts imports this module.
 type FollowupRunObservers = Pick<
   GetReplyOptions,
-  "onAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
+  "onAgentRunStart" | "onPreparedAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
 > & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  onDeliberateSilentTerminalReply?: () => void;
 };
 
 export type FollowupRun = {
@@ -243,6 +246,7 @@ export type FollowupRun = {
     | "suppressTranscriptOnlyAssistantPersistence"
     | "skillLibraryAuthoring"
   > & {
+    internalEventExecution?: SessionEventExecution;
     agentId: string;
     agentDir: string;
     runtimePolicySessionKey?: string;
@@ -292,6 +296,19 @@ export type FollowupRun = {
     skipProviderRuntimeHints?: boolean;
   };
 };
+
+export function bindReplyOperationQueueDisposition(
+  run: Pick<FollowupRun, "onQueueDisposition">,
+  state: ReplyOperationRunState | undefined,
+): void {
+  const observe = run.onQueueDisposition;
+  run.onQueueDisposition = (disposition) => {
+    observe?.(disposition);
+    if (state && (disposition !== "queue-cap-old" || state.admission?.status !== "accepted")) {
+      state.admission = { status: "skipped", reason: "queue-cap" };
+    }
+  };
+}
 
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,

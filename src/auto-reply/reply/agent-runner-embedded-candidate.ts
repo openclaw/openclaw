@@ -61,7 +61,7 @@ export async function runEmbeddedFallbackCandidate(
     ...params.candidateFastMode,
     thinkLevel: params.candidateThinkLevel,
   };
-  const { embeddedContext, senderContext, runBaseParams } = await buildEmbeddedRunExecutionParams({
+  const runBaseParams = await buildEmbeddedRunExecutionParams({
     run: candidateRun,
     replyRoute: turn.followupRun,
     sessionCtx: turn.sessionCtx,
@@ -120,7 +120,7 @@ export async function runEmbeddedFallbackCandidate(
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
-        ...embeddedContext,
+        ...runBaseParams,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
         cronCreatorAuthorityCapability: turn.opts?.cronCreatorAuthorityCapability,
@@ -131,8 +131,6 @@ export async function runEmbeddedFallbackCandidate(
           normalizeOptionalString(turn.sessionCtx.GroupChannel) ??
           normalizeOptionalString(turn.sessionCtx.GroupSubject),
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
-        ...senderContext,
-        ...runBaseParams,
         ...buildFallbackCandidateTurnParams(params),
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
         provider: embeddedRunProvider,

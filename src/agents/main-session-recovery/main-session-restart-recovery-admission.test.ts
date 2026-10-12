@@ -7,6 +7,7 @@ import { createGatewayCrashLoopRecovery } from "../../cli/gateway-cli/crash-loop
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
+  patchSessionEntryCore,
   loadSessionEntry as loadSessionEntryRaw,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -494,7 +495,7 @@ describe("startup recovery admission", () => {
           const lines = info.mock.calls.map(([line]) => line);
           expect(lines).toContainEqual(
             expect.stringMatching(
-              /startup complete: started=2 .*skipReasons=.*not_main_session:1.*work_start_blocked:1/,
+              /startup complete: started=2 .*skipReasons=.*archived:1.*not_main_session:1/,
             ),
           );
           const decisions = lines
@@ -515,8 +516,9 @@ describe("startup recovery admission", () => {
               }),
               expect.objectContaining({
                 sessionKey: "agent:main:archived",
-                decision: "blocked",
-                nextOwner: "operator",
+                reason: "archived",
+                decision: "deferred",
+                nextOwner: "none",
               }),
             ]),
           );
@@ -535,6 +537,114 @@ describe("startup recovery admission", () => {
         admissionSpy.mockRestore();
         waitSpy.mockRestore();
         info.mockRestore();
+      }
+    },
+  );
+
+  it.for([
+    { field: "initializationPending", action: "resume" },
+    { field: "pendingProjectGitUrl", action: "resume" },
+    { field: "pendingProjectGitUrl", action: "retry" },
+    { field: "pendingProjectGitUrl", action: "archive" },
+    { field: "initializationPending", action: "replace" },
+  ] as const)(
+    "handles $action when $field preparation finishes after startup",
+    async ({ field, action }, { signal }) => {
+      const target = await makeMainSessionFixture({
+        [field]: field === "initializationPending" ? true : "https://example.test/project.git",
+        pendingFinalDelivery: makePendingFinalDelivery(),
+      });
+      const startup = createDeferred();
+      const resumed = createDeferred();
+      const blocked = createDeferred();
+      const failedAttempt = createDeferred();
+      let failedRead = false;
+      const readSpy = vi.spyOn(transcriptReaders, "readSessionMessagesAsync");
+      if (action === "retry") {
+        readSpy.mockImplementationOnce(async () => {
+          failedRead = true;
+          throw new Error("transcript temporarily unavailable");
+        });
+      }
+      const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+      const admissionSpy = vi
+        .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+        .mockImplementation(
+          async <T>(run: () => Promise<T>, origin?: string, admissionSignal?: AbortSignal) => {
+            try {
+              return await admit(run, origin, admissionSignal);
+            } finally {
+              if (origin === "main-session:preparation-recovery" && failedRead) {
+                failedAttempt.resolve();
+              }
+            }
+          },
+        );
+      const info = vi.spyOn(mainSessionRecoveryLog, "info").mockImplementation((line) => {
+        if (line.includes("startup complete:")) {
+          startup.resolve();
+        }
+        if (line.includes('"reason":"archived"')) {
+          blocked.resolve();
+        }
+      });
+      vi.mocked(callGateway).mockImplementation(async () => {
+        resumed.resolve();
+        return { runId: "run-resumed" };
+      });
+      const recovery = scheduleRestartAbortedMainSessionRecovery({
+        getConfig: () => ({}),
+        delayMs: 0,
+        stateDir: tmpDir,
+        gatewayRuntime,
+      });
+      try {
+        await withinTest(startup.promise, signal);
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
+        if (action === "retry") {
+          vi.useFakeTimers();
+        }
+        if (action === "replace") {
+          await replaceSessionEntry(target, {
+            sessionId: "replacement-session",
+            updatedAt: Date.now(),
+          });
+          await recovery.stop();
+          expect(callGateway).not.toHaveBeenCalled();
+          expect(loadSessionEntry(target)?.sessionId).toBe("replacement-session");
+        } else {
+          await patchSessionEntryCore(target, () => ({
+            [field]: undefined,
+            ...(action === "archive" ? { archivedAt: Date.now() } : {}),
+          }));
+          if (action === "retry") {
+            await withinTest(failedAttempt.promise, signal);
+            expect(callGateway).not.toHaveBeenCalled();
+            expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
+            await vi.advanceTimersByTimeAsync(5_000);
+          }
+          await withinTest(action === "archive" ? blocked.promise : resumed.promise, signal);
+          if (action === "resume" || action === "retry") {
+            await gatewayRuntime.expectAdmission(1, recovery, target);
+          } else {
+            await recovery.stop();
+          }
+          expect(callGateway).toHaveBeenCalledTimes(action === "archive" ? 0 : 1);
+          expect(loadSessionEntry(target)?.abortedLastRun).toBe(action === "archive");
+        }
+        const decisions = info.mock.calls.map(([line]) => line);
+        expect(decisions).toContainEqual(expect.stringContaining('"decision":"deferred"'));
+        expect(decisions).toContainEqual(
+          expect.stringContaining('"nextOwner":"session-preparation"'),
+        );
+      } finally {
+        dispatchSettlement.resolve();
+        await recovery.stop();
+        info.mockRestore();
+        readSpy.mockRestore();
+        admissionSpy.mockRestore();
+        vi.useRealTimers();
       }
     },
   );

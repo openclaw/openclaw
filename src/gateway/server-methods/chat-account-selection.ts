@@ -4,15 +4,19 @@ import type { ChatAccountSelection } from "../../../packages/gateway-protocol/sr
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { captureOpenClawStateReadContext } from "../../state/openclaw-state-worker-context.js";
 import {
   isUserModelAuthProfileId,
   parseUserModelAuthProfileId,
 } from "../../state/user-model-account-id.js";
-import { readUserModelAccountSummaryAsync } from "../../state/user-model-account-operations.js";
+import { readUserModelAccountSelectionAsync } from "../../state/user-model-account-operations.js";
 import type { UserModelAccount } from "../../state/user-model-accounts.js";
-import { captureUserProfileModelAccountLinksAuthority } from "../../state/user-profile-events.js";
-import { getUserProfileDisplay, resolveUserProfileId } from "../../state/user-profiles.js";
+import {
+  captureUserProfileAuthorityRead,
+  captureUserProfileModelAccountLinksAuthority,
+  readUserProfileVersion,
+} from "../../state/user-profile-events.js";
 import type { ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 
 export async function prepareChatAccountSelection(params: {
@@ -26,14 +30,41 @@ export async function prepareChatAccountSelection(params: {
     : params.requesterProfileId;
   const authProfileId = params.sessionEntry?.authProfileOverride?.trim();
   let personal: UserModelAccount | undefined;
+  let ownerDisplayName: string | null | undefined;
   let isCurrent: (() => boolean) | undefined;
-  if (requesterProfileId && authProfileId && isUserModelAuthProfileId(authProfileId)) {
+  if (authProfileId && isUserModelAuthProfileId(authProfileId)) {
     const { admission } = captureOpenClawStateReadContext();
-    isCurrent = captureUserProfileModelAccountLinksAuthority(admission, requesterProfileId);
-    personal = await readUserModelAccountSummaryAsync(
+    const linksCurrent = requesterProfileId
+      ? captureUserProfileModelAccountLinksAuthority(admission, requesterProfileId)
+      : undefined;
+    const authority = await captureUserProfileAuthorityRead(admission);
+    const displayVersion = readUserProfileVersion();
+    const selection = await readUserModelAccountSelectionAsync(
       { profileId: requesterProfileId, authProfileId },
       { path: admission.databasePath },
     );
+    personal = selection?.personal;
+    ownerDisplayName = selection?.owner?.displayName;
+    const locator = parseUserModelAuthProfileId(authProfileId);
+    const identityCurrent = authority.bind(
+      [requesterProfileId, locator?.ownerProfileId, selection?.owner?.profileId].filter(
+        (id): id is string => id !== undefined,
+      ),
+    );
+    isCurrent = () => {
+      if (admission.identity.key.startsWith("file:")) {
+        assertExistingDatabaseIdentity(
+          admission.databasePath,
+          admission.identity.key,
+          admission.identity.birthtime,
+        );
+      }
+      return (
+        Boolean(identityCurrent?.()) &&
+        linksCurrent?.() !== false &&
+        readUserProfileVersion() === displayVersion
+      );
+    };
   }
   return () => {
     if (
@@ -45,7 +76,7 @@ export async function prepareChatAccountSelection(params: {
         "Personal account changed while preparing its metadata. Retry the request.",
       );
     }
-    return resolveChatAccountSelection({ ...params, personal });
+    return resolveChatAccountSelection({ ...params, personal, ownerDisplayName });
   };
 }
 
@@ -54,6 +85,7 @@ export function resolveChatAccountSelection(params: {
   authStore: AuthProfileStore;
   sessionEntry?: ChatMetadataSessionEntry;
   personal?: UserModelAccount;
+  ownerDisplayName?: string | null;
 }): ChatAccountSelection {
   const authProfileId = params.sessionEntry?.authProfileOverride?.trim();
   if (!authProfileId) {
@@ -75,9 +107,7 @@ export function resolveChatAccountSelection(params: {
   }
   // Session access permits using its established selection, not inspecting
   // another person's provider identity or discovering a credential locator.
-  const locator = parseUserModelAuthProfileId(authProfileId);
-  const owner = locator ? resolveUserProfileId(locator.ownerProfileId) : undefined;
-  const rawDisplayName = owner ? getUserProfileDisplay(owner).displayName?.trim() : undefined;
+  const rawDisplayName = params.ownerDisplayName?.trim();
   const displayName = rawDisplayName ? toUSVString(rawDisplayName) : undefined;
   return {
     kind: "personal",

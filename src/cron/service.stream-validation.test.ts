@@ -391,7 +391,7 @@ it("skips invalid main jobs with agentTurn payloads loaded from disk", async () 
     expect(requestHeartbeat).not.toHaveBeenCalled();
     const [job] = await cron.list({ includeDisabled: true });
     expect(job?.state.lastStatus).toBe("skipped");
-    expect(job?.state.lastError).toMatch(/main cron jobs require payload\.kind/i);
+    expect(job?.state.lastError).toMatch(/sessionTarget "main" requires payload\.kind/i);
   } finally {
     cron.stop();
   }

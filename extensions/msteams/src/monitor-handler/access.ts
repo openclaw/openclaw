@@ -16,6 +16,7 @@ import {
   resolveDefaultGroupPolicy,
   type OpenClawConfig,
 } from "../../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import type {
   StoredConversationReference,
   MSTeamsConversationStore,
@@ -118,13 +119,17 @@ function formatMSTeamsSenderReason(params: {
 
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   activity: MSTeamsTurnContext["activity"];
   hasControlCommand?: boolean;
   conversationThreadId?: string;
   contextBinding?: ChannelIngressContextBinding;
 }) {
   const activity = params.activity;
-  const msteamsCfg = params.cfg.channels?.msteams;
+  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
+  const msteamsCfg = params.cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(params.cfg, accountId)
+    : undefined;
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
@@ -142,7 +147,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   const pairing = createChannelPairingController({
     core,
     channel: "msteams",
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId,
   });
   const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
   const configuredDmAllowFrom = msteamsCfg?.allowFrom ?? [];
@@ -251,6 +256,7 @@ export async function resolveMSTeamsSenderAccess(params: {
 
 export async function admitMSTeamsMessage(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   activity: MSTeamsTurnContext["activity"];
   text: string;
   conversationId: string;
@@ -269,6 +275,7 @@ export async function admitMSTeamsMessage(params: {
     allowTextCommands && core.channel.commands.isControlCommandMessage(params.text, params.cfg);
   const access = await resolveMSTeamsSenderAccess({
     cfg: params.cfg,
+    accountId: params.accountId,
     activity: params.activity,
     hasControlCommand: isControlCommand,
   });

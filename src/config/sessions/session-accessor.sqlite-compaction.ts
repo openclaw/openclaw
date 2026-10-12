@@ -32,10 +32,6 @@ import {
 import { requireTranscriptEventAppendSnapshot } from "./session-accessor.sqlite-transcript-append-result.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
-  readNextTranscriptSeq,
-  readTranscriptContextVersionInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
-import {
   assertLockedTranscriptWriteAllowed,
   resolveTranscriptAppendRefusal,
 } from "./session-accessor.sqlite-transcript-write-guard.js";
@@ -45,11 +41,14 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import { trimIncognitoTranscript } from "./session-incognito-manual-compact.js";
 import type {
   CompactionBoundaryOperations,
   InitialSessionEntryCommit,
 } from "./session-manager-write-contract.js";
 import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
+import type { PreparedSessionSourceAuthority } from "./session-source-authority.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -147,7 +146,6 @@ function persistCompactionBoundary(
           appendIntent: params.prepared.appendIntent,
         }),
       };
-      const firstAppendedSeq = readNextTranscriptSeq(database, resolved.sessionId);
       let projectionNeedsReconcile = false;
       const appended = appendTranscriptEventSnapshotSync(
         preparedScope,
@@ -166,16 +164,6 @@ function persistCompactionBoundary(
         appended,
         `Session transcript entry was not persisted: ${event.id}`,
       );
-      const appendedRows = readTranscriptEventRows(database, resolved.sessionId, {
-        afterSeq: firstAppendedSeq - 1,
-      });
-      if (
-        event.type !== "compaction" ||
-        appendedRows.length !== 1 ||
-        appendedRows[0]?.eventJson !== JSON.stringify(event)
-      ) {
-        throw new Error("Compaction boundary validation failed");
-      }
       assertOwnedTranscriptWriteCommit(fencedScope);
       assertOwnedTranscriptWriteCommit(preparedScope);
       const fresh = readSessionEntryRow(database, resolved.sessionKey)?.entry;
@@ -199,7 +187,7 @@ function persistCompactionBoundary(
         committed: {
           result: event,
           before: committed.before,
-          after: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+          after: committed.after,
         },
         initialEntry,
         projectionNeedsReconcile,
@@ -217,6 +205,7 @@ export async function trimTranscriptForManualCompact(
     nowMs?: number;
     preparation?: {
       snapshot?: SqliteLifecycleTargetSnapshot;
+      source?: PreparedSessionSourceAuthority;
       assertEntryCurrent: (
         entry: SqliteLifecycleTargetSnapshot[number]["entry"] | undefined,
       ) => void;
@@ -226,6 +215,10 @@ export async function trimTranscriptForManualCompact(
     };
   } = {},
 ): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
+  const binding = captureIncognitoSessionOperation(scope);
+  if (binding) {
+    return trimIncognitoTranscript(binding, scope, selectRetainedLines, options);
+  }
   const resolved = resolveSqliteTranscriptScope(scope);
   if (options.preparation) {
     options.preparation.assertCurrent();

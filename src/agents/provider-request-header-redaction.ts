@@ -13,15 +13,10 @@ function collectSecretRepresentations(values: readonly string[]): SecretRepresen
     if (!candidate) {
       return;
     }
-    representations.set(
-      candidate,
-      representations.get(candidate) === true || percentEscapesCaseInsensitive,
-    );
-    const jsonEscaped = JSON.stringify(candidate).slice(1, -1);
-    if (jsonEscaped !== candidate) {
+    for (const representation of [candidate, JSON.stringify(candidate).slice(1, -1)]) {
       representations.set(
-        jsonEscaped,
-        representations.get(jsonEscaped) === true || percentEscapesCaseInsensitive,
+        representation,
+        representations.get(representation) === true || percentEscapesCaseInsensitive,
       );
     }
   };

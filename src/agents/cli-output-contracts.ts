@@ -5,6 +5,7 @@ import type {
   CliBackendParseJsonlLifecycleEvent,
 } from "../plugins/cli-backend.types.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import type { LiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -114,6 +115,9 @@ export type CliToolUseStartDelta = {
   args: Record<string, unknown>;
 };
 
+/** Counts-only progress while CLI tool arguments are still being generated. */
+export type CliToolInputDelta = LiveEditDiffProgress;
+
 /** Tool-call result event reconstructed from CLI stream output. */
 export type CliToolResultDelta = {
   toolCallId: string;
@@ -133,6 +137,7 @@ export type CliJsonlStreamingParserOptions = {
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onCompaction?: (delta: CliCompactionDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolInputDelta?: (delta: CliToolInputDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;

@@ -6,11 +6,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
-import type { Job } from "./sqlite-worker-broker.types.js";
+import type { Actor, Job } from "./sqlite-worker-broker.types.js";
+import type { SqliteWorkerCloseReceipt } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
-it.each(["valid", "framed", "mismatched", "unsafe", "malformed"])(
-  "settles the operation after considering its %s runtime admission",
+it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
+  "publishes worker receipts before settling its %s reply",
   async (kind) => {
     const key = "openclaw.sqliteNativeRuntimeAdmission";
     const previous = getEnvironmentData(key);
@@ -34,9 +35,31 @@ it.each(["valid", "framed", "mismatched", "unsafe", "malformed"])(
       const unexpected = () => {
         throw new Error("Runtime admission must not add a request or fail the operation");
       };
+      const actor: Pick<Actor, "id" | "closeReceipt"> = { id: 1 };
+      const closeReceipt: SqliteWorkerCloseReceipt = {
+        identity: { key: "fixture", canonicalPath: "/fixture/state.sqlite" },
+        incarnation: "closed-incarnation",
+        checkpoint: {
+          observedAtNs: 42n,
+          health: {
+            state: "complete",
+            observedAtMs: 1,
+            walBytes: 0,
+            databaseBytes: 4096,
+            logFrames: 0,
+            checkpointedFrames: 0,
+            lastCompletedAtMs: 1,
+            consecutiveBlocked: 0,
+            warning: false,
+          },
+        },
+      };
       const job: Job = {
         observation: { started() {}, completed() {} },
-        request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
+        request:
+          kind === "close"
+            ? { type: "close", id: 1, actor: 1 }
+            : { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
         bytes: 0,
         resolve: unexpected,
         reject: unexpected,
@@ -44,11 +67,17 @@ it.each(["valid", "framed", "mismatched", "unsafe", "malformed"])(
       };
       const finish = vi.fn(() => {
         expect(getEnvironmentData(key)).toEqual(
-          kind === "valid" || kind === "framed" ? receipt : undefined,
+          kind === "valid" || kind === "framed" || kind === "close" ? receipt : undefined,
         );
+        if (kind === "close") {
+          expect(actor.closeReceipt).toMatchObject({
+            incarnation: "closed-incarnation",
+            checkpoint: { observedAtNs: 42n },
+          });
+        }
       });
       const postMessage = vi.fn();
-      const slot = { current: job, worker: { postMessage } };
+      const slot = { actors: new Set([actor]), current: job, worker: { postMessage } };
       const owner = { fail: unexpected, finish, dispatch() {} };
       if (kind === "framed") {
         const producer = createSqliteWorkerTransferOwner();
@@ -91,7 +120,13 @@ it.each(["valid", "framed", "mismatched", "unsafe", "malformed"])(
       } else {
         receiveSqliteWorkerReply(
           slot,
-          { id: 1, ok: true, value: serialize("committed"), nativeRuntimeAdmission: forwarded },
+          {
+            id: 1,
+            ok: true,
+            value: serialize("committed"),
+            nativeRuntimeAdmission: forwarded,
+            ...(kind === "close" ? { closeReceipt } : {}),
+          },
           owner,
         );
         expect(postMessage).not.toHaveBeenCalled();
@@ -126,7 +161,7 @@ it("hydrates cached-context execute-frame errors without an explicit request con
   let failure: unknown;
 
   receiveSqliteWorkerReply(
-    { current: job, worker: { postMessage: unexpected } },
+    { actors: new Set(), current: job, worker: { postMessage: unexpected } },
     {
       id: 1,
       ok: false,

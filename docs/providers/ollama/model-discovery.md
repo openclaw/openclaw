@@ -28,9 +28,12 @@ ollama list
 openclaw models list
 ```
 
-A **nonempty** `models.providers.ollama.models` list selects manual models and
-skips discovery. When Ollama is in the agent's model scope, an explicit
-self-hosted endpoint with `models: []` remains eligible for discovery;
+When Ollama is in the agent's model scope, an explicit self-hosted endpoint is
+discovered even when `models.providers.ollama.models` lists models, as setup
+saves them. Configured models keep their settings; other installed chat models
+appear beside them, so a model pulled later shows up on the next model-list
+refresh without a config edit or restart. To list only configured models, set
+`models.mode: "replace"` or `plugins.entries.ollama.config.discovery.enabled: false`.
 `models.providers.ollama.apiKey` alone does not select that provider for Gateway
 model browsing.
 

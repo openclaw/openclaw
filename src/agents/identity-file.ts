@@ -29,7 +29,11 @@ const WRITABLE_IDENTITY_FIELDS = [
   ["avatar", "Avatar"],
 ] as const satisfies ReadonlyArray<readonly [keyof AgentIdentityFile, string]>;
 
-const RICH_IDENTITY_LABELS = new Set(["name", "creature", "vibe", "theme", "emoji", "avatar"]);
+const RICH_IDENTITY_LABELS = ["name", "creature", "vibe", "theme", "emoji", "avatar"] as const;
+
+function isRichIdentityLabel(label: string): label is (typeof RICH_IDENTITY_LABELS)[number] {
+  return RICH_IDENTITY_LABELS.some((field) => field === label);
+}
 
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "not set yet",
@@ -107,14 +111,8 @@ function parseIdentityMarkdown(content: string): AgentIdentityFile | null {
     if (!value || IDENTITY_PLACEHOLDER_VALUES.has(normalizeIdentityValue(value))) {
       continue;
     }
-    switch (parsed.label) {
-      case "name":
-      case "emoji":
-      case "creature":
-      case "vibe":
-      case "theme":
-      case "avatar":
-        identity[parsed.label] = value;
+    if (isRichIdentityLabel(parsed.label)) {
+      identity[parsed.label] = value;
     }
   }
   return Object.keys(identity).length > 0 ? identity : null;
@@ -124,7 +122,7 @@ function resolveIdentityInsertIndex(lines: string[]): number {
   // New fields stay grouped with existing rich identity fields; otherwise place
   // them directly after the title block so legacy prose remains intact.
   const lastIdentityIndex = lines.findLastIndex((line) =>
-    RICH_IDENTITY_LABELS.has(parseIdentityLine(line)?.label ?? ""),
+    isRichIdentityLabel(parseIdentityLine(line)?.label ?? ""),
   );
   if (lastIdentityIndex >= 0) {
     return lastIdentityIndex + 1;

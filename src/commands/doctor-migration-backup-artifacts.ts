@@ -33,14 +33,13 @@ export function recordDoctorMigrationBackups(
   }
   const targets: SessionSqliteMigrationTargetManifest[] = inventory.map(
     ({ path: source, identity }) => {
+      const archivePath = `${source}.pre-startup-migration-${backupId}.bak`;
       const move = {
         kind: "database-backup" as const,
         sourcePath: source,
-        archivePath: `${source}.pre-startup-migration-${backupId}.bak`,
+        archivePath,
         artifact: {
-          identity: readMigrationArtifactIdentity(
-            `${source}.pre-startup-migration-${backupId}.bak`,
-          ),
+          identity: readMigrationArtifactIdentity(archivePath),
           classification: "repair-original" as const,
           reason: "pre-startup-migration-backup",
           dependencies: [],

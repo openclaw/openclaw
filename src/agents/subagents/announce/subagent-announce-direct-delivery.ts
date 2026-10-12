@@ -62,6 +62,7 @@ import {
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
+  withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import {
@@ -121,6 +122,29 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
+  return withSubagentRequesterSource(
+    params.targetRequesterSessionKey,
+    params.requesterAgentId,
+    async (
+      isRequesterCurrent,
+    ): Promise<Awaited<ReturnType<typeof sendSubagentAnnounceDirectly>>> => {
+      const guardedParams = isRequesterCurrent
+        ? {
+            ...params,
+            isSourceSessionEffectsAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+            isSourceSessionAdmissionAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+          }
+        : params;
+      return sendSubagentAnnounceDirectlyBound(guardedParams);
+    },
+  );
+}
+
+async function sendSubagentAnnounceDirectlyBound(
+  params: Parameters<typeof sendSubagentAnnounceDirectly>[0],
+): ReturnType<typeof sendSubagentAnnounceDirectly> {
   if (params.signal?.aborted) {
     return { delivered: false, path: "none" };
   }
@@ -144,7 +168,7 @@ export async function sendSubagentAnnounceDirectly(
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requester = loadRequesterSessionEntry(
+    const requester = await loadRequesterSessionEntry(
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     );
@@ -377,7 +401,7 @@ export async function sendSubagentAnnounceDirectly(
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
       !resolveRequesterSessionActivity(
         params.targetRequesterSessionKey,
-        loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
+        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
       ).isActive &&
       !agentMediatedCompletion
     ) {

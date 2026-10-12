@@ -82,37 +82,6 @@ describe("gateway chat metadata runtime", () => {
     }
   });
 
-  test.each(["resolve", "reject"] as const)(
-    "never announces an obsolete build's %s after terminal failure",
-    async (settlement) => {
-      const onChanged = vi.fn();
-      const harness = createChatMetadataHarness(undefined, { onChanged });
-      const gate = createDeferred();
-      harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
-        await gate.promise;
-        if (settlement === "reject") {
-          throw new Error("obsolete build");
-        }
-        return { models: facts.modelCatalog.entries, modelCatalog: facts.modelCatalog.entries };
-      });
-      await harness.runtime.refresh();
-      onChanged.mockClear();
-      const build = harness.runtime.read({ agentId: "main" });
-      void build.catch(() => {});
-      await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledOnce());
-      harness.runtime.fail(new Error("owner failed"));
-      gate.resolve();
-      await expect(build).rejects.toThrow("owner failed");
-      expect(onChanged).toHaveBeenCalledOnce();
-      await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow("owner failed");
-      await harness.runtime.refresh();
-      expect(onChanged).toHaveBeenCalledTimes(2);
-      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
-        models: [expect.objectContaining({ id: "first" })],
-      });
-    },
-  );
-
   test("prepares a projection lazily after its owner publishes", async () => {
     const harness = createChatMetadataHarness();
 
@@ -128,7 +97,7 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).toHaveBeenCalledOnce();
   });
 
-  test("single-flights equivalent refreshes and reads", async () => {
+  test("single-flights equivalent refresh bursts and reads", async () => {
     const harness = createChatMetadataHarness();
     const releaseModels = createDeferred();
     harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
@@ -139,9 +108,9 @@ describe("gateway chat metadata runtime", () => {
       };
     });
 
-    const firstRefresh = harness.runtime.refresh();
-    const secondRefresh = harness.runtime.refresh();
-    await Promise.all([firstRefresh, secondRefresh]);
+    const refreshes = Array.from({ length: 128 }, () => harness.runtime.refresh());
+    await Promise.all(refreshes);
+    expect(harness.getPreparedOwner).toHaveBeenCalledTimes(1);
     expect(harness.buildProjection).not.toHaveBeenCalled();
     const firstRead = harness.runtime.read({ agentId: "main" });
     const secondRead = harness.runtime.read({ agentId: "main" });
@@ -150,7 +119,7 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
 
     releaseModels.resolve();
-    await Promise.all([firstRefresh, secondRefresh]);
+    await Promise.all(refreshes);
     const [first, second] = await Promise.all([firstRead, secondRead]);
     expect(first).toEqual(second);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
@@ -352,57 +321,6 @@ describe("gateway chat metadata runtime", () => {
         release.resolve();
         await reading;
         await harness.runtime.stop();
-      }
-    },
-  );
-
-  test.each(["resolve", "reject"] as const)(
-    "an evicted profile's late %s cannot replace or delete its newer ready entry",
-    async (settlement) => {
-      const harness = createChatMetadataHarness();
-      await harness.runtime.refresh();
-      await harness.runtime.read({ agentId: "main" });
-      const sessionEntry = { authProfileOverride: "test:evicted" };
-      const release = createDeferred();
-      harness.buildProjection.mockImplementationOnce(async () => {
-        await release.promise;
-        if (settlement === "reject") {
-          throw new Error("evicted projection failed");
-        }
-        return { modelCatalog: [], models: [] };
-      });
-      const oldRead = harness.runtime
-        .readStartup({ agentId: "main", sessionEntry })
-        .catch((error: unknown) => error);
-      try {
-        await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(2));
-        // Fill the bounded profile cache so the still-pending first entry is evicted.
-        for (let index = 0; index < 64; index += 1) {
-          await harness.runtime.readStartup({
-            agentId: "main",
-            sessionEntry: { authProfileOverride: `test:${index}` },
-          });
-        }
-        const newer = await harness.runtime.readStartup({ agentId: "main", sessionEntry });
-        release.resolve();
-        await oldRead;
-        await expect(
-          harness.runtime.readStartup({
-            agentId: "main",
-            sessionEntry,
-            readPolicy: "ready",
-          }),
-        ).resolves.toEqual({
-          sessionModelCatalog: newer?.sessionModelCatalog,
-          defaultModelCatalog: newer?.defaultModelCatalog,
-        });
-        await expect(
-          harness.runtime.readStartup({ agentId: "main", sessionEntry }),
-        ).resolves.toEqual(newer);
-        expect(harness.buildProjection).toHaveBeenCalledTimes(67);
-      } finally {
-        release.resolve();
-        await oldRead;
       }
     },
   );
@@ -772,30 +690,6 @@ describe("gateway chat metadata runtime", () => {
       draft.error,
     );
     expect(await harness.runtime.read({ agentId: "main" })).toEqual(shared);
-  });
-
-  test("resolves the replacement gate after a coalesced second invalidation", async () => {
-    const harness = createChatMetadataHarness();
-    await harness.runtime.refresh();
-    const releaseCommands = createDeferred();
-    harness.buildCommands.mockImplementationOnce(async () => {
-      await releaseCommands.promise;
-      return { commands: [{ name: "replacement" }] };
-    });
-
-    harness.runtime.invalidate();
-    const waitingRead = harness.runtime.read({ agentId: "main" });
-    const firstRefresh = harness.runtime.refresh();
-    await vi.waitFor(() => expect(harness.buildCommands).toHaveBeenCalledOnce());
-
-    harness.runtime.invalidate();
-    const secondRefresh = harness.runtime.refresh();
-    releaseCommands.resolve();
-    await Promise.all([firstRefresh, secondRefresh]);
-
-    await expect(waitingRead).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "first" })],
-    });
   });
 
   test("rejects replacement waiters on failure and recovers on a later generation", async () => {

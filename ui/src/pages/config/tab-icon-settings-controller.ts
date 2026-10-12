@@ -45,6 +45,7 @@ export class TabIconSettingsController implements ReactiveController {
     const unlocked = getLobsterdex();
     return {
       tabIcon: this.options.getPreference(),
+      lobsterdexEnabled: context.theme.branding.lobsterdex,
       tabIconAgentAvatar: agent
         ? resolveAgentAvatarUrl(agent, context.agentIdentity.get(id))
         : null,
@@ -53,6 +54,7 @@ export class TabIconSettingsController implements ReactiveController {
         if (preference.startsWith("lobster:")) {
           const lobsterId = preference.slice("lobster:".length);
           if (
+            !context.theme.branding.lobsterdex ||
             !LOBSTER_PET_PALETTES.some((palette) => palette.id === lobsterId) ||
             !getLobsterdex().has(lobsterId)
           ) {

@@ -57,6 +57,9 @@ describe("device setup completion pruning", () => {
             open: () => openOpenClawStateDatabase({ database, env }),
             stateOptions: () => ({ path: database.path, env }),
             write: (operation) => runOpenClawStateWriteTransaction(operation, { database, env }),
+            writeAdmitted: () => {
+              throw new Error("Bootstrap pruning retains its custom admission");
+            },
           },
         ),
       );

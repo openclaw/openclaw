@@ -9,12 +9,10 @@ import type {
 function hasMediaPayload(
   payload: DeriveDurableFinalDeliveryRequirementsParams["payload"],
 ): boolean {
-  if (payload.mediaUrl?.trim()) {
-    return true;
-  }
   return (
-    Array.isArray(payload.mediaUrls) &&
-    payload.mediaUrls.some((url) => typeof url === "string" && url.trim().length > 0)
+    Boolean(payload.mediaUrl?.trim()) ||
+    (Array.isArray(payload.mediaUrls) &&
+      payload.mediaUrls.some((url) => typeof url === "string" && url.trim().length > 0))
   );
 }
 

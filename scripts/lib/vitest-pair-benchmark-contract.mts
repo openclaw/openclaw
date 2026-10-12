@@ -448,52 +448,38 @@ function rotated<T>(values: T[], offset: number): T[] {
 
 export function buildBenchmarkSchedule(manifest: BenchmarkManifest): BenchmarkRunPlan[] {
   const plans: BenchmarkRunPlan[] = [];
-  for (const lane of manifest.lanes) {
-    for (const side of ["baseline", "candidate"] as const) {
-      plans.push({
-        id: `warmup-${lane.id}-${side}`,
-        phase: "warmup",
-        side,
-        lane,
-        round: null,
-        pair: null,
-        cacheMode: "warm",
-      });
-    }
-  }
-  for (let round = 0; round < manifest.rounds; round += 1) {
-    const sides =
-      round % 2 === 0 ? (["baseline", "candidate"] as const) : (["candidate", "baseline"] as const);
-    for (const lane of rotated(manifest.lanes, round)) {
-      const pair = `measured-${round + 1}-${lane.id}`;
-      for (const side of sides) {
-        plans.push({
-          id: `${pair}-${side}`,
-          phase: "measured",
-          side,
-          lane,
-          round: round + 1,
-          pair,
-          cacheMode: "warm",
-        });
-      }
-    }
-  }
-  for (const [index, lane] of manifest.lanes.entries()) {
-    const sides =
-      index % 2 === 0 ? (["baseline", "candidate"] as const) : (["candidate", "baseline"] as const);
-    const pair = `cold-${lane.id}`;
+  const appendPair = (
+    phase: "warmup" | "measured" | "cold",
+    lane: BenchmarkLane,
+    round: number | null = null,
+    reverse = false,
+  ) => {
+    const pair = `${phase}-${round === null ? "" : `${round}-`}${lane.id}`;
+    const sides = reverse
+      ? (["candidate", "baseline"] as const)
+      : (["baseline", "candidate"] as const);
     for (const side of sides) {
       plans.push({
         id: `${pair}-${side}`,
-        phase: "cold",
+        phase,
         side,
         lane,
-        round: null,
-        pair,
-        cacheMode: "fresh",
+        round,
+        pair: phase === "warmup" ? null : pair,
+        cacheMode: phase === "cold" ? "fresh" : "warm",
       });
     }
+  };
+  for (const lane of manifest.lanes) {
+    appendPair("warmup", lane);
+  }
+  for (let round = 0; round < manifest.rounds; round += 1) {
+    for (const lane of rotated(manifest.lanes, round)) {
+      appendPair("measured", lane, round + 1, round % 2 !== 0);
+    }
+  }
+  for (const [index, lane] of manifest.lanes.entries()) {
+    appendPair("cold", lane, null, index % 2 !== 0);
   }
   return plans;
 }

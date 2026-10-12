@@ -1,17 +1,13 @@
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import {
-  readSessionUpstreamLink,
-  type SessionUpstreamLink,
-} from "../../sessions/session-upstream-links.js";
-import { sessionUpstreamLinkSourceMatches } from "../../sessions/session-upstream-links.kernel.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import type { SessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { loadGatewaySessionEntry } from "../session-utils-store.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
-import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type UpstreamForkHarness = {
@@ -42,71 +38,57 @@ export function resolveUpstreamForkHarness(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-/** Keep the source incarnation, creator ceiling, and fork execution policy current until native I/O. */
+/** Keep source identity and execution authority current until native I/O. */
 export function createUpstreamForkCurrentGuard(params: {
   client: GatewayClient | null;
   commitGuard: () => void;
   context: Pick<GatewayRequestContext, "getRuntimeConfig">;
   forkHarness: UpstreamForkHarness;
-  link: SessionUpstreamLink;
   requestedAgentId: string;
   sessionKey: string;
-  source: ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>;
+  source: ReturnType<typeof loadGatewaySessionEntry>;
   targetKey: string;
 }) {
   const expectedEntry = params.source.entry;
   if (!expectedEntry) {
     throw new Error(`Session ${params.sessionKey} changed during fork initialization`);
   }
-  const context = captureOpenClawStateWorkerContext();
-  const expectedLink = structuredClone(params.link);
-  let inSourceTransaction = false;
-  const readCurrent = () => {
-    context.admission.assertCurrent();
+  const sourceMetadata = captureSessionEntryMetadataRead({
+    agentId: params.source.agentId,
+    sessionKey: params.source.canonicalKey,
+    storePath: params.source.storePath,
+  });
+  const assertCurrent = () => {
     params.commitGuard();
     const currentConfig = params.context.getRuntimeConfig();
-    const source = loadAccessorSessionEntryForGatewayTarget({
-      key: params.sessionKey,
-      cfg: currentConfig,
-      agentId: params.requestedAgentId,
-    });
-    const sourceEntry = source.entry;
-    const currentLink = sourceEntry
-      ? inSourceTransaction
-        ? expectedLink
-        : readSessionUpstreamLink(source.canonicalKey, source.target.agentId, {
-            path: context.admission.databasePath,
-          })
-      : undefined;
-    const currentForkHarness = currentLink ? resolveUpstreamForkHarness(currentLink) : undefined;
+    const source = sourceMetadata
+      ? params.source
+      : loadGatewaySessionEntry(
+          params.sessionKey,
+          { agentId: params.requestedAgentId },
+          currentConfig,
+        );
+    const sourceEntry = sourceMetadata ? sourceMetadata.readCurrent() : source.entry;
     if (
       !sourceEntry ||
       sourceEntry.sessionId !== expectedEntry.sessionId ||
       sourceEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
       sourceEntry.initializationPending === true ||
-      source.target.agentId !== params.source.target.agentId ||
+      source.agentId !== params.source.agentId ||
       source.canonicalKey !== params.source.canonicalKey ||
-      source.storePath !== params.source.storePath ||
-      !sessionUpstreamLinkSourceMatches(currentLink, expectedLink) ||
-      !currentForkHarness ||
-      currentForkHarness.harness !== params.forkHarness.harness ||
-      currentForkHarness.contract !== params.forkHarness.contract ||
-      currentForkHarness.sessionFork !== params.forkHarness.sessionFork
+      source.storePath !== params.source.storePath
     ) {
       throw new Error(`Session ${params.sessionKey} changed during fork initialization`);
     }
     const creationError = authorizeGatewaySessionCreation({
       cfg: currentConfig,
       client: params.client,
-      agentId: source.target.agentId,
+      agentId: source.agentId,
     });
     if (creationError) {
       throw new SessionMutationAuthorizationChangedError(creationError);
     }
-    return { currentConfig, currentForkHarness, source, sourceEntry };
-  };
-  const assertCurrent = () => {
-    const { currentConfig, currentForkHarness, source, sourceEntry } = readCurrent();
+    const currentForkHarness = params.forkHarness;
     const executionEnvironment =
       currentForkHarness.contract === "v2"
         ? (currentForkHarness.sessionFork.executionEnvironment ??
@@ -121,7 +103,7 @@ export function createUpstreamForkCurrentGuard(params: {
         "required"
         ? "required"
         : undefined;
-    const sourceModel = resolveSessionModelRef(currentConfig, sourceEntry, source.target.agentId);
+    const sourceModel = resolveSessionModelRef(currentConfig, sourceEntry, source.agentId);
     const policyHarness =
       currentForkHarness.harness.executionEnvironment === "host-only"
         ? currentForkHarness.harness
@@ -129,7 +111,7 @@ export function createUpstreamForkCurrentGuard(params: {
     const restriction = resolveSessionNativeRuntimeRestriction({
       operation: "fork",
       cfg: currentConfig,
-      agentId: source.target.agentId,
+      agentId: source.agentId,
       sessionKey: params.targetKey,
       entry: currentSandbox === "required" ? { sandbox: "required" } : {},
       persistedEntry: undefined,
@@ -143,20 +125,6 @@ export function createUpstreamForkCurrentGuard(params: {
     }
   };
   return {
-    upstreamLinkCurrent: {
-      context,
-      expected: expectedLink,
-      withCurrent<T>(run: () => T): T {
-        // The shared writer has checked this exact source inside its transaction.
-        const previous = inSourceTransaction;
-        inSourceTransaction = true;
-        try {
-          return run();
-        } finally {
-          inSourceTransaction = previous;
-        }
-      },
-    },
     assertCurrent,
     // After capture, the child initializer and plugin own rollback independently;
     // their target, registry, binding, and thread fences replace forward authority.

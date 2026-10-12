@@ -14,6 +14,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import {
+  decodeIndexedHistoryText,
   readCliHistoryCoverageUsers,
   readCoveredCliAggregateIds,
 } from "./cli-session-history-index.coverage.js";
@@ -46,14 +47,6 @@ function resolveImportedExternalIdentityKey(
     : undefined;
 }
 
-function decodeIndexedHistoryText(value: string | null): string | null {
-  if (value === null) {
-    return null;
-  }
-  const parsed = JSON.parse(value);
-  return typeof parsed === "string" ? parsed : null;
-}
-
 function isClaudeCliAssistantImport(role: string | null, metadata: string | null): boolean {
   if (role !== "assistant" || !metadata) {
     return false;
@@ -71,7 +64,8 @@ type HistoryRow = {
   bytes: number;
   role: string | null;
   text: string | null;
-  drift_text: string | null;
+  undecorated_text: string | null;
+  routed_key: string | null;
   timestamp: number | null;
   external_key: string | null;
   image_key: string | null;
@@ -114,7 +108,7 @@ export class CliSessionHistoryIndex {
     this.db = getNodeSqliteKysely<HistoryDatabase>(this.database);
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
-      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
+      text TEXT, undecorated_text TEXT, routed_key TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
       image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
@@ -126,6 +120,7 @@ export class CliSessionHistoryIndex {
       CREATE INDEX match_text ON messages(role, text, consumed, id);
       CREATE INDEX match_timed_text ON messages(role, text, consumed, id) WHERE timestamp IS NOT NULL;
       CREATE INDEX match_undated_text ON messages(role, text, consumed, id) WHERE timestamp IS NULL;
+      CREATE INDEX match_routed ON messages(role, routed_key, consumed, id);
       CREATE INDEX match_image ON messages(image_key, consumed, id);
       CREATE INDEX message_identity ON messages(message_id);
       CREATE INDEX local_sequence ON messages(local_seq);
@@ -218,7 +213,8 @@ export class CliSessionHistoryIndex {
         bytes: parameter((row) => row.bytes),
         role: parameter((row) => row.role),
         text: parameter((row) => row.text),
-        drift_text: parameter((row) => row.drift_text),
+        undecorated_text: parameter((row) => row.undecorated_text),
+        routed_key: parameter((row) => row.routed_key),
         timestamp: parameter((row) => row.timestamp),
         external_key: parameter((row) => row.external_key),
         image_key: parameter((row) => row.image_key),
@@ -244,7 +240,9 @@ export class CliSessionHistoryIndex {
     const meta = asOptionalRecord(record?.["__openclaw"]);
     const role = record?.role === "user" || record?.role === "assistant" ? record.role : undefined;
     const comparable: ReturnType<typeof extractComparableText> =
-      record && role ? extractComparableText(record, role) : { hasCliImageMentions: false };
+      record && role
+        ? extractComparableText(record, role, localSeq === undefined)
+        : { hasCliImageMentions: false };
     const localImage =
       record?.role === "user" && (readPersistedMediaFacts(record) ?? []).some(isImageMediaFact);
     const entryId = normalizeOptionalString(meta?.id);
@@ -257,9 +255,15 @@ export class CliSessionHistoryIndex {
       payload: localSeq === undefined ? serialized : null,
       bytes: Buffer.byteLength(serialized, "utf8"),
       role: role ?? null,
-      text: comparable.text === undefined ? null : JSON.stringify(comparable.text),
-      drift_text:
-        comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
+      // Ordinary original and cleaned bodies share a key space, so equivalent matches
+      // advance the same order floor without advancing genuinely different quotations.
+      text: comparable.text === undefined ? null : JSON.stringify([null, comparable.text]),
+      undecorated_text:
+        comparable.cleanedRoutedKey ??
+        (comparable.undecoratedText === undefined
+          ? null
+          : JSON.stringify([null, comparable.undecoratedText])),
+      routed_key: comparable.scopedKey ?? null,
       timestamp: asFiniteNumber(record?.timestamp) ?? null,
       external_key: resolveImportedExternalIdentityKey(meta) ?? null,
       image_key:
@@ -377,9 +381,9 @@ export class CliSessionHistoryIndex {
         ),
     );
     this.coverage.setLocalUsers(readCliHistoryCoverageUsers(this.database));
-    type Match = Pick<HistoryRow, "id" | "text" | "metadata" | "role">;
+    type Match = Pick<HistoryRow, "id" | "text" | "routed_key" | "metadata" | "role">;
     const candidates = () =>
-      this.db.selectFrom("messages").select(["id", "text", "metadata", "role"]);
+      this.db.selectFrom("messages").select(["id", "text", "routed_key", "metadata", "role"]);
     const matchExternal = prepareSqliteQueryTakeFirstSync<string, Match>(
       this.database,
       (parameter) =>
@@ -405,7 +409,7 @@ export class CliSessionHistoryIndex {
         .limit(1),
     );
     type TextMatch = { role: string; text: string; floor: number; timestamp: number | null };
-    const textMatchers = (external: boolean) => {
+    const textMatchers = (external: boolean, column: "text" | "routed_key") => {
       const create = (time: "any" | "window" | "missing") =>
         prepareSqliteQueryTakeFirstSync<TextMatch, Match>(this.database, (parameter) => {
           let query = candidates()
@@ -415,7 +419,7 @@ export class CliSessionHistoryIndex {
               parameter((row) => row.role),
             )
             .where(
-              "text",
+              column,
               "=",
               parameter((row) => row.text),
             )
@@ -449,8 +453,16 @@ export class CliSessionHistoryIndex {
         });
       return { any: create("any"), window: create("window"), missing: create("missing") };
     };
-    const withIdentity = textMatchers(true);
-    const withoutIdentity = textMatchers(false);
+    const matchers = {
+      text: {
+        withIdentity: textMatchers(true, "text"),
+        withoutIdentity: textMatchers(false, "text"),
+      },
+      routed_key: {
+        withIdentity: textMatchers(true, "routed_key"),
+        withoutIdentity: textMatchers(false, "routed_key"),
+      },
+    };
     const consume = prepareSqliteQuerySync<Pick<HistoryRow, "id" | "metadata" | "external_key">>(
       this.database,
       (parameter) =>
@@ -470,12 +482,26 @@ export class CliSessionHistoryIndex {
     const minimumOrder = (role: string | null, text: string) =>
       this.readOrderFloor({ role: role ?? "", text })?.minimum_order ?? 0;
     const advance = (
-      imported: Pick<HistoryRow, "role" | "text" | "drift_text">,
-      matched: Pick<HistoryRow, "id" | "text">,
+      imported: Pick<HistoryRow, "role" | "text" | "undecorated_text" | "routed_key">,
+      matched: Pick<HistoryRow, "id" | "text" | "routed_key">,
+      matchedKey?: string,
     ) => {
+      // Identity matches can omit the native envelope while retaining the exact sender body.
+      // Advancing its cleaned alternate would skip earlier plain turns on subsequent reads.
+      const sameRoutedBody =
+        imported.routed_key &&
+        !imported.routed_key.startsWith("[null,") &&
+        imported.routed_key === matched.routed_key;
       for (const text of new Set([
         imported.text,
-        matched.text === imported.text ? imported.text : imported.drift_text,
+        matchedKey ??
+          (!sameRoutedBody && matched.text !== imported.text ? imported.undecorated_text : null),
+        // Literal matches must not advance a different cleaned-body floor.
+        matchedKey === imported.routed_key ||
+        (!matchedKey && !sameRoutedBody && matched.text !== imported.text) ||
+        !imported.routed_key?.startsWith("[null,")
+          ? imported.routed_key
+          : null,
       ])) {
         if (text) {
           this.advanceOrderFloor({ role: imported.role ?? "", text, minimumOrder: matched.id + 1 });
@@ -495,7 +521,8 @@ export class CliSessionHistoryIndex {
             "bytes",
             "role",
             "text",
-            "drift_text",
+            "undecorated_text",
+            "routed_key",
             "timestamp",
             "external_key",
             "image_key",
@@ -510,15 +537,13 @@ export class CliSessionHistoryIndex {
       ).rows;
       runSqliteImmediateTransactionSync(this.database, () => {
         for (const imported of batch) {
-          let duplicate: Match | undefined;
+          let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
+          let matchedKey: string | undefined;
           let byIdentity = false;
-          if (imported.external_key) {
-            duplicate = matchExternal(imported.external_key);
-            if (duplicate) {
-              this.noteImportedCoverage(imported, { ...duplicate, byIdentity: true });
-              advance(imported, duplicate);
-              continue;
-            }
+          if (duplicate) {
+            this.noteImportedCoverage(imported, { ...duplicate, byIdentity: true });
+            advance(imported, duplicate);
+            continue;
           }
           if (imported.image_mentions && imported.image_key) {
             duplicate = matchImage(imported.image_key);
@@ -526,7 +551,14 @@ export class CliSessionHistoryIndex {
           }
           if (!duplicate && !imported.image_mentions) {
             const importedFloor = imported.text ? minimumOrder(imported.role, imported.text) : 0;
-            for (const text of [imported.text, imported.drift_text]) {
+            // Original text wins before cleaned views can collide with literal quotations.
+            // The existing scoped-key index also covers cleaned canonical user text.
+            const routed = imported.routed_key && !imported.routed_key.startsWith("[null,");
+            for (const [column, text] of [
+              ["text", imported.text],
+              ["routed_key", imported.routed_key],
+              ["routed_key", routed ? imported.undecorated_text : null],
+            ] as const) {
               if (!text || !imported.role) {
                 continue;
               }
@@ -534,13 +566,16 @@ export class CliSessionHistoryIndex {
                 text === imported.text
                   ? importedFloor
                   : Math.max(minimumOrder(imported.role, text), importedFloor);
-              const match = imported.external_key ? withIdentity : withoutIdentity;
+              const match = imported.external_key
+                ? matchers[column].withIdentity
+                : matchers[column].withoutIdentity;
               const params = { role: imported.role, text, floor, timestamp: imported.timestamp };
               duplicate =
                 imported.timestamp === null
                   ? match.any(params)
                   : (match.window(params) ?? match.missing(params));
               if (duplicate) {
+                matchedKey = text;
                 break;
               }
             }
@@ -576,7 +611,7 @@ export class CliSessionHistoryIndex {
               metadata: metadataChanged ? JSON.stringify(meta) : duplicate.metadata,
               external_key: resolveImportedExternalIdentityKey(meta) ?? null,
             });
-            advance(imported, duplicate);
+            advance(imported, duplicate, matchedKey);
           } else {
             this.insertMessage({
               ...imported,

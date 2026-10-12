@@ -252,7 +252,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     signal: params.signal,
   });
   const remainingMs = deadline.remainingMs;
-  const inspectionTimeoutMs = () => Math.min(remainingMs(), params.probeTimeoutMs ?? Infinity);
   const probeTimeoutMs = () =>
     waitForStartup && params.probeTimeoutMs === undefined
       ? remainingMs()
@@ -271,10 +270,8 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     env: params.serviceEnv,
     signal: deadline.signal,
     deadline,
-    // One-shot recovery caps network waits, not the preceding native inspection.
-    ...(!waitForStartup
-      ? { probeTimeoutMs: params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS }
-      : {}),
+    probeTimeoutMs:
+      params.probeTimeoutMs ?? (waitForStartup ? undefined : GATEWAY_RESTART_PROBE_TIMEOUT_MS),
   };
   let health: GatewayRestartSnapshot = params.health ?? {
     runtime: { status: "unknown" },
@@ -295,7 +292,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     if (!waitForStartup) {
       const inspectedHealth = await inspectGatewayRestart({
         ...probeParams,
-        timeoutMs: Math.max(1, inspectionTimeoutMs()),
+        timeoutMs: Math.max(1, remainingMs()),
       });
       assertCurrent();
       return inspectedHealth;
@@ -309,7 +306,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       deadlineOutcome: "snapshot",
       // The restart owner adds settling itself; reserve it once in the shared deadline.
       timeoutMs: Math.max(1, remainingMs() - settleDurationMs),
-      probeTimeoutMs: params.probeTimeoutMs,
       onObservation: (snapshot) => {
         health = snapshot;
         retainChannelTimeouts(snapshot);
@@ -387,7 +383,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           inspectGatewayRestart({
             ...probeParams,
             probeContext: context,
-            timeoutMs: Math.max(1, inspectionTimeoutMs()),
+            timeoutMs: Math.max(1, remainingMs()),
           });
         const inspected = await deadline.read("final Gateway identity", inspect);
         assertCurrent();

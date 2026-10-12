@@ -81,30 +81,35 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     throw new Error(admission.message);
   }
   if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
-    const settled = await settlePendingPackageActivation(resolveUpdateInstallRoot(discoveredRoot));
-    if (settled) {
-      defaultRuntime.error(
-        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
-          settled.retained
-            ? `Recovery evidence retained at ${settled.retained}.`
-            : "The original package and launchers remain unchanged."
-        }${settled.detail ? ` ${settled.detail}` : ""}`,
-      );
-      if (settled.detail) {
-        // The operation UUID identifies this repair receipt, not the original failed run.
-        // Replaying it after interrupted reporting preserves the original update outcome.
-        createUpdateRun(
-          {
-            runId: settled.operationId,
-            trigger: "cli",
-            settlement: {
-              reason: settled.reason,
-              detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
-            },
-          },
-          options,
+    const settlement = await settlePendingPackageActivation(
+      resolveUpdateInstallRoot(discoveredRoot),
+      (settled) => {
+        defaultRuntime.error(
+          `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+            settled.retained
+              ? `Recovery evidence retained at ${settled.retained}.`
+              : "The original package and launchers remain unchanged."
+          }${settled.detail ? ` ${settled.detail}` : ""}`,
         );
-      }
+        if (settled.detail) {
+          // The operation UUID identifies this repair receipt, not the original failed run.
+          // Replaying it after interrupted reporting preserves the original update outcome.
+          createUpdateRun(
+            {
+              runId: settled.operationId,
+              trigger: "cli",
+              settlement: {
+                reason: settled.reason,
+                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+              },
+            },
+            options,
+          );
+        }
+      },
+    );
+    if (settlement?.warning) {
+      defaultRuntime.error(`Warning: ${settlement.warning}`);
     }
   }
   using handoff =

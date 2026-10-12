@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -61,17 +62,17 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       }
       return await original.ensureExecApprovalsSnapshot();
     },
-    readExecApprovalsSnapshot: () => {
+    readExecApprovalsSnapshotAsync: async () => {
       execApprovalsStoreMock.readCalls += 1;
       if (execApprovalsStoreMock.readError !== undefined) {
         throw execApprovalsStoreMock.readError;
       }
       if (execApprovalsStoreMock.hasReadResult) {
-        return execApprovalsStoreMock.readResult as ReturnType<
-          typeof original.readExecApprovalsSnapshot
+        return execApprovalsStoreMock.readResult as Awaited<
+          ReturnType<typeof original.readExecApprovalsSnapshotAsync>
         >;
       }
-      return original.readExecApprovalsSnapshot();
+      return await original.readExecApprovalsSnapshotAsync();
     },
     updateExecApprovals: async (...args: Parameters<typeof original.updateExecApprovals>) => {
       execApprovalsStoreMock.updateCalls += 1;
@@ -207,6 +208,15 @@ describe("node host invoke", () => {
   it("passes the owning agent session to plugin node commands", async () => {
     const handle = vi.fn(async () => '{"ok":true}');
     const registry = createEmptyPluginRegistry();
+    registry.plugins = [
+      createPluginRecord({
+        id: "canvas",
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+    ];
     registry.nodeHostCommands = [
       {
         pluginId: "canvas",
@@ -452,7 +462,9 @@ describe("node host invoke", () => {
     const result = await invokeExecApprovals("system.execApprovals.set", {
       file: { version: 1, agents: { main: {} } },
     });
-    const prepared = execApprovalsStoreMock.updateParams?.update(missingSnapshot.file);
+    const { applyExecApprovalsUpdate } = await import("../infra/exec-approvals-mutation.kernel.js");
+    const update = execApprovalsStoreMock.updateParams?.update;
+    const prepared = update && applyExecApprovalsUpdate(missingSnapshot.file, update);
 
     expect(execApprovalsStoreMock.ensureCalls).toBe(0);
     expect(execApprovalsStoreMock.readCalls).toBe(1);

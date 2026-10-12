@@ -14,6 +14,5 @@ export function resolveThreadBindingPersona(params: { label?: string; agentId?: 
   return truncateUtf16Safe(`${SYSTEM_MARK} ${base}`, THREAD_BINDING_PERSONA_MAX_CHARS);
 }
 
-export function resolveThreadBindingPersonaFromRecord(record: ThreadBindingRecord): string {
-  return resolveThreadBindingPersona(record);
-}
+export const resolveThreadBindingPersonaFromRecord: (record: ThreadBindingRecord) => string =
+  resolveThreadBindingPersona;

@@ -185,7 +185,7 @@ async function runWithModelFallbackInternal<T>(
       ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime
-    ? authRuntime.ensureAuthProfileStore(params.agentDir, {
+    ? await authRuntime.ensureAuthProfileStoreAsync(params.agentDir, {
         profileId: userLockedAuthProfileId,
         externalCli: externalCliDiscoveryScoped({
           config: params.cfg,
@@ -253,9 +253,8 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
-  const runAttribution = { sessionId: params.sessionId, lane: params.lane };
+  const runAttribution = { runId: params.runId, sessionId: params.sessionId, lane: params.lane };
   const runObs = {
-    runId: params.runId,
     ...runAttribution,
     requestedProvider: params.provider,
     requestedModel: params.model,
@@ -731,7 +730,7 @@ async function runWithModelFallbackInternal<T>(
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
-    soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
+    soonestCooldownExpiry: await resolveFallbackSoonestCooldownExpiry({
       authRuntime,
       userLockedAuthProfileId,
       agentDir: params.agentDir,

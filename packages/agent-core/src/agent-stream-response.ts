@@ -45,6 +45,7 @@ export type AsyncToolBatchScheduling = {
 
 export type ExecutedToolCallBatch = {
   messages: ToolResultMessage[];
+  terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
   terminateRun: boolean;

@@ -156,6 +156,7 @@ export async function readChatHistoryPageKernel(
         subagentCoordination: options.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
         maxChars: effectiveMaxChars,
+        toolResultMaxChars: params.toolResultMaxChars,
         resolveCronJobName: options.resolveCronJobName,
         ...(options.deferProfileDisplay
           ? {}
@@ -222,6 +223,7 @@ export async function readChatHistoryPageKernel(
     readScope,
     effectiveMaxChars,
     max,
+    toolResultMaxChars: params.toolResultMaxChars,
     maxBytes: maxHistoryBytes,
     isPageFull: (projection) =>
       prepareChatHistoryResponsePage(projection, params, options.readMessageSequence).omission

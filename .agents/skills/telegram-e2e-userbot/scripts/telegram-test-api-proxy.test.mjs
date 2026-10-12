@@ -435,8 +435,10 @@ test("reports upstream failures without exposing exception details or bot tokens
   assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
 });
 
-test("proxy close aborts the in-flight Test Server request", async (t) => {
-  t.mock.method(console, "error", () => {});
+test("getUpdates preserves the caller offset after upstream failure and closes without failure noise", async (t) => {
+  const diagnostic = t.mock.method(console, "error", () => {});
+  const offsets = [];
+  const cause = Object.assign(new Error("synthetic-private /bot123:ABC"), { code: "ECONNRESET" });
   let upstreamStarted;
   let upstreamAborted = false;
   const started = new Promise((resolve) => {
@@ -444,6 +446,15 @@ test("proxy close aborts the in-flight Test Server request", async (t) => {
   });
   const proxy = await startTelegramTestApiProxy({
     fetchImpl: async (_url, init) => {
+      offsets.push(JSON.parse(await new Response(init.body).text()).offset);
+      if (offsets.length === 1) {
+        throw new TypeError("synthetic-private upstream failure", { cause });
+      }
+      if (offsets.length === 2) {
+        return new Response('{"ok":true,"result":[{"update_id":123}]}', {
+          headers: { "content-type": "application/json" },
+        });
+      }
       upstreamStarted();
       return await new Promise((_resolve, reject) => {
         init.signal.addEventListener(
@@ -457,14 +468,38 @@ test("proxy close aborts the in-flight Test Server request", async (t) => {
       });
     },
   });
-  const request = fetch(`${proxy.apiRoot}/bot123:ABC/getUpdates`, {
-    method: "POST",
-    body: "{}",
-  }).catch(() => undefined);
+  t.after(() => proxy.close());
+  const poll = (offset) =>
+    fetch(`${proxy.apiRoot}/bot123:ABC/getUpdates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ offset, timeout: 30 }),
+    });
+  const failed = await poll(123);
+  assert.equal(failed.status, 502);
+  assert.deepEqual(await failed.json(), {
+    ok: false,
+    description: "Telegram Test Server proxy failed.",
+  });
+  const recovered = await poll(123);
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(await recovered.json(), { ok: true, result: [{ update_id: 123 }] });
+  const request = poll(124).catch(() => undefined);
   await started;
   await proxy.close();
   await request;
+  assert.deepEqual(offsets, [123, 123, 124]);
   assert.equal(upstreamAborted, true);
+  assert.equal(diagnostic.mock.calls.length, 1);
+  const line = diagnostic.mock.calls[0].arguments[0];
+  assert.deepEqual(JSON.parse(line), {
+    event: "telegram_test_api_proxy_failure",
+    phase: "upstream-fetch",
+    method: "getUpdates",
+    errorClass: "TypeError",
+    errorCode: "ECONNRESET",
+  });
+  assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
 });
 
 test("lease revocation blocks every later Bot API request", async (t) => {

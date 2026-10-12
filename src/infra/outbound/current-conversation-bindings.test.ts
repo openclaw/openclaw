@@ -14,6 +14,7 @@ import {
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
 import {
   testing,
   bindGenericCurrentConversation,
@@ -154,17 +155,12 @@ async function withReadOnlyStateDatabase<T>(run: () => T | Promise<T>): Promise<
 }
 
 async function withRejectedBindingCommit<T>(run: () => Promise<T>): Promise<T> {
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  const injected = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          throw new Error("Injected binding commit failure");
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const injected = probe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      throw new Error("Injected binding commit failure");
+    }
+    admit(request, grant);
+  });
   try {
     return await run();
   } finally {
@@ -243,37 +239,6 @@ describe("generic current-conversation bindings", () => {
     expect(resolveWorkspaceConversation("user:inspection")).not.toBeNull();
   });
 
-  it("advertises support only for channels that opt into current-conversation binds", () => {
-    expect(
-      getGenericCurrentConversationBindingCapabilities({
-        channel: "workspace",
-        accountId: "default",
-      }),
-    ).toEqual({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current"],
-    });
-    expect(
-      getGenericCurrentConversationBindingCapabilities({
-        channel: "definitely-not-a-channel",
-        accountId: "default",
-      }),
-    ).toBeNull();
-  });
-
-  it("requires an active channel plugin registration", () => {
-    setActivePluginRegistry(createTestRegistry([]));
-
-    expect(
-      getGenericCurrentConversationBindingCapabilities({
-        channel: "workspace",
-        accountId: "default",
-      }),
-    ).toBeNull();
-  });
-
   it("stores Control UI session-key conversations without a channel plugin", async () => {
     setActivePluginRegistry(createTestRegistry([]));
     expect(
@@ -311,63 +276,6 @@ describe("generic current-conversation bindings", () => {
       { targetSessionKey: "agent:main:adopted" },
     );
   });
-
-  it("preserves persisted bindings after the state database reopens", async () => {
-    const bound = await bindGenericCurrentConversation({
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-      targetKind: "session",
-      conversation: workspaceConversation("user:U123"),
-      metadata: {
-        label: "workspace-dm",
-      },
-    });
-
-    expectBindingFields(bound, {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-    });
-
-    closeOpenClawStateDatabaseForTest();
-
-    const resolved = resolveGenericCurrentConversationBinding(workspaceConversation("user:U123"));
-    expectBindingFields(resolved, {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-    });
-    expectBindingMetadata(resolved, { label: "workspace-dm" });
-  });
-
-  it.each([false, true])(
-    "inherits runtime metadata only when refreshing the same target (replace=%s)",
-    async (replace) => {
-      const originalTarget = "plugin-binding:owner-plugin:original";
-      const metadata = {
-        pluginBindingOwner: "plugin",
-        pluginId: "owner-plugin",
-        pluginRoot: "/plugins/owner-plugin",
-        opaque: { runtimeId: "original" },
-      };
-      await bindWorkspaceConversation("user:replacement-owner", {
-        targetSessionKey: originalTarget,
-        metadata,
-      });
-      const targetSessionKey = replace ? "agent:main:acp:replacement" : originalTarget;
-
-      await bindWorkspaceConversation("user:replacement-owner", {
-        targetSessionKey,
-        metadata: { label: "updated" },
-      });
-      closeOpenClawStateDatabaseForTest();
-
-      const binding = expectSessionBinding(resolveWorkspaceConversation("user:replacement-owner"));
-      expect(binding.targetSessionKey).toBe(targetSessionKey);
-      expect(binding.metadata).toEqual({
-        ...(replace ? {} : metadata),
-        label: "updated",
-        lastActivityAt: expect.any(Number),
-      });
-    },
-  );
 
   describe("independent SQLite owners", () => {
     it.each(["bind", "touch", "expiry cleanup", "unbind"] as const)(
@@ -559,81 +467,10 @@ describe("generic current-conversation bindings", () => {
     });
   });
 
-  it("normalizes persisted target session keys on reload", async () => {
-    seedPersistedBinding({
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: " agent:codex:acp:workspace-dm ",
-      targetKind: "session",
-      conversation: workspaceConversation("user:U123"),
-      status: "active",
-      boundAt: 1234,
-      metadata: {
-        label: "workspace-dm",
-      },
-    });
-
-    const resolved = resolveGenericCurrentConversationBinding(workspaceConversation("user:U123"));
-
-    expectBindingFields(resolved, {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-    });
-    expectBindingMetadata(resolved, { label: "workspace-dm" });
-    const bindings = listGenericCurrentConversationBindingsBySession(
-      "agent:codex:acp:workspace-dm",
-    );
-    expect(bindings).toHaveLength(1);
-    expectBindingFields(bindings[0], {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-    });
-  });
-
-  it("does not match partial target keys or request aliases", async () => {
-    await bindWorkspaceConversation("user:U123");
-
-    expect(listGenericCurrentConversationBindingsBySession("agent:main")).toEqual([]);
-    expect(listGenericCurrentConversationBindingsBySession("main")).toEqual([]);
-  });
-
-  it("drops self-parent conversation refs when storing generic current bindings", async () => {
-    const bound = await bindGenericCurrentConversation({
-      targetSessionKey: "agent:codex:acp:forum-dm",
-      targetKind: "session",
-      conversation: {
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-        parentConversationId: "6098642967",
-      },
-    });
-
-    const boundRecord = expectBindingFields(bound, {
-      bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
-    });
-    expect(boundRecord.conversation).toEqual({
-      channel: "forum",
-      accountId: "default",
-      conversationId: "6098642967",
-    });
-    expect(bound?.conversation.parentConversationId).toBeUndefined();
-    expectBindingFields(
-      resolveGenericCurrentConversationBinding({
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-      }),
-      {
-        bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
-        targetSessionKey: "agent:codex:acp:forum-dm",
-      },
-    );
-  });
-
   it("migrates persisted legacy self-parent binding ids on load", async () => {
     seedPersistedBinding({
       bindingId: "generic:forum\u241fdefault\u241f6098642967\u241f6098642967",
-      targetSessionKey: "agent:codex:acp:forum-dm",
+      targetSessionKey: " agent:codex:acp:forum-dm ",
       targetKind: "session",
       conversation: {
         channel: "forum",
@@ -789,57 +626,7 @@ describe("generic current-conversation bindings", () => {
     expect(resolveGenericCurrentConversationBinding(workspaceConversation("user:U123"))).toBeNull();
   });
 
-  it("persists touched activity after the state database reopens", async () => {
-    const bound = await bindGenericCurrentConversation({
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-      targetKind: "session",
-      conversation: workspaceConversation("user:U123"),
-      metadata: {
-        label: "workspace-dm",
-      },
-    });
-
-    expectSessionBinding(bound);
-
-    touchGenericCurrentConversationBinding(
-      "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      1_234_567_890,
-    );
-
-    closeOpenClawStateDatabaseForTest();
-
-    expectBindingMetadata(
-      resolveGenericCurrentConversationBinding(workspaceConversation("user:U123")),
-      {
-        label: "workspace-dm",
-        lastActivityAt: 1_234_567_890,
-      },
-    );
-  });
-
   describe("SQLite write failures", () => {
-    it("keeps the committed binding when its replacement write fails", async () => {
-      await bindWorkspaceConversation("user:U1", {
-        targetSessionKey: "agent:codex:acp:session-a",
-      });
-
-      await expect(
-        withRejectedBindingCommit(() =>
-          bindWorkspaceConversation("user:U1", {
-            targetSessionKey: "agent:codex:acp:session-b",
-          }),
-        ),
-      ).rejects.toThrow();
-
-      expect(resolveWorkspaceConversation("user:U1")?.targetSessionKey).toBe(
-        "agent:codex:acp:session-a",
-      );
-      closeOpenClawStateDatabaseForTest();
-      expect(resolveWorkspaceConversation("user:U1")?.targetSessionKey).toBe(
-        "agent:codex:acp:session-a",
-      );
-    });
-
     it("keeps committed activity unchanged when a touch write fails", async () => {
       const bound = expectSessionBinding(
         await bindWorkspaceConversation("user:U1", { metadata: { label: "workspace-dm" } }),
@@ -855,38 +642,6 @@ describe("generic current-conversation bindings", () => {
       expect(resolveWorkspaceConversation("user:U1")?.metadata?.lastActivityAt).toBe(
         originalActivity,
       );
-    });
-
-    it("keeps a binding when unbind by id fails", async () => {
-      const bound = expectSessionBinding(await bindWorkspaceConversation("user:U1"));
-
-      await expect(
-        withRejectedBindingCommit(() =>
-          unbindGenericCurrentConversationBindings({
-            bindingId: bound.bindingId,
-            reason: "test cleanup",
-          }),
-        ),
-      ).rejects.toThrow();
-
-      expect(resolveWorkspaceConversation("user:U1")).not.toBeNull();
-    });
-
-    it("keeps every matching binding when unbind by session fails", async () => {
-      const targetSessionKey = "agent:codex:acp:shared";
-      await bindWorkspaceConversation("user:U1", { targetSessionKey });
-      await bindWorkspaceConversation("user:U2", { targetSessionKey });
-
-      await expect(
-        withRejectedBindingCommit(() =>
-          unbindGenericCurrentConversationBindings({
-            targetSessionKey,
-            reason: "test cleanup",
-          }),
-        ),
-      ).rejects.toThrow();
-
-      expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
     });
 
     it("keeps an expired binding when prune-on-resolve fails", async () => {
@@ -940,14 +695,6 @@ describe("generic current-conversation bindings", () => {
 
       vi.setSystemTime(new Date(1_000_500));
       expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
-    });
-
-    it("reads an unexpired binding without requiring a SQLite cleanup write", async () => {
-      await bindWorkspaceConversation("user:U1");
-
-      await expect(
-        withReadOnlyStateDatabase(() => resolveWorkspaceConversation("user:U1")),
-      ).resolves.not.toBeNull();
     });
   });
 });

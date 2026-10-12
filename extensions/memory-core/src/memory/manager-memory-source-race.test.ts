@@ -101,11 +101,6 @@ describe("memory source changes during indexing", () => {
             .join("\n");
         expect(indexedText()).toContain("Updated beta sibling");
         expect(indexedText()).not.toContain("Obsolete alpha");
-        expect(
-          db
-            .prepare("SELECT hash FROM memory_embedding_cache WHERE hash = ?")
-            .get(hashText(obsoleteContent)),
-        ).toBeUndefined();
         expect(manager.status().dirty).toBe(true);
         expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(false);
 

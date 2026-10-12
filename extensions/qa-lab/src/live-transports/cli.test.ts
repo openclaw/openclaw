@@ -1,7 +1,7 @@
 // Qa Lab tests cover live transport CLI and adapter contribution discovery.
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   adapterRuntimeLoads,
@@ -73,9 +73,19 @@ function registerCommand(commandName: string) {
 }
 
 describe("live transport QA contributions", () => {
+  let previousExitCode: typeof process.exitCode;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.clearAllMocks();
     listQaRunnerCliContributions.mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    process.exitCode = previousExitCode;
+    stderrWrite.mockRestore();
   });
 
   it("registers all three dedicated commands without loading suite or adapter runtimes", () => {
@@ -89,7 +99,7 @@ describe("live transport QA contributions", () => {
     expect(adapterRuntimeLoads).toEqual(adapterLoadsBefore);
   });
 
-  it.each(["discord", "slack", "whatsapp"] as const)(
+  it.each(["slack", "whatsapp"] as const)(
     "routes the shipped %s command through the shared suite host",
     async (commandName) => {
       const registration = listLiveTransportQaCliRegistrations().find(
@@ -113,6 +123,8 @@ describe("live transport QA contributions", () => {
       "node",
       "openclaw",
       "discord",
+      "--channel-driver",
+      "crabline",
       "--repo-root",
       "/repo",
       "--output-dir",
@@ -137,6 +149,7 @@ describe("live transport QA contributions", () => {
     expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
       channelId: "discord",
       options: {
+        channelDriver: "crabline",
         repoRoot: "/repo",
         outputDir: "/proof",
         providerMode: "mock-openai",
@@ -155,30 +168,6 @@ describe("live transport QA contributions", () => {
     });
     expect(command.helpInformation()).toContain("Usage: qa discord [options]");
   });
-
-  it("maps the Discord Crabline driver", async () => {
-    const qa = new Command();
-    requireRegistration("discord").register(qa);
-
-    await qa.parseAsync(["node", "openclaw", "discord", "--channel-driver", "crabline"]);
-
-    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
-      channelId: "discord",
-      options: expect.objectContaining({ channelDriver: "crabline" }),
-    });
-  });
-
-  it.each(["slack", "whatsapp"] as const)(
-    "does not expose an unsupported Crabline driver on the %s command",
-    async (commandName) => {
-      const { qa } = registerCommand(commandName);
-
-      await expect(
-        qa.parseAsync(["node", "openclaw", commandName, "--channel-driver", "crabline"]),
-      ).rejects.toMatchObject({ code: "commander.unknownOption" });
-      expect(runLiveTransportQaSuiteCommand).not.toHaveBeenCalled();
-    },
-  );
 
   it("preserves standard command defaults, duplicate scenarios, and dispatch errors", async () => {
     const commandName = "discord";
@@ -219,18 +208,9 @@ describe("live transport QA contributions", () => {
 
     const failure = new Error(`${commandName} suite failed`);
     runLiveTransportQaSuiteCommand.mockRejectedValueOnce(failure);
-    const next = registerCommand(commandName).qa.parseAsync(["node", "openclaw", commandName]);
-    await expect(next).rejects.toBe(failure);
-  });
-
-  it("rejects a missing standard option value before suite dispatch", async () => {
-    const commandName = "discord";
-    const { qa } = registerCommand(commandName);
-
-    await expect(qa.parseAsync(["node", "openclaw", commandName, "--model"])).rejects.toThrow(
-      "option '--model <ref>' argument missing",
-    );
-    expect(runLiveTransportQaSuiteCommand).not.toHaveBeenCalled();
+    await registerCommand(commandName).qa.parseAsync(["node", "openclaw", commandName]);
+    expect(stderrWrite).toHaveBeenCalledWith(`${failure.message}\n`);
+    expect(process.exitCode).toBe(1);
   });
 
   it("keeps all three adapter runtimes lazy and preserves factory failure identity", async () => {
@@ -301,21 +281,4 @@ describe("live transport QA contributions", () => {
       sutAccountId: "sut",
     });
   });
-
-  it.each(["discord", "telegram"])(
-    "does not expose worker concurrency for the shared-instance %s command",
-    async (commandName) => {
-      const registration = listLiveTransportQaCliRegistrations().find(
-        (candidate) => candidate.commandName === commandName,
-      );
-      const qa = new Command().exitOverride().configureOutput({ writeErr: () => {} });
-      registration?.register(qa);
-
-      await expect(
-        qa.parseAsync(["node", "openclaw", commandName, "--concurrency", "2"]),
-      ).rejects.toThrow("unknown option '--concurrency'");
-      expect(runLiveTransportQaSuiteCommand).not.toHaveBeenCalled();
-      expect(runTelegram).not.toHaveBeenCalled();
-    },
-  );
 });

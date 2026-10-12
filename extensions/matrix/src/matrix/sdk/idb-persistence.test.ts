@@ -98,7 +98,7 @@ describe("Matrix IndexedDB persistence", () => {
   it("uses the client-owned state runtime after the ambient plugin scope changes", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     const originalRuntime = getMatrixRuntime();
-    const stateRuntime = { openKeyedStore: originalRuntime.state.openKeyedStore };
+    const stateRuntime = { openKeyedStoreV2: originalRuntime.state.openKeyedStoreV2 };
     await seedDatabase({
       name: cryptoDatabaseName,
       storeName: "sessions",
@@ -108,7 +108,7 @@ describe("Matrix IndexedDB persistence", () => {
       ...originalRuntime,
       state: {
         ...originalRuntime.state,
-        openKeyedStore: () => {
+        openKeyedStoreV2: () => {
           throw new Error("ambient Matrix runtime is unavailable");
         },
       },
@@ -173,62 +173,65 @@ describe("Matrix IndexedDB persistence", () => {
     });
   });
 
-  it.each(["bulk", "legacy"])(
-    "reassembles exact snapshot bytes beyond chunk 9 with %s stores",
-    async (mode) => {
-      const snapshotJson = JSON.stringify({
-        records: Array.from({ length: 24 }, (_, index) => `${index}:🦞${"x".repeat(15_000)}`),
-      });
-      await writeMatrixIdbSnapshotJson({ storageRootDir: tmpDir, snapshotJson, databaseCount: 1 });
-      const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>(
-        "matrix",
-        openMatrixIdbSnapshotStoreOptions(tmpDir),
-      );
-      const stateRuntime: MatrixSnapshotStateRuntime = {
-        openKeyedStore<T>(options: OpenAsyncKeyedStoreOptions) {
-          const reader = createPluginStateKeyedStoreForTests<T>("matrix", options);
-          return mode === "bulk" ? reader : { ...reader, lookupMany: undefined };
-        },
-      };
-      expect(await readMatrixIdbSnapshotJson(tmpDir)).toBe(snapshotJson);
-      await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBe(snapshotJson);
-      const chunk = (await store.entries()).find(
-        (row) => row.value.kind === "snapshot-chunk" && row.value.index === 10,
-      );
-      expect(chunk).toBeDefined();
-      if (!chunk || chunk.value.kind !== "snapshot-chunk") {
-        throw new Error("expected snapshot chunk 10");
-      }
-      await store.register(chunk.key, { ...chunk.value, data: "modified" });
-      await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBeNull();
-      const laterChunk = (await store.entries()).find(
-        (row) => row.value.kind === "snapshot-chunk" && row.value.index === 11,
-      );
-      if (!laterChunk) {
-        throw new Error("expected snapshot chunk 11");
-      }
-      const { db } = openOpenClawStateDatabase({
-        env: openMatrixIdbSnapshotStoreOptions(tmpDir).env,
-      });
-      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
-        "invalid JSON",
-        laterChunk.key,
-      );
-      await store.register(chunk.key, { ...chunk.value, index: -1 });
-      expect(await readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
-      await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBeNull();
-      await store.delete(chunk.key);
-      expect(await readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
-      await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBeNull();
-      await store.register(chunk.key, chunk.value);
-      await expect(readMatrixIdbSnapshotJson(tmpDir)).rejects.toMatchObject(
-        expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
-      );
-      await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).rejects.toMatchObject({
-        code: "PLUGIN_STATE_CORRUPT",
-      });
-    },
-  );
+  it("reassembles exact snapshot bytes beyond chunk 9", async () => {
+    const snapshotJson = JSON.stringify({
+      records: Array.from({ length: 24 }, (_, index) => `${index}:🦞${"x".repeat(15_000)}`),
+    });
+    await writeMatrixIdbSnapshotJson({ storageRootDir: tmpDir, snapshotJson, databaseCount: 1 });
+    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>(
+      "matrix",
+      openMatrixIdbSnapshotStoreOptions(tmpDir),
+    );
+    const stateRuntime: MatrixSnapshotStateRuntime = {
+      openKeyedStoreV2<T>(options: OpenAsyncKeyedStoreOptions) {
+        return createPluginStateKeyedStoreForTests<T>("matrix", options);
+      },
+    };
+    expect(await readMatrixIdbSnapshotJson(tmpDir)).toBe(snapshotJson);
+    await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBe(snapshotJson);
+    const chunk = (await store.entries()).find(
+      (row) => row.value.kind === "snapshot-chunk" && row.value.index === 10,
+    );
+    expect(chunk).toBeDefined();
+    if (!chunk || chunk.value.kind !== "snapshot-chunk") {
+      throw new Error("expected snapshot chunk 10");
+    }
+    await store.register(chunk.key, { ...chunk.value, data: "modified" });
+    await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBeNull();
+    const laterChunk = (await store.entries()).find(
+      (row) => row.value.kind === "snapshot-chunk" && row.value.index === 11,
+    );
+    if (!laterChunk) {
+      throw new Error("expected snapshot chunk 11");
+    }
+    await store.register(chunk.key, { ...chunk.value, index: -1 });
+    expect(await readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
+    await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBeNull();
+    await store.delete(chunk.key);
+    expect(await readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
+    await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBeNull();
+    await store.register(chunk.key, chunk.value);
+    // Corrupt offline storage, not a live owner's cached rows.
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    const { db, path: databasePath } = openOpenClawStateDatabase({
+      env: openMatrixIdbSnapshotStoreOptions(tmpDir).env,
+    });
+    db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+      "invalid JSON",
+      laterChunk.key,
+    );
+    await closeOpenClawStateDatabaseAsync();
+    // A fresh physical file models the cold-process read without cached row facts.
+    fs.copyFileSync(databasePath, `${databasePath}.corrupt`);
+    fs.renameSync(`${databasePath}.corrupt`, databasePath);
+    await expect(readMatrixIdbSnapshotJson(tmpDir)).rejects.toMatchObject(
+      expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
+    );
+    await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).rejects.toMatchObject({
+      code: "PLUGIN_STATE_CORRUPT",
+    });
+  });
 
   it.each(["absent", "valid", "malformed"] as const)(
     "refuses retired snapshot JSON when canonical SQLite state is %s",
@@ -284,7 +287,7 @@ describe("Matrix IndexedDB persistence", () => {
       expect(fs.readFileSync(snapshotPath, "utf8")).toBe(snapshot);
 
       const storeSpy = vi
-        .spyOn(getMatrixRuntime().state, "openKeyedStore")
+        .spyOn(getMatrixRuntime().state, "openKeyedStoreV2")
         .mockImplementation(() => {
           throw new Error("sqlite unavailable");
         });

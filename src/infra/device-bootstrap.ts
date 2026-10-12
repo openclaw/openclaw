@@ -113,17 +113,22 @@ type BootstrapParams<Key extends keyof DeviceBootstrapOperations> = Omit<
   "nowMs"
 > & { baseDir?: string };
 
+function runBootstrapMutation<Key extends keyof DeviceBootstrapOperations>(
+  type: Key,
+  input: (nowMs: number) => DeviceBootstrapOperations[Key]["input"],
+  options: Parameters<typeof executeDevicePairingMutation<Key>>[1],
+): Promise<DeviceBootstrapOperations[Key]["output"]> {
+  return withLock(() => executeDevicePairingMutation({ type, input: input(Date.now()) }, options));
+}
+
 /** Reuse one environment-owned setup credential across provider replay. */
 export async function ensureDevicePairSetupBootstrapToken(
   params: BootstrapParams<"bootstrap.ensure">,
 ): Promise<DeviceBootstrapOperations["bootstrap.ensure"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.ensure", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.ensure", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+  });
 }
 
 /** Consume only while the bound device and its live handoff authority remain current. */
@@ -134,29 +139,21 @@ export async function consumeDeviceBootstrapTokenWithSetupCompletion(
   },
 ): Promise<DeviceBootstrapOperations["bootstrap.consume"]["output"]> {
   const { baseDir, pairedDeviceMatches, admitsCloudWorkerSetup, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.consume", input: { ...input, nowMs: Date.now() } },
-      {
-        baseDir,
-        onAuthorityRefused: () => null,
-        admit: (facts) => {
-          if (facts.kind === "bootstrap.consume") {
-            assertBootstrapTokenCurrent(facts);
-            if (pairedDeviceMatches && !pairedDeviceMatches(facts.pairedDevice)) {
-              throw new DevicePairingAuthorityRefusedError();
-            }
-          }
-          if (
-            facts.kind === "bootstrap.cloudWorkerSetup" &&
-            admitsCloudWorkerSetup?.(facts) !== true
-          ) {
-            throw new DevicePairingAuthorityRefusedError();
-          }
-        },
-      },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.consume", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+    onAuthorityRefused: () => null,
+    admit: (facts) => {
+      if (facts.kind === "bootstrap.consume") {
+        assertBootstrapTokenCurrent(facts);
+        if (pairedDeviceMatches && !pairedDeviceMatches(facts.pairedDevice)) {
+          throw new DevicePairingAuthorityRefusedError();
+        }
+      }
+      if (facts.kind === "bootstrap.cloudWorkerSetup" && admitsCloudWorkerSetup?.(facts) !== true) {
+        throw new DevicePairingAuthorityRefusedError();
+      }
+    },
+  });
 }
 
 /** Confirm that the pairing client received the credential-bearing handoff response. */
@@ -164,12 +161,9 @@ export async function confirmDevicePairSetupCompletionDelivery(
   params: BootstrapParams<"bootstrap.confirm">,
 ): Promise<DeviceBootstrapOperations["bootstrap.confirm"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.confirm", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.confirm", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+  });
 }
 
 /** Read the terminal outcome and prune expired completions under the settlement lock. */
@@ -177,24 +171,19 @@ export async function readDevicePairSetupCompletion(
   params: BootstrapParams<"bootstrap.readCompletion">,
 ): Promise<DeviceBootstrapOperations["bootstrap.readCompletion"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.readCompletion", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.readCompletion", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+  });
 }
 
 export async function clearDeviceBootstrapTokens(
   params: { baseDir?: string; assertCurrent?: () => void } = {},
 ): Promise<{ removed: number }> {
   const { baseDir, assertCurrent, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.clear", input: { ...input, nowMs: Date.now() } },
-      { baseDir, assertCurrent },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.clear", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+    assertCurrent,
+  });
 }
 
 /** Revoke a bootstrap token unless its cloud-worker environment is already bound to the token's device. */
@@ -203,12 +192,9 @@ export async function revokeDeviceBootstrapToken(params: {
   baseDir?: string;
 }): Promise<{ removed: boolean; record?: DeviceBootstrapTokenRecord }> {
   const { baseDir, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.revoke", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.revoke", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+  });
 }
 
 /** Restore an uncorrelated bootstrap bearer after an undelivered credential response. */
@@ -216,12 +202,9 @@ export async function restoreGenericDeviceBootstrapToken(
   params: BootstrapParams<"bootstrap.restore">,
 ): Promise<DeviceBootstrapOperations["bootstrap.restore"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.restore", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.restore", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+  });
 }
 
 /** Record one role/scope leg of a multi-role bootstrap handoff. */
@@ -229,20 +212,15 @@ export async function redeemDeviceBootstrapTokenProfile(
   params: BootstrapParams<"bootstrap.redeem">,
 ): Promise<DeviceBootstrapOperations["bootstrap.redeem"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.redeem", input: { ...input, nowMs: Date.now() } },
-      {
-        baseDir,
-        onAuthorityRefused: () => ({ recorded: false, fullyRedeemed: false }),
-        admit: (facts) => {
-          if (facts.kind === "bootstrap.token") {
-            assertBootstrapTokenCurrent(facts);
-          }
-        },
-      },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.redeem", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+    onAuthorityRefused: () => ({ recorded: false, fullyRedeemed: false }),
+    admit: (facts) => {
+      if (facts.kind === "bootstrap.token") {
+        assertBootstrapTokenCurrent(facts);
+      }
+    },
+  });
 }
 
 /** Verify a bootstrap token, bind its first device identity, and stage requested scopes. */
@@ -250,20 +228,15 @@ export async function verifyDeviceBootstrapToken(
   params: BootstrapParams<"bootstrap.verify">,
 ): Promise<DeviceBootstrapOperations["bootstrap.verify"]["output"]> {
   const { baseDir, ...input } = params;
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.verify", input: { ...input, nowMs: Date.now() } },
-      {
-        baseDir,
-        onAuthorityRefused: () => ({ ok: false, reason: "bootstrap_token_invalid" }),
-        admit: (facts) => {
-          if (facts.kind === "bootstrap.token") {
-            assertBootstrapTokenCurrent(facts);
-          }
-        },
-      },
-    ),
-  );
+  return await runBootstrapMutation("bootstrap.verify", (nowMs) => ({ ...input, nowMs }), {
+    baseDir,
+    onAuthorityRefused: () => ({ ok: false, reason: "bootstrap_token_invalid" }),
+    admit: (facts) => {
+      if (facts.kind === "bootstrap.token") {
+        assertBootstrapTokenCurrent(facts);
+      }
+    },
+  });
 }
 
 /** Remove retained setup outcomes independently of status requests or later pairings. */

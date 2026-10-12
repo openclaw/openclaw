@@ -121,19 +121,13 @@ function pushMemorySessionTranscriptIndexing(
   entries: PolicyDataHandlingEvidence[],
   cfg: Record<string, unknown>,
 ): void {
-  const memory = asNonArrayRecord(cfg.memory);
-  const defaultsMemorySearch = asNonArrayRecord(memory.search);
-  const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaultsMemorySearch);
+  const defaults = readMemorySessionSettings(asNonArrayRecord(cfg.memory).search);
+  const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaults);
   if (defaultSessionMemory !== undefined) {
-    const defaultExperimental = asNonArrayRecord(defaultsMemorySearch.experimental);
     entries.push({
       id: "agents-defaults-memory-session-transcripts",
       kind: "memorySessionTranscriptIndexing",
-      source:
-        readBoolean(defaultsMemorySearch.rememberAcrossConversations) === undefined &&
-        readBoolean(defaultExperimental.sessionMemory) !== undefined
-          ? "oc://openclaw.config/memory/search/experimental/sessionMemory"
-          : "oc://openclaw.config/memory/search/rememberAcrossConversations",
+      source: `oc://openclaw.config/memory/search/${defaults.sourceKey}`,
       scope: "global",
       value: defaultSessionMemory,
       explicit: true,
@@ -146,43 +140,32 @@ function pushMemorySessionTranscriptIndexing(
     if (!isRecord(rawAgent)) {
       return;
     }
-    const agentMemory = isRecord(rawAgent.memory) ? rawAgent.memory : undefined;
-    const memorySearch = isRecord(agentMemory?.search) ? agentMemory.search : undefined;
-    const agentSessionMemory =
-      memorySearch === undefined
-        ? defaultSessionMemory
-        : memorySearchSessionTranscriptIndexing(memorySearch, defaultsMemorySearch);
+    const memorySearch = asNonArrayRecord(rawAgent.memory).search;
+    const local = readMemorySessionSettings(memorySearch);
+    const agentSessionMemory = isRecord(memorySearch)
+      ? memorySearchSessionTranscriptIndexing(local, defaults)
+      : defaultSessionMemory;
     if (agentSessionMemory === undefined) {
       return;
     }
-    const explicit = readMemorySessionSettings(memorySearch).explicit;
-    const experimental = asNonArrayRecord(memorySearch?.experimental);
     entries.push({
       id: `${agentId}-memory-session-transcripts`,
       kind: "memorySessionTranscriptIndexing",
-      source: explicit
-        ? readBoolean(memorySearch?.rememberAcrossConversations) === undefined &&
-          readBoolean(experimental.sessionMemory) !== undefined
-          ? `${configured.sourceBase}/memory/search/experimental/sessionMemory`
-          : `${configured.sourceBase}/memory/search/rememberAcrossConversations`
+      source: local.explicit
+        ? `${configured.sourceBase}/memory/search/${local.sourceKey}`
         : "oc://openclaw.config/memory/search/rememberAcrossConversations",
       scope: "agent",
       agentId: normalizeAgentId(agentId),
       value: agentSessionMemory,
-      explicit,
+      explicit: local.explicit,
     });
   });
 }
 
 function memorySearchSessionTranscriptIndexing(
-  memorySearch: unknown,
-  inheritedMemorySearch?: unknown,
+  local: ReturnType<typeof readMemorySessionSettings>,
+  inherited = local,
 ): boolean | undefined {
-  if (!isRecord(memorySearch)) {
-    return undefined;
-  }
-  const local = readMemorySessionSettings(memorySearch);
-  const inherited = readMemorySessionSettings(inheritedMemorySearch);
   const rememberAcrossConversations = local.remember ?? inherited.remember;
   if (rememberAcrossConversations === undefined && !local.explicit) {
     return undefined;
@@ -197,9 +180,12 @@ function memorySearchSessionTranscriptIndexing(
 function readMemorySessionSettings(value: unknown) {
   const search = asNonArrayRecord(value);
   const enabled = readBoolean(search.enabled);
-  const remember =
-    readBoolean(search.rememberAcrossConversations) ??
-    readBoolean(asNonArrayRecord(search.experimental).sessionMemory);
+  const current = readBoolean(search.rememberAcrossConversations);
+  const legacy =
+    current === undefined
+      ? readBoolean(asNonArrayRecord(search.experimental).sessionMemory)
+      : undefined;
+  const remember = current ?? legacy;
   const sessions =
     search.sources === undefined
       ? undefined
@@ -209,6 +195,7 @@ function readMemorySessionSettings(value: unknown) {
     remember,
     sessions,
     explicit: enabled !== undefined || remember !== undefined || sessions !== undefined,
+    sourceKey: legacy === undefined ? "rememberAcrossConversations" : "experimental/sessionMemory",
   };
 }
 

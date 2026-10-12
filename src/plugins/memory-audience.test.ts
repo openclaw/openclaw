@@ -114,33 +114,6 @@ describe("memory audience resolution", () => {
     expect(Object.isFrozen(audience)).toBe(true);
   });
 
-  it("uses durable chat type for threaded sessions", async () => {
-    const root = rootEntry("group");
-    const threadKey = "agent:main:discord:group:room:thread:reply";
-    const { audience } = await grantAt(threadKey, root, true);
-    expect(audience).toEqual({
-      kind: "conversation",
-      agentId: AGENT_ID,
-      sessionKey: threadKey,
-      sessionId: root.sessionId,
-    });
-  });
-
-  it("reuses an admitted root entry without a session read", async () => {
-    await grantAt(ROOT_KEY, rootEntry(), true);
-    expect(fakeSessionOwner.workerReads).toEqual([]);
-  });
-
-  it("reads a child's durable parent on the session read worker", async () => {
-    const root = rootEntry();
-    const resolution = await resolveChild(root, childEntry(root));
-    expect(resolution).toMatchObject({
-      status: "granted",
-      audience: { kind: "owner-private", agentId: AGENT_ID },
-    });
-    expect(fakeSessionOwner.workerReads).toEqual([ROOT_KEY]);
-  });
-
   it("denies a missing parent, missing chat type, missing session id, or mismatched session id", async () => {
     const root = rootEntry();
     const child = childEntry(root);

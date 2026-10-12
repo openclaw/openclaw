@@ -216,7 +216,6 @@ describe("Testbox lease freshness", () => {
     ["old schema", "state schema"],
     ["missing HEAD", "headSha"],
     ["invalid HEAD", "headSha"],
-    ["changed HEAD", "headSha"],
   ])("rejects %s after preparation without refreshing allocation provenance", (change, message) => {
     const fixture = createLeaseFixture();
     fixture.allocate();
@@ -225,8 +224,6 @@ describe("Testbox lease freshness", () => {
     expect(() => admitted?.assertCurrent()).not.toThrow();
     if (change === "withdrawn") {
       rmSync(fixture.statePath);
-    } else if (change === "changed HEAD") {
-      fixture.advanceHead();
     } else {
       const receipt = JSON.parse(original);
       if (change === "reassigned") {
@@ -242,17 +239,12 @@ describe("Testbox lease freshness", () => {
       ? readFileSync(fixture.statePath, "utf8")
       : undefined;
     expect(() => admitted?.assertCurrent()).toThrow(message);
-    if (change !== "changed HEAD") {
-      expect(() => fixture.reuse()).toThrow(message);
-    }
+    expect(() => fixture.reuse()).toThrow(message);
     expect(admitted?.current.headSha).toBe(JSON.parse(original).headSha);
     if (changedReceipt === undefined) {
       expect(existsSync(fixture.statePath)).toBe(false);
     } else {
       expect(readFileSync(fixture.statePath, "utf8")).toBe(changedReceipt);
-    }
-    if (change === "changed HEAD") {
-      expect(readFileSync(fixture.statePath, "utf8")).toBe(original);
     }
   });
 

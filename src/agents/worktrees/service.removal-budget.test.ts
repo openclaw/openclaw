@@ -146,7 +146,6 @@ it("backs off the shared repository after a missing-object snapshot failure", as
   });
   expect((await gc()).removed).toEqual([healthy.id]);
   await requireGit(repoRoot, ["remote", "set-url", "origin", source]);
-  await requireGit(repoRoot, ["cat-file", "blob", "HEAD:missing.txt"]);
   expect((await gc(true)).removed.toSorted()).toEqual(
     records.map((record) => record.id).toSorted(),
   );
@@ -178,7 +177,6 @@ it("records an admitted deletion timeout after its caller cancels and loses sess
   vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
     if (args[0] === "worktree" && args[1] === "remove") {
       options?.beforeRun?.();
-      await fs.unlink(path.join(record.path, "README.md"));
       current = false;
       controller.abort(new Error("caller cancelled"));
       return {

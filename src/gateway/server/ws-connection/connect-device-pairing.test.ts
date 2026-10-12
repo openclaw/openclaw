@@ -32,11 +32,9 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
 } from "../../../shared/device-bootstrap-profile.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import {
-  disconnectedUserGitHubConnection,
-  readUserGitHubConnection,
-  updateUserGitHubConnection,
-} from "../../../state/user-github-connections.js";
+import { readUserGitHubConnectionAsync } from "../../../state/user-github-connections.js";
+import { disconnectedUserGitHubConnection } from "../../../state/user-github-connections.kernel.js";
+import { updateUserGitHubConnection } from "../../../state/user-github-connections.test-support.js";
 import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
 import {
@@ -370,7 +368,7 @@ describe("gateway connect pairing exemptions", () => {
       }
       expect(personalStatus).not.toHaveBeenCalled();
       expect(personalAuthorize).not.toHaveBeenCalled();
-      expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
+      expect(await readUserGitHubConnectionAsync(person.id)).toEqual(personalConnection);
       const sessions = await rpcReq<SessionsListResult>(reconnect, "sessions.list", {});
       expect(sessions.ok).toBe(true);
       expect(
@@ -474,6 +472,7 @@ describe("gateway connect pairing exemptions", () => {
       expect(personalStatus).toHaveBeenCalledExactlyOnceWith({
         owner: "gateway-owner",
         assertCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
       });
       expect(personalAuthorize).not.toHaveBeenCalled();
       const afterRepair = await rpcReq<UsersListResult>(reconnect, "users.list", {});
@@ -484,7 +483,7 @@ describe("gateway connect pairing exemptions", () => {
         emails: ["person@example.test"],
         role: "guest",
       });
-      expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
+      expect(await readUserGitHubConnectionAsync(person.id)).toEqual(personalConnection);
     } finally {
       for (const spy of personalSpies) {
         spy.mockRestore();
@@ -980,6 +979,12 @@ describe("gateway connect pairing exemptions", () => {
       expect((await getPairedDevice(paired.identity.deviceId))?.approvedScopes).toEqual([
         "operator.read",
       ]);
+      expect((await listDevicePairing()).pending).toContainEqual(
+        expect.objectContaining({
+          deviceId: paired.identity.deviceId,
+          scopes: ["operator.write"],
+        }),
+      );
     } finally {
       ws?.close();
       await started.server.close();

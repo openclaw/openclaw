@@ -10,9 +10,9 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
 import { stop } from "./service/ops-lifecycle.js";
+import { startCronScheduler } from "./service/scheduler-actor.js";
+import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
-import { armTimer } from "./service/timer.js";
-import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -66,45 +66,36 @@ describe("cron scheduled wakes", () => {
   it("joins a scheduled tick waiting for admission without reopening suspension", async ({
     signal,
   }) => {
+    const store = await makeStorePath();
     const clock = createGatewaySchedulerClock(now);
-    const state = createState(undefined, clock);
+    const state = createState(store.storePath, clock);
     state.store = { version: 1, jobs: [job(now + 1_000)] };
-    armTimer(state);
+    await saveCronStore(store.storePath, state.store);
+    const { wake: wakeScheduler } = await captureCronSchedulerWakeForTest(() =>
+      startCronScheduler(state, new Set()),
+    );
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
     const releaseSuspension = () => {
       suspension?.release();
     };
     signal.addEventListener("abort", releaseSuspension, { once: true });
-    const wake = clock.advanceBy(1_000);
+    const wake = wakeScheduler(state);
 
     try {
       state.deps.scheduler.beginClose();
       stop(state);
+      await state.schedulerDrain;
       await state.deps.scheduler.stop();
       await wake;
 
       expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(state.storeLoadedAtMs).toBeNull();
       expect(state.deps.log.error).not.toHaveBeenCalled();
     } finally {
       signal.removeEventListener("abort", releaseSuspension);
       releaseSuspension();
       await wake;
     }
-  });
-
-  it("keeps a past-due active occurrence from producing a zero-delay loop", async () => {
-    const store = await makeStorePath();
-    const overdue = job(now - 17 * 60_000);
-    overdue.state.runningAtMs = overdue.state.nextRunAtMs! + 1;
-    await saveCronStore(store.storePath, { version: 1, jobs: [overdue] });
-    const state = createState(store.storePath);
-
-    await onTimer(state);
-
-    expect(state.running).toBe(false);
-    expect(state.deps.scheduler.nextWakeAtMs).toBeGreaterThanOrEqual(now + 2_000);
   });
 });

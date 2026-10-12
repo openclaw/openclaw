@@ -8,8 +8,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./prepared-model-catalog-worker.js";
 import {
   createCatalogFixture,
   expectNativeHarnessModelsPublishedFromWorker,

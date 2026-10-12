@@ -43,12 +43,8 @@ vi.mock("@openclaw/fs-safe/store", async (importOriginal) => {
   };
 });
 
-const {
-  collectEntrySpoolPaths,
-  pruneOrphanedDeliveryQueueMedia,
-  releaseSpoolArtifacts,
-  stageQueuePayloadMedia,
-} = await import("./delivery-queue-media-spool.js");
+const { pruneOrphanedDeliveryQueueMedia, releaseSpoolArtifacts, stageQueuePayloadMedia } =
+  await import("./delivery-queue-media-spool.js");
 const { enqueueDelivery } = await import("./delivery-queue-storage.js");
 const { pruneExpiredDeliveryQueueTombstones } = await import("../delivery-queue-sqlite.js");
 const { loadDeliveryQueueEntry, seedDeliveryQueueEntry } =
@@ -249,23 +245,6 @@ describe("retention", () => {
 });
 
 describe("ownership helpers", () => {
-  it("collects only spool-owned references", () => {
-    const spoolPath = path.join(spoolRoot, ARTIFACT_A);
-    const generationPath = path.join(spoolRoot, `g1-${ARTIFACT_A}`);
-    expect(
-      collectEntrySpoolPaths(
-        [
-          { mediaUrl: spoolPath },
-          { mediaUrl: generationPath },
-          { mediaUrl: path.join(spoolRoot, `g2-${ARTIFACT_A}`) },
-          { mediaUrl: "https://example.com/a.ogg" },
-          { mediaUrl: path.join(sourceDir, "b.ogg") },
-        ],
-        stateDir,
-      ),
-    ).toEqual([spoolPath, generationPath]);
-  });
-
   it("releases versioned artifacts without touching paths outside the spool", async () => {
     const outside = path.join(sourceDir, "not-ours.ogg");
     await fs.writeFile(outside, "bytes");
@@ -410,31 +389,12 @@ describe("staging", () => {
     expect(await fs.readdir(spoolRoot).catch(() => [])).toEqual([]);
   });
 
-  it("copies a repeated source once", async () => {
+  it("preserves blank media slots and copies repeated local media once", async () => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");
 
     const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: source }, { mediaUrl: source }],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result.status).toBe("staged");
-    if (result.status !== "staged") {
-      return;
-    }
-    expect(result.artifacts).toHaveLength(1);
-    expect(result.payloads[0]?.mediaUrl).toBe(result.payloads[1]?.mediaUrl);
-  });
-
-  it("preserves blank media slots while staging valid local media", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: " ", mediaUrls: ["", source, "  "] }],
+      payloads: [{ mediaUrl: " ", mediaUrls: ["", source, source, "  "] }],
       mediaAccess: mediaAccessFor([sourceDir]),
       maxBytes: 1024 * 1024,
       stateDir,
@@ -447,7 +407,7 @@ describe("staging", () => {
     expect(result.artifacts).toHaveLength(1);
     expect(result.payloads[0]).toEqual({
       mediaUrl: " ",
-      mediaUrls: ["", result.artifacts[0], "  "],
+      mediaUrls: ["", result.artifacts[0], result.artifacts[0], "  "],
     });
   });
 });

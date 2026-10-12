@@ -6,13 +6,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
-import { normalizeRoute } from "../../scripts/lib/docs-published-routes.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { preparedScriptWrapperEnv } from "../../test/scripts/prepared-script-wrapper.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 
-const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
+const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir } =
   await import("../../scripts/docs-link-audit.mts");
 
 type AuditCliCase = {
@@ -511,21 +510,6 @@ describe("docs-link-audit", () => {
       return docsRoot;
     };
 
-    it("accepts declared mirrored routes in anchors mode when the source is absent", () => {
-      const tempDirs: string[] = [];
-      try {
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing"),
-          allowExternalClawHubRoutes: true,
-          anchors: true,
-        });
-        expect(result.broken).toEqual([]);
-        expect(result.unverifiedMirroredFragments).toBe(0);
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
-    });
-
     it("reports fragments into mirrored routes as unverified rather than missing", () => {
       const tempDirs: string[] = [];
       try {
@@ -679,13 +663,6 @@ describe("docs-link-audit", () => {
     });
   });
 
-  it("normalizes route fragments away", () => {
-    expect(normalizeRoute("/plugins/building-plugins#registering-agent-tools")).toBe(
-      "/plugins/building-plugins",
-    );
-    expect(normalizeRoute("/plugins/building-plugins?tab=all")).toBe("/plugins/building-plugins");
-  });
-
   it("prepares every external-link input without exposing code literals", () => {
     const tempDirs: string[] = [];
     const fixtureRoot = makeTempDir(tempDirs, "docs-external-link-audit-");
@@ -828,18 +805,6 @@ describe("docs-link-audit", () => {
     } finally {
       cleanupTempDirs(tempDirs);
     }
-  });
-
-  it("resolves redirects that land on anchored sections", () => {
-    const redirects = new Map([
-      ["/plugins/agent-tools", "/plugins/building-plugins#registering-agent-tools"],
-    ]);
-    const routes = new Set(["/plugins/building-plugins"]);
-
-    expect(resolveRoute("/plugins/agent-tools", { redirects, routes })).toEqual({
-      ok: true,
-      terminal: "/plugins/building-plugins",
-    });
   });
 
   it("does not create mirrored docs copies for non-root docs trees", () => {

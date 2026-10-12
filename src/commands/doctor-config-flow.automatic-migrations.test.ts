@@ -60,7 +60,11 @@ it("backs up and persists inherited Talk SecretRefs for an unmarked published up
       message: expect.stringContaining("talk.realtime"),
     });
 
-    await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+    await (
+      await prepareDoctorContext(configPath, {
+        options: { nonInteractive: true },
+      })
+    )[Symbol.asyncDispose]();
 
     const saved = await readConfigFileSnapshot();
     expect(saved.valid).toBe(true);
@@ -73,7 +77,11 @@ it("backs up and persists inherited Talk SecretRefs for an unmarked published up
       raw.plugins.entries["voice-call"].config,
     );
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-    await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+    await (
+      await prepareDoctorContext(configPath, {
+        options: { nonInteractive: true },
+      })
+    )[Symbol.asyncDispose]();
     expect((await readConfigFileSnapshot()).raw).toBe(saved.raw);
     expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
   });
@@ -106,7 +114,7 @@ it.each([
       const configPath = await writeOpenClawConfig(home, raw);
       const original = await fs.readFile(configPath, "utf8");
 
-      await prepareDoctorContext(configPath);
+      await (await prepareDoctorContext(configPath))[Symbol.asyncDispose]();
 
       const saved = await readConfigFileSnapshot();
       expect(saved.valid).toBe(repaired);
@@ -144,7 +152,7 @@ it("preserves sandbox override bytes and effective permissions during Doctor rep
     const before = resolveSandboxToolPolicyForAgent(raw, "restricted");
     expect(isToolAllowed(before, "exec")).toBe(false);
 
-    await prepareDoctorContext(configPath);
+    await (await prepareDoctorContext(configPath))[Symbol.asyncDispose]();
 
     const saved = await readConfigFileSnapshot();
     const after = resolveSandboxToolPolicyForAgent(saved.sourceConfig, "restricted");
@@ -174,7 +182,7 @@ it("normalizes retired metadata and Code Mode config for an unmarked npm updater
     expect((await readConfigFileSnapshot()).valid).toBe(false);
 
     // Shipped npm parents omit --fix and do not set the update marker.
-    const ctx = await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
+    await using ctx = await prepareDoctorContext(configPath, { options: { nonInteractive: true } });
 
     expect(ctx.prompter.shouldRepair).toBe(false);
     const saved = await readConfigFileSnapshot();
@@ -262,9 +270,11 @@ it.each([
         }
         const original = await fs.readFile(configPath, "utf8");
 
-        await prepareDoctorContext(configPath, {
-          options: { nonInteractive: true, repair: fixture.repair },
-        });
+        await (
+          await prepareDoctorContext(configPath, {
+            options: { nonInteractive: true, repair: fixture.repair },
+          })
+        )[Symbol.asyncDispose]();
 
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.access(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });

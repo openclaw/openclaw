@@ -2,7 +2,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ConfigPatchAck } from "./config-gateway-operations.ts";
+import type { ConfigPatchAck } from "./config-draft-model.ts";
 import { createConfigCapabilityHarness, createConfigServerMock } from "./config-test-harness.ts";
 
 it.each([false, true])(

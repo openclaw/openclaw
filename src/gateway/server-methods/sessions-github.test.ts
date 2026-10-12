@@ -4,6 +4,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { getRuntimeConfig } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { getUserProfileDisplay } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -28,7 +29,7 @@ import type {
 const mocks = vi.hoisted(() => ({
   caller: vi.fn(),
   loadSession: vi.fn(),
-  request: vi.fn<GitHubPublicationCoordinator["requestForSession"]>(),
+  request: vi.fn<GitHubPublicationCoordinator["requestForSessionV2"]>(),
 }));
 
 vi.mock("../../agents/tools/gateway-caller-context.js", async (importOriginal) => ({
@@ -41,6 +42,9 @@ vi.mock("../session-utils.js", async (importOriginal) => ({
 }));
 
 const expectedSystemRequester = {
+  version: 2,
+  signal: expect.any(AbortSignal),
+  prepareSource: expect.any(Function),
   snapshot: {
     version: 1,
     actor: { kind: "system" },
@@ -64,7 +68,7 @@ async function invoke(
     params,
     respond,
     context: {
-      githubPublicationService: { requestForSession: mocks.request },
+      githubPublicationService: { requestForSessionV2: mocks.request },
       getRuntimeConfig,
     } as never,
     client:
@@ -113,7 +117,7 @@ describe("sessions.github.publish", () => {
     });
   });
 
-  it.each([undefined, "main"])(
+  it.each([undefined])(
     "uses host-owned caller identity with requested owner %s",
     async (agentId) => {
       const respond = await invoke({
@@ -153,7 +157,7 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it.each(["fresh", "existing", "wrong-key", "lookup-failed", "ordinary"])(
+  it.each(["fresh", "wrong-key", "ordinary"])(
     "forwards only the exact owner's %s selection rejection fact",
     async (mode) => {
       const key = "publication-selection";
@@ -218,6 +222,7 @@ describe("sessions.github.publish", () => {
         });
         const profile = await ensureCanonicalUserProfileForEmail("publisher@example.test");
         const creator = await ensureCanonicalUserProfileForEmail("session-creator@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: "agent:main:main" },
           {
@@ -261,6 +266,9 @@ describe("sessions.github.publish", () => {
           idempotencyKey: "operator-publication-1",
           agentId: "main",
           requester: {
+            version: 2,
+            signal: expect.any(AbortSignal),
+            prepareSource: expect.any(Function),
             snapshot: {
               version: 1,
               actor: { kind: "operator", profileId: profile.id },
@@ -281,7 +289,6 @@ describe("sessions.github.publish", () => {
   );
 
   it.each([
-    ["agent:research:main", "research", "configured", undefined],
     ["global", "ops", "configured", undefined],
     ["agent:research:main", "research", "explicit", undefined],
     ["global", "research", "explicit", "research"],

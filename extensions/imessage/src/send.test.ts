@@ -1191,13 +1191,13 @@ describe("sendMessageIMessage receipts", () => {
   it("joins pending echo persistence before sending and its rollback before rejecting", async () => {
     const { getIMessageRuntime } = await import("./runtime.js");
     const state = getIMessageRuntime().state;
-    const openStore = state.openKeyedStore.bind(state);
+    const openStore = state.openKeyedStoreV2.bind(state);
     const writeStarted = createDeferred<void>();
     const writeGate = createDeferred<void>();
     const deleteStarted = createDeferred<void>();
     const deleteGate = createDeferred<void>();
     const openSpy = vi
-      .spyOn(state, "openKeyedStore")
+      .spyOn(state, "openKeyedStoreV2")
       .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openStore<T>(options);
         if (options.namespace === "imessage.sent-echoes") {

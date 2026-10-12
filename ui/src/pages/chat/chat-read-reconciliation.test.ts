@@ -269,7 +269,13 @@ it("keeps global outbox event recovery bound to the event's agent", async () => 
   expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toEqual([
     [
       "chat.history",
-      { sessionKey: "global", agentId: "work", inputRunIds: ["work-run"], limit: 1000 },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        inputRunIds: ["work-run"],
+        limit: 1000,
+        toolResultMaxChars: 2_000,
+      },
       { timeoutMs: 30_000 },
     ],
   ]);

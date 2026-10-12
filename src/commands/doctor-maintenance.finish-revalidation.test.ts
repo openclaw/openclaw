@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as restartHealthProbe from "../cli/daemon-cli/restart-health-probe.js";
@@ -232,7 +233,8 @@ async function runDoctorFinishForStoppedUnit(
         }
         const pathname = openOpenClawStateDatabase().path;
         closeOpenClawStateDatabaseForTest();
-        const db = openNodeSqliteDatabase(pathname);
+        // Damaged legacy bytes are input to Doctor, not a managed schema publication.
+        const db = new DatabaseSync(pathname);
         try {
           db.exec(
             "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",

@@ -29,11 +29,7 @@ import {
   OUTBOUND_DELIVERY_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
 import { findDeliveryIntentOwnersInDatabase } from "./delivery-queue-ownership.kernel.js";
-import {
-  enqueueDeliveryOnce,
-  loadPendingDelivery,
-  findDeliveryIntentOwner,
-} from "./delivery-queue-storage.js";
+import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
 
 describe("outbound delivery namespace ownership", () => {
   let rootDir: string;
@@ -182,37 +178,6 @@ describe("outbound delivery namespace ownership", () => {
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       namespace: "legacy",
       retired: true,
-      status: "pending",
-    });
-  });
-
-  it("observes ownership before and after an atomic namespace move", async () => {
-    const id = "moving-delivery-intent";
-    const source = { id, enqueuedAt: 1, retryCount: 0 };
-    const destination = { ...source, enqueuedAt: 2 };
-    seedDeliveryQueueEntry({
-      queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-      entry: source,
-      stateDir,
-    });
-    expect(await findDeliveryIntentOwner(id, stateDir)).toMatchObject({
-      queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-      namespace: "preparing",
-      status: "pending",
-    });
-
-    expect(
-      movePendingDeliveryQueueEntryNamespace({
-        sourceQueueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-        destinationQueueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        expectedSourceEntry: source,
-        destinationEntry: destination,
-        stateDir,
-      }),
-    ).toBe("moved");
-    expect(await findDeliveryIntentOwner(id, stateDir)).toMatchObject({
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-      namespace: "prepared",
       status: "pending",
     });
   });

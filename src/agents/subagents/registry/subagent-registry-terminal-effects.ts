@@ -1,5 +1,6 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { scopeLegacySessionKeyToAgent } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
@@ -307,7 +308,12 @@ export async function completeTerminalEffects(
           }
           try {
             await cleanupBrowserSessions({
-              sessionKeys: [entry.childSessionKey],
+              sessionKeys: [
+                scopeLegacySessionKeyToAgent({
+                  agentId: entry.childAgentId,
+                  sessionKey: entry.childSessionKey,
+                }) ?? "",
+              ],
               isCurrent: isCurrentSessionEffectsOwner,
               prepareCurrent: async () =>
                 !(await context.shouldSuppressSessionEffects(entry)) &&

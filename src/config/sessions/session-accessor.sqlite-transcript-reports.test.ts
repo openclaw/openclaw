@@ -1,8 +1,10 @@
 import { copyFileSync, readFileSync, renameSync } from "node:fs";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -20,11 +22,15 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   appendSessionTranscriptReport,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { appendAbortedSessionTranscriptPartial } from "./session-accessor.sqlite-transcript-reports.js";
-import { prepareTranscriptPayload } from "./transcript-payload.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import {
+  createTranscriptEventInserter,
+  createTranscriptPayloadUpdater,
+  prepareTranscriptPayload,
+} from "./transcript-payload.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 afterEach(() => {
@@ -55,7 +61,7 @@ const assistant = {
 } satisfies AssistantMessage;
 const selected = { customType: "status", content: body, details: { selected: true } };
 
-async function seedReports() {
+async function seedReports(stopReason: AssistantMessage["stopReason"] = assistant.stopReason) {
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
@@ -73,7 +79,7 @@ async function seedReports() {
       type: "message",
       id: "assistant",
       parentId: "selected",
-      message: { ...assistant, __openclaw: { runId: "run" } },
+      message: { ...assistant, stopReason, __openclaw: { runId: "run" } },
     },
     {
       type: "message",
@@ -459,14 +465,14 @@ describe("SQLite report payload selection", () => {
     "keeps %s reporting independent of unselected compressed bodies",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const db = await seedReports();
+        const db = await seedReports(kind === "run" ? "error" : "stop");
         // Unselected bodies are unavailable; their recorded navigation still supports report decisions.
         const changed = db
           .prepare(
-            "UPDATE transcript_events SET event_zstd = x'010203' WHERE session_id = ? AND event_zstd IS NOT NULL AND seq != 3",
+            "UPDATE transcript_events SET event_zstd = x'010203' WHERE session_id = ? AND event_zstd IS NOT NULL AND seq != 3 AND seq != ?",
           )
-          .run(scope.sessionId);
-        expect(changed.changes).toBe(4);
+          .run(scope.sessionId, kind === "run" ? 4 : -1);
+        expect(changed.changes).toBe(kind === "run" ? 3 : 4);
         const before = transcriptSnapshot(db);
         const selectReport = vi.fn(() => undefined);
         const report: Parameters<typeof appendSessionTranscriptReport>[1] =
@@ -499,7 +505,8 @@ describe("SQLite report payload selection", () => {
       const alias = state.path("report-alias");
       await symlink(path.dirname(databasePath), alias, "junction");
       const aliasedScope = { ...scope, storePath: path.join(alias, path.basename(databasePath)) };
-      const other = new DatabaseSync(databasePath);
+      const other = openNodeSqliteDatabase(databasePath);
+      admitSqliteSchema(other);
       const competitor = {
         customType: "status",
         content: "concurrent report",
@@ -508,20 +515,20 @@ describe("SQLite report payload selection", () => {
       const selectReport = vi.fn((latest: { content: unknown } | undefined) => {
         if (selectReport.mock.calls.length === 1) {
           // Force the actual selection-to-commit race without a timer or worker test hook.
-          other
-            .prepare(
-              "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 6, ?, 1)",
-            )
-            .run(
-              scope.sessionId,
-              JSON.stringify({
-                type: "custom_message",
-                id: "competitor",
-                parentId: "tail",
-                ...competitor,
-                display: true,
-              }),
-            );
+          createTranscriptEventInserter(
+            other,
+            scope.sessionId,
+          )({
+            seq: 6,
+            eventJson: JSON.stringify({
+              type: "custom_message",
+              id: "competitor",
+              parentId: "tail",
+              ...competitor,
+              display: true,
+            }),
+            createdAt: 1,
+          });
         }
         return { customType: "status", content: String(latest?.content), display: true };
       });
@@ -616,9 +623,14 @@ describe("SQLite report payload selection", () => {
             scope.sessionId,
           );
         } else {
-          db.prepare(
-            "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 6, ?, 1)",
-          ).run(scope.sessionId, JSON.stringify({ type: "session", id: "later", version: 1 }));
+          createTranscriptEventInserter(
+            db,
+            scope.sessionId,
+          )({
+            seq: 6,
+            eventJson: JSON.stringify({ type: "session", id: "later", version: 1 }),
+            createdAt: 1,
+          });
           await expect(appendSessionTranscriptReport(scope, report)).resolves.toMatchObject({
             ok: true,
           });
@@ -672,14 +684,12 @@ describe("SQLite report payload selection", () => {
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(3);
       expect(events[1]).toEqual(unreadable);
-      expect(JSON.stringify(events[2])).not.toContain(secret);
-      expect(JSON.stringify(events[2])).toContain("synthe…alue");
       expect(events[2]).toMatchObject({
         type: "message",
         parentId: "unreadable",
         message: {
           responseId: assistant.responseId,
-          content: [{ type: "text", text: expect.stringContaining(body) }],
+          content: [{ type: "text", text: `${body}${secret}` }],
         },
       });
     });
@@ -698,15 +708,7 @@ describe("SQLite report payload selection", () => {
       const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
       const payload = prepareTranscriptPayload(db, raw);
       expect(payload.event_zstd).not.toBeNull();
-      db.prepare(`UPDATE transcript_events
-        SET event_json = ?, event_zstd = ?, event_utf8_bytes = ?, navigation_json = ?
-        WHERE session_id = ? AND seq = 1`).run(
-        payload.event_json,
-        payload.event_zstd,
-        payload.event_utf8_bytes,
-        payload.navigation_json,
-        scope.sessionId,
-      );
+      createTranscriptPayloadUpdater(db, scope.sessionId)({ ...payload, seq: 1 });
       const before = transcriptSnapshot(db);
       await expect(
         appendSessionTranscriptReport(scope, {

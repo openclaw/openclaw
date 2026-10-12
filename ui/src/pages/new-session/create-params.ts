@@ -26,15 +26,6 @@ export type DraftSessionCreateSelection = Partial<
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
 };
 
-export function canStartSessionAsDraft(params: {
-  allowedVisibilities?: readonly string[];
-  hasMultipleIdentities?: boolean;
-}): boolean {
-  return (
-    params.allowedVisibilities?.includes("draft") === true && params.hasMultipleIdentities === true
-  );
-}
-
 export function isWorktreeNameValid(value: string): boolean {
   const name = value.trim();
   return !name || WORKTREE_NAME_PATTERN.test(name);

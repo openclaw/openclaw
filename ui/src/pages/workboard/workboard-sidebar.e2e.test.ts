@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "../../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiElementScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -74,41 +75,53 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "new?agent=main");
-      const workboard = page.locator(".sidebar-zone-entry .nav-item", { hasText: "Workboard" });
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await openSidebarPages(page);
+      const workboardEntry = sidebar.locator(".sidebar-pages__entry").filter({
+        has: page.locator('[data-sidebar-entry="plugin:workboard/workboard"]'),
+      });
+      await workboardEntry.getByRole("button", { name: "Pin", exact: true }).click();
+      const rail = sidebar.locator(".sidebar-rail__pins");
+      const workboard = rail.getByRole("link", { name: "Workboard", exact: true });
       const widths = () =>
-        page.locator(".sidebar-zone-entry:has(.nav-item)").evaluateAll((rows) =>
+        rail.locator(".sidebar-rail__pin:has(.nav-item)").evaluateAll((rows) =>
           rows.map((row) => {
             const link = row.querySelector(".nav-item")!;
             const icon = link.querySelector(".nav-item__icon")!;
-            const menu = row.querySelector(".sidebar-reorder-trigger")!;
             const rowBox = row.getBoundingClientRect();
             const linkBox = link.getBoundingClientRect();
-            const menuBox = menu.getBoundingClientRect();
+            const iconBox = icon.getBoundingClientRect();
             return {
               label: link.textContent?.trim(),
               width: linkBox.width,
-              // The reorder grip sits in the row's leading gutter, so the link spans the full row.
               available: rowBox.width,
-              gripStart: menuBox.left - rowBox.left,
-              gripEnd: menuBox.right,
-              iconStart: icon.getBoundingClientRect().left,
+              height: linkBox.height,
+              iconContained:
+                iconBox.left >= linkBox.left &&
+                iconBox.right <= linkBox.right &&
+                iconBox.top >= linkBox.top &&
+                iconBox.bottom <= linkBox.bottom,
+              iconCenter: iconBox.left + iconBox.width / 2 - linkBox.left,
+              labelWidth: link.querySelector(".nav-item__text")!.getBoundingClientRect().width,
             };
           }),
         );
       await workboard.waitFor();
+      expect(await rail.locator(".sidebar-reorder-trigger").count()).toBe(0);
       await expect
         .poll(async () => (await widths()).find((row) => row.label === "Workboard")?.width)
-        .toBeGreaterThan(150);
+        .toBeCloseTo(36, 1);
+      await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
       const initialWidths = await widths();
       expect(await page.locator(".sidebar-session-group-status:empty").count()).toBe(0);
       const capture = async (name: string) => {
         if (!artifactDir) {
           return;
         }
-        const sidebar = page.locator(".sidebar");
+        const surface = page.locator(".sidebar");
         await writeFile(
           path.join(artifactDir, name + ".png"),
-          await takeControlUiElementScreenshot(page, sidebar, [workboard]),
+          await takeControlUiElementScreenshot(page, surface, [workboard]),
         );
       };
       await workboard.hover();
@@ -120,17 +133,26 @@ suite.define(() => {
         .getByRole("button", { name: "Compact", exact: true })
         .click();
       await page.keyboard.press("Escape");
-      await page.locator(".nav-item--home").click();
+      await sidebar.getByRole("button", { name: "Talk to your Home agent", exact: true }).click();
+      await page.getByRole("button", { name: "Open Home full page", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toMatch(/^\/chat(?:\/|$)/u);
       await workboard.hover();
       await capture("after-workboard");
       const finalWidths = await widths();
       expect(finalWidths.map((row) => row.label)).toEqual(initialWidths.map((row) => row.label));
       for (const row of finalWidths) {
         expect.soft(row.width, row.label).toBeCloseTo(row.available, 1);
-        expect.soft(row.gripStart, row.label).toBeGreaterThanOrEqual(-0.1);
-        expect.soft(row.gripEnd, row.label).toBeLessThanOrEqual(row.iconStart + 0.1);
+        expect.soft(row.iconContained, row.label).toBe(true);
+        expect.soft(row.height, row.label).toBeCloseTo(36, 1);
+        expect.soft(row.iconCenter, row.label).toBeCloseTo(row.width / 2, 1);
+        expect.soft(row.labelWidth, row.label).toBeLessThanOrEqual(1);
       }
-      await page.locator(".sidebar-brand__new-thread").click();
+      const sessionsView = sidebar.getByRole("button", { name: "Sessions", exact: true });
+      const newConversation = sidebar.getByRole("link", { name: "New conversation", exact: true });
+      if (!(await newConversation.isVisible())) {
+        await sessionsView.click();
+      }
+      await newConversation.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       expect.soft(await widths()).toEqual(finalWidths);
       await assertSessionSectionCountAlignment(page, [

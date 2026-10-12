@@ -40,6 +40,28 @@ export type Story = StoryVerse[];
 
 type InlineMatch = { readonly 0: string; readonly [index: number]: string | undefined };
 
+function matchMarkdownDestination(text: string, image: boolean): InlineMatch | null {
+  const prefix = (image ? /^!\[([^\]]*)\]\(/ : /^\[([^\]]+)\]\(/).exec(text);
+  if (!prefix) {
+    return null;
+  }
+  const start = prefix[0].length;
+  let depth = 0;
+  for (let end = start; end < text.length; end++) {
+    if (text[end] === "\\") {
+      end++;
+    } else if (text[end] === "(") {
+      depth++;
+    } else if (text[end] === ")") {
+      if (depth === 0) {
+        return end > start ? [text.slice(0, end + 1), prefix[1], text.slice(start, end)] : null;
+      }
+      depth--;
+    }
+  }
+  return null;
+}
+
 // In running prose a bare URL never ends in sentence punctuation or a stray paren. A closing
 // paren ends the URL only when it balances one inside it, as in .../wiki/Function_(mathematics).
 function matchBareUrl(text: string): InlineMatch | null {
@@ -86,7 +108,7 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
     render: (match) => ({ "inline-code": expectDefined(match[1], "inline code capture") }),
   },
   {
-    pattern: /^\[([^\]]+)\]\(([^)]+)\)/,
+    pattern: (text) => matchMarkdownDestination(text, false),
     render: (match) => ({
       link: {
         href: expectDefined(match[2], "link URL capture"),
@@ -95,7 +117,7 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
     }),
   },
   {
-    pattern: /^!\[([^\]]*)\]\(([^)]+)\)/,
+    pattern: (text) => matchMarkdownDestination(text, true),
     render: (match) => ({
       imageBlock: {
         src: expectDefined(match[2], "image URL capture"),

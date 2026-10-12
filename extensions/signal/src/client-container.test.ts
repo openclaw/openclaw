@@ -83,6 +83,34 @@ describe("container health", () => {
   });
 });
 
+describe("discarded container responses", () => {
+  it.each([
+    { operation: "health", status: 200, expected: { ok: true, status: 200, error: null } },
+    { operation: "health", status: 503, expected: { ok: false, status: 503, error: "HTTP 503" } },
+    { operation: "attachment", status: 404, expected: { data: undefined } },
+  ])(
+    "does not wait for unread body cancellation: $operation HTTP $status",
+    async ({ operation, status, expected }) => {
+      vi.useFakeTimers();
+      const release = createDeferred<void>();
+      const cancel = vi.fn(() => release.promise);
+      mockFetch.mockResolvedValue(new Response(new ReadableStream({ cancel }), { status }));
+      const settled = vi.fn();
+      const result = (
+        operation === "health" ? containerCheck(baseUrl, 25) : attachment({ timeoutMs: 25 })
+      ).then(settled);
+      try {
+        await vi.advanceTimersByTimeAsync(25);
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(settled).toHaveBeenCalledWith(expected);
+      } finally {
+        release.resolve();
+        await result;
+      }
+    },
+  );
+});
+
 describe("container REST responses", () => {
   it.each([
     { status: 500, text: "x".repeat(20_000), error: `Signal REST 500: ${"x".repeat(16 * 1024)}` },

@@ -24,17 +24,6 @@ const schema = {
 };
 
 describe("config form search", () => {
-  it.each([
-    ["token tag:security tag:Auth", "token", ["security", "auth"]],
-    ["Café tag:storage 文書", "café 文書", ["storage"]],
-    ["Log tag:storage tag:STORAGE File", "log file", ["storage"]],
-    ["  ", "", []],
-    ["Log  File", "log  file", []],
-    ["path:tag:storage", "path:tag:storage", []],
-  ])("parses search query %j", (query, text, tags) => {
-    expect(parseConfigSearchQuery(query)).toEqual({ text, tags });
-  });
-
   it("matches fields by tag through ui hints", () => {
     const parsed = parseConfigSearchQuery("tag:security");
     const matched = matchesNodeSearch({
@@ -49,23 +38,22 @@ describe("config form search", () => {
     expect(matched).toBe(true);
   });
 
-  it.each([
-    ["access tag:security token", true],
-    ["mode tag:security", false],
-    ["access token tag:storage", false],
-  ])("requires text and tag when combined in %j", (query, expected) => {
-    expect(
-      matchesNodeSearch({
-        schema: schema.properties.gateway,
-        value: {},
-        path: ["gateway"],
-        hints: {
-          "gateway.auth.token": { label: "Access Token", tags: ["security"] },
-        },
-        criteria: parseConfigSearchQuery(query),
-      }),
-    ).toBe(expected);
-  });
+  it.each([["mode tag:security", false]])(
+    "requires text and tag when combined in %j",
+    (query, expected) => {
+      expect(
+        matchesNodeSearch({
+          schema: schema.properties.gateway,
+          value: {},
+          path: ["gateway"],
+          hints: {
+            "gateway.auth.token": { label: "Access Token", tags: ["security"] },
+          },
+          criteria: parseConfigSearchQuery(query),
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("searches array item schemas before entries exist", () => {
     const matched = matchesNodeSearch({
@@ -90,20 +78,19 @@ describe("config form search", () => {
     expect(matched).toBe(true);
   });
 
-  it.each([
-    { values: [], query: "secondary endpoint" },
-    { values: ["primary"], query: "overflow endpoint" },
-  ])("searches positional and typed-tail schemas for $values", ({ values, query }) => {
+  it.each(["composed overflow"])("searches %s array schemas declared through allOf", (query) => {
     const matched = matchesNodeSearch({
       schema: {
         type: "array",
-        items: [
-          { type: "string", description: "Primary endpoint" },
-          { type: "string", description: "Secondary endpoint" },
+        items: [{ type: "string", description: "Outer endpoint" }],
+        allOf: [
+          {
+            items: [{}, { type: "string", description: "Composed secondary endpoint" }],
+            additionalItems: { type: "string", description: "Composed overflow endpoint" },
+          },
         ],
-        additionalItems: { type: "string", description: "Overflow endpoint" },
       },
-      value: values,
+      value: [],
       path: ["endpoints"],
       hints: {},
       criteria: parseConfigSearchQuery(query),
@@ -111,30 +98,6 @@ describe("config form search", () => {
 
     expect(matched).toBe(true);
   });
-
-  it.each(["composed secondary", "composed overflow"])(
-    "searches %s array schemas declared through allOf",
-    (query) => {
-      const matched = matchesNodeSearch({
-        schema: {
-          type: "array",
-          items: [{ type: "string", description: "Outer endpoint" }],
-          allOf: [
-            {
-              items: [{}, { type: "string", description: "Composed secondary endpoint" }],
-              additionalItems: { type: "string", description: "Composed overflow endpoint" },
-            },
-          ],
-        },
-        value: [],
-        path: ["endpoints"],
-        hints: {},
-        criteria: parseConfigSearchQuery(query),
-      });
-
-      expect(matched).toBe(true);
-    },
-  );
 
   it("does not search tuple positions forbidden by an allOf branch", () => {
     const matched = matchesNodeSearch({

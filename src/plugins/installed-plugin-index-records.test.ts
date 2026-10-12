@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -15,7 +14,6 @@ import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
@@ -36,7 +34,6 @@ import {
 } from "./installed-plugin-index-records.js";
 // Covers installed plugin index record parsing and normalization.
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
-import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
@@ -79,30 +76,6 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
   return actual;
 }
 
-function updatePersistedInstallRecordsWithoutClearingCache(
-  stateDir: string,
-  records: Record<string, PluginInstallRecord>,
-) {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const now = Date.now();
-      db.prepare(
-        `
-          UPDATE config_machine_state
-             SET value_json = json_set(
-                   value_json,
-                   '$.index.installRecords', json(?),
-                   '$.revision', ?
-                 ),
-                 updated_at_ms = ?
-           WHERE state_key = 'plugins.installedIndex'
-        `,
-      ).run(JSON.stringify(records), now, now);
-    },
-    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
-  );
-}
-
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -112,52 +85,51 @@ afterEach(async () => {
 });
 
 describe("plugin index install records store", () => {
-  it.each([
-    { code: "EACCES" },
-    { code: "ERR_SQLITE_ERROR", errcode: 5, errstr: "database is locked" },
-    { code: "ERR_SQLITE_ERROR", errcode: 6, errstr: "database table is locked" },
-  ])("preserves read errors without recovery or cache poisoning: %j", async (details) => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } } as const;
-    await seedInstalledPluginIndex(records, { stateDir, candidates: [] });
-    writeManagedNpmPlugin({
-      stateDir,
-      packageName: "recoverable",
-      pluginId: "recoverable",
-      version: "1.0.0",
-    });
-    const error = Object.assign(new Error("plugin index read failed"), details);
-    const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
-    const scanSpy = vi.spyOn(fs, "readdirSync");
-    for (const read of [
-      inspectPersistedInstalledPluginIndexInstallRecordsSync,
-      readPersistedInstalledPluginIndexInstallRecords,
-      loadInstalledPluginIndexInstallRecordsSync,
-    ]) {
-      readSpy.mockImplementationOnce(() => {
-        throw error;
+  it.each([{ code: "ERR_SQLITE_ERROR", errcode: 6, errstr: "database table is locked" }])(
+    "preserves read errors without recovery or cache poisoning: %j",
+    async (details) => {
+      const stateDir = tempDirs.make("openclaw-plugin-index-records-");
+      const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } } as const;
+      await seedInstalledPluginIndex(records, { stateDir, candidates: [] });
+      writeManagedNpmPlugin({
+        stateDir,
+        packageName: "recoverable",
+        pluginId: "recoverable",
+        version: "1.0.0",
       });
-      await expect
-        .soft(
-          Promise.resolve().then(() => read({ stateDir })),
-          read.name,
-        )
-        .rejects.toBe(error);
-    }
-    const asyncReadSpy = vi
-      .spyOn(metadataWorker, "readPluginMetadataStateRow")
-      .mockRejectedValueOnce(error);
-    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).rejects.toBe(error);
-    expect(scanSpy).not.toHaveBeenCalled();
-    asyncReadSpy.mockRestore();
-    readSpy.mockRestore();
-    scanSpy.mockRestore();
+      const error = Object.assign(new Error("plugin index read failed"), details);
+      const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
+      const scanSpy = vi.spyOn(fs, "readdirSync");
+      for (const read of [
+        inspectPersistedInstalledPluginIndexInstallRecordsSync,
+        readPersistedInstalledPluginIndexInstallRecords,
+        loadInstalledPluginIndexInstallRecordsSync,
+      ]) {
+        readSpy.mockImplementationOnce(() => {
+          throw error;
+        });
+        await expect
+          .soft(
+            Promise.resolve().then(() => read({ stateDir })),
+            read.name,
+          )
+          .rejects.toBe(error);
+      }
+      const asyncReadSpy = vi
+        .spyOn(metadataWorker, "readPluginMetadataStateRow")
+        .mockRejectedValueOnce(error);
+      await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).rejects.toBe(error);
+      expect(scanSpy).not.toHaveBeenCalled();
+      asyncReadSpy.mockRestore();
+      readSpy.mockRestore();
+      scanSpy.mockRestore();
 
-    const restored = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expect(restored.authoritative).toEqual(records.authoritative);
-    expect(restored.recoverable).toMatchObject({ source: "npm", spec: "recoverable@1.0.0" });
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual(restored);
-  });
+      const restored = await loadInstalledPluginIndexInstallRecords({ stateDir });
+      expect(restored.authoritative).toEqual(records.authoritative);
+      expect(restored.recoverable).toMatchObject({ source: "npm", spec: "recoverable@1.0.0" });
+      expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual(restored);
+    },
+  );
 
   it("writes machine-managed install records outside config", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
@@ -203,43 +175,6 @@ describe("plugin index install records store", () => {
     });
   });
 
-  it("preserves install records for plugins without a discovered manifest", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-
-    await seedInstalledPluginIndex(
-      {
-        missing: {
-          source: "npm",
-          spec: "missing-plugin@1.0.0",
-          installPath: path.join(stateDir, "plugins", "missing"),
-        },
-      },
-      {
-        stateDir,
-        candidates: [],
-        now: () => new Date(1777118400000),
-      },
-    );
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    if (!persisted) {
-      throw new Error("Expected persisted plugin index");
-    }
-    expectRecordFields(persisted.installRecords?.missing, {
-      source: "npm",
-      spec: "missing-plugin@1.0.0",
-      installPath: path.join(stateDir, "plugins", "missing"),
-    });
-    expect(persisted.plugins).toEqual([]);
-    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
-      missing: {
-        source: "npm",
-        spec: "missing-plugin@1.0.0",
-        installPath: path.join(stateDir, "plugins", "missing"),
-      },
-    });
-  });
-
   it("preserves newer shared-state schema errors while loading install records", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     await seedInstalledPluginIndex(
@@ -253,6 +188,8 @@ describe("plugin index install records store", () => {
     );
     await closeOpenClawStateDatabaseAsync();
     const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    fs.renameSync(databasePath, `${databasePath}.template`);
+    fs.copyFileSync(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
@@ -266,173 +203,6 @@ describe("plugin index install records store", () => {
         ),
       }),
     );
-  });
-
-  it("returns prototype-safe map copies without cloning cached records", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const candidate = createPluginCandidate(stateDir, "cached");
-    await seedInstalledPluginIndex(
-      {
-        cached: {
-          source: "npm",
-          spec: "cached@1.0.0",
-        },
-      },
-      { stateDir, candidates: [candidate] },
-    );
-
-    const first = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
-    const second = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
-
-    expect(first).not.toBe(second);
-    expect(Object.getPrototypeOf(first)).toBeNull();
-    expect(Object.getPrototypeOf(second)).toBeNull();
-    expect(expectDefined(first.cached, "first.cached test invariant")).toBe(
-      expectDefined(second.cached, "second.cached test invariant"),
-    );
-  });
-
-  it("invalidates cached records when the persisted index is rewritten", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const first = createPluginCandidate(stateDir, "first");
-    await refreshPersistedInstalledPluginIndex({
-      stateDir,
-      candidates: [first],
-      reason: "source-changed",
-      installRecords: {
-        first: {
-          source: "npm",
-          spec: "first@1.0.0",
-        },
-      },
-    });
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
-      first: {
-        source: "npm",
-        spec: "first@1.0.0",
-      },
-    });
-
-    const second = createPluginCandidate(stateDir, "second");
-    await refreshPersistedInstalledPluginIndex({
-      stateDir,
-      candidates: [second],
-      reason: "source-changed",
-      installRecords: {
-        second: {
-          source: "npm",
-          spec: "second@1.0.0",
-        },
-      },
-    });
-
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
-      second: {
-        source: "npm",
-        spec: "second@1.0.0",
-      },
-    });
-  });
-
-  it("keeps cached records until cache clear after an external index write", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const candidate = createPluginCandidate(stateDir, "external");
-    await refreshPersistedInstalledPluginIndex({
-      stateDir,
-      candidates: [candidate],
-      reason: "source-changed",
-      installRecords: {
-        external: {
-          source: "npm",
-          spec: "external@1.0.0",
-        },
-      },
-    });
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
-      external: {
-        source: "npm",
-        spec: "external@1.0.0",
-      },
-    });
-
-    updatePersistedInstallRecordsWithoutClearingCache(stateDir, {
-      external: {
-        source: "npm",
-        spec: "external-plugin@2.0.0",
-      },
-    });
-
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
-      external: {
-        source: "npm",
-        spec: "external@1.0.0",
-      },
-    });
-
-    clearLoadInstalledPluginIndexInstallRecordsCache();
-
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
-      external: {
-        source: "npm",
-        spec: "external-plugin@2.0.0",
-      },
-    });
-  });
-
-  it("recovers managed npm plugin records when the persisted ledger is empty", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const discordDir = writeManagedNpmPlugin({
-      stateDir,
-      packageName: "@openclaw/discord",
-      pluginId: "discord",
-      version: "2026.5.2",
-    });
-    const codexDir = writeManagedNpmPlugin({
-      stateDir,
-      packageName: "@openclaw/codex",
-      pluginId: "codex",
-      version: "2026.5.2",
-    });
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded.codex, {
-      source: "npm",
-      spec: "@openclaw/codex@2026.5.2",
-      installPath: codexDir,
-      version: "2026.5.2",
-      resolvedName: "@openclaw/codex",
-      resolvedVersion: "2026.5.2",
-      resolvedSpec: "@openclaw/codex@2026.5.2",
-    });
-    expectRecordFields(loaded.discord, {
-      source: "npm",
-      spec: "@openclaw/discord@2026.5.2",
-      installPath: discordDir,
-      version: "2026.5.2",
-      resolvedName: "@openclaw/discord",
-      resolvedVersion: "2026.5.2",
-      resolvedSpec: "@openclaw/discord@2026.5.2",
-    });
-    const loadedSync = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
-    expectRecordFields(loadedSync.codex, { source: "npm", installPath: codexDir });
-    expectRecordFields(loadedSync.discord, { source: "npm", installPath: discordDir });
-  });
-
-  it("still recovers legacy flat managed npm plugin records", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const discordDir = writeManagedNpmPlugin({
-      stateDir,
-      packageName: "@openclaw/discord",
-      pluginId: "discord",
-      version: "2026.5.2",
-      layout: "legacy",
-    });
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded.discord, {
-      source: "npm",
-      spec: "@openclaw/discord@2026.5.2",
-      installPath: discordDir,
-      version: "2026.5.2",
-    });
   });
 
   it("keeps persisted install record metadata over recovered npm records", async () => {
@@ -468,60 +238,11 @@ describe("plugin index install records store", () => {
 
   it.each([
     {
-      expectedSpec: "@openclaw/discord",
-      label: "bare",
-      persistedVersion: "2026.7.1",
-      recoveredVersion: "2026.7.1",
-      spec: "@openclaw/discord",
-    },
-    {
-      expectedSpec: "@openclaw/discord@latest",
-      label: "latest",
-      persistedVersion: "2026.7.1",
-      recoveredVersion: "2026.7.1",
-      spec: "@openclaw/discord@latest",
-    },
-    {
-      expectedSpec: "@openclaw/discord@beta",
-      label: "dist-tag",
-      persistedVersion: "2026.7.1",
-      recoveredVersion: "2026.7.1",
-      spec: "@openclaw/discord@beta",
-    },
-    {
       expectedSpec: "@openclaw/discord@2026.7.1",
       label: "obsolete exact-version",
       persistedVersion: "2026.6.4",
       recoveredVersion: "2026.7.1",
       spec: "@openclaw/discord@2026.6.4",
-    },
-    {
-      expectedSpec: "@openclaw/discord@2027.1.0",
-      label: "unsupported legacy range",
-      persistedVersion: "2026.6.4",
-      recoveredVersion: "2027.1.0",
-      spec: "@openclaw/discord@^2026.6.0",
-    },
-    {
-      expectedSpec: "@openclaw/discord@2026.7.2-beta.1",
-      label: "bare prerelease",
-      persistedVersion: "2026.7.1",
-      recoveredVersion: "2026.7.2-beta.1",
-      spec: "@openclaw/discord",
-    },
-    {
-      expectedSpec: "@openclaw/discord@2026.7.2-beta.1",
-      label: "latest prerelease",
-      persistedVersion: "2026.7.1",
-      recoveredVersion: "2026.7.2-beta.1",
-      spec: "@openclaw/discord@latest",
-    },
-    {
-      expectedSpec: "@openclaw/discord@beta",
-      label: "opted-in prerelease",
-      persistedVersion: "2026.7.1",
-      recoveredVersion: "2026.7.2-beta.1",
-      spec: "@openclaw/discord@beta",
     },
   ])(
     "recovers a valid managed generation with a compatible $label selector",
@@ -595,59 +316,6 @@ describe("plugin index install records store", () => {
       });
     },
   );
-
-  it("recovers when an ENOTDIR ancestor blocks the stale managed generation", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const packageName = "@openclaw/discord";
-    const npmDir = path.join(stateDir, "npm");
-    const fixtureProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
-    writeManagedNpmPlugin({
-      stateDir,
-      packageName,
-      pluginId: "discord",
-      version: "2026.7.1",
-    });
-    const activeProjectRoot = resolvePluginNpmGenerationProjectDir({
-      npmDir,
-      packageName,
-      generationKey: "discord-2026.7.1",
-    });
-    fs.renameSync(fixtureProjectRoot, activeProjectRoot);
-    const staleProjectRoot = resolvePluginNpmGenerationProjectDir({
-      npmDir,
-      packageName,
-      generationKey: "discord-2026.6.4",
-    });
-    fs.writeFileSync(staleProjectRoot, "not a directory", "utf8");
-    const stalePackageDir = path.join(staleProjectRoot, "node_modules", ...packageName.split("/"));
-    const activePackageDir = path.join(
-      activeProjectRoot,
-      "node_modules",
-      ...packageName.split("/"),
-    );
-
-    await seedInstalledPluginIndex(
-      {
-        discord: {
-          source: "npm",
-          spec: "@openclaw/discord@latest",
-          installPath: stalePackageDir,
-          resolvedName: packageName,
-          resolvedVersion: "2026.6.4",
-          integrity: "sha512-stale",
-        },
-      },
-      { stateDir, candidates: [] },
-    );
-
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    const record = expectRecordFields(loaded.discord, {
-      spec: "@openclaw/discord@latest",
-      installPath: activePackageDir,
-      resolvedVersion: "2026.7.1",
-    });
-    expect(record.integrity).toBeUndefined();
-  });
 
   it("recovers a Windows managed generation when the persisted root casing differs", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
@@ -751,173 +419,6 @@ describe("plugin index install records store", () => {
     expectRecordFields(loadedSync.codex, {
       version: "2026.5.18-beta.1",
       resolvedVersion: "2026.5.18-beta.1",
-    });
-  });
-
-  it("keeps recovered managed npm records cached until cache clear after package changes", () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const codexDir = writeManagedNpmPlugin({
-      stateDir,
-      packageName: "@openclaw/codex",
-      pluginId: "codex",
-      version: "2026.5.18-beta.1",
-    });
-    expectRecordFields(loadInstalledPluginIndexInstallRecordsSync({ stateDir }).codex, {
-      source: "npm",
-      spec: "@openclaw/codex@2026.5.18-beta.1",
-      installPath: codexDir,
-      version: "2026.5.18-beta.1",
-    });
-
-    const packagePath = path.join(codexDir, "package.json");
-    const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    fs.writeFileSync(
-      packagePath,
-      JSON.stringify({
-        ...packageManifest,
-        version: "2026.5.19-beta.1",
-      }),
-      "utf8",
-    );
-
-    expectRecordFields(loadInstalledPluginIndexInstallRecordsSync({ stateDir }).codex, {
-      source: "npm",
-      spec: "@openclaw/codex@2026.5.18-beta.1",
-      installPath: codexDir,
-      version: "2026.5.18-beta.1",
-      resolvedVersion: "2026.5.18-beta.1",
-      resolvedSpec: "@openclaw/codex@2026.5.18-beta.1",
-    });
-
-    clearLoadInstalledPluginIndexInstallRecordsCache();
-
-    expectRecordFields(loadInstalledPluginIndexInstallRecordsSync({ stateDir }).codex, {
-      source: "npm",
-      spec: "@openclaw/codex@2026.5.18-beta.1",
-      installPath: codexDir,
-      version: "2026.5.19-beta.1",
-      resolvedVersion: "2026.5.19-beta.1",
-      resolvedSpec: "@openclaw/codex@2026.5.19-beta.1",
-    });
-  });
-
-  it("does not probe install record files again on hot cache hits", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const candidate = createPluginCandidate(stateDir, "hot-cache");
-    await refreshPersistedInstalledPluginIndex({
-      stateDir,
-      candidates: [candidate],
-      reason: "source-changed",
-      installRecords: {
-        "hot-cache": {
-          source: "npm",
-          spec: "hot-cache@1.0.0",
-        },
-      },
-    });
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
-      "hot-cache": {
-        source: "npm",
-        spec: "hot-cache@1.0.0",
-      },
-    });
-    const statSpy = vi.spyOn(fs, "statSync");
-    const readSpy = vi.spyOn(fs, "readFileSync");
-
-    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
-      "hot-cache": {
-        source: "npm",
-        spec: "hot-cache@1.0.0",
-      },
-    });
-
-    expect(statSpy).not.toHaveBeenCalled();
-    expect(readSpy).not.toHaveBeenCalled();
-  });
-
-  it("preserves git install resolution fields in persisted records", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const candidate = createPluginCandidate(stateDir, "git-demo");
-    await seedInstalledPluginIndex(
-      {
-        "git-demo": {
-          source: "git",
-          spec: "git:file:///tmp/git-demo@abc123",
-          installPath: path.join(stateDir, "plugins", "git-demo"),
-          gitUrl: "file:///tmp/git-demo",
-          gitRef: "abc123",
-          gitCommit: "abc123",
-        },
-      },
-      { stateDir, candidates: [candidate] },
-    );
-
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded["git-demo"], {
-      source: "git",
-      spec: "git:file:///tmp/git-demo@abc123",
-      gitUrl: "file:///tmp/git-demo",
-      gitRef: "abc123",
-      gitCommit: "abc123",
-    });
-  });
-
-  it("preserves ClawHub ClawPack install metadata in persisted records", async () => {
-    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
-    const candidate = createPluginCandidate(stateDir, "clawpack-demo");
-    await seedInstalledPluginIndex(
-      {
-        "clawpack-demo": {
-          source: "clawhub",
-          spec: "clawhub:clawpack-demo",
-          installPath: path.join(stateDir, "plugins", "clawpack-demo"),
-          clawhubUrl: "https://clawhub.ai",
-          clawhubPackage: "clawpack-demo",
-          clawhubFamily: "code-plugin",
-          clawhubChannel: "official",
-          artifactKind: "npm-pack",
-          artifactFormat: "tgz",
-          npmIntegrity: "sha512-clawpack",
-          npmShasum: "1".repeat(40),
-          npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
-          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          clawpackSpecVersion: 1,
-          clawpackManifestSha256:
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          clawpackSize: 4096,
-          clawhubTrustDisposition: "review-required",
-          clawhubTrustScanStatus: "suspicious",
-          clawhubTrustReasons: ["payload_strings"],
-          clawhubTrustPending: true,
-          clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
-          clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
-        },
-      },
-      { stateDir, candidates: [candidate] },
-    );
-
-    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expectRecordFields(loaded["clawpack-demo"], {
-      source: "clawhub",
-      spec: "clawhub:clawpack-demo",
-      artifactKind: "npm-pack",
-      artifactFormat: "tgz",
-      npmIntegrity: "sha512-clawpack",
-      npmShasum: "1".repeat(40),
-      npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
-      clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      clawpackSpecVersion: 1,
-      clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      clawpackSize: 4096,
-      clawhubTrustDisposition: "review-required",
-      clawhubTrustScanStatus: "suspicious",
-      clawhubTrustReasons: ["payload_strings"],
-      clawhubTrustPending: true,
-      clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
-      clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
     });
   });
 

@@ -3,6 +3,41 @@ import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "./web-awesome-select.ts";
 
+type Select = HTMLElementTagNameMap["wa-select"];
+
+function rendered(select: Select) {
+  return select.updateComplete;
+}
+
+async function optionsRendered(select: Select) {
+  await rendered(select);
+  await Promise.all(
+    [...select.querySelectorAll("wa-option")].map((option) => option.updateComplete),
+  );
+}
+
+function open(select: Select) {
+  return select.show();
+}
+
+function onShown(select: Select, listener: () => void) {
+  select.addEventListener("wa-after-show", listener);
+}
+
+async function interruptClosing(
+  select: Select,
+  close: () => Promise<void>,
+  reopen: () => Promise<void>,
+) {
+  await duringElementAnimation(select.popup.popup, "hide", close, async () => {
+    await reopen();
+    await rendered(select);
+  });
+  await expect.poll(() => select.popup.popup.getAnimations().length).toBe(0);
+  await rendered(select);
+  await select.popup.updateComplete;
+}
+
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("Web Awesome select lifecycle", () => {
@@ -16,30 +51,20 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome select lifecycle
     </wa-select>`;
     const select = host.querySelector("wa-select")!;
     document.body.append(host);
-    await select.updateComplete;
-    await Promise.all(
-      [...select.querySelectorAll("wa-option")].map((option) => option.updateComplete),
-    );
+    await optionsRendered(select);
     const events: string[] = [];
     const changes: unknown[] = [];
-    select.addEventListener("wa-after-show", () => events.push("shown"));
+    onShown(select, () => events.push("shown"));
     select.addEventListener("change", () => changes.push(select.value));
 
     await page.getByRole("combobox", { name: "Model", exact: true }).click();
     await expect.element(page.getByRole("option", { name: "Default", exact: true })).toBeVisible();
     await expect.poll(() => events).toEqual(["shown"]);
-    await duringElementAnimation(
-      select.popup.popup,
-      "hide",
+    await interruptClosing(
+      select,
       () => userEvent.keyboard("{Escape}"),
-      async () => {
-        await page.getByRole("combobox", { name: "Model", exact: true }).click();
-        await select.updateComplete;
-      },
+      () => page.getByRole("combobox", { name: "Model", exact: true }).click(),
     );
-    await expect.poll(() => select.popup.popup.getAnimations().length).toBe(0);
-    await select.updateComplete;
-    await select.popup.updateComplete;
 
     const option = select.querySelector<HTMLElement>('wa-option[value="selected"]')!;
     await expect.element(option).toBeVisible();
@@ -55,7 +80,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome select lifecycle
     select.innerHTML = '<wa-option value="chosen">Available option</wa-option>';
     document.body.append(select);
 
-    await select.show();
+    await open(select);
     const option = select.querySelector("wa-option")!;
     await expect.element(option).toBeVisible();
     await page.elementLocator(option).click();

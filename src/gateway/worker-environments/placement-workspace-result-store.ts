@@ -1,19 +1,16 @@
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { required, type WorkerSessionTurnClaim } from "./placement-record.js";
-import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   preparePlacementWorkspaceResultAuthority,
   readPlacementWorkspaceResultAuthority,
 } from "./placement-turn-authority.js";
-import {
-  listPendingWorkerWorkspaceResultsInDatabase,
-  readWorkerWorkspaceReconciliationFacts,
-} from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 export function createPlacementWorkspaceResultReader(
-  runtime: Pick<PlacementStoreRuntime, "path" | "instanceId" | "read">,
+  runtime: { path: string; instanceId: string },
   read: (ids: readonly string[]) => Promise<WorkerSessionPlacementProjection>,
 ) {
   const context = captureOpenClawStateWorkerContext({ path: runtime.path });
@@ -32,15 +29,30 @@ export function createPlacementWorkspaceResultReader(
     preparedWorkspaceResult: (claim: WorkerSessionTurnClaim) => current(claim)?.pendingResult,
     preparedWorkspaceResultPlacement: (claim: WorkerSessionTurnClaim) => current(claim)?.placement,
     /** @deprecated Await listPendingWorkspaceResultsAsync; retained for released plugin contexts. */
-    listPendingWorkspaceResults(sessionId?: string) {
-      context.admission.assertCurrent();
-      return listPendingWorkerWorkspaceResultsInDatabase(runtime.read(), sessionId);
+    listPendingWorkspaceResults(sessionId?: string): WorkerWorkspacePendingResult[] {
+      void sessionId;
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "listPendingWorkspaceResults",
+        replacement: "listPendingWorkspaceResultsAsync",
+        compatibility: "Synchronous placement inventory reads now fail with migration guidance.",
+      });
+      throw new Error(
+        "Await listPendingWorkspaceResultsAsync; synchronous placement inventory reads are no longer supported.",
+      );
     },
     /** @deprecated Await getWorkspaceResultReconcilingSessionIdsAsync. */
     getWorkspaceResultReconcilingSessionIds(sessionIds: readonly string[]): ReadonlySet<string> {
-      context.admission.assertCurrent();
-      const ids = [...new Set(sessionIds.map((sessionId) => required(sessionId, "session id")))];
-      return readWorkerWorkspaceReconciliationFacts(runtime.read(), ids).reconcilingSessionIds;
+      void sessionIds;
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "getWorkspaceResultReconcilingSessionIds",
+        replacement: "getWorkspaceResultReconcilingSessionIdsAsync",
+        compatibility: "Synchronous placement inventory reads now fail with migration guidance.",
+      });
+      throw new Error(
+        "Await getWorkspaceResultReconcilingSessionIdsAsync; synchronous placement inventory reads are no longer supported.",
+      );
     },
     async getWorkspaceResultReconcilingSessionIdsAsync(
       sessionIds: readonly string[],

@@ -122,6 +122,13 @@ update warning; callers using only the existing synchronous guard remain support
 
 ### SQLite write admission
 
+For runtime storage, use the owning domain's awaited operations or
+`openOpenClawAgentSqliteWorkerStoreV2`; see
+[native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+The following `sqlite-runtime` callback helper is deprecated compatibility until
+the next Plugin SDK major. Awaiting admission does not move its SQL off the
+caller's thread.
+
 `runSqliteImmediateTransaction(db, prepare, options?)` from
 `openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
 the event loop. Its asynchronous `prepare` function may run more than once when
@@ -141,7 +148,8 @@ same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
 The callback and SQLite calls still run synchronously on the caller's thread.
 
-For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Inside a worker backend, `prepareSqliteQuerySync(db, build)` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` compiles a repeated fixed query's
 Kysely shape once and binds fresh parameters on each call. It uses the normal
 synchronous executor and the connection's bounded statement cache when enabled.
 Keep the prepared function with its database owner and discard it when closing
@@ -191,6 +199,18 @@ include `hostWaitMs` alongside the existing timing fields; host wait is included
 in `runMs`, not added to it. This field is diagnostic data, not a public config
 option.
 
+The task's `timeoutMs` includes host callbacks. Expiry aborts the callback's
+`signal` and retires the worker; a host response can shorten the remaining
+deadline but cannot renew it. An owner that already enforces a separate,
+approval-aware host deadline can set `hostTimeout: "owner"` to suspend the pool
+clock during host callbacks and supply its remaining budget in the response.
+Accepted host effects still need their owner's settlement and cleanup receipts.
+Forward the callback signal into queued reads, writes, locks, and network requests;
+checking it only after an `await` leaves canceled work in the queue. A host-wait
+timeout emits `WORKER_HOST_CALLBACK_TIMEOUT` with the callback's operation name
+(a string request or its `kind`/`type` field), without logging its payload.
+Requests without a label identify their worker entrypoint instead.
+
 Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
 `prepareWorker()` runs once per Worker creation attempt and returns
 `{ options, temporaryDirectory? }`. Its `options` shallowly override
@@ -228,6 +248,14 @@ it cannot safely interrupt a stuck native call. Native sections must therefore
 have bounded inputs and must not wait for network, user input, or unbounded work.
 
 ### SQLite worker stores
+
+For canonical agent databases, use `openOpenClawAgentSqliteWorkerStoreV2` with
+`{ version: 2, assertCurrent }`. It retains the existing agent execution owner,
+provides explicit worker-owned `prepare()` for creation, and checks live
+authority at transaction and commit admission. `executeExisting` leaves missing
+storage absent. See the [migration example](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+Released raw native callbacks retain their ordering and warn on use until their
+removal in the next Plugin SDK major.
 
 Use `openSqliteWorkerStore<Operations>` from
 `openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the

@@ -13,7 +13,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
@@ -26,17 +26,16 @@ import {
 } from "./session-accessor.js";
 import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import {
-  deleteMaterializedSessionStatePlans,
-  planSessionStateDeleteIfUnreferenced,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { prepareTranscriptPayload } from "./transcript-payload.js";
 
 type TestEvent = { id: string; [key: string]: unknown };
 const event = (id: string, content = "archive me"): TestEvent => ({ type: "session", id, content });
@@ -589,7 +588,10 @@ describe("SQLite transcript archive worker", () => {
                 .values({
                   session_id: sessionId,
                   seq: 1,
-                  event_json: JSON.stringify(event("concurrent-event", "concurrent append")),
+                  ...prepareTranscriptPayload(
+                    transaction.db,
+                    JSON.stringify(event("concurrent-event", "concurrent append")),
+                  ),
                   created_at: Date.now(),
                 }),
             );

@@ -40,3 +40,19 @@ export function expectRespondError(
   expect(mockCallArg(mock, 0, 1)).toBeUndefined();
   return expectRecordFields(mockCallArg(mock, 0, 2), expected);
 }
+
+export function expectSessionEntryEnsure(
+  mock: ReturnType<typeof vi.fn>,
+  agentId: string,
+  sessionKey: string,
+) {
+  expect(mock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agentId,
+      sessionKey,
+      storePath: expect.any(String),
+      requester: expect.any(Function),
+      assertCurrent: expect.any(Function),
+    }),
+  );
+}

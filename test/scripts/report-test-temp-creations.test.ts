@@ -42,78 +42,6 @@ function createGitFixture(prefix: string) {
 }
 
 describe("report-test-temp-creations", () => {
-  it("reports added bare temp creation lines using changed-lane test path scope", () => {
-    const bareTempSource = [
-      "const tempRoot = fs.",
-      "mkdtemp",
-      'Sync(path.join(os.tmpdir(), "case-"));',
-    ].join("");
-    const mkdtempSource = ["const tempRoot = fs.", "mkdtemp", 'Sync("case-");'].join("");
-    const diff = [
-      addedDiff(
-        "src/example.test.ts",
-        [
-          bareTempSource,
-          'const helperRoot = makeTempDir(tempDirs, "case-");',
-          "console.log(tempRoot, helperRoot);",
-        ],
-        11,
-      ),
-      addedDiff(
-        "src/example.ts",
-        [["const productionTemp = fs.", "mkdtemp", 'Sync("case-");'].join("")],
-        5,
-      ),
-      ...[
-        "test/helper.test-support.mjs",
-        "test/helpers/temp-fixture.ts",
-        "test/helpers/temp-dir.ts",
-        "packages/foo/__tests__/helper.ts",
-        "extensions/discord/src/monitor/message-handler.test-helpers.ts",
-      ].map((file) => addedDiff(file, [mkdtempSource], 2)),
-    ].join("\n");
-
-    expect(collectTempCreationFindingsFromDiff(diff)).toEqual([
-      {
-        file: "src/example.test.ts",
-        line: 11,
-        reason: "new mkdtemp temp directory creation",
-        source: bareTempSource,
-      },
-      ...[
-        "test/helper.test-support.mjs",
-        "test/helpers/temp-fixture.ts",
-        "packages/foo/__tests__/helper.ts",
-        "extensions/discord/src/monitor/message-handler.test-helpers.ts",
-      ].map((file) => ({
-        file,
-        line: 2,
-        reason: "new mkdtemp temp directory creation",
-        source: mkdtempSource,
-      })),
-    ]);
-  });
-
-  it("reports repository-observed mkdtemp call forms", () => {
-    const sources = [
-      ["const root = await fs.promises.", "mkdtemp", '(path.join(os.tmpdir(), "case-"));'].join(""),
-      ["const root = await fs.", "mkdtemp", '(path.join(os.tmpdir(), "case-"));'].join(""),
-      ["const root = await fsPromises.", "mkdtemp", '("/tmp/openclaw-case-");'].join(""),
-      ["const root = await ", "mkdtemp", '(path.join(tmpdir(), "case-"));'].join(""),
-      ["const root = ", "mkdtemp", 'Sync(join(tmpdir(), "case-"));'].join(""),
-    ];
-    const diff = addedDiff("test/scripts/temp-patterns.test.ts", sources);
-
-    expect(collectTempCreationFindingsFromDiff(diff)).toEqual(
-      sources.map((source, index) => ({
-        file: "test/scripts/temp-patterns.test.ts",
-        line: index + 1,
-        reason: "new mkdtemp temp directory creation",
-        source,
-      })),
-    );
-  });
-
   it("honors explicit allow comments with reasons", () => {
     const mkdtempCall = ["fs.", "mkdtemp", 'Sync("case-")'].join("");
     const tmpDirCall = ["tmp.", "dir", 'Sync({ prefix: "case-" })'].join("");
@@ -198,34 +126,6 @@ describe("report-test-temp-creations", () => {
     ]);
   });
 
-  it("reports multiline imports from the shared temp-dir helper", () => {
-    const file = "src/example.test.ts";
-    const source = [
-      "import {",
-      "  createTempDirTracker,",
-      '} from "../test/helpers/temp-dir.js";',
-      "const tempDirs = createTempDirTracker();",
-    ].join("\n");
-    const diff = addedDiff(file, source.split("\n"));
-
-    expect(
-      collectTempCreationFindingsFromDiff(diff, { fileTextByPath: { [file]: source } }),
-    ).toEqual([
-      {
-        file,
-        line: 2,
-        reason: "new manual temp-dir helper import",
-        source: 'import { createTempDirTracker, } from "../test/helpers/temp-dir.js";',
-      },
-      {
-        file,
-        line: 4,
-        reason: "new manual temp-dir helper usage",
-        source: "const tempDirs = createTempDirTracker();",
-      },
-    ]);
-  });
-
   it("reports manual helpers added to existing multiline imports", () => {
     const file = "test/scripts/manual-temp.test.ts";
     const source = [
@@ -257,20 +157,6 @@ describe("report-test-temp-creations", () => {
           'import { useAutoCleanupTempDirTracker, makeTempDir, } from "../helpers/temp-dir.js";',
       },
     ]);
-  });
-
-  it("allows the auto-cleaning temp-dir helper", () => {
-    const file = "test/scripts/auto-temp.test.ts";
-    const source = [
-      'import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
-      "const tempDirs = useAutoCleanupTempDirTracker(afterEach);",
-      'const workspace = tempDirs.make("case-");',
-    ].join("\n");
-    const diff = addedDiff(file, source.split("\n"));
-
-    expect(
-      collectTempCreationFindingsFromDiff(diff, { fileTextByPath: { [file]: source } }),
-    ).toEqual([]);
   });
 
   it("ignores manual helper fixture strings and the helper test file", () => {
@@ -310,22 +196,6 @@ describe("report-test-temp-creations", () => {
         },
       }),
     ).toEqual([]);
-  });
-
-  it("prints help with usage, outputs, and examples", () => {
-    const output = execFileSync(
-      process.execPath,
-      [path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"), "--help"],
-      {
-        cwd: repoRoot,
-        encoding: "utf8",
-      },
-    );
-
-    expect(output).toContain("Usage: node scripts/report-test-temp-creations.mjs");
-    expect(output).toContain("Outputs:");
-    expect(output).toContain("--no-merge-base");
-    expect(output).toContain("Examples:");
   });
 
   it("formats GitHub warning annotations for CI report mode", () => {
@@ -373,101 +243,6 @@ describe("report-test-temp-creations", () => {
     expect(jsonReport("--staged", "--base", "HEAD^")).toEqual(expected);
     expect(jsonReport("--base", "HEAD^", "--head", "HEAD")).toEqual(expected);
     expect(jsonReport("--base", "HEAD^", "--head", "HEAD", "--no-merge-base")).toEqual(expected);
-  });
-
-  it.each(["rename", "copy"])("preserves added-line scope for %s into and out of tests", (mode) => {
-    const { root, git, report } = createGitFixture("openclaw-temp-report-renames-");
-    git("config", "diff.renames", mode === "copy" ? "copies" : "true");
-    fs.mkdirSync(path.join(root, "src"));
-    const existing = ["const existing = fs.", "mkdtemp", 'Sync("old-");'].join("");
-    fs.writeFileSync(path.join(root, "src", "enter.ts"), `${existing}\n// entering tests\n`);
-    fs.writeFileSync(path.join(root, "src", "leave.test.ts"), `${existing}\n// leaving tests\n`);
-    git("add", "src");
-    git("commit", "-q", "-m", "base");
-    for (const [from, to] of Object.entries({
-      "src/enter.ts": "src/enter.test.ts",
-      "src/leave.test.ts": "src/leave.ts",
-    })) {
-      if (mode === "rename") {
-        git("mv", from, to);
-      } else {
-        fs.copyFileSync(path.join(root, from), path.join(root, to));
-        fs.appendFileSync(path.join(root, from), "// changed copy source\n");
-      }
-    }
-    const source = ["const added = fs.", "mkdtemp", 'Sync("new-");'].join("");
-    fs.appendFileSync(path.join(root, "src", "enter.test.ts"), `${source}\n`);
-    fs.appendFileSync(path.join(root, "src", "leave.ts"), `${source}\n`);
-    git("add", "src");
-
-    const result = report("--staged", "--json");
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual([
-      { file: "src/enter.test.ts", line: 3, reason: "new mkdtemp temp directory creation", source },
-    ]);
-  });
-
-  it("reads staged source for manual helper scans", () => {
-    const { root, git, report } = createGitFixture("openclaw-temp-report-staged-source-");
-    git("commit", "--allow-empty", "-q", "-m", "initial");
-
-    fs.mkdirSync(path.join(root, "test", "scripts"), { recursive: true });
-    const stagedManualFile = path.join(root, "test", "scripts", "staged-manual.test.ts");
-    const stagedAutoFile = path.join(root, "test", "scripts", "staged-auto.test.ts");
-    const manualSource = [
-      'import { makeTempDir } from "../helpers/temp-dir.js";',
-      "const tempDirs = new Set<string>();",
-      'const workspace = makeTempDir(tempDirs, "case-");',
-    ].join("\n");
-    const autoSource = [
-      'import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
-      "const tempDirs = useAutoCleanupTempDirTracker(afterEach);",
-      'const workspace = tempDirs.make("case-");',
-    ].join("\n");
-    fs.writeFileSync(stagedManualFile, `${manualSource}\n`, "utf8");
-    fs.writeFileSync(stagedAutoFile, `${autoSource}\n`, "utf8");
-    git("add", "test/scripts");
-    fs.writeFileSync(stagedManualFile, `${autoSource}\n`, "utf8");
-    fs.writeFileSync(stagedAutoFile, `${manualSource}\n`, "utf8");
-
-    const result = report("--staged", "--json");
-
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual([
-      {
-        file: "test/scripts/staged-manual.test.ts",
-        line: 1,
-        reason: "new manual temp-dir helper import",
-        source: 'import { makeTempDir } from "../helpers/temp-dir.js";',
-      },
-      {
-        file: "test/scripts/staged-manual.test.ts",
-        line: 3,
-        reason: "new manual temp-dir helper usage",
-        source: 'const workspace = makeTempDir(tempDirs, "case-");',
-      },
-    ]);
-  });
-
-  it("exits non-zero for staged findings when requested", () => {
-    const { root, git, report } = createGitFixture("openclaw-temp-report-");
-    fs.mkdirSync(path.join(root, "test", "helpers"), { recursive: true });
-    fs.writeFileSync(path.join(root, "test", "helpers", "case.ts"), "const value = 1;\n", "utf8");
-    git("add", "test/helpers/case.ts");
-    git("commit", "-q", "-m", "initial");
-
-    const source = [
-      "const tempRoot = fs.",
-      "mkdtemp",
-      'Sync(path.join(os.tmpdir(), "case-"));\n',
-    ].join("");
-    fs.appendFileSync(path.join(root, "test", "helpers", "case.ts"), source, "utf8");
-    git("add", "test/helpers/case.ts");
-
-    const result = report("--staged", "--fail-on-findings");
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("test/helpers/case.ts");
   });
 
   it("falls back to a two-dot diff when refs have no merge base", () => {

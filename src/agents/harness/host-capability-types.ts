@@ -12,6 +12,8 @@ type AgentHarnessHostApprovalResult = Readonly<{
 type AgentHarnessPreparedEnvironment = Readonly<{
   credentialScrubEnv: Readonly<Record<string, string>>;
   localIdentityEnv: Readonly<Record<string, string>>;
+  /** Append to effective Git parameters only in an owned local execution environment. */
+  localGitConfigParameters?: string;
   /** Local child destination facts; must not be projected into a remote or sandbox process. */
   localProcessEnv?: Readonly<Record<string, string>>;
   /** Tool lookup on an owned local process; omit for remote, socket, or sandbox placement. */
@@ -38,6 +40,12 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Native runtimes must install pre-tool admission for these pending workspace operations. */
+  workspaceReadiness?: Readonly<{
+    toolNames: readonly string[];
+    /** Await the existing workspace owner while preserving this run's authority. */
+    waitUntilReady: () => Promise<void>;
+  }>;
   /** Native delegation without person selection must remain unambiguous at admission. */
   assertNativeSubagentSpawnAllowed?: () => void;
   /** Binds the actual native model; returns undefined only for runs without an operator source. */

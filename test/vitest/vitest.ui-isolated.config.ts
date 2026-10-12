@@ -24,7 +24,10 @@ export function createUiIsolatedVitestConfig(
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
     useNonIsolatedRunner: false,
   });
-  return { ...config, plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()] };
+  return {
+    ...config,
+    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()],
+  };
 }
 
 export default createUiIsolatedVitestConfig();

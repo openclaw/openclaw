@@ -96,15 +96,15 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   sessionCatalogAgentId: string | null = null;
   sessionCatalogRevision = 0;
   readonly sessionCatalogPageDepths = new Map<string, number>();
-  readonly sessionCatalogRevisions = new Map<string, number>();
   private sessionScopeAgentId: string | null = null;
+  private agentSelectionSource: ApplicationContext["agentSelection"] | undefined;
+  private agentSelectionIntentRevision: number | undefined;
   private sessionsSource: SessionCapability | null = null;
   private filteredSessionScope: string | null = null;
   private unsubscribeFilteredSessions: (() => void) | null = null;
   childSessionScope = {};
   private childSessionCanonicalListRevision: number | null = null;
   private readonly childSessionQueries = new Map<string, ChildSessionQuery>();
-  private cachedSessionResult: SessionsListResult | null = null;
   private stopCatalogBrowserEvents: (() => void) | null = null;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayConnectionRevision = 0;
@@ -224,6 +224,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.gatewayClient = null;
     this.gatewayConnected = false;
     this.gatewayAvailable = false;
+    this.agentSelectionSource = undefined;
+    this.agentSelectionIntentRevision = undefined;
     this.retireSessionCatalogData();
     this.scroll.dispose();
     this.lineage.disconnect();
@@ -259,12 +261,19 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionCatalogs = [];
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
     this.sessionCatalogPageDepths.clear();
-    this.sessionCatalogRevisions.clear();
     this.requestSessionDataUpdate();
   }
 
   synchronizeSessionScope(): void {
     const context = this.context;
+    const selection = context?.agentSelection;
+    const foreground =
+      selection !== undefined &&
+      selection === this.agentSelectionSource &&
+      selection.intentRevision !== this.agentSelectionIntentRevision;
+    // Consume same-agent intent too, before a later automatic scope change can reuse it.
+    this.agentSelectionSource = selection;
+    this.agentSelectionIntentRevision = selection?.intentRevision;
     const nextAgentId = context ? normalizeAgentId(this.host.expandedAgentId()) : null;
     // A reconnect cannot revoke ownership until its replacement hello is authoritative.
     const nextCatalogAgentId =
@@ -299,7 +308,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       // Catalog cursors and rows belong to the selected agent, not just its host.
       this.sessionCatalogs = [];
       this.sessionCatalogPageDepths.clear();
-      this.sessionCatalogRevisions.clear();
     }
     if (agentChanged && !ownsCurrentCanonicalList) {
       // A replacement capability may publish its new-agent list before selection synchronizes.
@@ -313,7 +321,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       context?.gateway.snapshot.phase === "connected" &&
       hasSidebarListFilter(this.host)
     ) {
-      void this.scheduleSidebarSessions();
+      void (foreground ? this.refreshSidebarSessions() : this.scheduleSidebarSessions());
     }
   }
 
@@ -372,14 +380,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   private readonly updateSessions = (sessions: SessionCapability) => {
-    const snapshot = sessions.state;
-    if (this.cachedSessionResult && !sessions.presentation.resultCached) {
-      // A filtered live list can replace the cached projection before the primary list lands.
-      if (this.sessionsResult === this.cachedSessionResult) {
-        this.clearSessionCache();
-      }
-      this.cachedSessionResult = null;
+    if (sessions.presentation.resultCached) {
+      return;
     }
+    const snapshot = sessions.state;
     if (this.childSessionCanonicalListRevision !== sessions.canonicalListRevision) {
       this.childSessionCanonicalListRevision = sessions.canonicalListRevision;
       // Observed child queries own their freshness. Only unobserved, collapsed
@@ -397,9 +401,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.clearSessionCache();
     }
     publishSidebarSessionList(this, { ...snapshot, ...sessions.presentation });
-    this.cachedSessionResult = sessions.presentation.resultCached
-      ? sessions.presentation.result
-      : null;
     this.sessionsLoading = snapshot.loading;
     this.requestSessionDataUpdate();
   };
@@ -479,7 +480,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   private clearSessionCache(): void {
     this.childSessionCanonicalListRevision = null;
-    this.cachedSessionResult = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
     this.sessionsStartupPending = false;
@@ -703,8 +703,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.resetChildSessionState();
     this.sessionResultsByAgent = {};
     if (!hasSidebarListFilter(this.host) && this.context) {
-      this.sessionsResult = this.context.sessions.presentation.result;
-      this.sessionsAgentId = this.context.sessions.presentation.agentId;
+      const presentation = this.context.sessions.presentation;
+      this.sessionsResult = presentation.resultCached ? null : presentation.result;
+      this.sessionsAgentId = presentation.resultCached ? null : presentation.agentId;
     } else if (this.context) {
       this.bindFilteredSessions();
     }

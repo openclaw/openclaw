@@ -84,86 +84,406 @@ function respond(connection: RequestConnection, id: string, payload: unknown, ok
   );
 }
 
+function refuseBootstrapRead(connection: RequestConnection, id = latestFrame(connection).id): void {
+  respond(
+    connection,
+    id,
+    {
+      code: "UNAVAILABLE",
+      message: "suspended",
+      retryable: true,
+      retryAfterMs: 60_000,
+      details: { reason: "gateway-suspending" },
+    },
+    false,
+  );
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("GatewayProtocolClient requests", () => {
-  it("parks 40 polling identity clients during 30 seconds of suspension after refusal", async () => {
-    vi.useFakeTimers();
-    let suspended = true;
-    let refused = 0;
-    let recovered = 0;
-    const clients = Array.from({ length: 40 }, () => {
-      const harness = createRequestHarness({
-        requestTimeoutMs: 60_000,
-        send: (frame) => {
-          const connection = harness.connections[0];
-          assert(connection);
-          if (suspended) {
-            refused += 1;
-          }
-          respond(
-            connection,
-            frame.id,
-            suspended
-              ? {
-                  code: "UNAVAILABLE",
-                  message: "agent.identity.get unavailable during gateway suspension",
-                  retryable: true,
-                  retryAfterMs: 60_000,
-                  details: { reason: "gateway-suspending", phase: "prepared" },
-                }
-              : { agentId: "main" },
-            !suspended,
+  it.each(["gateway-suspending", "gateway-restarting"])(
+    "parks 40 bootstrap clients during 30 seconds of %s after refusal",
+    async (reason) => {
+      vi.useFakeTimers();
+      let suspended = true;
+      let refused = 0;
+      let recovered = 0;
+      const clients = Array.from({ length: 40 }, () => {
+        const harness = createRequestHarness({
+          requestTimeoutMs: 60_000,
+          send: (frame) => {
+            const connection = harness.connections[0];
+            assert(connection);
+            if (suspended) {
+              refused += 1;
+            }
+            respond(
+              connection,
+              frame.id,
+              suspended
+                ? {
+                    code: "UNAVAILABLE",
+                    message: `${frame.method} unavailable during gateway drain`,
+                    retryable: true,
+                    retryAfterMs: 60_000,
+                    details: { reason, phase: "prepared" },
+                  }
+                : { agentId: "main" },
+              !suspended,
+            );
+          },
+        });
+        const connection = harness.connections[0];
+        assert(connection);
+        const notify = (phase: string) =>
+          connection.handlers.message(
+            JSON.stringify({ type: "event", event: "gateway.suspension", payload: { phase } }),
           );
-        },
+        let pending = false;
+        const poll = () => {
+          if (pending) {
+            return;
+          }
+          pending = true;
+          void Promise.all(
+            [
+              "agent.identity.get",
+              "sessions.subscribe",
+              "sessions.groups.list",
+              "question.list",
+              "sessions.list",
+            ].map((method) => harness.client.request(method, { agentId: "main" })),
+          ).then(
+            () => {
+              pending = false;
+              recovered += 1;
+            },
+            () => {
+              pending = false;
+            },
+          );
+        };
+        poll();
+        return { ...harness, notify, timer: setInterval(poll, 1_000) };
       });
-      const connection = harness.connections[0];
-      assert(connection);
-      const notify = (phase: string) =>
-        connection.handlers.message(
-          JSON.stringify({ type: "event", event: "gateway.suspension", payload: { phase } }),
-        );
-      let pending = false;
-      const poll = () => {
-        if (pending) {
-          return;
+      try {
+        await vi.advanceTimersByTimeAsync(29_999);
+        for (const { timer } of clients) {
+          clearInterval(timer);
         }
-        pending = true;
-        void harness.client.request("agent.identity.get", { agentId: "main" }).then(
-          () => {
-            pending = false;
-            recovered += 1;
-          },
-          () => {
-            pending = false;
-          },
+        await vi.advanceTimersByTimeAsync(1);
+        suspended = false;
+        for (const { notify } of clients) {
+          notify("accepting");
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refused).toBeLessThanOrEqual(40);
+        expect(recovered).toBe(40);
+      } finally {
+        for (const { client, timer } of clients) {
+          clearInterval(timer);
+          client.stop();
+        }
+      }
+    },
+  );
+
+  it("probes one parked bootstrap read with jitter and releases the rest after restart rollback", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    const first = client.request("sessions.subscribe", {});
+    respond(
+      connection,
+      latestFrame(connection).id,
+      {
+        code: "UNAVAILABLE",
+        message: "restarting",
+        retryable: true,
+        retryAfterMs: 10_000,
+        details: { reason: "gateway-restarting" },
+      },
+      false,
+    );
+    const second = client.request("sessions.groups.list", {});
+    await vi.advanceTimersByTimeAsync(65_999);
+    expect(connection.frames).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connection.frames).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(connection.frames).toHaveLength(2);
+    respond(connection, latestFrame(connection).id, { subscribed: true });
+    expect(latestFrame(connection).method).toBe("sessions.groups.list");
+    respond(connection, latestFrame(connection).id, { groups: [] });
+    await expect(first).resolves.toEqual({ subscribed: true });
+    await expect(second).resolves.toEqual({ groups: [] });
+    client.stop();
+  });
+
+  it("holds bootstrap reads after shutdown and retires them before reconnect", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    connection.handlers.message(
+      JSON.stringify({
+        type: "event",
+        event: "shutdown",
+        payload: { restartExpectedMs: 1_500 },
+      }),
+    );
+    const outcome = client.request("question.list", {}).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(connection.frames).toHaveLength(0);
+    connection.close(1012, "restart");
+    expect(await outcome).toMatchObject({ message: "gateway closed (1012): restart" });
+    client.start();
+    const replacement = connections.at(-1);
+    assert(replacement);
+    const fresh = client.request("question.list", {});
+    respond(replacement, latestFrame(replacement).id, { questions: [] });
+    await expect(fresh).resolves.toEqual({ questions: [] });
+    client.stop();
+  });
+
+  it.each(["preparing", "draining", "prepared"])(
+    "replaces refusal probes with an announced %s pause despite late refusals",
+    async (phase) => {
+      vi.useFakeTimers();
+      const { client, connections } = createRequestHarness();
+      const connection = connections[0];
+      assert(connection);
+      const identity = client.request("agent.identity.get", {});
+      const identityFrame = latestFrame(connection);
+      const groups = client.request("sessions.groups.list", {});
+      refuseBootstrapRead(connection, identityFrame.id);
+      const notify = (nextPhase: string) =>
+        connection.handlers.message(
+          JSON.stringify({
+            type: "event",
+            event: "gateway.suspension",
+            payload: { phase: nextPhase },
+          }),
         );
-      };
-      poll();
-      return { ...harness, notify, timer: setInterval(poll, 1_000) };
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(29_999);
-      for (const { timer } of clients) {
-        clearInterval(timer);
-      }
+      await vi.advanceTimersByTimeAsync(500);
+      notify(phase);
+      refuseBootstrapRead(connection);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(connection.frames.map((frame) => frame.method)).toEqual([
+        "agent.identity.get",
+        "sessions.groups.list",
+      ]);
+      notify("accepting");
+      expect(connection.frames.map((frame) => frame.method)).toEqual([
+        "agent.identity.get",
+        "sessions.groups.list",
+        "agent.identity.get",
+        "sessions.groups.list",
+      ]);
+      respond(connection, identityFrame.id, { agentId: "main" });
+      respond(connection, latestFrame(connection).id, { groups: [] });
+      await expect(identity).resolves.toEqual({ agentId: "main" });
+      await expect(groups).resolves.toEqual({ groups: [] });
+      client.stop();
+    },
+  );
+
+  it("does not renew an expired empty pause before the next bootstrap probe", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness({ requestTimeoutMs: 30_000 });
+    const connection = connections[0];
+    assert(connection);
+    const expired = client.request("agent.identity.get", {}).catch((error: unknown) => error);
+    refuseBootstrapRead(connection);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(await expired).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: true });
+    const first = client.request("sessions.list", {});
+    const second = client.request("question.list", {});
+    expect(connection.frames.map((frame) => frame.method)).toEqual([
+      "agent.identity.get",
+      "sessions.list",
+    ]);
+    respond(connection, latestFrame(connection).id, { sessions: [] });
+    expect(latestFrame(connection).method).toBe("question.list");
+    respond(connection, latestFrame(connection).id, { questions: [] });
+    await expect(first).resolves.toEqual({ sessions: [] });
+    await expect(second).resolves.toEqual({ questions: [] });
+    client.stop();
+  });
+
+  it.each(["gateway-suspending", "gateway-restarting"])(
+    "retains the longest outstanding retry deadline for %s",
+    async (reason) => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      const { client, connections } = createRequestHarness();
+      const connection = connections[0];
+      assert(connection);
+      const identity = client.request("agent.identity.get", {});
+      const groups = client.request("sessions.groups.list", {});
+      const [identityFrame, groupsFrame] = connection.frames;
+      assert(identityFrame && groupsFrame);
+      const reject = (id: string, retryAfterMs: number) =>
+        respond(
+          connection,
+          id,
+          {
+            code: "UNAVAILABLE",
+            message: "draining",
+            retryable: true,
+            retryAfterMs,
+            details: { reason },
+          },
+          false,
+        );
+      reject(identityFrame.id, 120_000);
+      await vi.advanceTimersByTimeAsync(500);
+      reject(groupsFrame.id, 1_000);
+      await vi.advanceTimersByTimeAsync(119_499);
+      expect(connection.frames).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(1);
-      suspended = false;
-      for (const { notify } of clients) {
-        notify("accepting");
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(refused).toBeLessThanOrEqual(40);
-      expect(recovered).toBe(40);
-    } finally {
-      for (const { client, timer } of clients) {
-        clearInterval(timer);
-        client.stop();
-      }
+      expect(connection.frames).toHaveLength(3);
+      respond(connection, identityFrame.id, { agentId: "main" });
+      respond(connection, groupsFrame.id, { groups: [] });
+      await Promise.all([identity, groups]);
+      client.stop();
+    },
+  );
+
+  it("keeps the pause when a probe fails authorization before admission", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    const question = client.request("question.list", {}).catch((error: unknown) => error);
+    refuseBootstrapRead(connection);
+    const groups = client.request("sessions.groups.list", {});
+    const list = client.request("sessions.list", {});
+    await vi.advanceTimersByTimeAsync(60_000);
+    respond(
+      connection,
+      latestFrame(connection).id,
+      {
+        code: "FORBIDDEN",
+        message: "missing question scope",
+      },
+      false,
+    );
+    expect(await question).toMatchObject({ gatewayCode: "FORBIDDEN" });
+    expect(connection.frames.map((frame) => frame.method)).toEqual([
+      "question.list",
+      "question.list",
+      "sessions.groups.list",
+    ]);
+    respond(connection, latestFrame(connection).id, { groups: [] });
+    expect(latestFrame(connection).method).toBe("sessions.list");
+    respond(connection, latestFrame(connection).id, { sessions: [] });
+    await Promise.all([groups, list]);
+    client.stop();
+  });
+
+  it("does not send queued probes while their shared signal is aborting", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    const controller = new AbortController();
+    const question = client
+      .request("question.list", {}, { signal: controller.signal })
+      .catch((error: unknown) => error);
+    refuseBootstrapRead(connection);
+    const outcomes = [
+      question,
+      ...["sessions.groups.list", "sessions.list"].map((method) =>
+        client.request(method, {}, { signal: controller.signal }).catch((error: unknown) => error),
+      ),
+    ];
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(connection.frames).toHaveLength(2);
+    controller.abort();
+    for (const outcome of await Promise.all(outcomes)) {
+      expect(outcome).toBeInstanceOf(Error);
     }
+    expect(connection.frames).toHaveLength(2);
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("does not send queued probes whose deadlines are already due", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { client, connections } = createRequestHarness({ requestTimeoutMs: 70_000 });
+    const connection = connections[0];
+    assert(connection);
+    const identity = client.request("agent.identity.get", {}).catch((error: unknown) => error);
+    respond(
+      connection,
+      latestFrame(connection).id,
+      {
+        code: "UNAVAILABLE",
+        message: "restarting",
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { reason: "gateway-restarting" },
+      },
+      false,
+    );
+    const queued = ["sessions.groups.list", "sessions.list"].map((method) =>
+      client.request(method, {}).catch((error: unknown) => error),
+    );
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(await identity).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: true });
+    for (const outcome of await Promise.all(queued)) {
+      expect(outcome).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: false });
+    }
+    expect(connection.frames).toHaveLength(2);
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("does not let an older probe release a newer admission pause", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    const notify = (phase: string) =>
+      connection.handlers.message(
+        JSON.stringify({
+          type: "event",
+          event: "gateway.suspension",
+          payload: { phase },
+        }),
+      );
+    const identity = client.request("agent.identity.get", {});
+    refuseBootstrapRead(connection);
+    const groups = client.request("sessions.groups.list", {});
+    const list = client.request("sessions.list", {});
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(connection.frames).toHaveLength(2);
+    notify("draining");
+    respond(connection, latestFrame(connection).id, { agentId: "main" });
+    await identity;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(connection.frames).toHaveLength(2);
+    notify("accepting");
+    expect(connection.frames.map((frame) => frame.method)).toEqual([
+      "agent.identity.get",
+      "agent.identity.get",
+      "sessions.groups.list",
+      "sessions.list",
+    ]);
+    const groupsFrame = connection.frames.at(-2);
+    assert(groupsFrame);
+    respond(connection, groupsFrame.id, { groups: [] });
+    respond(connection, latestFrame(connection).id, { sessions: [] });
+    await Promise.all([groups, list]);
+    client.stop();
   });
 
   it("seeds the identity wait from hello and keeps writes synchronous", async () => {
@@ -188,11 +508,30 @@ describe("GatewayProtocolClient requests", () => {
     ]);
     const writeFrame = connection.frames[1];
     assert(writeFrame);
-    respond(connection, writeFrame.id, { code: "UNAVAILABLE", message: "suspended" }, false);
+    respond(
+      connection,
+      writeFrame.id,
+      {
+        code: "UNAVAILABLE",
+        message: "suspended",
+        retryable: true,
+        retryAfterMs: 60_000,
+        details: { reason: "gateway-suspending" },
+      },
+      false,
+    );
     await expect(write).rejects.toThrow("suspended");
     respond(connection, latestFrame(connection).id, { resumed: true });
     await control;
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(connection.frames).toHaveLength(3);
+    connection.handlers.message(
+      JSON.stringify({
+        type: "event",
+        event: "gateway.suspension",
+        payload: { phase: "accepting" },
+      }),
+    );
     expect(latestFrame(connection).method).toBe("agent.identity.get");
     respond(connection, latestFrame(connection).id, { agentId: "main" });
     await expect(identity).resolves.toEqual({ agentId: "main" });

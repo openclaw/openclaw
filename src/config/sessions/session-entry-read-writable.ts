@@ -1,22 +1,30 @@
 import path from "node:path";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
+import {
+  readRetainedSessionEntryFacts,
+  retainSessionEntryReadFacts,
+} from "./session-entry-read-facts.js";
+import { readAdmittedSessionEntry } from "./session-entry-read-ordered.js";
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
 } from "./session-entry-read-request.js";
+import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionEntry,
@@ -31,7 +39,11 @@ export async function readSessionEntryInWorker(
   assertCallerCurrent: () => void = () => {},
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
   onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
+  reader?: SessionEntryCohortReader,
 ) {
+  if (reader) {
+    return readAdmittedSessionEntry(reader, input, assertCallerCurrent, onReadTarget);
+  }
   const { scope, env } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
   const agentId = scope.agentId
@@ -64,7 +76,14 @@ export async function readSessionEntryInWorker(
   }
   // Incognito still belongs to its process-held native owner until that owner's complete cutover.
   if (isNativeSessionEntryRead(scope, agentId)) {
-    const entry = loadSessionEntry(scope);
+    let readSource: CapturedSessionEntryReadSource | undefined;
+    const { existing: entry } = resolveSessionEntry(scope, {
+      onReadSource: onReadTarget
+        ? (source) => {
+            readSource = source;
+          }
+        : undefined,
+    });
     if (onReadTarget) {
       const nativeAgentId = agentId ?? normalizeAgentId(scope.defaultAgentId);
       const sessionKey = resolveSqliteSessionKey(scope.sessionKey, nativeAgentId);
@@ -74,6 +93,7 @@ export async function readSessionEntryInWorker(
         storePath:
           scope.storePath ??
           resolveIncognitoOpenClawAgentSqlitePath({ agentId: nativeAgentId, env }),
+        readSource,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
     }
@@ -135,9 +155,22 @@ export async function readSessionEntryInWorker(
           await owner.refreshBeforeDispatch(() => execution.assertCurrent());
           execution.assertCurrent();
           await execution.prepare(source);
-          return execution.runExisting(source, (worker) =>
-            worker.execute({ type: "session.entry.read", input: { sessionKey } }),
-          );
+          assertCurrent();
+          const nativeOwner = execution.captureGenerationClaim();
+          const request = { sessionKeys: [sessionKey] };
+          const before = readSqliteDatabaseWriteTokenForPath(options.path);
+          const cached = readRetainedSessionEntryFacts(options, request, nativeOwner);
+          const selected =
+            cached ??
+            (await execution.runExisting(source, (worker) =>
+              worker.execute({ type: "session.entry.read", input: request }),
+            ));
+          assertCurrent();
+          nativeOwner.assertCurrent();
+          if (!cached && selected) {
+            retainSessionEntryReadFacts(options, request, selected, before);
+          }
+          return selected?.entries.find((row) => row.sessionKey === sessionKey)?.entry;
         });
         await owner.revalidateTarget();
         assertCurrent();

@@ -337,6 +337,16 @@ describe("attachment sidebar source ownership", () => {
       }),
     );
     expect(objectBlob?.type).toBe("image/svg+xml");
+    const svg = container.querySelector("openclaw-chat-svg-attachment")!;
+    svg.label = "Renamed vector";
+    await svg.updateComplete;
+    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(objectUrl);
+    expect(container.querySelector("img.chat-message-image")?.getAttribute("alt")).toBe(
+      "Renamed vector",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    svg.label = "vector.svg";
+    await svg.updateComplete;
     expect(container.querySelector("iframe")).toBeNull();
     container.querySelector("img.chat-message-image")?.dispatchEvent(new Event("load"));
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledOnce();
@@ -347,6 +357,7 @@ describe("attachment sidebar source ownership", () => {
     const lightboxItem = onOpenImage.mock.calls[0]?.[0] as { release?: () => void } | undefined;
     expect(lightboxItem?.release).toBeTypeOf("function");
     container.remove();
+    await Promise.resolve();
     expect(revokeObjectURL).not.toHaveBeenCalledWith(objectUrl);
     lightboxItem?.release?.();
     expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
@@ -416,6 +427,7 @@ describe("attachment sidebar source ownership", () => {
     );
     const attachment = container.querySelector("openclaw-chat-svg-attachment")!;
     attachment.remove();
+    await Promise.resolve();
     container.append(attachment);
     await intersectAttachment();
 
@@ -822,6 +834,12 @@ describe("attachment sidebar source ownership", () => {
     expect(
       container.querySelector(".chat-assistant-attachment-card__status-reason")?.textContent,
     ).toBe(reason);
+    expect(
+      container
+        .querySelector(".chat-assistant-attachment-card__status-meta")
+        ?.textContent?.replace(/\s+/gu, " ")
+        .trim(),
+    ).toBe(`Not sent · ${reason}`);
     expect(
       container.querySelector(
         ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",

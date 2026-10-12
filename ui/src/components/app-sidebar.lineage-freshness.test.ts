@@ -348,7 +348,7 @@ describe("selected lineage after managed list admission", () => {
           if (params?.spawnedBy === p2) {
             return sessionsResult([current], 30);
           }
-          if (params?.involvingMe === true) {
+          if (params?.archived === "all") {
             managedReads += 1;
             return result();
           }
@@ -380,7 +380,8 @@ describe("selected lineage after managed list admission", () => {
       const { row, parent: parentOfSelected, expand } = sessionTree(sidebar, key);
       let originalLineage: Promise<void> | undefined;
       try {
-        await activateSessionMenuValue(sidebar, "involving-me");
+        // Status filtering owns a separate managed query without requiring involvement membership.
+        await activateSessionMenuValue(sidebar, "status:all");
         await waitForFast(() => {
           expect(managedReads).toBeGreaterThan(0);
           expect(sidebar.sessionData.sessionsLoading).toBe(false);
@@ -483,7 +484,7 @@ describe("selected lineage after managed list admission", () => {
 });
 
 describe("selected lineage after a full sessions.changed event", () => {
-  it.each(["filtered omitted", "unfiltered metadata"] as const)(
+  it.each(["status-filtered omitted", "unfiltered metadata"] as const)(
     "%s keeps accepted event fields visible after list refresh failures",
     async (mode) => {
       vi.useFakeTimers();
@@ -556,7 +557,7 @@ describe("selected lineage after a full sessions.changed event", () => {
           if (params?.spawnedBy === p2) {
             return result([current]);
           }
-          if (params?.involvingMe === true) {
+          if (params?.archived === "all") {
             if (failedLists) {
               managedFailures += 1;
               throw new Error("Synthetic managed refresh failure");
@@ -588,7 +589,8 @@ describe("selected lineage after a full sessions.changed event", () => {
       const { row, parent: directParent, expand } = sessionTree(sidebar, key);
       try {
         if (filtered) {
-          await activateSessionMenuValue(sidebar, "involving-me");
+          // Status filtering owns a separate managed query without requiring involvement membership.
+          await activateSessionMenuValue(sidebar, "status:all");
           await waitForFast(() => {
             expect(sidebar.sessionData.sessionsLoading).toBe(false);
             expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([
@@ -677,7 +679,7 @@ describe("selected lineage after a full sessions.changed event", () => {
         // A retained parent query refreshes its changed member; reparenting
         // retires the old query before its scheduled refresh runs.
         expect(controllerChildReads).toBe(reparent ? 1 : 2);
-        if (mode === "filtered omitted") {
+        if (mode === "status-filtered omitted") {
           expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([
             p1,
           ]);

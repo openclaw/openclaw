@@ -26,10 +26,7 @@ import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/conf
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import { getMissingLocalMemoryEmbeddingProviderMessage } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import {
-  resolveManifestOwnerBasePolicyBlock,
-  type ManifestOwnerBasePolicyBlockReason,
-} from "../plugins/manifest-owner-policy.js";
+import { resolveManifestOwnerBasePolicyBlock } from "../plugins/manifest-owner-policy.js";
 import {
   getActiveMemoryProviderCore,
   resolveActiveMemoryBackendConfig,
@@ -145,6 +142,7 @@ function resolveActiveMemoryConversationRecallSupport(cfg: OpenClawConfig) {
 
 type MemorySearchHealthPath =
   | "memory.search.provider"
+  | "memory.search.sources"
   | "plugins.slots.memory"
   | "memory.search.remote.baseUrl"
   | "memory.search.model";
@@ -165,17 +163,15 @@ function inspectRememberAcrossConversationsHealth(params: {
     return false;
   }
   const conversationRecallSupport = resolveActiveMemoryConversationRecallSupport(params.cfg);
-  const activeMemoryAvailable = conversationRecallSupport.available;
-  if (!activeMemoryAvailable) {
+  if (!conversationRecallSupport.available) {
     params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but the Active Memory plugin is disabled. Enable the plugin or set memory.search.rememberAcrossConversations to false.`,
     );
-  }
-  if (activeMemoryAvailable && !conversationRecallSupport.providerSupported) {
+  } else if (!conversationRecallSupport.providerSupported) {
     params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but the current memory provider does not support protected private transcript recall. Set memory.search.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
     );
-  } else if (activeMemoryAvailable && !conversationRecallSupport.memorySearchAllowed) {
+  } else if (!conversationRecallSupport.memorySearchAllowed) {
     params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memory.search.rememberAcrossConversations to false.`,
     );
@@ -375,6 +371,14 @@ async function inspectMemorySearchHealthForAgent(
     report("No active memory plugin is registered for the current config.", "plugins.slots.memory");
     return;
   }
+  if (resolved.sessionSourceExcluded) {
+    report(
+      `Memory search for agent "${agentId}" requests the "sessions" source, but session indexing is disabled. Set memory.search.experimental.sessionMemory to true for this agent, or enable memory.search.rememberAcrossConversations for private cross-conversation recall.`,
+      "memory.search.sources",
+      false,
+      true,
+    );
+  }
   if (provider === "none") {
     return;
   }
@@ -415,19 +419,13 @@ async function inspectMemorySearchHealthForAgent(
       .map(({ owner }) => owner);
     const policyArtifacts =
       eligibleOwners.length > 0 ? loadProviderPolicyArtifacts(eligibleOwners) : null;
-    let installedOwner: (typeof installedOwners)[number];
-    let ownerPolicyBlock: ManifestOwnerBasePolicyBlockReason | null;
-    if (policyArtifacts) {
-      installedOwner = policyArtifacts.owner;
-      ownerPolicyBlock = null;
-    } else {
-      const blockedOwner = ownerPolicies.find(({ policyBlock }) => policyBlock);
-      if (!blockedOwner) {
-        throw new Error(`Unable to resolve the installed provider owner for "${provider}".`);
-      }
-      installedOwner = blockedOwner.owner;
-      ownerPolicyBlock = blockedOwner.policyBlock;
+    const selectedPolicy = policyArtifacts
+      ? { owner: policyArtifacts.owner, policyBlock: null }
+      : ownerPolicies.find(({ policyBlock }) => policyBlock);
+    if (!selectedPolicy) {
+      throw new Error(`Unable to resolve the installed provider owner for "${provider}".`);
     }
+    const { owner: installedOwner, policyBlock: ownerPolicyBlock } = selectedPolicy;
     const providerPolicy = policyArtifacts?.surface;
     const inspectSetup = ownerPolicyBlock
       ? undefined

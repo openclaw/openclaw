@@ -1,50 +1,126 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { canRequesterAbortChatRun } from "../gateway/server-methods/chat-abort-authorization.js";
-import { readExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
-import type * as HeartbeatWake from "../infra/heartbeat-wake.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
-  enqueueSystemEventEntry,
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "../infra/system-events.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { captureExecRequestCancellation } from "./bash-process-control.js";
-import {
-  deleteSession,
-  getFinishedSession,
-  getSession,
-  waitForExecScope,
-} from "./bash-process-registry.js";
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
+import { runEmbeddedAgent } from "./embedded-agent.js";
 
-const readSessionEntriesMock = vi.hoisted(() => vi.fn());
-vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
-  readSessionEntriesFromStoreInWorker: readSessionEntriesMock,
-}));
-const requestHeartbeatMock = vi.hoisted(() => vi.fn());
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof HeartbeatWake>()),
-  requestHeartbeat: requestHeartbeatMock,
-}));
-beforeEach(() => {
-  readSessionEntriesMock.mockReset().mockRejectedValue(new Error("session worker unavailable"));
-  requestHeartbeatMock.mockClear();
+// mock-isolation: Keep model inference outside the real process and session-event ownership fixture.
+vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
+const model = vi.mocked(runEmbeddedAgent);
+await Promise.all([
+  import("../auto-reply/dispatch.js"),
+  import("../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
+
+let state: OpenClawTestState;
+let config: OpenClawConfig;
+const receipts: sessionEvents.SessionEventReceipt[] = [];
+const enqueue = sessionEvents.enqueueSessionEventForHost;
+
+beforeAll(async () => {
+  state = await createOpenClawTestState({
+    label: "exec-followup",
+    env: { OPENCLAW_TEST_FAST: "0" },
+  });
+  config = {
+    agents: {
+      entries: { main: { workspace: state.workspaceDir } },
+      defaults: {
+        workspace: state.workspaceDir,
+        skipBootstrap: true,
+        model: { primary: "mock-openai/gpt-5.6-luna" },
+        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+    plugins: { enabled: false },
+    skills: { load: { watch: false } },
+  };
+  setRuntimeConfigSnapshot(config);
+  await state.writeConfig(config);
+  openOpenClawStateDatabase();
 });
-afterEach(() => {
+
+beforeEach(() => {
+  model.mockReset().mockImplementation(async (params: RunEmbeddedAgentParams) => {
+    await expectDefined(params.preparedRunAdmission, "real completion admission").admit(
+      "gateway",
+      params.runId,
+    );
+    params.onExecutionPhase?.({ phase: "model_call_started" });
+    await params.onExecutionStarted?.();
+    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+  });
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+    const receipt = enqueue(text, options);
+    receipts.push(receipt);
+    return receipt;
+  });
+});
+
+afterEach(async () => {
+  for (const receipt of receipts) {
+    receipt.cancel();
+  }
+  await Promise.all(receipts.map((receipt) => receipt.settled));
+  receipts.length = 0;
+  vi.restoreAllMocks();
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
 });
+
+afterAll(async () => {
+  await state?.cleanup();
+});
+
+async function seedOrigin(sessionKey: string, spawnedBy?: string) {
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey },
+    {
+      sessionId: sessionKey.replaceAll(":", "-"),
+      lifecycleRevision: "original",
+      updatedAt: Date.now(),
+      sessionStartedAt: Date.now(),
+      permissionMode: "full",
+      ...(spawnedBy ? { spawnedBy, spawnDepth: 1 } : {}),
+    },
+  );
+}
 
 function nodeCommand(source: string): string {
   const quote = (value: string) =>
     `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
   const command = `${quote(process.execPath)} -e ${quote(source)}`;
   return process.platform === "win32" ? `& ${command}` : command;
+}
+
+async function completion(signal: AbortSignal) {
+  const receipt = expectDefined(receipts.at(-1), "ordinary completion receipt");
+  expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+  expect(await withinTest(receipt.settled, signal)).toMatchObject({
+    status: "completed",
+    executionStarted: true,
+  });
 }
 
 test("does not advertise detached continuation when process is unavailable", async () => {
@@ -63,10 +139,16 @@ test("does not advertise detached continuation when process is unavailable", asy
   expect(result.details).not.toHaveProperty("followUp");
 });
 
-test("starts and notifies when the session worker fails, then resolves child identity again", async () => {
+test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
+  signal,
+}) => {
   const sessionKey = "agent:main:dashboard:notification-possible";
+  await seedOrigin(sessionKey);
+  vi.spyOn(sessionReads, "readSessionEntriesFromStoreInWorker").mockRejectedValueOnce(
+    new Error("session worker unavailable"),
+  );
   const exec = createExecTool({
-    config: {},
+    config,
     host: "gateway",
     security: "full",
     ask: "off",
@@ -78,11 +160,8 @@ test("starts and notifies when the session worker fails, then resolves child ide
   const processTool = createProcessTool({ scopeKey: sessionKey });
   for (const recovered of [false, true]) {
     if (recovered) {
-      readSessionEntriesMock.mockResolvedValue({
-        entries: [{ sessionKey, entry: { spawnedBy: "agent:main:main", spawnDepth: 1 } }],
-      });
+      await seedOrigin(sessionKey, "agent:main:main");
     }
-    requestHeartbeatMock.mockClear();
     const started = await exec.execute("notification-possible", {
       command: nodeCommand('process.stdout.write("EXEC_STARTED"); process.exitCode = 1'),
       background: true,
@@ -91,8 +170,12 @@ test("starts and notifies when the session worker fails, then resolves child ide
     if (started.details.status !== "running") {
       throw new Error("Expected a background process");
     }
-    await waitForExecScope(sessionKey);
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(recovered ? 0 : 1);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    if (!recovered) {
+      await completion(signal);
+    }
+    expect(receipts).toHaveLength(1);
+    expect(model).toHaveBeenCalledOnce();
     const result = await processTool.execute("collect", {
       action: "poll",
       sessionId: started.details.sessionId,
@@ -105,145 +188,93 @@ test("starts and notifies when the session worker fails, then resolves child ide
   }
 });
 
-test.each([
-  { sessionScope: "per-sender", stopAt: "origin" },
-  { sessionScope: "global", stopAt: "origin" },
-  { sessionScope: "per-sender", stopAt: "active destination" },
-] as const)(
-  "cancels a routed $sessionScope exec completion from $stopAt after its finished record is removed",
-  async ({ sessionScope, stopAt }) => {
-    const directory = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "exec-routed-stop-")),
-    );
-    const releasePath = path.join(directory, "release");
-    const origin = {
-      runId: `routed-request-${sessionScope}`,
-      sessionKey: "agent:main:telegram:direct:owner",
-      sessionId: `routed-session-${sessionScope}`,
-      agentId: "main",
-      ownerDeviceId: "origin-device",
-    };
-    const destination = sessionScope === "global" ? "agent:main:global" : "agent:main:main";
-    const continuationScope = `routed-continuation:${sessionScope}`;
-    // Watch before checking so either parent/child startup order releases without polling.
-    const command = nodeCommand(`
-      const fs = require("node:fs");
-      let done = false;
-      const finish = () => {
-        if (!done && fs.existsSync(${JSON.stringify(releasePath)})) {
-          done = true;
-          watcher.close();
-          process.stdout.write("ROUTED_REQUEST_COMPLETE");
-        }
-      };
-      const watcher = fs.watch(${JSON.stringify(directory)}, finish);
-      finish();
-    `);
+test("reports manual collection after destination capture fails, then recovers on the same tool", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:exec-capture-failure";
+  await seedOrigin(sessionKey);
+  let faults = 0;
+  const capture = sessionEvents.captureSessionEventTargetForHost;
+  vi.spyOn(sessionEvents, "captureSessionEventTargetForHost").mockImplementation(
+    async (...args) => {
+      if (args[0] === "main" && args[1] === sessionKey && faults === 0) {
+        faults++;
+        throw new Error("session event destination unavailable");
+      }
+      return capture(...args);
+    },
+  );
+  const exec = createExecTool({
+    config,
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    agentId: "main",
+    sessionKey,
+    scopeKey: sessionKey,
+    notifyOnExit: true,
+    notifyOnExitEmptySuccess: true,
+    allowBackground: true,
+  });
+  const processTool = createProcessTool({ scopeKey: sessionKey });
+  for (const recovered of [false, true]) {
+    const release = path.join(state.workspaceDir, `release-${recovered}`);
+    const child = `const fs = require("node:fs"); const release = ${JSON.stringify(release)}; const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("EXEC_COLLECTED"); } }); if (fs.existsSync(release)) { watcher.close(); process.stdout.write("EXEC_COLLECTED"); }`;
     try {
-      const started = await withExecRequestTurn({ identity: origin }, async () => {
-        const exec = createExecTool({
-          ...origin,
-          config: {},
-          host: "gateway",
-          security: "full",
-          ask: "off",
-          cwd: directory,
-          scopeKey: origin.sessionKey,
-          allowBackground: true,
-          notifyOnExit: true,
-          eventRouting: { sessionScope, dmScope: "main", allowFrom: ["owner"] },
-        });
-        return exec.execute("routed-completion", { command, yieldMs: 10, timeoutSeconds: 60 });
+      const started = await exec.execute("capture-failure", {
+        command: nodeCommand(child),
+        background: true,
       });
+      expect(faults).toBe(1);
       expect(started.details.status).toBe("running");
       if (started.details.status !== "running") {
-        throw new Error("Expected an ordinary yielded command");
+        throw new Error("Expected a background process");
       }
-      await fs.writeFile(releasePath, "release");
-      await waitForExecScope(origin.sessionKey);
-      expect(getFinishedSession(started.details.sessionId)?.exitCode).toBe(0);
-      expect(peekSystemEventEntries(origin.sessionKey)).toEqual([]);
-      const routed = peekSystemEventEntries(destination);
-      expect(routed).toHaveLength(1);
-      expect(routed[0]?.text).toContain("ROUTED_REQUEST_COMPLETE");
-      const neighbor = enqueueSystemEventEntry("Unrelated queued reminder", {
-        sessionKey: destination,
+      const followUp = expectDefined(started.details.followUp, "background continuation guidance");
+      expect(followUp).toContain(
+        recovered ? "wake this conversation automatically" : "poll with a timeout",
+      );
+      if (!recovered) {
+        expect(followUp).not.toContain("wake this conversation automatically");
+      }
+      expect(started.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(followUp),
       });
-      expect(neighbor?.id).toEqual(expect.any(String));
-
-      // This is the registry's normal visible-record removal; the queued event outlives it.
-      deleteSession(started.details.sessionId);
-      expect(getFinishedSession(started.details.sessionId)).toBeUndefined();
-      if (stopAt === "active destination") {
-        const current = {
-          runId: "routed-continuation-run",
-          sessionKey: destination,
-          sessionId: "routed-continuation-session",
-          agentId: "main",
-        };
-        const owners = readExecRequestOwners(routed[0]!);
-        expect(owners).toHaveLength(1);
-        await withExecRequestTurn(
-          {
-            identity: { ...current, ownerDeviceId: "destination-device" },
-            owners,
-          },
-          // Embedded execution repeats the identity but does not own the admitted actor.
-          () =>
-            withExecRequestTurn({ identity: current }, async () => {
-              const exec = createExecTool({
-                ...current,
-                config: {},
-                host: "gateway",
-                security: "full",
-                ask: "off",
-                cwd: directory,
-                scopeKey: continuationScope,
-                allowBackground: true,
-                notifyOnExit: true,
-              });
-              const running = await exec.execute("routed-continuation", {
-                command: nodeCommand('require("node:fs").watch(".", () => {})'),
-                yieldMs: 10,
-                timeoutSeconds: 60,
-              });
-              expect(running.details.status).toBe("running");
-              if (running.details.status !== "running") {
-                throw new Error("Expected the destination continuation's ordinary command");
-              }
-              const process = getSession(running.details.sessionId);
-              expect(process).toBeDefined();
-              const capture = (deviceId: string) =>
-                captureExecRequestCancellation(current, (identity) =>
-                  canRequesterAbortChatRun(identity, { deviceId, isAdmin: false }),
-                );
-              const denied = capture("foreign-device");
-              expect(denied.cancel()).toBe(false);
-              await denied.settle();
-              expect(process?.exited).toBe(false);
-              expect(process?.cancellationRequested).not.toBe(true);
-              expect(peekSystemEventEntries(destination)).toEqual([...routed, neighbor]);
-
-              const cancellation = capture("destination-device");
-              expect(cancellation.cancel()).toBe(true);
-              await cancellation.settle();
-              expect(process).toMatchObject({ exited: true, exitReason: "manual-cancel" });
-              expect(process?.finalizationFailed).not.toBe(true);
-              expect(process?.cleanupUncertain).not.toBe(true);
-            }),
-        );
-      } else {
-        const cancellation = captureExecRequestCancellation(origin);
-        expect(cancellation.cancel()).toBe(true);
-        await cancellation.settle();
+      for (const action of ["list", "poll", "log"] as const) {
+        const running = await processTool.execute("inspect", {
+          action,
+          sessionId: started.details.sessionId,
+        });
+        if (!recovered) {
+          const expected = {
+            sessionId: started.details.sessionId,
+            followUp: expect.stringContaining("before ending the turn"),
+          };
+          expect(running.details).toMatchObject(
+            action === "list" ? { sessions: [expected] } : expected,
+          );
+        }
       }
-      expect(peekSystemEventEntries(destination)).toEqual([neighbor]);
-      expect(peekSystemEventEntries(origin.sessionKey)).toEqual([]);
+      await fs.writeFile(release, "release");
+      await withinTest(waitForExecScope(sessionKey), signal);
+      if (recovered) {
+        await completion(signal);
+      }
+      expect(receipts).toHaveLength(recovered ? 1 : 0);
+      expect(model).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      const collected = await processTool.execute("collect", {
+        action: "poll",
+        sessionId: started.details.sessionId,
+      });
+      expect(collected.details).toMatchObject({
+        status: "completed",
+        aggregated: "EXEC_COLLECTED",
+        exitCode: 0,
+      });
     } finally {
-      await fs.writeFile(releasePath, "release");
-      getProcessSupervisor().cancelScope(continuationScope, "manual-cancel");
-      await Promise.all([waitForExecScope(origin.sessionKey), waitForExecScope(continuationScope)]);
-      await fs.rm(directory, { recursive: true, force: true });
+      await fs.writeFile(release, "release");
+      await withinTest(waitForExecScope(sessionKey), signal);
     }
-  },
-);
+  }
+});

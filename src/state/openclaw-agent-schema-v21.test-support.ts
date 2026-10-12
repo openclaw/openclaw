@@ -58,6 +58,11 @@ export function restoreEmptyV21StorageForHistoricalFixture(database: DatabaseSyn
     }
     // Dropping the snapshot table also removes its revision triggers.
     database.exec("ALTER TABLE session_nodes DROP COLUMN snapshot_revision");
+    database.exec(`
+      ALTER TABLE session_nodes DROP COLUMN session_started_at;
+      ALTER TABLE session_nodes DROP COLUMN has_optional_references;
+      ALTER TABLE context_engine_turn_outbox DROP COLUMN payload_state;
+    `);
     database.exec(OPENCLAW_AGENT_SCHEMA_V21_SQL);
     database.exec("COMMIT");
   } catch (error) {

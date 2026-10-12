@@ -1,7 +1,10 @@
+import http from "node:http";
 import { HTTPFetchError } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const realGlobalFetch = globalThis.fetch.bind(globalThis);
 
 const {
   pushMessageMock,
@@ -880,6 +883,81 @@ describe("LINE send helpers", () => {
     expect((caught as HTTPFetchError).body).not.toContain("tail");
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("redacts a reflected Authorization token from LINE error bodies", async () => {
+    const token = "line-channel-access-token-xyz0123456789abcdef";
+    resolveLineChannelAccessTokenMock.mockReturnValue(token);
+    lineFetchMock.mockImplementationOnce(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get("authorization") ?? "";
+        return new Response(
+          `proxy failure reflected Authorization: ${authorization}; request rejected`,
+          {
+            status: 400,
+            statusText: "Bad Request",
+            headers: { "content-type": "text/plain" },
+          },
+        );
+      },
+    );
+
+    const caught = await captureError(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
+
+    expect(caught).toBeInstanceOf(HTTPFetchError);
+    const body = (caught as HTTPFetchError).body;
+    expect(body).toContain("proxy failure");
+    expect(body).toContain("request rejected");
+    expect(body).not.toContain(token);
+  });
+
+  it("masks a reflected Authorization token through a real HTTP reflector", async () => {
+    const token = "line-channel-access-token-xyz0123456789abcdef";
+    resolveLineChannelAccessTokenMock.mockReturnValue(token);
+    const server = http.createServer((req, res) => {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end(
+        `proxy failure reflected Authorization: ${req.headers.authorization}; request rejected`,
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    try {
+      // The production send boundary targets the fixed LINE API host; route only the
+      // destination to the loopback reflector while the real fetch stack and the
+      // production response handling run unchanged.
+      lineFetchMock.mockImplementationOnce(
+        async (url: string | URL | Request, init?: RequestInit) => {
+          const target = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+          return realGlobalFetch(
+            target.replace("https://api.line.me", `http://127.0.0.1:${address.port}`),
+            init,
+          );
+        },
+      );
+
+      const caught = await captureError(() =>
+        sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+      );
+
+      expect(caught).toBeInstanceOf(HTTPFetchError);
+      const body = (caught as HTTPFetchError).body;
+      expect(body).toContain("proxy failure");
+      expect(body).toContain("request rejected");
+      expect(body).not.toContain(token);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it("preserves reply rejection status when the LINE error body cannot be read", async () => {

@@ -23,10 +23,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import {
   createTestSession,

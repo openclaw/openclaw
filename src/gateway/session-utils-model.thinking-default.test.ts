@@ -36,6 +36,22 @@ import {
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 
+it("keeps runtime capacity reads separate from cached API capability donors", () => {
+  const context = buildSessionListRowMetadataContext({ now: 1 });
+  const entry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "local-model",
+    name: "Local model",
+    contextTokens: 32_768,
+  };
+  const selection = { entry, routeVariants: [entry], runtimeId: "native-fixture" };
+  expect(context.selectModelCatalogRuntimeEntry(selection).entry.contextTokens).toBe(32_768);
+  expect(
+    context.selectModelCatalogRuntimeEntry({ ...selection, allowApiFallback: false }).entry
+      .contextTokens,
+  ).toBeUndefined();
+});
+
 describe("Gateway stored thinking levels", () => {
   it("keeps stored Ultra for supported harnesses and clamps unavailable native profiles", () => {
     // A synthetic model lets observed native efforts define the capability set.
@@ -53,20 +69,18 @@ describe("Gateway stored thinking levels", () => {
       resolveProviderPolicySurface("openai")?.resolveThinkingProfile,
       "OpenAI public thinking policy",
     );
+    const modelEntry: ModelCatalogEntry & ThinkingCatalogPolicyCarrier = {
+      provider: "openai",
+      id: "native-effort-fixture",
+      name: "Native effort fixture",
+      [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
+    };
     const row = (
       entry: SessionEntry,
       catalog?: { reasoning?: boolean; compat?: { supportedReasoningEfforts: string[] } },
     ) => {
       const modelCatalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] | undefined = catalog
-        ? [
-            {
-              provider: "openai",
-              id: "native-effort-fixture",
-              name: "Native effort fixture",
-              [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
-              ...catalog,
-            },
-          ]
+        ? [{ ...modelEntry, ...catalog }]
         : undefined;
       return buildGatewaySessionRow({
         cfg,
@@ -86,11 +100,11 @@ describe("Gateway stored thinking levels", () => {
     expect(row(stored).thinkingLevel).toBe("ultra");
     expect(row(stored, {}).thinkingLevel).toBe("ultra");
     expect(row(stored, { reasoning: true }).thinkingLevel).toBe("ultra");
-    expect(row(stored, { reasoning: false }).thinkingLevel).toBe("off");
+    expect(row(stored, { reasoning: false }).thinkingLevel).toBe("ultra");
     expect(
       row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["off"] } })
         .thinkingLevel,
-    ).toBe("off");
+    ).toBe("ultra");
     expect(
       row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } })
         .thinkingLevel,
@@ -101,6 +115,20 @@ describe("Gateway stored thinking levels", () => {
     });
     expect(nativeUltra.thinkingLevel).toBe("ultra");
     expect(nativeUltra.thinkingLevels).toContainEqual({ id: "ultra", label: "ultra" });
+    expect(
+      projectSessionPatchResult({
+        cfg,
+        targetAgentId: "main",
+        canonicalKey: "agent:main:main",
+        entry: stored,
+        storePath: "/tmp/agents/main/sessions/sessions.json",
+        preparedAcpMeta: null,
+        modelCatalog: [{ ...modelEntry, reasoning: false }],
+      }),
+    ).toMatchObject({
+      entry: { thinkingLevel: "ultra" },
+      resolved: { thinkingLevel: "off" },
+    });
   });
 });
 

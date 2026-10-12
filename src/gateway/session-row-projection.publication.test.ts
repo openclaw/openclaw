@@ -13,6 +13,7 @@ import { recordSessionParticipant } from "../config/sessions/session-accessor.sq
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceFinalizationOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   emitSessionIdentityMutation,
@@ -26,9 +27,11 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as projectionWork from "./session-projection-work.js";
+import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -82,6 +85,8 @@ it.each(["native", "worker"] as const)(
         expect(warm?.entry).toMatchObject(sideMetadata);
         expect(warm?.storedEntry).toMatchObject(sideMetadata);
         const reads = vi.spyOn(materialization, "readSessionRowEntry");
+        const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+        const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
         const observed: Array<{
           entry: SessionEntry | undefined;
           storedEntry: SessionEntry | undefined;
@@ -118,6 +123,14 @@ it.each(["native", "worker"] as const)(
           },
         ]);
         expect(reads).not.toHaveBeenCalled();
+        await projection.ensureMaterialized();
+        expect(projection.snapshot(query).row?.label).toBe("Updated label");
+        expect(rowReads).not.toHaveBeenCalled();
+        expect(
+          sharedReads.mock.calls.filter(
+            ([, command]) => command.type === "sessionRows.sharedFacts",
+          ),
+        ).toEqual([]);
         const publishedSource = projection.capture(query)?.publishedSource;
         expect(publishedSource).toBeDefined();
         const sql = observeHostDataSql();
@@ -146,6 +159,14 @@ it.each(["native", "worker"] as const)(
           sessionChanges.emit({ ...scope, storePath: warm!.storeTarget.storePath });
           expect(projection.sharingTarget(query)).toBeNull();
           expect(projection.capture(query)?.publishedSource).toBeUndefined();
+          expect(() => projection.selectEntries(query)).toThrow(SessionRowFactsPending);
+          const refreshed = await listProjectedSessions({
+            projection,
+            opts: { includePeople: true },
+          });
+          expect(refreshed.sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
+            "Updated label",
+          );
           expect(sql.queries).toEqual([]);
         } finally {
           sql.restore();

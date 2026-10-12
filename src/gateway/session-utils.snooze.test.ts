@@ -14,7 +14,17 @@ describe("session list snooze projection", () => {
   beforeEach(resetSessionProviderArtifacts);
   afterAll(closeSessionSqliteDatabasesForTest);
 
-  test.each([["agent:main:dashboard:pinned", { parentSessionKey: "agent:main:main" }]])(
+  test.each([
+    ["agent:main:dashboard:pinned", { parentSessionKey: "agent:main:main" }],
+    [
+      "agent:main:dashboard:promoted",
+      {
+        parentSessionKey: "agent:main:dashboard:parent",
+        spawnedBy: "agent:main:dashboard:parent",
+        sidebarRoot: true,
+      },
+    ],
+  ] as const)(
     "session lists separate archived rows and sort pinned %s first",
     async (pinnedKey, lineage) => {
       const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
@@ -39,6 +49,7 @@ describe("session list snooze projection", () => {
       const active = await listSessionFixture({ cfg, storePath: "", store, opts: {} });
       expect(active.sessions.map((session) => session.key)).toEqual([pinnedKey, "recent"]);
       expect(active.sessions[0]).toMatchObject({
+        ...lineage,
         pinned: true,
         pinnedAt: 40,
         snoozedUntil: 1_800_000_000_000,

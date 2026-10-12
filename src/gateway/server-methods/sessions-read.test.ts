@@ -256,7 +256,11 @@ test.each(
 
 test("agents.list includes durable provenance only for matching roster rows", async () => {
   await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
-  recordAgentProvenance("research", { createdVia: "agent", creatorAgentId: "ops" }, { nowMs: 42 });
+  await recordAgentProvenance(
+    "research",
+    { createdVia: "agent", creatorAgentId: "ops" },
+    { nowMs: 42 },
+  );
 
   const result = await listAgentsViaRpc();
 

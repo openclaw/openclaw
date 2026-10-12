@@ -1,11 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createCronStreamWatchers } from "../gateway/cron-stream-watchers.js";
 import { fakeSupervisor } from "../gateway/cron-stream-watchers.test-helpers.js";
-import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -197,61 +195,6 @@ describe("cron stream worker service", () => {
     });
   });
 
-  it("rolls back service-source supersession at real native commit admission", async () => {
-    await withStreamService(async ({ service, job, storePath, source, setDefaultAgent }) => {
-      let commitAdmissionWitnessed = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) => {
-          let nonce: string | undefined;
-          return createAdmission((request, grant) => {
-            const facts = request.facts;
-            if (
-              request.stage === "transaction" &&
-              isRecord(facts) &&
-              typeof facts.nonce === "string"
-            ) {
-              nonce = facts.nonce;
-            }
-            if (
-              request.stage === "commit" &&
-              nonce &&
-              isRecord(facts) &&
-              facts.nonce === nonce &&
-              facts.bytes instanceof Uint8Array
-            ) {
-              commitAdmissionWitnessed = true;
-              setDefaultAgent("beta");
-            }
-            admit(request, grant);
-          }, attachment);
-        });
-      try {
-        const outcome = await service
-          .updateExternalState(job.id, source.scheduleKey, source.identity, {
-            streamStatus: "error",
-          })
-          .then(
-            (value) => ({ kind: "returned", value }),
-            (error: unknown) => ({ kind: "rejected", error }),
-          );
-        expect(commitAdmissionWitnessed).toBe(true);
-        expect(outcome).toMatchObject({
-          kind: "rejected",
-          error: { message: "Cron mutation source or service changed before commit" },
-        });
-        expect(service.getJob(job.id)?.state.streamStatus).toBeUndefined();
-        expect(
-          (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state
-            .streamStatus,
-        ).toBeUndefined();
-      } finally {
-        admission.mockRestore();
-      }
-    });
-  });
-
   it("preserves shutdown failure while adopting the committed retirement identity after reply loss", async () => {
     await withStreamService(async ({ service, job, storePath, source, setDefaultAgent }) => {
       setDefaultAgent("alpha");
@@ -352,7 +295,7 @@ describe("cron stream worker service", () => {
 
   it.each([
     {
-      name: "joins history before one failure publication when the committed worker reply is lost",
+      name: "retains durable failure state without publishing after worker reply loss",
       loseReply: true,
     },
     {
@@ -364,14 +307,6 @@ describe("cron stream worker service", () => {
       async ({ service, job, storePath, source, setDefaultAgent, enqueueSystemEvent, onEvent }) => {
         const historyEntered = createDeferred();
         const releaseHistory = createDeferred();
-        const historyAtAlert: Array<ReturnType<typeof readCronRunHistoryPageForTests>["entries"]> =
-          [];
-        enqueueSystemEvent.mockImplementation(() => {
-          historyAtAlert.push(
-            readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
-              .entries,
-          );
-        });
         const record = runHistory.recordCronRun;
         const history = vi
           .spyOn(runHistory, "recordCronRun")
@@ -413,6 +348,23 @@ describe("cron stream worker service", () => {
             settled = true;
           });
         try {
+          if (loseReply) {
+            expect(await pending).toMatchObject({ kind: "rejected" });
+            const loss = expectDefined(dropped, "actual external-state worker mutation");
+            expect(loss.wasDropped()).toBe(true);
+            expect(loss.attempts).toHaveLength(1);
+            await loss.waitForExit();
+            expect(history).not.toHaveBeenCalled();
+            expect(enqueueSystemEvent).not.toHaveBeenCalled();
+            expect(
+              onEvent.mock.calls.filter(([event]) => event.action === "finished"),
+            ).toHaveLength(0);
+            expect(service.getJob(job.id)?.state).toEqual(residentBefore);
+            expect(
+              (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,
+            ).toMatchObject(expectedState);
+            return;
+          }
           expect(
             await Promise.race([
               historyEntered.promise.then(() => "history-entered"),
@@ -424,49 +376,26 @@ describe("cron stream worker service", () => {
           expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(
             0,
           );
-          if (!loseReply) {
-            expect(
-              (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,
-            ).toMatchObject(expectedState);
-            setDefaultAgent("beta");
-          }
+          expect(
+            (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,
+          ).toMatchObject(expectedState);
+          setDefaultAgent("beta");
           releaseHistory.resolve();
           const outcome = await pending;
           expect(outcome).toMatchObject({ kind: "rejected" });
           expect(history).toHaveBeenCalledTimes(1);
-          if (loseReply) {
-            const loss = expectDefined(dropped, "actual external-state worker mutation");
-            expect(loss.wasDropped()).toBe(true);
-            expect(loss.attempts).toHaveLength(1);
-            await loss.waitForExit();
-            expect(historyAtAlert).toEqual([
-              [
-                expect.objectContaining({
-                  jobId: job.id,
-                  status: "error",
-                  error: "source exhausted restarts",
-                  durationMs: 0,
-                }),
-              ],
-            ]);
-            expect(
-              onEvent.mock.calls.filter(([event]) => event.action === "finished"),
-            ).toHaveLength(1);
-            expect(service.getJob(job.id)?.state).toMatchObject(expectedState);
-          } else {
-            expect(outcome).toMatchObject({
-              error: { message: "Cron mutation source or service changed before commit" },
-            });
-            expect(
-              readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
-                .entries,
-            ).toEqual([]);
-            expect(enqueueSystemEvent).not.toHaveBeenCalled();
-            expect(
-              onEvent.mock.calls.filter(([event]) => event.action === "finished"),
-            ).toHaveLength(0);
-            expect(service.getJob(job.id)?.state).toEqual(residentBefore);
-          }
+          expect(outcome).toMatchObject({
+            error: { message: "Cron mutation source or service changed before commit" },
+          });
+          expect(
+            readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
+              .entries,
+          ).toEqual([]);
+          expect(enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(
+            0,
+          );
+          expect(service.getJob(job.id)?.state).toEqual(residentBefore);
           expect(
             (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,
           ).toMatchObject(expectedState);

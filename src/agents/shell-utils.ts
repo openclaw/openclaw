@@ -201,21 +201,14 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   }
 
   const rawEnvShell = process.env.SHELL?.trim();
-  const envShell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
-  const shellName = envShell ? path.basename(envShell) : "";
+  let shell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
-  if (shellName === "fish") {
-    const shell = resolveShellFromPath("bash") ?? resolveShellFromPath("sh");
-    if (shell) {
-      return createArgvShellConfig(shell, getPosixShellArgs(shell));
-    }
-  }
-  if (envShell) {
-    return createArgvShellConfig(envShell, getPosixShellArgs(envShell));
+  if (shell && path.basename(shell) === "fish") {
+    shell = resolveShellFromPath("bash") ?? resolveShellFromPath("sh") ?? shell;
   }
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
-  const shell = resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
+  shell ??= resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
   return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 

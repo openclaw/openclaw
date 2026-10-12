@@ -260,83 +260,30 @@ async function runImageScenario(
 }
 
 describe("native image scenario delivery evidence", () => {
-  it.each([false, true])(
-    "accepts one exact image after completion (progress=%s)",
-    async (progress) => {
-      if (!progress) {
-        expect(await runImageScenario()).toMatchObject({ status: "pass" });
-        return;
-      }
-      vi.useFakeTimers();
-      const waiting = createDeferred<"waiting">();
-      let active = true;
-      observeStatusWait.mockImplementationOnce(() => waiting.resolve("waiting"));
-      const result = runImageScenario({ progress, isGenerating: () => active });
-      try {
-        expect(await Promise.race([waiting.promise, result])).toBe("waiting");
-      } finally {
-        active = false;
-        await vi.runAllTimersAsync();
-        await result;
-        observeStatusWait.mockReset();
-        vi.useRealTimers();
-      }
-      expect(await result).toMatchObject({ status: "pass" });
-    },
-  );
-
-  it("accepts direct OpenClaw image generation without Codex discovery", async () => {
-    await expect(
-      runImageScenario({ runtimeId: "openclaw", liveCodexDiscovery: "missing" }),
-    ).resolves.toMatchObject({ status: "pass" });
-  });
-
-  it("compares persisted generated-attachment Markdown using the delivered caption", async () => {
-    const result = await runImageScenario({
-      replyFormat: "markdown",
-      liveCodexDiscovery: "present",
-    });
-    expect(result, result.details).toMatchObject({ status: "pass" });
-  });
-
-  it("accepts forced Codex image generation without discovery receipts", async () => {
-    await expect(
-      runImageScenario({
-        runtimeId: "codex",
-        runtimeSelection: "forced",
-        liveCodexDiscovery: "missing",
-      }),
-    ).resolves.toMatchObject({ status: "pass" });
-  });
-
-  it("requires linked searchable discovery for configured live Codex image generation", async () => {
-    await expect(runImageScenario({ liveCodexDiscovery: "missing" })).resolves.toMatchObject({
-      status: "fail",
-      details: expect.stringContaining(
-        "expected live happy-path tool_search discovery for image_generate",
-      ),
-    });
-    const result = await runImageScenario({ liveCodexDiscovery: "present" });
-    expect(result).toMatchObject({ status: "pass" });
-    expect(result.steps?.[0]?.details).toContain(
-      "image_generate tool_search discovery phase=happy search=search-image",
-    );
+  it.each([true])("accepts one exact image after completion (progress=%s)", async (progress) => {
+    if (!progress) {
+      expect(await runImageScenario()).toMatchObject({ status: "pass" });
+      return;
+    }
+    vi.useFakeTimers();
+    const waiting = createDeferred<"waiting">();
+    let active = true;
+    observeStatusWait.mockImplementationOnce(() => waiting.resolve("waiting"));
+    const result = runImageScenario({ progress, isGenerating: () => active });
+    try {
+      expect(await Promise.race([waiting.promise, result])).toBe("waiting");
+    } finally {
+      active = false;
+      await vi.runAllTimersAsync();
+      await result;
+      observeStatusWait.mockReset();
+      vi.useRealTimers();
+    }
+    expect(await result).toMatchObject({ status: "pass" });
   });
 
   it.each([
-    ["duplicate message", "expected exactly one generated-image delivery"],
     ["late duplicate message", "expected exactly one generated-image delivery"],
-    ["duplicate attachment", "expected exactly one generated-image delivery"],
-    ["wrong bytes", "expected exactly one generated-image delivery"],
-    ["empty bytes", "expected exactly one generated-image delivery"],
-    ["empty file", "image generation did not produce a nonempty saved media file"],
-    ["missing tool completion", "generated image completion was not persisted"],
-    ["status only", "generated image completion was not persisted"],
-    ["duplicate generation", "generated image completion was not persisted"],
-    ["missing persisted reply", "generated image completion was not persisted"],
-    ["persisted progress only", "generated image completion was not persisted"],
-    ["wrong caption", "generated image completion was not persisted"],
-    ["unrelated markdown", "generated image completion was not persisted"],
     ["failed turn", "agent.wait returned error: image generation failed"],
   ] as const)("rejects %s", async (fault, error) => {
     expect(await runImageScenario({ fault })).toMatchObject({

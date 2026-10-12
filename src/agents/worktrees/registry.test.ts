@@ -296,7 +296,10 @@ describe("managed worktree registry", () => {
 
   it("adds the provisioned-path ledger to an existing worktree registry", async () => {
     const databasePath = openOpenClawStateDatabase({ env }).path;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    await fs.rename(databasePath, `${databasePath}.template`);
+    await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`

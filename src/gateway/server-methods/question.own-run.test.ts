@@ -18,6 +18,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -547,6 +549,12 @@ describe("own-run question admission", () => {
         const entered = createDeferred();
         const release = createDeferred();
         const failure = new Error("Transient question worker read failure");
+        // The injected failure must exercise the worker instead of a warm entry receipt.
+        sessionChanges.invalidate({
+          ...sessionScope,
+          storePath: resolveOpenClawAgentSqlitePath(sessionScope),
+          factsInvalidated: true,
+        });
         const run = projectionLane.pool.run.bind(projectionLane.pool);
         const spy = vi.spyOn(projectionLane.pool, "run").mockImplementationOnce(async (...args) => {
           if (cause === "transient worker failure") {
@@ -586,6 +594,7 @@ describe("own-run question admission", () => {
             await manager.drain();
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           }
+          expect(spy).toHaveBeenCalledOnce();
         } finally {
           release.resolve();
           await result;

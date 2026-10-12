@@ -1,5 +1,5 @@
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 
 type ForegroundClaims = NonNullable<
   NonNullable<SessionEntry["mainRestartRecovery"]>["foregroundClaims"]

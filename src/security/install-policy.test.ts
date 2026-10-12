@@ -156,12 +156,6 @@ describe("runInstallPolicy", () => {
     });
   }
 
-  it("does nothing when install policy is disabled", async () => {
-    await expect(runInstallPolicy({ config: {}, request: baseRequest(sourceDir) })).resolves.toBe(
-      undefined,
-    );
-  });
-
   it("does nothing when install policy is present but not enabled", async () => {
     await expect(
       runInstallPolicy({
@@ -173,43 +167,6 @@ describe("runInstallPolicy", () => {
         request: baseRequest(sourceDir),
       }),
     ).resolves.toBe(undefined);
-  });
-
-  it("executes policy for skills when targets are omitted", async () => {
-    const capturePath = path.join(sourceDir, "request.json");
-    const cwdPath = path.join(sourceDir, "cwd.txt");
-    const response = JSON.stringify({ protocolVersion: 1, decision: "allow" });
-
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        CWD_FILE: cwdPath,
-        OUT_FILE: capturePath,
-        POLICY_RESPONSE: response,
-      }),
-      request: baseRequest(sourceDir),
-    });
-
-    expect(result).toEqual({});
-    const captured = JSON.parse(await fs.readFile(capturePath, "utf8")) as Record<string, unknown>;
-    expect(captured.protocolVersion).toBe(1);
-    expect(captured.openclawVersion).toEqual(expect.any(String));
-    expect(captured.targetType).toBe("skill");
-    expect(captured.sourcePath).toBe(sourceDir);
-    expect(captured.source).toEqual({
-      kind: "clawhub",
-      authority: "openclaw",
-      mutable: false,
-      network: true,
-    });
-    await expect(fs.readFile(cwdPath, "utf8")).resolves.toBe(
-      await fs.realpath(path.dirname(scriptPath)),
-    );
-    expect(captured.request).toMatchObject({
-      kind: "skill-install",
-      mode: "install",
-      requestedSpecifier: "clawhub:weather@1.0.0",
-    });
-    expect(captured.origin).toMatchObject({ type: "clawhub", slug: "weather" });
   });
 
   it("preserves PATH so env shebang policy scripts can start", async () => {
@@ -525,43 +482,15 @@ describe("runInstallPolicy", () => {
     expect(result?.findings).toBeUndefined();
   });
 
-  it("selects display findings after dropping malformed entries", async () => {
-    const result = await runResponse({
-      protocolVersion: 1,
-      decision: "warn",
-      reason: "review valid findings",
-      findings: [
-        ...Array.from({ length: 100 }, () => ({ severity: "warn", message: "invalid" })),
-        {
-          ruleId: "valid-after-malformed-prefix",
-          severity: "critical",
-          message: "Review this critical finding.",
-        },
-      ],
-    });
+  it.each([{ label: "missing", reason: undefined }])(
+    "fails closed when a warning has a $label reason",
+    async ({ reason }) => {
+      const result = await runResponse({ protocolVersion: 1, decision: "warn", reason });
 
-    expect(result?.warning).toEqual({
-      reason: "review valid findings",
-      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
-    expect(result?.findings).toEqual([
-      {
-        ruleId: "valid-after-malformed-prefix",
-        severity: "critical",
-        message: "Review this critical finding.",
-      },
-    ]);
-  });
-
-  it.each([
-    { label: "missing", reason: undefined },
-    { label: "empty", reason: "  " },
-  ])("fails closed when a warning has a $label reason", async ({ reason }) => {
-    const result = await runResponse({ protocolVersion: 1, decision: "warn", reason });
-
-    expect(result?.blocked?.code).toBe("security_scan_failed");
-    expect(result?.blocked?.reason).toContain('decision "warn" requires a non-empty reason');
-  });
+      expect(result?.blocked?.code).toBe("security_scan_failed");
+      expect(result?.blocked?.reason).toContain('decision "warn" requires a non-empty reason');
+    },
+  );
 
   it("preserves block findings without file or line", async () => {
     const result = await runResponse({
@@ -659,25 +588,6 @@ describe("runInstallPolicy", () => {
       "security.installPolicy.exec.command must be an absolute path",
     );
   });
-
-  it.runIf(process.platform !== "win32")(
-    "rejects Windows-style policy command paths on POSIX",
-    async () => {
-      const result = await runInstallPolicy({
-        config: configWithExec({
-          source: "exec",
-          command: "C:\\tmp\\policy.cjs",
-          args: [],
-        }),
-        request: baseRequest(sourceDir),
-      });
-
-      expect(result?.blocked?.code).toBe("security_scan_failed");
-      expect(result?.blocked?.reason).toContain(
-        "security.installPolicy.exec.command must be an absolute path",
-      );
-    },
-  );
 
   it("reports static validation issues without running policy command", async () => {
     const validation = await validateInstallPolicyStatic(

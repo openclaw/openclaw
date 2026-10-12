@@ -599,6 +599,17 @@ export function createCrabboxWarmImageManager(dependencies: {
       );
     },
     lookupLease,
+    /** Runtime attested when this checkpoint was captured; undefined once its record is gone. */
+    checkpointRuntimeIdentity: async (checkpointId: string) => {
+      for (const { value } of await openStore().entries()) {
+        for (const image of [value.image, value.previous]) {
+          if (image?.checkpointId === checkpointId) {
+            return image.runtimeIdentity;
+          }
+        }
+      }
+      return undefined;
+    },
     markPrepared: (id: string, baseCommit: string, assertOwnerCurrent?: () => void) =>
       openStore().markPrepared(id, baseCommit, assertOwnerCurrent),
     markEnrolled: (id: string, assertOwnerCurrent?: () => void) =>

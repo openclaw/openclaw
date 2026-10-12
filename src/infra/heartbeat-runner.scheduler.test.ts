@@ -122,24 +122,30 @@ describe("startHeartbeatRunner", () => {
   it("aborts an active wake when the runner stops", async () => {
     const pending = createDeferred();
     let signal: AbortSignal | undefined;
-    runSpy.mockImplementation(async () => {
-      signal = getHeartbeatWakeAbortSignal();
-      await pending.promise;
-      return { status: "ran", durationMs: 1 };
-    });
-    const runner = start();
-    await wake({ source: "manual", intent: "manual", reason: "manual", sessionKey });
-    expect(signal?.aborted).toBe(false);
-    runner.stop();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(signal?.aborted).toBe(true);
-    pending.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    const dispose = setHeartbeatWakeHandler(drain);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(drain).toHaveBeenCalledOnce();
-    dispose();
+    try {
+      runSpy.mockImplementation(async () => {
+        signal = getHeartbeatWakeAbortSignal();
+        await pending.promise;
+        return { status: "ran", durationMs: 1 };
+      });
+      const runner = start();
+      await wake({ source: "manual", intent: "manual", reason: "manual", sessionKey });
+      expect(signal?.aborted).toBe(false);
+      runner.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(signal?.aborted).toBe(true);
+      pending.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      const drain = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+      const dispose = setHeartbeatWakeHandler(drain);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(drain).not.toHaveBeenCalled();
+      expect(runSpy).toHaveBeenCalledOnce();
+      dispose();
+    } finally {
+      pending.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    }
   });
 
   it("keeps persisted monitor cadence authoritative when its tick joins a task turn", async () => {
@@ -446,7 +452,7 @@ describe("targeted unscheduled wake dispatch", () => {
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
     });
     expect(
-      wakeCronService(state, {
+      await wakeCronService(state, {
         mode: "next-heartbeat",
         text: "Operator requested a session update.",
         agentId: "main",

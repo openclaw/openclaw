@@ -250,7 +250,7 @@ export class DiscordAudioWorker {
         break;
       }
       case "output-audio":
-        this.outputs.get(command.id)?.appendAdmitted(Buffer.from(command.audio), command.audible);
+        this.outputs.get(command.id)?.append(Buffer.from(command.audio), command.audible);
         break;
       case "output-mark":
         this.outputs
@@ -289,12 +289,11 @@ export class DiscordAudioWorker {
           break;
         }
         const writable = this.fileInput.stream.write(Buffer.from(command.audio));
+        const onDrain = () => this.post({ type: "stream-drain", id: command.id });
         if (writable) {
-          this.post({ type: "stream-drain", id: command.id });
+          onDrain();
         } else {
-          this.fileInput.stream.once("drain", () =>
-            this.post({ type: "stream-drain", id: command.id }),
-          );
+          this.fileInput.stream.once("drain", onDrain);
         }
         break;
       }

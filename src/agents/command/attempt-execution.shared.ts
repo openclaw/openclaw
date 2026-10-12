@@ -2,6 +2,10 @@
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 type PersistSessionEntryParams = {
   agentId: string;
@@ -11,7 +15,7 @@ type PersistSessionEntryParams = {
   initialEntry: SessionEntry;
   entry: SessionEntry;
   creation?: Parameters<typeof buildSessionCreationStamp>[0];
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionSourceAssertion;
   shouldPersist?: (entry: SessionEntry | undefined) => boolean;
 };
 
@@ -52,7 +56,7 @@ export async function persistAgentSession(
     {
       fallbackEntry: params.sessionStore[params.sessionKey] ?? params.entry,
       replaceEntry: true,
-      workerGuard: { source: params.assertCommitAllowed },
+      ...sessionEntryCommitGuardOptions(params.assertCommitAllowed),
       requireWriteSuccess: params.creation !== undefined,
       onCommitted: (entry) => {
         published = true;

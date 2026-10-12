@@ -22,7 +22,7 @@ function renderHealthcheck(port: number, retries: number, startPeriod: number) {
         - CMD
         - node
         - -e
-        - fetch("http://127.0.0.1:${port}/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+        - fetch("http://127.0.0.1:${port}/healthz").then(async(r)=>{await r.body?.cancel();process.exitCode=r.ok?0:1}).catch(()=>{process.exitCode=1})
       interval: 10s
       timeout: 5s
       retries: ${retries}

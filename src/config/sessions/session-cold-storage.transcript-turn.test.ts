@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   withSessionTranscriptWriteLock,
   type SessionTranscriptWriteLockContext,
@@ -61,13 +62,28 @@ describe("selected transcript turn cold restoration", () => {
     });
     const descriptor = readSessionColdTranscript(fixture.database(), historicalId);
     expect(descriptor).toBeDefined();
+    const prepareMessage = vi.fn(async (message: unknown) => {
+      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+      return message;
+    });
     const append = () =>
       persistSessionTranscriptTurn(
         { ...fixture.scope, sessionKey: "agent:main:global" },
         {
           expectedSessionId: historicalId,
           expectedLifecycleRevision: "selected",
-          messages: [{ message: { role: "user", content: "Resume selected history" } }],
+          messages: [
+            {
+              message: {
+                role: "user",
+                content: "Resume selected history",
+                idempotencyKey: "resume-selected-history",
+              },
+              workerPreparation: {
+                prepareMessageAfterIdempotencyCheckAsync: prepareMessage,
+              },
+            },
+          ],
           updateMode: "none",
         },
       );
@@ -77,7 +93,7 @@ describe("selected transcript turn cold restoration", () => {
         updatedAt: 2,
         lifecycleRevision: "successor",
       });
-    return { ...fixture, append, descriptor, replaceRevision };
+    return { ...fixture, append, descriptor, replaceRevision, prepareMessage };
   }
 
   it.each(["turn", "locked worker with owner fence", "locked SDK released-sync"])(
@@ -86,6 +102,7 @@ describe("selected transcript turn cold restoration", () => {
       const fixture = await createFixture();
       if (mode === "turn") {
         await expect(fixture.append()).resolves.toMatchObject({ appendedCount: 1 });
+        expect(fixture.prepareMessage).toHaveBeenCalledOnce();
       } else {
         const message = { role: "user", content: "Resume selected history" };
         const prepare = vi.fn((value: typeof message) => value);
@@ -134,6 +151,25 @@ describe("selected transcript turn cold restoration", () => {
     },
   );
 
+  it("restores archived history through the bounded manager's own read admission", async () => {
+    const fixture = await createFixture();
+    const manager = await SessionManager.openBoundedAsync(
+      { ...fixture.scope, sessionKey: "agent:main:global" },
+      { maxBytes: 2 * 1024 * 1024, maxEvents: 5 },
+    );
+    expect(manager.getEntry("history-user")).toMatchObject({
+      message: { content: [{ type: "text", text: "你好 🦞\n".repeat(12_000) }] },
+    });
+    expect(manager.getEntry("history-assistant")).toMatchObject({
+      parentId: "history-user",
+      message: { content: [{ type: "text", text: "Preserved response" }] },
+    });
+    expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+    expect(fixture.snapshot().events.filter((event) => event.session_id === historicalId)).toEqual(
+      fixture.original.events.filter((event) => event.session_id === historicalId),
+    );
+  });
+
   it.each(["before restoration", "at worker admission"])(
     "keeps the archive cold when the captured revision changes %s",
     async (timing) => {
@@ -175,6 +211,7 @@ describe("selected transcript turn cold restoration", () => {
       });
       expect(admitted).toBe(timing === "at worker admission");
       expect(commitRequested).toBe(false);
+      expect(fixture.prepareMessage).not.toHaveBeenCalled();
       expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
         fixture.descriptor,
       );
@@ -187,8 +224,8 @@ describe("selected transcript turn cold restoration", () => {
     },
   );
 
-  it.for(["prepared source", "optional writer fence"] as const)(
-    "keeps a locked read cold when its %s changes during restoration admission",
+  it.for(["prepared source", "turn source", "optional writer fence"] as const)(
+    "keeps history cold when its %s changes during restoration admission",
     async (guard, { signal }) => {
       const fixture = await createFixture();
       const sourceScope = {
@@ -231,6 +268,7 @@ describe("selected transcript turn cold restoration", () => {
       });
       const scope = {
         ...fixture.scope,
+        ...(guard === "turn source" ? { sessionKey: "agent:main:global" } : {}),
         ...(guard === "optional writer fence"
           ? { expectedOwner: { lifecycleRevision: "selected", activeWriterRunId: undefined } }
           : {}),
@@ -261,21 +299,23 @@ describe("selected transcript turn cold restoration", () => {
         locked.readEvents(),
       );
       const pending = withSessionTranscriptWriteAssertion(scope, assertion, () =>
-        guard === "optional writer fence"
-          ? withTranscriptWriteLock(scope, callback)
-          : withSessionTranscriptWriteLock(scope, callback),
+        guard === "turn source"
+          ? fixture.append()
+          : guard === "optional writer fence"
+            ? withTranscriptWriteLock(scope, callback)
+            : withSessionTranscriptWriteLock(scope, callback),
       );
       try {
         await withinTest(
           awaitGateBeforeSettlement(
             requested.promise,
             pending,
-            "Locked read settled before cold restoration admission",
+            "History access settled before cold restoration admission",
           ),
           signal,
         );
         expect(assertion.prepareSessionSource).toHaveBeenCalled();
-        if (guard === "prepared source") {
+        if (guard !== "optional writer fence") {
           replaceSessionEntrySync(sourceScope, {
             sessionId: sourceScope.sessionId,
             updatedAt: 2,
@@ -290,7 +330,7 @@ describe("selected transcript turn cold restoration", () => {
           });
         }
         resume.resolve();
-        if (guard === "prepared source") {
+        if (guard !== "optional writer fence") {
           await expect(pending).rejects.toThrow("Prepared cold source changed");
         } else {
           await expect(pending).rejects.toMatchObject({
@@ -299,6 +339,7 @@ describe("selected transcript turn cold restoration", () => {
           });
         }
         expect(callback).not.toHaveBeenCalled();
+        expect(fixture.prepareMessage).not.toHaveBeenCalled();
         expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(
           fixture.descriptor,
         );

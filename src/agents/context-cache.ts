@@ -8,8 +8,6 @@ const CONTEXT_WINDOW_CACHE_STATE_KEY = Symbol.for("openclaw.contextWindowCacheSt
 const contextWindowCacheGlobal = globalThis as typeof globalThis & {
   [CONTEXT_WINDOW_CACHE_STATE_KEY]?: ContextWindowCacheState;
 };
-export const REUSED_CONTEXT_WINDOW_CACHE_STATE =
-  contextWindowCacheGlobal[CONTEXT_WINDOW_CACHE_STATE_KEY] !== undefined;
 const CONTEXT_WINDOW_CACHE_STATE = (contextWindowCacheGlobal[CONTEXT_WINDOW_CACHE_STATE_KEY] ??= {
   configuredTokenCache: new Map(),
   discoveredTokenCache: new Map(),

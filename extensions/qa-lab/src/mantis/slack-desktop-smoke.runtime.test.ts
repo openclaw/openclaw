@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisSlackDesktopSmoke } from "./slack-desktop-smoke.runtime.js";
@@ -80,16 +81,22 @@ function mockMantisCliRuntime(runMantisSlackDesktopSmokeCommand = vi.fn()) {
 
 describe("mantis Slack desktop smoke runtime", () => {
   let repoRoot: string;
+  let previousExitCode: typeof process.exitCode;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
 
   function runSmoke(options: NonNullable<Parameters<typeof runMantisSlackDesktopSmoke>[0]>) {
     return runMantisSlackDesktopSmoke({ crabboxBin: "/tmp/crabbox", repoRoot, ...options });
   }
 
   beforeEach(async () => {
+    previousExitCode = process.exitCode;
+    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mantis-slack-desktop-smoke-"));
   });
 
   afterEach(async () => {
+    process.exitCode = previousExitCode;
+    stderrWrite.mockRestore();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     await fs.rm(repoRoot, { force: true, recursive: true });
@@ -167,6 +174,58 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(runArgs).toContain("openclaw/openclaw#85141");
     expect(runArgs).not.toContain("--no-sync");
     const remoteScript = runArgs?.at(-1);
+    if (typeof remoteScript !== "string") {
+      throw new Error("Slack remote script was not generated");
+    }
+    const authScript = remoteScript
+      .split("<<'MANTIS_SLACK_AUTH'\n")[1]
+      ?.split("\nMANTIS_SLACK_AUTH")[0];
+    const pinScript = remoteScript
+      .split("read -r pnpm_version pnpm_sha512 < <(node -e '\n")[1]
+      ?.split("\n')")[0];
+    if (!authScript || !pinScript) {
+      throw new Error("Slack generated validators were not found");
+    }
+    for (const ok of [true, false]) {
+      const write = vi.fn<(chunk: string) => boolean>(() => true);
+      const probe = {
+        env: { OPENCLAW_QA_SLACK_SUT_BOT_TOKEN: "fixture-token" },
+        stdout: { write },
+        exitCode: 0,
+      };
+      await runInNewContext("(async () => {" + authScript + "})()", {
+        process: probe,
+        AbortSignal: { timeout: () => undefined },
+        fetch: async () => ({
+          json: async () => ({ ok, team_id: "Tfixture", user_id: "Ufixture" }),
+        }),
+      });
+      expect(probe.exitCode).toBe(ok ? 0 : 1);
+      expect(write).toHaveBeenCalledExactlyOnceWith(
+        JSON.stringify({ ok, team_id: "Tfixture", user_id: "Ufixture" }),
+      );
+    }
+    const hash = "a".repeat(128);
+    for (const valid of [true, false]) {
+      const log = vi.fn();
+      const probe = { exitCode: 0 };
+      runInNewContext(pinScript, {
+        process: probe,
+        console: { log },
+        require: (name: string) => {
+          if (name !== "./package.json") {
+            throw new Error("unexpected validator dependency");
+          }
+          return { packageManager: valid ? "pnpm@12.5.1+sha512." + hash : "pnpm@12.5.1" };
+        },
+      });
+      expect(probe.exitCode).toBe(valid ? 0 : 1);
+      if (valid) {
+        expect(log).toHaveBeenCalledExactlyOnceWith("12.5.1 " + hash);
+      } else {
+        expect(log).not.toHaveBeenCalled();
+      }
+    }
     expect(remoteScript).toContain("hydrate_mode='source'");
     expect(remoteScript).toContain("${BROWSER:-}");
     expect(remoteScript).toContain("${CHROME_BIN:-}");
@@ -878,16 +937,18 @@ describe("mantis Slack desktop smoke runtime", () => {
     const qa = new Command("qa");
     registerMantisCli(qa);
 
-    await expect(
-      qa.parseAsync([
-        "node",
-        "openclaw",
-        "mantis",
-        "slack-desktop-smoke",
-        "--approval-checkpoints",
-        "--gateway-setup",
-      ]),
-    ).rejects.toThrow("--approval-checkpoints cannot be used with --gateway-setup");
+    await qa.parseAsync([
+      "node",
+      "openclaw",
+      "mantis",
+      "slack-desktop-smoke",
+      "--approval-checkpoints",
+      "--gateway-setup",
+    ]);
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining("--approval-checkpoints cannot be used with --gateway-setup"),
+    );
+    expect(process.exitCode).toBe(1);
 
     expect(runMantisSlackDesktopSmokeCommand).not.toHaveBeenCalled();
     vi.doUnmock("./cli.runtime.js");

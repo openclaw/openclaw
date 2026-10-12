@@ -347,7 +347,7 @@ container/binary version separately with the report. A Windows Node controller
 can use the same external-engine interface, but Windows Docker runtime behavior
 has not been verified for this sample.
 
-Compare the same deterministic tasks with a pinned Chromium baseline. Record
+Compare the same fixed tasks with a pinned Chromium baseline. Record
 task completion before reporting speed or memory improvements; unsupported or
 failed work must not be counted as a successful fast result. Report warm and
 cold runs separately, engine versions, host OS/architecture, client overhead,

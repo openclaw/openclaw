@@ -27,6 +27,7 @@ type CodexAppServerConversationSource = {
   sessionId: string;
   threadId: string;
   sessionKey?: string;
+  storePath?: string;
 };
 
 type CodexAppServerConversationStart = {
@@ -153,6 +154,7 @@ function readConversationSource(
   const sessionId = normalizeOptionalString(value?.sessionId);
   const threadId = normalizeOptionalString(value?.threadId);
   const sessionKey = normalizeOptionalString(value?.sessionKey);
+  const storePath = normalizeOptionalString(value?.storePath);
   if (!agentId || !sessionId || !threadId) {
     return undefined;
   }
@@ -161,6 +163,7 @@ function readConversationSource(
     sessionId,
     threadId,
     ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
   };
 }
 

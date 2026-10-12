@@ -109,6 +109,24 @@ export function createCodexAppServerAgentHarness(
   const resolveIsolatedCompletionRuntime: NonNullable<
     AgentHarnessV2["resolveIsolatedCompletionRuntime"]
   > = ({ authorizationOwner }) => (authorizationOwner === "host" ? "openclaw" : "self");
+  const assertOwnershipCurrent = (params: { assertCurrent: () => void }) => {
+    params.assertCurrent();
+    if (disposed) {
+      throw new Error("Codex agent harness is disposed");
+    }
+  };
+  const projectOwnership = (
+    binding: ReturnType<CodexAppServerBindingStore["read"]>,
+  ): ReturnType<NonNullable<AgentHarnessV2["resolveSessionRuntimeOwnership"]>> =>
+    binding?.preserveNativeModel === true
+      ? {
+          model: "native",
+          auth: binding.connectionScope === "supervision" ? "native" : "host",
+          ...(binding.model?.trim() && binding.modelProvider
+            ? { modelRef: { provider: binding.modelProvider, model: binding.model } }
+            : {}),
+        }
+      : undefined;
   const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -131,33 +149,36 @@ export function createCodexAppServerAgentHarness(
     },
     authBootstrap: "harness",
     resolveIsolatedCompletionRuntime,
+    // Retained only for final synchronous authority checks until the next Plugin SDK major.
     resolveSessionRuntimeOwnership: (params) => {
-      const assertCurrent = () => {
-        params.assertCurrent();
-        if (disposed) {
-          throw new Error("Codex agent harness is disposed");
-        }
-      };
-      assertCurrent();
+      assertOwnershipCurrent(params);
       const identity = sessionBindingIdentity(params);
       let binding = options.bindingStore.read(identity);
       if (!binding) {
-        // Read host lineage only after a miss; a current binding must not trigger host I/O.
         const previousSessionId = params.readPreviousSessionId?.();
         binding = previousSessionId
           ? options.bindingStore.read({ ...identity, sessionId: previousSessionId })
           : undefined;
       }
+      assertOwnershipCurrent(params);
+      return projectOwnership(binding);
+    },
+    resolveSessionRuntimeOwnershipAsync: async (params) => {
+      const assertCurrent = () => assertOwnershipCurrent(params);
       assertCurrent();
-      return binding?.preserveNativeModel === true
-        ? {
-            model: "native",
-            auth: binding.connectionScope === "supervision" ? "native" : "host",
-            ...(binding.model?.trim() && binding.modelProvider
-              ? { modelRef: { provider: binding.modelProvider, model: binding.model } }
-              : {}),
-          }
-        : undefined;
+      const identity = sessionBindingIdentity(params);
+      let binding = await options.bindingStore.readAsync(identity);
+      assertCurrent();
+      if (!binding) {
+        // Read host lineage only after a miss; a current binding must not trigger host I/O.
+        const previousSessionId = await params.readPreviousSessionId();
+        assertCurrent();
+        binding = previousSessionId
+          ? await options.bindingStore.readAsync({ ...identity, sessionId: previousSessionId })
+          : undefined;
+      }
+      assertCurrent();
+      return projectOwnership(binding);
     },
     ...(sessionCatalogControlFactory && sessionRuntime
       ? {
@@ -217,9 +238,7 @@ export function createCodexAppServerAgentHarness(
         return { entries: [] };
       }
       modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
-      return {
-        entries: await modelCatalog.load(params, resolveAttemptPluginConfig(params.config)),
-      };
+      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),

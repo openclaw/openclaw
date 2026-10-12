@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -27,10 +27,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
@@ -181,8 +178,6 @@ beforeEach(async () => {
   const defaultWorkspace = path.join(state.root, "non-git-workspace");
   await fs.mkdir(defaultWorkspace);
   repository = await createRepository(state.root, "selected-project");
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace: defaultWorkspace };
   ({ storePath } = await createSessionStoreDir());
   const { getRuntimeConfig } = await getGatewayConfigModule();
@@ -197,15 +192,15 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await disposeSessionReadContexts();
-  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   projectCloneMocks.materializeProjectClone.mockReset();
   projectCloneMocks.refreshProjectClone.mockReset();
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
   testState.agentsConfig = undefined;
   await state?.cleanup();
 });
+
+afterAll(closeStateDatabaseForTest);
 
 test.each(["registered", "github", "inherited"] as const)(
   "required visible spawn selects %s project through the write-scope Gateway",
@@ -451,8 +446,7 @@ test("worktree spawns do not inherit an unregistered parent working directory", 
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
   const { entry: parent } = await createManagedProjectParent();
   const params = { ...parentCreateParams, cwd: repository };
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   const reused = await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
     params,

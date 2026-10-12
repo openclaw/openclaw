@@ -7,10 +7,7 @@ import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import {
-  readSubagentRunsInWorker,
-  streamSubagentRegistryInWorker,
-} from "../agents/subagents/registry/subagent-registry.store.worker.js";
+import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
@@ -31,17 +28,14 @@ import {
 import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
-} from "../gateway/github-publication-store.js";
-import {
-  readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
-  readRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-repository-publication-store.js";
-import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
+} from "../gateway/github-publication-store.worker.js";
+import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.worker.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
-} from "../gateway/operator-approval-standing-grants.js";
-import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
+} from "../gateway/operator-approval-standing-grants.worker.js";
+import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.worker.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {
@@ -59,7 +53,7 @@ import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-e
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { inspectGatewayOwnerLeaseForMaintenance } from "../infra/gateway-owner-lease.worker.js";
+import { inspectGatewayOwnerLease } from "../infra/gateway-owner-lease.worker.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
@@ -82,6 +76,7 @@ import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
+import { readPluginMetadataStateRowsInDatabase } from "../plugins/installed-plugin-index-row.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
@@ -113,37 +108,26 @@ import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
 import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
+import { readStateStream } from "./openclaw-state-read-stream.js";
 import type {
   OpenClawStateReadReply,
+  OpenClawStateReadRequest,
   OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
-import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
-import {
-  listUserChannelIdentitiesInDatabase,
-  resolveUserChannelIdentityInDatabase,
-} from "./user-channel-identities.js";
-import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
-import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
+import { readUserBackgroundCommand } from "./user-background.kernel.js";
+import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
-import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
-import {
-  readUserProfileAuthorityCommand,
-  readCurrentUserProfileAliasesInDatabase,
-  readUserProfileSnapshotCommand,
-  readUserProfileIdForEmail,
-} from "./user-profile-identity.read.js";
-import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
+import { readUserProfileCommand } from "./user-profile-read.worker.js";
 
 serveOwnedWorkerTasks(
-  async function read(input, channel, control): Promise<OpenClawStateReadReply> {
+  async function read(message, channel, control): Promise<OpenClawStateReadReply> {
+    // SAFETY: Only the typed state-read pool sends requests on this private worker port.
+    const input = message as OpenClawStateReadRequest;
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
-      if (!isReadRequest(input)) {
-        throw new Error("Shared-state reader requires a captured state location and read command");
-      }
       const prepared = stateReadRegistry.prepare(input.command.type);
       if (prepared) {
         return prepared.then(() => read(input, channel, control));
@@ -164,21 +148,21 @@ serveOwnedWorkerTasks(
         if (command.type === "admit") {
           return { ok: true, type: "admit" };
         }
-        if (command.type === "subagents.restore") {
-          if (!channel) {
-            throw new Error("Subagent restore requires a bounded receiver");
-          }
-          const count = await control.runNativeSection(() =>
-            streamSubagentRegistryInWorker(input, channel, () => {
+        if (command.type === "subagents.restore" || command.type === "meetingTranscripts.export") {
+          return await control.runNativeSection(() =>
+            readStateStream(input, command, channel, () => {
               sourceAdmitted = true;
             }),
           );
-          return { ok: true, type: command.type, sourceAdmitted: true, count };
         }
-        if (command.type === "doctor.gatewayOwnerLease.read") {
-          const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {
-            sourceAdmitted = true;
-          });
+        if (command.type === "gatewayOwnerLease.read") {
+          const lease = inspectGatewayOwnerLease(
+            input,
+            () => {
+              sourceAdmitted = true;
+            },
+            command.schemaMaintenance,
+          );
           return { ok: true, type: command.type, sourceAdmitted: true, lease };
         }
         const locationArgs = [
@@ -422,6 +406,12 @@ serveOwnedWorkerTasks(
                 row: readExecApprovalsConfigRow(db),
               };
             }
+            if (command.type === "plugins.metadata.read") {
+              return {
+                type: command.type,
+                rows: readPluginMetadataStateRowsInDatabase(db, command.input.stateKeys),
+              };
+            }
             if (command.type === "skills.library.descriptions") {
               return {
                 type: command.type,
@@ -499,12 +489,6 @@ serveOwnedWorkerTasks(
                 row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
               };
             }
-            if (command.type === "githubRepository.request") {
-              return {
-                type: command.type,
-                row: readRepositoryGitHubPublicationInDatabase(db, command.requestId),
-              };
-            }
             if (
               command.type === "githubPublication.knownPullRequestUrls" ||
               command.type === "githubRepository.knownPullRequestUrls"
@@ -520,46 +504,27 @@ serveOwnedWorkerTasks(
                       ),
               };
             }
-            if (command.type === "userProfiles.authority.resolve") {
-              return readUserProfileAuthorityCommand(db, command);
-            }
-            if (command.type === "userProfiles.aliases.resolve") {
-              return {
-                type: command.type,
-                ...readCurrentUserProfileAliasesInDatabase(db, command.profileId),
-              };
-            }
             if (
+              command.type === "userProfiles.authority.resolve" ||
+              command.type === "userProfiles.aliases.resolve" ||
+              command.type === "userProfiles.catalogIdentity" ||
               command.type === "userProfiles.githubIdentity.cached" ||
-              command.type === "userProfiles.githubAttribution.resolve"
-            ) {
-              return readUserProfileGitHubCommand(db, command);
-            }
-            if (command.type === "userProfiles.channelIdentity.list") {
-              return {
-                type: command.type,
-                result: readUserChannelIdentityResult(() =>
-                  listUserChannelIdentitiesInDatabase(db, command.profileId),
-                ),
-              };
-            }
-            if (command.type === "userProfiles.channelIdentity.resolve") {
-              return {
-                type: command.type,
-                linked: resolveUserChannelIdentityInDatabase(db, command.identity),
-              };
-            }
-            if (
+              command.type === "userProfiles.githubAttribution.resolve" ||
+              command.type === "userProfiles.channelIdentity.list" ||
+              command.type === "userProfiles.channelIdentity.resolve" ||
               command.type === "userProfiles.reconcile" ||
-              command.type === "userProfiles.catalog"
+              command.type === "userProfiles.catalog" ||
+              command.type === "userProfiles.avatar.inspect" ||
+              command.type === "userProfiles.avatar.read" ||
+              command.type === "userProfiles.email.resolve"
             ) {
-              return readUserProfileSnapshotCommand(db, command);
+              return readUserProfileCommand(db, command);
             }
             if (
-              command.type === "userProfiles.avatar.inspect" ||
-              command.type === "userProfiles.avatar.read"
+              command.type === "userBackground.snapshot" ||
+              command.type === "userBackground.image"
             ) {
-              return readUserProfileAvatarCommand(db, command);
+              return readUserBackgroundCommand(db, command);
             }
             if (command.type === "userPreferences.values") {
               return {
@@ -567,21 +532,13 @@ serveOwnedWorkerTasks(
                 values: selectUserPreferenceValues(db, command.profileIds, command.key),
               };
             }
-            if (command.type === "userModelAccounts.links") {
-              return {
-                type: command.type,
-                links: runSqliteDeferredTransactionSync(db, () =>
-                  listUserProfileAuthLinksInDatabase(db, command.profileId),
-                ),
-              };
-            }
-            if (command.type === "userProfiles.email.resolve") {
-              return {
-                type: command.type,
-                profileId: runSqliteDeferredTransactionSync(db, () =>
-                  readUserProfileIdForEmail(db, command.email),
-                ),
-              };
+            if (
+              command.type === "userModelAccounts.links" ||
+              command.type === "userModelAccounts.summary" ||
+              command.type === "userModelAccounts.selection" ||
+              command.type === "userModelAccounts.catalog"
+            ) {
+              return readUserModelAccountCommand(db, command);
             }
             if (command.type === "sessionRepositoryWorkspaces.find") {
               return {

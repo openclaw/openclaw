@@ -62,7 +62,9 @@ function createInteractionHarness(params: {
 }
 
 type ResolverParams = Parameters<typeof resolveDiscordProviderCommandSpecs>[0];
-type SkillCommands = ReturnType<NonNullable<ResolverParams["listSkillCommandsForAgents"]>>;
+type SkillCommands = Awaited<
+  ReturnType<NonNullable<ResolverParams["prepareSkillCommandsForAgents"]>>
+>;
 
 const cfg: OpenClawConfig = {};
 const skillCommands = [
@@ -87,7 +89,7 @@ function createResolverHarness(
   const nativeCommandSpecs = options.nativeCommandSpecs ?? [
     { name: "built-in", description: "Built in", acceptsArgs: false },
   ];
-  const listSkillCommandsForAgents = vi.fn(() => configuredSkillCommands);
+  const prepareSkillCommandsForAgents = vi.fn(async () => configuredSkillCommands);
   const listNativeCommandSpecsForConfig = vi.fn(
     (
       _config: OpenClawConfig,
@@ -118,7 +120,7 @@ function createResolverHarness(
   return {
     error,
     listNativeCommandSpecsForConfig,
-    listSkillCommandsForAgents,
+    prepareSkillCommandsForAgents,
     log,
     resolve: () =>
       resolveDiscordProviderCommandSpecs({
@@ -128,7 +130,7 @@ function createResolverHarness(
         nativeSkillsEnabled: options.nativeSkillsEnabled ?? true,
         voiceEnabled: options.voiceEnabled ?? false,
         maxDiscordCommands: options.maxDiscordCommands ?? 3,
-        listSkillCommandsForAgents,
+        prepareSkillCommandsForAgents,
         listNativeCommandSpecsForConfig,
       }),
   };
@@ -271,7 +273,7 @@ describe("resolveDiscordProviderCommandSpecs", () => {
       nativeSkillsEnabled: true,
       voiceEnabled: false,
       maxDiscordCommands: uniqueCount,
-      listSkillCommandsForAgents: vi.fn(() => [voiceSkill]),
+      prepareSkillCommandsForAgents: vi.fn(async () => [voiceSkill]),
     });
 
     expect(resolved.skillCommands).toEqual([voiceSkill]);

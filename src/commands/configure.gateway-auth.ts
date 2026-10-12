@@ -80,18 +80,6 @@ function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | und
   );
 }
 
-function hasStaticManifestCatalogRows(cfg: OpenClawConfig, provider: string | undefined): boolean {
-  if (!provider) {
-    return false;
-  }
-  return (
-    loadStaticManifestCatalogRowsForList({
-      cfg,
-      providerFilter: provider,
-    }).length > 0
-  );
-}
-
 function listConfiguredModelProviders(cfg: OpenClawConfig): string[] {
   return Object.entries(cfg.models?.providers ?? {})
     .filter(([, provider]) => (provider.models?.length ?? 0) > 0)
@@ -257,7 +245,11 @@ export async function promptAuthConfig(
     const promptProvider =
       modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
     const hasPromptProviderConfiguredModels = hasConfiguredProviderModels(next, promptProvider);
-    const hasPromptProviderStaticManifestRows = hasStaticManifestCatalogRows(next, promptProvider);
+    const hasPromptProviderStaticManifestRows = Boolean(
+      promptProvider &&
+      loadStaticManifestCatalogRowsForList({ cfg: next, providerFilter: promptProvider }).length >
+        0,
+    );
     const shouldLoadModelCatalog =
       modelPrompt?.loadCatalog ??
       (hasPromptProviderConfiguredModels || hasPromptProviderStaticManifestRows);

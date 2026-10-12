@@ -197,14 +197,14 @@ describe("collectPackageDistImports", () => {
   });
 
   it("excludes only the handoff runtime's staged native URL", () => {
-    const stagedPath = "./node_modules/koffi/indirect.cjs";
+    const stagedPath = "./node_modules/@openclaw/proc-safe/dist/identity.js";
     const source = [
       `new URL("${stagedPath}", import.meta.url);`,
       `import "${stagedPath}";`,
       `export * from "${stagedPath}";`,
       `import("${stagedPath}");`,
       `require("${stagedPath}");`,
-      'new URL("./node_modules/koffi/other.cjs", import.meta.url);',
+      'new URL("./node_modules/@openclaw/proc-safe/dist/other.js", import.meta.url);',
     ].join("\n");
     for (const importerPath of ["dist/managed-handoff-runtime.mjs", "dist/other.mjs"]) {
       const imports = collectPackageDistImports({
@@ -215,10 +215,10 @@ describe("collectPackageDistImports", () => {
       expect(imports).toEqual([
         ...Array.from({ length: expectedNativeEdges }, (_, index) => ({
           importerPath,
-          importedPath: "dist/node_modules/koffi/indirect.cjs",
+          importedPath: "dist/node_modules/@openclaw/proc-safe/dist/identity.js",
           kind: index === expectedNativeEdges - 1 ? "require" : undefined,
         })),
-        { importerPath, importedPath: "dist/node_modules/koffi/other.cjs" },
+        { importerPath, importedPath: "dist/node_modules/@openclaw/proc-safe/dist/other.js" },
       ]);
     }
   });

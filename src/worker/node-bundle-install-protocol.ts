@@ -19,20 +19,16 @@ const WorkerBuildSchema = z.custom<WorkerAdmissionHandshake>(
   "invalid worker build identity",
 );
 
-const BundleInstallInputSchema = z
-  .object({
-    gatewayNamespace: z.string().regex(GATEWAY_NAMESPACE_PATTERN),
-    bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
-    build: WorkerBuildSchema,
-    archive: z
-      .object({
-        token: z.string().regex(TOKEN_PATTERN),
-        sha256: z.string().regex(SHA256_PATTERN),
-        bytes: z.number().int().min(1).max(MAX_WORKER_BUNDLE_ARCHIVE_BYTES),
-      })
-      .strict(),
-  })
-  .strict();
+const BundleInstallInputSchema = z.strictObject({
+  gatewayNamespace: z.string().regex(GATEWAY_NAMESPACE_PATTERN),
+  bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
+  build: WorkerBuildSchema,
+  archive: z.strictObject({
+    token: z.string().regex(TOKEN_PATTERN),
+    sha256: z.string().regex(SHA256_PATTERN),
+    bytes: z.number().int().min(1).max(MAX_WORKER_BUNDLE_ARCHIVE_BYTES),
+  }),
+});
 
 export type NodeWorkerBundleInstallInput = z.infer<typeof BundleInstallInputSchema>;
 export type NodeWorkerBundleInstallResult = WorkerAdmissionHandshake;

@@ -13,7 +13,7 @@ import {
 } from "./chat-pane-session-controls.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import * as modelControls from "./components/chat-model-controls.ts";
+import * as modelControls from "./components/chat-model-controls.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

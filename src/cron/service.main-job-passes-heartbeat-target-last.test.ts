@@ -8,6 +8,7 @@ import {
   setupCronServiceSuite,
   writeCronStoreSnapshot,
 } from "./service.test-harness.js";
+import { onTimer } from "./service/timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-main-heartbeat-target" });
 
@@ -33,14 +34,13 @@ describe("cron main job passes heartbeat target=last", () => {
         },
       ],
     });
-    const { cron, finished, requestHeartbeatAndWait } = createStartedCronServiceWithFinishedBarrier(
-      {
+    const { cron, state, finished, requestHeartbeatAndWait } =
+      createStartedCronServiceWithFinishedBarrier({
         scheduler: createTestGatewayScheduler(clock.clock),
         storePath,
         logger,
         requestHeartbeatAndWait: async () => ({ status: "ran", durationMs: 50 }),
-      },
-    );
+      });
     const terminal = finished.waitForOk("main-delivery");
     try {
       await cron.start();
@@ -48,6 +48,7 @@ describe("cron main job passes heartbeat target=last", () => {
       if (job?.state.lastRunAtMs === undefined) {
         expect(job?.state.nextRunAtMs).toBeTypeOf("number");
         await clock.advanceTo(job!.state.nextRunAtMs!);
+        await onTimer(state);
       }
       await terminal;
       expect(requestHeartbeatAndWait).toHaveBeenCalledExactlyOnceWith(

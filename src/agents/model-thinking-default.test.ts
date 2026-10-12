@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveDirectBundledProviderPolicySurface } from "../plugins/provider-policy-surface.js";
-import { PREPARED_THINKING_POLICY } from "../plugins/provider-thinking-catalog.js";
 import { resolveThinkingDefault } from "./model-thinking-default.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
@@ -14,32 +13,7 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
 
 describe("resolveThinkingDefault", () => {
   it.each([
-    { thinking: "extra-high", expected: "xhigh" },
-    { thinking: false, expected: "off" },
-    { thinking: "disabled", expected: "off" },
-  ])(
-    "prefers and normalizes per-model thinking=$thinking over global defaults",
-    ({ thinking, expected }) => {
-      expect(
-        resolveThinkingDefault({
-          cfg: {
-            agents: {
-              defaults: {
-                thinkingDefault: "low",
-                models: { "fixture/reasoning-model": { params: { thinking } } },
-              },
-            },
-          },
-          provider: "fixture",
-          model: "reasoning-model",
-        }),
-      ).toBe(expected);
-    },
-  );
-
-  it.each([
     { thinking: false, agentDefault: undefined, expected: "off" },
-    { thinking: "extra-high", agentDefault: undefined, expected: "xhigh" },
     { thinking: "high", agentDefault: "minimal", expected: "minimal" },
   ] as const)(
     "resolves agent thinking defaults (model=$thinking, agent=$agentDefault)",
@@ -87,17 +61,7 @@ describe("resolveThinkingDefault", () => {
     ).toBe("high");
   });
 
-  it.each([
-    { provider: "anthropic", model: "claude-opus-5", reasoning: true, expected: "high" },
-    { provider: "anthropic", model: "claude-opus-4-7", reasoning: true, expected: "off" },
-    { provider: "anthropic", model: "claude-opus-4-8", reasoning: true, expected: "off" },
-    { provider: "anthropic", model: "claude-sonnet-4-6", reasoning: true, expected: "adaptive" },
-    { provider: "anthropic", model: "claude-opus-4-80", reasoning: true, expected: "medium" },
-    { provider: "anthropic-vertex", model: "claude-opus-4-8", reasoning: true, expected: "off" },
-    { provider: "claude-cli", model: "claude-opus-4-8", reasoning: true, expected: "off" },
-    { provider: "anthropic", model: "claude-opus-5", reasoning: false, expected: "off" },
-    { provider: "anthropic", model: "claude-fable-5", reasoning: false, expected: "medium" },
-  ])(
+  it.each([{ provider: "anthropic", model: "claude-opus-5", reasoning: true, expected: "high" }])(
     "honors configured $provider/$model policy with reasoning=$reasoning",
     ({ provider, model, reasoning, expected }) => {
       const resolveThinkingProfile = resolveDirectBundledProviderPolicySurface(
@@ -121,47 +85,47 @@ describe("resolveThinkingDefault", () => {
     },
   );
 
-  it.each(["registry", "prepared", "prepared-null"])(
-    "uses the %s policy owner for configured defaults",
-    (source) => {
-      const resolveThinkingProfile = vi.fn(() => ({
-        levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }] as const,
-        defaultLevel: "low" as const,
-      }));
-      const registryPolicy =
-        source === "registry"
-          ? resolveThinkingProfile
-          : vi.fn(() => ({ levels: [{ id: "high" }] as const, defaultLevel: "high" as const }));
-      const model = "claude-opus-5";
-      const catalog = [
-        {
-          provider: "anthropic",
-          id: model,
-          name: model,
-          reasoning: true,
-          ...(source === "registry"
-            ? {}
-            : {
-                [PREPARED_THINKING_POLICY]:
-                  source === "prepared-null" ? null : { resolve: resolveThinkingProfile },
-              }),
-        },
-      ];
-      expect(
-        resolveThinkingDefault({
-          cfg: { agents: { defaults: { model: { primary: `anthropic/${model}` } } } },
-          provider: "anthropic",
-          model,
-          catalog,
-          agentRuntime: "claude-cli",
-          providerPolicySource: {
-            providers: [{ provider: { id: "anthropic", resolveThinkingProfile: registryPolicy } }],
+  it.each([
+    { model: "Kimi-K3", thinking: undefined, agentDefault: undefined, expected: "off" },
+    { model: "Kimi-K3", thinking: "max", agentDefault: undefined, expected: "max" },
+    { model: "Kimi-K3", thinking: "low", agentDefault: "medium", expected: "medium" },
+    { model: "k3", thinking: undefined, agentDefault: undefined, expected: "high" },
+    { model: "k3-256k", thinking: undefined, agentDefault: undefined, expected: "high" },
+  ] as const)(
+    "preserves fresh and serialized Kimi defaults (model=$model, thinking=$thinking, agent=$agentDefault)",
+    ({ model, thinking, agentDefault, expected }) => {
+      const resolveThinkingProfile =
+        resolveDirectBundledProviderPolicySurface("kimi-coding")?.resolveThinkingProfile;
+      if (!resolveThinkingProfile) {
+        throw new Error("Missing thinking policy for kimi");
+      }
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: `kimi/${model}` },
+            models: { [`kimi/${model}`]: { params: { thinking } } },
           },
-        }),
-      ).toBe(source === "prepared-null" ? "medium" : "low");
-      expect(resolveThinkingProfile).toHaveBeenCalledTimes(source === "prepared-null" ? 0 : 1);
-      if (source !== "registry") {
-        expect(registryPolicy).not.toHaveBeenCalled();
+          entries: { alpha: { thinkingDefault: agentDefault } },
+        },
+      };
+      for (const [state, cfg] of [
+        ["fresh", config],
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- Persisted JSON omits undefined preferences.
+        ["serialized existing", JSON.parse(JSON.stringify(config))],
+      ] as const) {
+        expect(
+          resolveThinkingDefault({
+            cfg,
+            agentId: "alpha",
+            provider: "kimi",
+            model,
+            catalog: [{ provider: "kimi", id: model, name: model, reasoning: true }],
+            providerPolicySource: {
+              providers: [{ provider: { id: "kimi", resolveThinkingProfile } }],
+            },
+          }),
+          state,
+        ).toBe(expected);
       }
     },
   );

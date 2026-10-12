@@ -54,11 +54,15 @@ export async function probeMatrix(params: {
         ssrfPolicy: params.ssrfPolicy,
         dispatcherPolicy: params.dispatcherPolicy,
       });
-      const userId = await client.getUserId();
-      if (inputUserId && inputUserId !== userId) {
-        return { ...result, error: "Matrix access token user does not match configured userId" };
+      try {
+        const userId = await client.getUserId();
+        if (inputUserId && inputUserId !== userId) {
+          return { ...result, error: "Matrix access token user does not match configured userId" };
+        }
+        return { ...result, ok: true, userId };
+      } finally {
+        await client.stopWithoutPersist();
       }
-      return { ...result, ok: true, userId };
     },
     (error) => ({
       ok: false,

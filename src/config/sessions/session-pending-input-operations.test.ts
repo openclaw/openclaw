@@ -6,19 +6,33 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   isSqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
+import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import {
+  ensureSessionInputCompletionsSchema,
+  ensureSessionPendingInputsSchema,
+} from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   listSessionPendingInputs,
@@ -27,6 +41,8 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
+import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
 
 const scope = {
   agentId: "main",
@@ -38,6 +54,52 @@ const message = (runId: string) => ({
   content: `Synthetic pending input ${runId}`,
   timestamp: 1,
   idempotencyKey: `${runId}:user`,
+});
+
+it("accepts supplied legacy completion callbacks without falling back from async completion", async () => {
+  const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+  const legacy = vi.fn(() => outcome);
+  const recorder = {
+    ...createUserTurnTranscriptRecorder({
+      message: message("legacy"),
+      target: { ...scope, sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 } },
+    }),
+    completeProcessingAsync: undefined,
+    completeProcessing: legacy,
+  };
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  const plugin = new PluginInstance("pending-input-legacy-recorder");
+  try {
+    await plugin.run(async () => {
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("completeProcessingAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+    expect(
+      await completeUserTurnProcessing(
+        { ...recorder, completeProcessingAsync: async () => undefined },
+        outcome,
+      ),
+    ).toBeUndefined();
+    await expect(
+      completeUserTurnProcessing(
+        {
+          ...recorder,
+          completeProcessingAsync: async () => {
+            throw new Error("Async completion failed");
+          },
+        },
+        outcome,
+      ),
+    ).rejects.toThrow("Async completion failed");
+    expect(legacy).toHaveBeenCalledTimes(2);
+  } finally {
+    warning.mockRestore();
+    await plugin.dispose();
+  }
 });
 
 function createFixture() {
@@ -62,6 +124,153 @@ function createFixture() {
   };
 }
 
+it("keeps host-created synchronous completion usable through the SDK compatibility window", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { pending } = createFixture();
+    const recorder = createUserTurnTranscriptRecorder({
+      message: message("host-legacy"),
+      target: { ...scope, sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 } },
+      trackInputCompletion: true,
+    });
+    expect(await recorder.stageApproved!({ runId: "host-legacy", assertCurrent: () => {} })).toBe(
+      true,
+    );
+    const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+    expect(recorder.completeProcessing!(outcome)).toEqual(outcome);
+    expect(recorder.getProcessingCompletion!()).toEqual(outcome);
+    expect(pending()).toEqual([]);
+    await recorder.waitForPendingInputSettlement!();
+  });
+});
+
+it("shares transaction rows without retaining stale custody and returns the persisted staging postimage", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { database } = createFixture();
+    ensureSessionPendingInputsSchema(database.db);
+    ensureSessionInputCompletionsSchema(database.db);
+    const identity = {
+      ...scope,
+      idempotencyKey: "cohort:user",
+      runId: "cohort",
+      requestHash: "cohort-hash",
+      lifecycleGeneration: "cohort-generation",
+      authorityAgentId: "main",
+    };
+    const read = () => {
+      const snapshot = runSqliteReadSnapshotSync(database.db, () =>
+        readPendingInput(database, { ...identity, kind: "stage", trackCompletion: true }),
+      );
+      if (snapshot.kind !== "stage") {
+        throw new Error("Expected staging snapshot");
+      }
+      return snapshot;
+    };
+    const grants: unknown[] = [];
+    const mutate = (input: PendingInputMutation) =>
+      mutatePendingInput(
+        input,
+        {
+          admit: (stage, facts) => grants.push({ stage, facts: structuredClone(facts) }),
+          writeTransaction: (_label, _owner, run) =>
+            runOpenClawAgentWriteTransaction(run, { agentId: "main" }),
+        },
+        () => {},
+      );
+    const stage = (expected = read()): PendingInputMutation => ({
+      ...identity,
+      kind: "stage",
+      expected,
+      trackCompletion: true,
+      inputId: "cohort-input",
+      messageJson: JSON.stringify(message("cohort")),
+    });
+    const input = stage();
+    database.db
+      .prepare(
+        "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(scope.sessionKey, "new-member", "owner", 2);
+    const counter = trackSqliteStatementExecutions(
+      database.db,
+      ["entry", "members", "pending", "completion"],
+      (sql) => {
+        if (/\bfrom "session_nodes"/iu.test(sql)) {
+          return "entry";
+        }
+        if (/\bfrom "session_members"/iu.test(sql)) {
+          return "members";
+        }
+        if (/\bfrom "session_pending_inputs"/iu.test(sql)) {
+          return "pending";
+        }
+        if (/\bfrom "session_input_completions"/iu.test(sql)) {
+          return "completion";
+        }
+        return null;
+      },
+    );
+    let staged;
+    try {
+      staged = mutate(input);
+      expect(counter.counts).toEqual({ entry: 1, members: 1, pending: 1, completion: 1 });
+    } finally {
+      counter.restore();
+    }
+    expect(staged.stagedInput).toEqual(
+      database.db
+        .prepare("SELECT * FROM session_pending_inputs WHERE input_id = ?")
+        .get("cohort-input"),
+    );
+    expect(grants).toMatchObject([
+      {
+        stage: "transaction",
+        facts: {
+          candidate: undefined,
+          authority: {
+            entry: { sessionId: scope.sessionId },
+            members: [{ identityId: "new-member" }],
+          },
+        },
+      },
+      {
+        stage: "commit",
+        facts: { receipt: { stagedInput: { input_id: "cohort-input", state: "queued" } } },
+      },
+    ]);
+
+    const stale = stage();
+    database.db
+      .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
+      .run("replacement", "cohort-input");
+    expect(() => mutate(stale)).toThrow("changed before staging committed");
+    database.db
+      .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
+      .run(identity.requestHash, "cohort-input");
+    const requeued = mutate(stage());
+    expect(requeued.stagedInput).toEqual(staged.stagedInput);
+
+    const completionCounter = trackSqliteStatementExecutions(database.db, ["completion"], (sql) =>
+      /\bfrom "session_input_completions"/iu.test(sql) ? "completion" : null,
+    );
+    const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+    try {
+      expect(mutate({ ...identity, kind: "complete", outcome }).outcome).toEqual(outcome);
+      expect(completionCounter.counts.completion).toBe(1);
+    } finally {
+      completionCounter.restore();
+    }
+    expect(() => mutate({ ...identity, requestHash: "other", kind: "complete", outcome })).toThrow(
+      "Input completion conflicts with the accepted input",
+    );
+    const previous = read();
+    writeSessionEntry(database, scope.sessionKey, {
+      sessionId: "replacement-session",
+      updatedAt: 2,
+    });
+    expect(() => mutate(stage(previous))).toThrow("no longer owns the admitted session");
+  });
+});
+
 it("stages and settles an agent user-turn recorder without caller-thread SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = createFixture();
@@ -84,7 +293,7 @@ it("stages and settles an agent user-turn recorder without caller-thread SQL", a
       const cancelledReceipt = await fixture.stage("cancelled");
       cancelled = cancelledReceipt;
       const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-      expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
       expect(recorder.getProcessingCompletion?.()).toEqual(outcome);
       recorder.finishPendingInput?.("interrupted");
       cancelledReceipt.finish("cancelled");
@@ -129,25 +338,20 @@ it.each(["cancelled", "consumed", "failed"] as const)(
         await recorder.persistApproved();
         expect(recorder.isPendingInputConsumed?.()).toBe(true);
       }
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            const facts = request.facts;
-            if (
-              result === "failed" &&
-              request.stage === "commit" &&
-              isRecord(facts) &&
-              isRecord(facts.publication) &&
-              isRecord(facts.publication.receipt) &&
-              facts.publication.receipt.operation === "finish"
-            ) {
-              throw new Error("Synthetic cancellation commit refused");
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(admission, (request, grant, callback) => {
+        const facts = request.facts;
+        if (
+          result === "failed" &&
+          request.stage === "commit" &&
+          isRecord(facts) &&
+          isRecord(facts.publication) &&
+          isRecord(facts.publication.receipt) &&
+          facts.publication.receipt.operation === "finish"
+        ) {
+          throw new Error("Synthetic cancellation commit refused");
+        }
+        callback(request, grant);
+      });
       try {
         recorder.finishPendingInput?.("cancelled");
         expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
@@ -179,6 +383,38 @@ it.each(["cancelled", "consumed", "failed"] as const)(
     });
   },
 );
+
+it("preserves synchronous SDK recorder completion until callers migrate to async", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const fixture = createFixture();
+    const recorder = createUserTurnTranscriptRecorder({
+      message: message("legacy-completion"),
+      trackInputCompletion: true,
+      target: {
+        ...scope,
+        storePath: fixture.database.path,
+        sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 },
+      },
+    });
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      expect(
+        await recorder.stageApproved?.({ runId: "legacy-completion", assertCurrent: () => {} }),
+      ).toBe(true);
+      const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+      expect(recorder.completeProcessing?.(outcome)).toEqual(outcome);
+      expect(
+        fixture.database.db.prepare("SELECT outcome_json FROM session_input_completions").get(),
+      ).toEqual({ outcome_json: JSON.stringify(outcome) });
+      expect(fixture.pending()).toEqual([]);
+      expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+    } finally {
+      warning.mockRestore();
+      recorder.finishPendingInput?.("interrupted");
+      await recorder.waitForPendingInputSettlement?.();
+    }
+  });
+});
 
 it("retains cancellation disposition custody while accepted processing completion is waiting", async ({
   signal,
@@ -258,24 +494,19 @@ it.each(["transaction", "commit"] as const)(
       const fixture = createFixture();
       let current = true;
       let revoked = false;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            const facts = request.facts;
-            if (
-              request.stage === phase &&
-              isRecord(facts) &&
-              isRecord(facts.publication) &&
-              facts.publication.kind === "pending-input-settlement-custody"
-            ) {
-              current = false;
-              revoked = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(admission, (request, grant, callback) => {
+        const facts = request.facts;
+        if (
+          request.stage === phase &&
+          isRecord(facts) &&
+          isRecord(facts.publication) &&
+          facts.publication.kind === "pending-input-settlement-custody"
+        ) {
+          current = false;
+          revoked = true;
+        }
+        callback(request, grant);
+      });
       try {
         await expect(
           fixture.stage("ended", () => {
@@ -324,26 +555,21 @@ it("refuses processing completion when the admitted lifecycle changes during the
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = createFixture();
     const receipt = await fixture.stage("stale-lifecycle", () => {}, true);
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let rotated = false;
-    const spy = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          const facts = request.facts;
-          if (
-            request.stage === "transaction" &&
-            isRecord(facts) &&
-            isRecord(facts.publication) &&
-            isRecord(facts.publication.receipt) &&
-            facts.publication.receipt.operation === "complete"
-          ) {
-            rotateAgentEventLifecycleGeneration();
-            rotated = true;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const spy = probe.admission(admission, (request, grant, callback) => {
+      const facts = request.facts;
+      if (
+        request.stage === "transaction" &&
+        isRecord(facts) &&
+        isRecord(facts.publication) &&
+        isRecord(facts.publication.receipt) &&
+        facts.publication.receipt.operation === "complete"
+      ) {
+        rotateAgentEventLifecycleGeneration();
+        rotated = true;
+      }
+      callback(request, grant);
+    });
     try {
       await expect(
         receipt.completeAsync?.(buildAgentRunTerminalOutcome({ status: "ok" })),
@@ -360,7 +586,7 @@ it("refuses processing completion when the admitted lifecycle changes during the
   });
 });
 
-it.each(["lost reply", "unknown settlement"] as const)(
+it.each(["lost reply", "unknown settlement", "independent committed write"] as const)(
   "settles staging with %s without replaying its native write",
   async (fault) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -398,6 +624,18 @@ it.each(["lost reply", "unknown settlement"] as const)(
                       facts: { kind: "pending-input-settlement", operation: "stage" },
                     });
                     expect(nativeAdmission?.settlement?.kind).toBe("completed");
+                    if (fault === "independent committed write") {
+                      runOpenClawAgentWriteTransaction(
+                        (database) => {
+                          writeSessionEntry(database, "agent:main:independent-input", {
+                            sessionId: "independent-input",
+                            updatedAt: 2,
+                          });
+                        },
+                        { agentId: scope.agentId },
+                      );
+                      return result;
+                    }
                     if (fault === "unknown settlement") {
                       const observed = expectDefined(nativeAdmission, "Expected native admission");
                       const settlement = vi

@@ -1,3 +1,4 @@
+import "../../worker-heap-flag.mjs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MessagePort, Worker } from "node:worker_threads";
@@ -9,6 +10,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
 
 type WorkerCpuHandle = {
@@ -66,10 +68,11 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
 });
 
 export function createCpuTrackedWorker(...args: ConstructorParameters<typeof Worker>): Worker {
-  const worker = new Worker(...args);
-  trackWorker(worker); // Bun need not emit Node's process-level Worker event.
-  // Node's process event can register the Worker before its constructor returns.
-  trackedWorkers.workers.get(worker)!.script = workerScriptName(args[0], args[1]?.eval);
+  const worker = runWithMainThreadTask(
+    `worker:${workerScriptName(args[0], args[1]?.eval)}`,
+    () => new Worker(...args),
+  );
+  trackNativeWorkerForCpu(worker, args[0], args[1]?.eval);
   return worker;
 }
 
@@ -79,6 +82,7 @@ export function trackNativeWorkerForCpu(
   filename: string | URL,
   evalSource = false,
 ): void {
+  // Register explicitly on Bun; Node may already have reported the Worker during construction.
   trackWorker(worker);
   trackedWorkers.workers.get(worker)!.script = workerScriptName(filename, evalSource);
 }

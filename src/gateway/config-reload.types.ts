@@ -7,20 +7,24 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
 
-export type InProcessConfigCandidate = {
+export type GatewayConfigReloadCandidate = {
   config: OpenClawConfig;
   compareConfig: OpenClawConfig;
-  persistedHash: string;
+  persistedHash: ConfigFileSnapshot["hash"];
+  origin: "write" | "file";
   afterWrite?: ConfigWriteNotification["afterWrite"];
   preparedCandidate?: ConfigWriteNotification["preparedCandidate"];
   runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
   application?: RuntimeConfigWriteApplicationClaim;
+  carriedApplications?: RuntimeConfigWriteApplicationClaim[];
   epoch: number;
   snapshot: ConfigFileSnapshot;
 };
 
 export type GatewayConfigReloadTransactionOwnership = {
   isCurrent: () => boolean;
+  /** A queued successor can finish model preparation without revoking this transaction. */
+  hasNewerConfig?: () => boolean;
   checkpoint: () => Promise<void>;
   withRestartPreparation: <T>(
     run: (ownership: GatewayConfigReloadTransactionOwnership) => Promise<T>,

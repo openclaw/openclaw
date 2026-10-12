@@ -8,11 +8,7 @@ type DiscordApprovalAction = Extract<MessagePresentationAction, { type: "approva
 const DISCORD_APPROVAL_CUSTOM_ID_MAX_CHARS = 100;
 
 function encodeDiscordApprovalCustomId(action: DiscordApprovalAction): string {
-  return [
-    `execapproval:kind=${action.approvalKind}`,
-    `id=${encodeURIComponent(action.approvalId)}`,
-    `action=${action.decision}`,
-  ].join(";");
+  return `execapproval:kind=${action.approvalKind};id=${encodeURIComponent(action.approvalId)};action=${action.decision}`;
 }
 
 function encodeBoundedDiscordApprovalCustomId(action: DiscordApprovalAction): string {

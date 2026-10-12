@@ -97,7 +97,9 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
     };
   }
   const sessionTarget =
-    params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined;
+    params.job.sourceConversation || params.job.payload.kind === "agentTurn"
+      ? params.job.sessionTarget
+      : undefined;
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
   const sourceConversation = plan.mode === "announce" ? params.job.sourceConversation : undefined;
   return { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey, sourceConversation };
@@ -140,7 +142,7 @@ async function resolvePreparedCronDeliveryPreview(
   }
   if (!resolved.ok) {
     if (
-      (sessionTarget === "current" || (sessionTarget === "isolated" && sourceConversation)) &&
+      (sessionTarget === "current" || sourceConversation !== undefined) &&
       plan.mode === "announce" &&
       !resolved.sourceConversationUnavailable &&
       !requiresExternalCronDelivery(plan, resolved)
@@ -166,11 +168,13 @@ async function resolvePreparedCronDeliveryPreview(
   return {
     label: `${plan.mode} -> ${formatTarget(resolved.channel, resolved.to)}`,
     detail:
-      requestedChannel !== "last"
-        ? "explicit"
-        : deliverySessionKey
-          ? `resolved from last, session ${deliverySessionKey}`
-          : "resolved from last, main session",
+      plan.mode === "announce"
+        ? "commits to the destination conversation; sends one external notification"
+        : requestedChannel !== "last"
+          ? "explicit"
+          : deliverySessionKey
+            ? `resolved from last, session ${deliverySessionKey}`
+            : "resolved from last, main session",
   };
 }
 

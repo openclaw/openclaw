@@ -22,16 +22,14 @@ import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_REF_PREFIX,
-  CLAWHUB_SKILLS_SH_TRUST_LABEL,
   fetchClawHubSkillCard,
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
   installSkillFromClawHub,
-  readVerifiedClawHubSkillSourceUrl,
   readTrackedClawHubSkillSlugs,
   resolveClawHubSkillVerificationTarget,
   updateSkillsFromClawHub,
@@ -60,6 +58,7 @@ import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
+import { buildSkillVerificationOutput } from "./skills-cli-verification-output.js";
 import {
   formatSkillInfo,
   formatSkillsCheck,
@@ -70,11 +69,6 @@ import {
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
 import { registerSkillsSearchCli } from "./skills-search-cli.js";
-
-type ResolvedClawHubSkillVerificationTarget = Extract<
-  Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
-  { ok: true }
->;
 
 const skillInstallLogger = {
   info: (message: string) => defaultRuntime.log(message),
@@ -201,34 +195,6 @@ function resolveClawHubTargetWorkspace(
 function shouldFailSkillVerification(result: ClawHubSkillVerificationResponse): boolean {
   const envelope = result as { ok: unknown; decision: unknown };
   return envelope.ok !== true || envelope.decision !== "pass";
-}
-
-function buildSkillVerificationOutput(
-  result: ClawHubSkillVerificationResponse,
-  target: ResolvedClawHubSkillVerificationTarget,
-): Record<string, unknown> {
-  const verifiedSourceUrl = readVerifiedClawHubSkillSourceUrl(result.provenance);
-  return {
-    ...result,
-    openclaw: {
-      resolution: {
-        source: target.resolution.source,
-        selector: target.resolution.selector,
-        registry: target.resolution.registry,
-        installedVersion: target.resolution.installedVersion,
-        ...(target.requestedReference ? { reference: target.requestedReference } : {}),
-      },
-      ...(target.trustState
-        ? {
-            trust: {
-              state: target.trustState,
-              label: CLAWHUB_SKILLS_SH_TRUST_LABEL,
-            },
-          }
-        : {}),
-      ...(verifiedSourceUrl ? { verifiedSourceUrl } : {}),
-    },
-  };
 }
 
 function readVerifiedSkillCardUrl(
@@ -434,6 +400,9 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
         } catch (err) {
+          if (err instanceof ExitError) {
+            throw err;
+          }
           defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
@@ -525,6 +494,9 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
           }
         } catch (err) {
+          if (err instanceof ExitError) {
+            throw err;
+          }
           defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
@@ -613,6 +585,9 @@ export function registerSkillsCli(program: Command) {
             }
           }
         } catch (err) {
+          if (err instanceof ExitError) {
+            throw err;
+          }
           reportError(formatErrorMessage(err));
           exitCode = 1;
         }

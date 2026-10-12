@@ -101,6 +101,9 @@ suite.define(() => {
           .evaluateHandle((popup: WaPopup) => popup.anchor);
         await composer.press("ArrowDown");
         await composer.press("ArrowUp");
+        expect(
+          await anchor.evaluate((element) => element instanceof Element && element.isConnected),
+        ).toBe(true);
         await composer.press("Tab");
         await expect.poll(() => composer.inputValue()).toBe(`${prefix}😄`);
         await expect

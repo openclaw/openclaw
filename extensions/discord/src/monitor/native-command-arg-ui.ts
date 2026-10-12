@@ -58,13 +58,12 @@ function parseDiscordCommandArgData(
   };
 }
 
-async function handleDiscordCommandArgInteraction(params: {
-  interaction: ButtonInteraction;
-  data: ComponentData;
-  ctx: DiscordCommandArgContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}) {
+async function handleDiscordCommandArgInteraction(
+  params: DiscordCommandArgButtonParams & {
+    interaction: ButtonInteraction;
+    data: ComponentData;
+  },
+) {
   const { interaction, data, ctx } = params;
   const clearWithMessage = async (content: string) =>
     await params.safeInteractionCall("command arg update", () =>

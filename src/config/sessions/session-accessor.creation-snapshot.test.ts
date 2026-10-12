@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir, cleanupTempDirs } from "../../../test/helpers/temp-dir.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
@@ -16,11 +17,13 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const tempDirs: string[] = [];
 afterEach(async () => {
@@ -33,6 +36,22 @@ afterEach(async () => {
 });
 
 describe("session creation snapshot", () => {
+  it("preserves a competing creation committed while the initial entry is prepared", async () => {
+    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-conflict-") };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
+    const competing = { sessionId: "competing", updatedAt: 1, label: "retained" };
+    openOpenClawAgentDatabase(scope);
+
+    await expect(
+      createSessionEntryWithTranscript(scope, ({ existingEntry }) => {
+        expect(existingEntry).toBeUndefined();
+        replaceSessionEntrySync(scope, competing);
+        return { ok: true, entry: { sessionId: "prepared", updatedAt: 2 } };
+      }),
+    ).rejects.toThrow("SQLite session entry changed before replacement");
+    expect(loadSessionEntry(scope)).toMatchObject(competing);
+  });
+
   it("preserves adopted history without selecting a new projection", async () => {
     const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
     const scope = { agentId: "main", env, sessionKey: "agent:main:target", sessionId: "target" };
@@ -186,17 +205,17 @@ describe("session creation snapshot", () => {
         { sessionId: "sibling", updatedAt: 1, label: "taken" },
       );
       listSessionEntriesCore(scope);
-      const db = openOpenClawAgentDatabase(scope).db;
+      const database = openOpenClawAgentDatabase(scope);
+      const { db } = database;
+      runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
       if (kind === "nul") {
-        db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-          JSON.stringify(entry) + "\0trailing",
-          scope.sessionKey,
-        );
+        db.prepare(
+          "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
+        ).run(JSON.stringify(entry) + "\0trailing", scope.sessionKey);
       } else {
-        db.prepare("UPDATE session_nodes SET updated_at = ? WHERE session_key = ?").run(
-          2,
-          scope.sessionKey,
-        );
+        db.prepare(
+          "UPDATE session_nodes SET updated_at = ?, entry_valid = 0 WHERE session_key = ?",
+        ).run(2, scope.sessionKey);
       }
       const expected = listSessionEntriesCore(scope).find(
         (row) => row.sessionKey === scope.sessionKey,
@@ -209,6 +228,10 @@ describe("session creation snapshot", () => {
       expect(context.existingEntry).toEqual(expected);
       expect(context.targetEntry).toEqual(expected);
       expect(context.labelInUse).toBe(true);
+      // Offline repair revokes the physical proof before another reader admits these rows.
+      runSqliteImmediateTransactionSync(db, () =>
+        markCanonicalSessionValidationPending(database, [scope.sessionKey]),
+      );
       await expect(
         createSessionEntryWithTranscript(scope, () => ({ ok: false, error: "unreachable" })),
       ).rejects.toThrow("openclaw doctor --fix");
@@ -240,9 +263,10 @@ describe("session creation snapshot", () => {
       if (!changed && value.includes("snapshot-target-marker")) {
         changed = true;
         const update = external.prepare(
-          "UPDATE session_nodes SET entry_json = ? WHERE session_key = ?",
+          "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
         );
         external.exec("BEGIN");
+        seedCanonicalSessionValidation({ agentId: "main", db: external });
         expect(
           external
             .prepare(

@@ -75,7 +75,7 @@ export function buildGatewayBenchCommand(
 }
 
 export function parseCliArgs(
-  argv: string[],
+  argv: readonly string[],
   options: {
     booleanFlags: ReadonlySet<string>;
     repeatableValueFlags?: ReadonlySet<string>;
@@ -546,11 +546,7 @@ export function flushOutputLineBuffers(
   buffers: Record<"stderr" | "stdout", string>,
   onLine: (line: string, nowMs: number) => void,
   nowMs: number,
-  options: { flushPartial?: boolean } = {},
 ): void {
-  if (!options.flushPartial) {
-    return;
-  }
   for (const stream of ["stdout", "stderr"] as const) {
     const line = buffers[stream];
     if (line) {

@@ -1,7 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
 import { readPreparedSessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
@@ -12,7 +11,10 @@ import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  openIncognitoTestActor,
+  useIncognitoNoHostSql,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -20,7 +22,6 @@ const authority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let closingActor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
-let sql: ReturnType<typeof observeHostDataSql>;
 const target = (name: string, owner = actor) => ({
   agentId: owner.agentId,
   env,
@@ -29,32 +30,10 @@ const target = (name: string, owner = actor) => ({
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-public-creation-") };
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  const closing = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "closing",
-    env,
-    authority,
-  });
-  assert(opened && closing);
-  actor = opened;
-  closingActor = closing;
+  actor = await openIncognitoTestActor(env, authority);
+  closingActor = await openIncognitoTestActor(env, authority, "closing");
 });
-beforeEach(() => {
-  sql = observeHostDataSql();
-});
-afterEach(() => {
-  try {
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
+useIncognitoNoHostSql();
 afterAll(async () => {
   await Promise.all([actor?.close(), closingActor?.close()]);
   await closeOpenClawStateDatabaseAsync();

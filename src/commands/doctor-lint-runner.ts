@@ -502,8 +502,7 @@ async function executeDoctorLint(
     warnings,
     cleanupWarnings: stateView.cleanupWarnings,
     writeOutput() {
-      const mode = detectDoctorLintOutputMode(opts);
-      if (mode === "json") {
+      if (detectDoctorLintOutputMode(opts) === "json") {
         writeJsonResult({
           ok: exitCode === 0,
           checksRun: result.checksRun,

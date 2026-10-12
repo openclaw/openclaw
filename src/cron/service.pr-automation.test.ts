@@ -37,8 +37,9 @@ import {
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
-import { CronService, type CronEvent } from "./service.js";
-import { createNoopLogger } from "./service.test-harness.js";
+import type { CronEvent } from "./service.js";
+import { createCronServiceWithStateForTest, createNoopLogger } from "./service.test-harness.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -143,7 +144,7 @@ async function createFixture(option: CiAutomationOption) {
   const clock = createGatewaySchedulerClock(Date.now());
   let finished = createDeferredCore<CronEvent>();
   const work = new AsyncWorkScope();
-  const execution = new CronService({
+  const { cron: execution, state: executionState } = createCronServiceWithStateForTest({
     scheduler: createTestGatewayScheduler(clock.clock),
     nowMs: clock.clock.now,
     storePath: path.join(stateDir, "cron", "jobs.json"),
@@ -178,6 +179,9 @@ async function createFixture(option: CiAutomationOption) {
   const tick = async () => {
     finished = createDeferredCore<CronEvent>();
     await clock.advanceBy(300_000);
+    void work
+      .track(() => onTimer(executionState))
+      .catch((error: unknown) => finished.reject(error));
     return await finished.promise;
   };
   const stop = async () => {
