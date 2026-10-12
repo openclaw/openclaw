@@ -265,6 +265,37 @@ The same provider snapshot is available to `/status` in chat and OpenClaw's
 usage UI. The budget is policy-wide, so requests made by another client using
 the same ClawRouter policy can change the remaining percentage.
 
+## Pool dashboard
+
+Open **ClawRouter** in the Control UI sidebar to inspect the subscription pool
+behind your configured key. The bundled plugin loads at Gateway startup when
+`models.providers.clawrouter` is configured, subject to the normal plugin
+allowlist and enablement settings. Apply the configuration and restart the
+Gateway if the entry is not yet available. No Custom plugin UI lab setting is
+needed for the bundled copy.
+
+The read-only page shows the policy's allowed models, subscriptions with
+headroom per model, account and plan details, credential status, quota windows
+(including model-specific windows), reset times, extra-usage spend and limits,
+and request, token, and API-equivalent usage. API-equivalent value describes
+metered model usage; it is not necessarily the subscription's actual bill.
+The paid-fallback summary aggregates the API-key and environment usage lanes;
+these totals can include direct paid routing as well as fallback requests.
+Select **Refresh** to request a fresh snapshot; the page does not poll.
+Missing upstream measurements appear as **Not reported**.
+
+The page calls the plugin-owned `clawrouter.pool.get` Gateway method, which
+requires `operator.read`. The Gateway requests `/v1/pool` from the configured
+ClawRouter origin using the same provider credential resolution as usage
+(env key first, then configured credentials and auth profiles). The key stays
+on the Gateway and is never included in the page response.
+
+Pool visibility is opt-in on the ClawRouter policy. If it is hidden, ask your
+ClawRouter admin to enable pool status for that policy. An older deployment
+without `/v1/pool` reports that an update is needed; rejected keys and temporary
+connection failures have separate next-step messages. These states do not
+prevent model calls or the existing `/v1/usage` snapshot.
+
 ## Troubleshooting
 
 | Symptom                                  | Check                                                                                                                                              |

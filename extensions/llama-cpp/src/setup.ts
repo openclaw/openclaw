@@ -41,6 +41,7 @@ import {
   resolveLlamaCppModelDownloadSize,
   type ManagedLlamaServer,
 } from "./managed-server.js";
+import { resolveLlamaCppMediaModels } from "./media-config.js";
 import { recommendLlamaCppModel, resolveLlamaCppModelCandidates } from "./model-catalog.js";
 
 const BYTES_PER_GB = 1_000_000_000;
@@ -88,7 +89,9 @@ async function configuredCandidates(
     allowPluginNormalization: false,
   });
   const primaryId = primary.provider === LLAMA_CPP_PROVIDER_ID ? primary.model : undefined;
+  const mediaModels = resolveLlamaCppMediaModels(provider);
   return provider.models
+    .filter((model) => model.id !== mediaModels?.ocr && model.id !== mediaModels?.vision)
     .map((model) => ({ model, provider }))
     .toSorted((a, b) => Number(b.model.id === primaryId) - Number(a.model.id === primaryId));
 }
@@ -157,7 +160,7 @@ function buildSetupResult(params: {
             managed: params.managed,
             modelInventory:
               params.plan === "embedding-only"
-                ? []
+                ? (existing?.models ?? [])
                 : params.model
                   ? [
                       params.model,
@@ -364,7 +367,11 @@ async function resolveSetupPlan(
     return undefined;
   }
 
-  if (localMemoryIntent && existing && (!existing.localService || existing.models.length > 0)) {
+  if (
+    localMemoryIntent &&
+    existing &&
+    (!existing.localService || (await configuredCandidates(ctx.config)).length > 0)
+  ) {
     await ctx.prompter.note(
       "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
       "Setup skipped",
@@ -389,6 +396,7 @@ async function resolveSetupPlan(
 export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const managedExisting = existing?.localService ? existing : undefined;
+  const mediaModels = resolveLlamaCppMediaModels(managedExisting);
   const cacheDir = resolveLlamaCppModelCacheDir(managedExisting);
   const embeddingSetup = resolveEmbeddingSetup(ctx.config, cacheDir);
   if (embeddingSetup.conflict) {
@@ -460,7 +468,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
         maxTokens: plan.candidate.model.maxTokens,
       };
     } else {
-      chatModel = { mode: "remove" };
+      chatModel = { mode: mediaModels ? "preserve" : "remove" };
     }
     const embeddingModelLabel = embeddingModel.isDefault
       ? "EmbeddingGemma"
@@ -474,8 +482,15 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     });
     const managed = await prepareManagedLlamaServer({
       chatModel,
-      configuredChatModelIds:
-        plan.kind === "chat" ? plan.candidate.provider.models.map((model) => model.id) : [],
+      configuredChatModelIds: mediaModels
+        ? managedExisting?.models.map((model) => model.id)
+        : plan.kind === "chat"
+          ? plan.candidate.provider.models.map((model) => model.id)
+          : [],
+      // Keep media's one-model residency when later setup replaces its router.
+      ...(mediaModels
+        ? { mediaModels: [], modelsMax: 1, localService: managedExisting?.localService }
+        : {}),
       embeddingModelPath,
       asset,
       isolated: true,

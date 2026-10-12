@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 describe("profile-bound appearance preferences", () => {
-  it("publishes default navigation on first authenticated profile adoption", async () => {
+  it("publishes empty navigation without importing legacy profile entries or writing defaults", async () => {
     patchSettings({ sidebarEntries: ["route:usage"] });
     let published = loadSettings();
     const onApplied = vi.fn(() => {
@@ -61,7 +61,14 @@ describe("profile-bound appearance preferences", () => {
     });
     const request = vi.fn(async (_method: string) => ({
       status: "ok",
-      entries: {},
+      entries: {
+        "ui.sidebarEntries": [
+          "route:usage",
+          "route:cron",
+          "plugin:workboard/workboard",
+          "session:agent:main:legacy",
+        ],
+      },
     }));
     await refreshProfileAppearancePrefs(
       readOptions(createWriter(request), {}, profileId, onApplied),
@@ -123,7 +130,7 @@ describe("profile-bound appearance preferences", () => {
     await refreshProfileAppearancePrefs(readOptions(writer, config, profileId, onApplied));
 
     expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: [...Object.values(UI_APPEARANCE_PREFERENCE_KEYS), "ui.sidebarEntries"],
+      keys: [...Object.values(UI_APPEARANCE_PREFERENCE_KEYS), "ui.railShortcuts"],
     });
     expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",
