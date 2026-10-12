@@ -171,7 +171,9 @@ describe("ClawSweeper activity relay cutover", () => {
     ["pull_request_review_comment", true],
   ])("retains the intended %s activity path", (event, uncovered) => {
     expect(condition).toBeTypeOf("string");
-    if (!condition) throw new Error("activity relay must have an explicit cutover condition");
+    if (!condition) {
+      throw new Error("activity relay must have an explicit cutover condition");
+    }
     const expression = condition.replace(/^\s*\$\{\{|\}\}\s*$/g, "");
     for (const gate of ["", "0", "1"]) {
       const admitted = runInNewContext(expression, {
