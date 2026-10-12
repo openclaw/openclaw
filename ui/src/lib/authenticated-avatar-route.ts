@@ -9,6 +9,8 @@ type AvatarRouteEntry = {
   retryTimer: ReturnType<typeof setTimeout> | undefined;
   retryAttempts: number;
   unavailable: boolean;
+  /** A 401/403 for every candidate credential; retained until auth is restored or the key changes. */
+  authRejected: boolean;
 };
 
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
@@ -85,6 +87,7 @@ async function fetchAvatarRoute(
   let blobUrl: string | null = null;
   let notFound = false;
   let retryDelayMs: number | undefined;
+  let authRejected = false;
   try {
     // Ordered credential recovery: a saved token can be stale while the session's
     // password is valid, so a rejected credential falls through to the next one
@@ -102,8 +105,10 @@ async function fetchAvatarRoute(
       entry.unavailable = retryUnavailable && response.status === 503;
       retryDelayMs = entry.unavailable ? retryAfterMs(response) : undefined;
       if (response.status !== 401 && response.status !== 403) {
+        authRejected = false;
         break;
       }
+      authRejected = true;
     }
   } catch {
     // A missing image leaves the owning view's existing text/mascot fallback visible.
@@ -139,6 +144,14 @@ async function fetchAvatarRoute(
       // fallback until auth recovery, a new route/credential, or final release.
       return;
     }
+    if (authRejected) {
+      // Every candidate credential was rejected. Retain the entry so ordinary
+      // rerenders reuse this rejection instead of re-issuing the same protected
+      // request; a changed credential changes the key, and a verified session
+      // recovery invalidates retained rejections below.
+      entry.authRejected = true;
+      return;
+    }
     // Avatar misses stay retryable because a later identity publication may make the route valid.
     deleteEntry(key, entry);
     return;
@@ -164,6 +177,20 @@ export class AuthenticatedAvatarRouteLoader {
       this.changed();
     }
   };
+  private readonly onAuthRestored = () => {
+    // A verified session recovery can make a previously rejected or unavailable
+    // route valid. Drop both retained states so the next resolve starts one
+    // fresh request instead of reusing the stale outcome.
+    if (this.connected) {
+      for (const key of this.keys) {
+        const entry = sharedAvatarRoutes.get(key);
+        if (entry?.authRejected || (entry?.unavailable && entry.retryTimer === undefined)) {
+          deleteEntry(key, entry);
+        }
+      }
+    }
+    this.onUpdate();
+  };
 
   private readonly changed: () => void;
 
@@ -182,15 +209,7 @@ export class AuthenticatedAvatarRouteLoader {
 
   connect() {
     this.connected = true;
-    this.stopAuthRecovery ??= subscribeBrowserAuthRestored(() => {
-      for (const key of this.keys) {
-        const entry = sharedAvatarRoutes.get(key);
-        if (entry?.unavailable && entry.retryTimer === undefined) {
-          deleteEntry(key, entry);
-        }
-      }
-      this.onUpdate();
-    });
+    this.stopAuthRecovery ??= subscribeBrowserAuthRestored(this.onAuthRestored);
     this.changed();
   }
 
@@ -247,6 +266,7 @@ export class AuthenticatedAvatarRouteLoader {
         retryTimer: undefined,
         retryAttempts: 0,
         unavailable: false,
+        authRejected: false,
       };
       sharedAvatarRoutes.set(key, entry);
       void fetchAvatarRoute(key, url, authTokens, retryUnavailable, entry);
