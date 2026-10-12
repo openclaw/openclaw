@@ -184,6 +184,10 @@ async function prepareStartupConfig(
             `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
           );
         }
+      } else {
+        // Record completion even when no changes are needed, so the inspection
+        // isn't repeated on every boot (no legacy webhooks → marker → skip next time).
+        recordUnwrittenWebhookCompletion(read.snapshot, migration, env);
       }
     }
     const verification = await refreshStartupPluginQuarantine({
