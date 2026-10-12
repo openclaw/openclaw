@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fsSync, { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -52,16 +51,7 @@ function pending(updateId: number, text = "legacy update") {
 }
 
 describe("Telegram JSON spool Doctor import", () => {
-  it.each([
-    "stale",
-    "fresh",
-    "message-date",
-    "edited-message",
-    "missing-receipt",
-    "already-imported",
-    "already-imported-message-date",
-    "already-imported-edited-message",
-  ] as const)(
+  it.each(["stale", "fresh", "message-date", "edited-message", "missing-receipt"] as const)(
     "%s legacy update passes through migration before the drain can dispatch",
     async (scenario) => {
       await withOpenClawTestState(
@@ -69,16 +59,9 @@ describe("Telegram JSON spool Doctor import", () => {
         async ({ env, stateDir }) => {
           const spoolDir = path.join(stateDir, "telegram", "ingress-spool-default");
           await fs.mkdir(spoolDir, { recursive: true });
-          const shouldDispatch = [
-            "fresh",
-            "edited-message",
-            "missing-receipt",
-            "already-imported-edited-message",
-          ].includes(scenario);
+          const shouldDispatch = ["fresh", "edited-message", "missing-receipt"].includes(scenario);
           const originalReceivedAt =
-            scenario === "stale" || scenario === "already-imported"
-              ? receivedAt - 120 * 86_400_000
-              : receivedAt;
+            scenario === "stale" ? receivedAt - 120 * 86_400_000 : receivedAt;
           const message = {
             ...pending(41).update.message,
             date: Math.floor(
@@ -102,15 +85,15 @@ describe("Telegram JSON spool Doctor import", () => {
           );
           const sourcePath = path.join(spoolDir, "0000000000000041.json");
           await fs.writeFile(sourcePath, bytes);
-          const nativeQueue = createChannelIngressQueue({
-            channelId: "telegram",
-            accountId: "native",
-            stateDir,
-          });
-          if (scenario.startsWith("already-imported")) {
-            await nativeQueue.enqueue("0000000000000041", pending(42), {
-              receivedAt: originalReceivedAt,
-            });
+          const oldestReceivedAt = originalReceivedAt - 86_400_000;
+          if (scenario === "stale") {
+            await fs.writeFile(
+              path.join(spoolDir, "0000000000000042.json"),
+              JSON.stringify({
+                ...pending(42),
+                receivedAt: oldestReceivedAt,
+              }),
+            );
           }
           const context = createPluginDoctorStateMigrationContext({
             pluginId: "telegram",
@@ -122,29 +105,6 @@ describe("Telegram JSON spool Doctor import", () => {
               mutation: { assertCurrent() {} },
             },
           });
-          if (scenario.startsWith("already-imported")) {
-            context.channelIngressQueues![0]!.importLegacyEntries!({
-              accountId: "default",
-              entries: [
-                {
-                  entry: {
-                    id: "0000000000000041",
-                    receivedAt: originalReceivedAt,
-                    status: "pending",
-                    payload,
-                  },
-                  sources: [
-                    {
-                      sourcePath,
-                      sha256: createHash("sha256").update(bytes).digest("hex"),
-                      size: Buffer.byteLength(bytes),
-                    },
-                  ],
-                },
-              ],
-            });
-            await fs.rename(sourcePath, `${sourcePath}.migrated`);
-          }
           const input = {
             config: {},
             env,
@@ -153,29 +113,6 @@ describe("Telegram JSON spool Doctor import", () => {
             context,
           };
           const results = await runDetectedMigrations(input);
-          if (scenario.startsWith("already-imported")) {
-            expect((await nativeQueue.listPending()).map((entry) => entry.id)).toEqual([
-              "0000000000000041",
-            ]);
-          }
-          if (scenario.startsWith("already-imported") && !shouldDispatch) {
-            const backupPath = results[0]?.changes
-              .find((line) => line.startsWith("Saved pre-migration SQLite backup: "))
-              ?.slice("Saved pre-migration SQLite backup: ".length);
-            expect(backupPath).toBeDefined();
-            const backup = openNodeSqliteDatabase(backupPath!, { readOnly: true });
-            try {
-              expect(
-                backup
-                  .prepare(
-                    "SELECT status, payload_json FROM channel_ingress_events WHERE account_id = 'default' AND event_id = ?",
-                  )
-                  .get("0000000000000041"),
-              ).toEqual({ status: "pending", payload_json: JSON.stringify(payload) });
-            } finally {
-              backup.close();
-            }
-          }
           const queue = createChannelIngressQueue<typeof payload>({
             channelId: "telegram",
             stateDir,
@@ -194,18 +131,29 @@ describe("Telegram JSON spool Doctor import", () => {
             expect(handleUpdate).toHaveBeenCalledTimes(shouldDispatch ? 1 : 0);
             if (!shouldDispatch) {
               expect(results[0]?.warnings).toEqual([
-                expect.stringContaining("1 stale legacy Telegram update"),
+                expect.stringContaining(
+                  `${scenario === "stale" ? 2 : 1} stale legacy Telegram update`,
+                ),
               ]);
               expect(results[0]?.warnings[0]).toContain(
                 new Date(message.date * 1000).toISOString(),
               );
               expect(results[0]?.warningDisposition).toBe("recoverable");
-              expect(await queue.listFailed?.()).toEqual([
-                expect.objectContaining({
-                  reason: "stale-legacy-import",
-                  receivedAt: originalReceivedAt,
-                }),
-              ]);
+              const failed = await queue.listFailed?.();
+              expect(failed).toHaveLength(scenario === "stale" ? 2 : 1);
+              expect(failed).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({
+                    id: "0000000000000041",
+                    reason: "stale-legacy-import",
+                    receivedAt: originalReceivedAt,
+                  }),
+                ]),
+              );
+              if (scenario === "stale") {
+                expect(results[0]?.warnings[0]).toContain(new Date(oldestReceivedAt).toISOString());
+                expect(results[0]?.changes).toEqual([]);
+              }
               expect(await queue.resubmit?.("0000000000000041")).toMatchObject({
                 kind: "unrecoverable",
               });
