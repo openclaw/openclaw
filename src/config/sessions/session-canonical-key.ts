@@ -586,6 +586,11 @@ export function assertCanonicalSqliteSessionKeysCurrent(
     });
   if (incremental) {
     const inMemory = typeof identity?.identity === "symbol";
+    // Canonical writers preserve readiness; offline imports revoke the shared proof.
+    if (!inMemory && canonicalReady) {
+      remember();
+      return undefined;
+    }
     if (!inMemory && !canonicalReady) {
       // A copied clean projection is not first-admission proof for an unknown file.
       deferCanonicalSessionValidation(database, true);

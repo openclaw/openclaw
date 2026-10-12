@@ -7,14 +7,12 @@ import { start, stop } from "../service/ops-lifecycle.js";
 import { makeCronRecoveryState } from "../service/run-recovery.test-support.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import { loadCronStore } from "../store.js";
-import {
-  finishCronRunReceiptAsync,
-  releaseLocalCronRunReceiptOwnership,
-} from "./run-receipt-store.js";
+import { releaseLocalCronRunReceiptOwnership } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   makeCronReceiptJob,
   makeCronRecoveryJob,
+  finishCronRunReceiptAsync,
 } from "./run-receipt-store.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-delivery-commit-" });

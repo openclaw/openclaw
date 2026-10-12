@@ -12,6 +12,7 @@ import { normalizeRestartRecoveryTerminalRunIds } from "./restart-recovery-state
 import { updateSessionEntry } from "./session-accessor.js";
 import type { SessionActorAuthority, SessionActorOutcome } from "./session-actor-contract.js";
 import { runSessionActorCommand, withSessionActor } from "./session-actor-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -71,6 +72,13 @@ export function resolveRestartRecoverySteeringBlockReason(
 }
 
 function captureCurrent(input: RestartRecoveryTerminalDeliveryScope) {
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    return {
+      scope: { ...input, storePath: memory.path, sessionActor: memory },
+      absent: false,
+    };
+  }
   const source = captureIncognitoSessionSource(input);
   const ownerPath = source && ("kind" in source ? source.path : source.actor.path);
   const scope = {

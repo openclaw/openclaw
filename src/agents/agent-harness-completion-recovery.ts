@@ -9,8 +9,9 @@ import {
   prepareSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { readAdmittedHarnessCompletionInput } from "../config/sessions/session-harness-completion-source.kernel.js";
+import { readAdmittedHarnessCompletionInputFromSqlite } from "../config/sessions/session-harness-completion-source.kernel.js";
 import type { HarnessCompletionSourceSnapshot } from "../config/sessions/session-harness-completion-source.types.js";
 import { decodeSessionTranscriptWorkerReadError } from "../config/sessions/session-history-worker-errors.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
@@ -36,7 +37,34 @@ import { rethrowIncognitoSessionError } from "../state/incognito-session-error.j
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { assertHarnessCompletionSourceAdmission } from "./agent-harness-completion-scope.js";
 
-export { readAdmittedHarnessCompletionInput } from "../config/sessions/session-harness-completion-source.kernel.js";
+export function readAdmittedHarnessCompletionInput(
+  params: Parameters<typeof readAdmittedHarnessCompletionInputFromSqlite>[0],
+): boolean {
+  const memory = getSessionActorStorageBinding({
+    sessionKey: params.claim.requesterSessionKey,
+    agentId: params.claim.requesterAgentId,
+    storePath: params.storePath,
+  });
+  if (!memory) {
+    return readAdmittedHarnessCompletionInputFromSqlite(params);
+  }
+  const snapshot = memory.actor.storage!.readCurrent(
+    {
+      type: "session.completion.read",
+      input: {
+        sourceRunId: params.claim.sourceRunId,
+        claim: params.claim,
+        mode: "committed",
+        admission: resolveSessionTranscriptReadFence({
+          agentId: params.claim.requesterAgentId,
+          sessionId: params.claim.sessionId,
+        }),
+      },
+    },
+    memory.authority,
+  );
+  return snapshot.entry?.sessionId === params.claim.sessionId && snapshot.validInput;
+}
 
 /** These receipts are stricter than legacy live-return classification: omission is not success. */
 export function hasHarnessCompletionFinalReceipt(
@@ -188,6 +216,43 @@ export function createHarnessCompletionSourceAssertion(params: {
     sessionKey: params.claim.requesterSessionKey,
     storePath: params.storePath,
   };
+  const memory = getSessionActorStorageBinding(target);
+  if (memory) {
+    const assertCurrent = () => {
+      const snapshot = memory.actor.storage!.readCurrent(
+        {
+          type: "session.completion.read",
+          input: {
+            sourceRunId: params.claim.sourceRunId,
+            claim: params.claim,
+            admission: resolveSessionTranscriptReadFence({
+              agentId: target.agentId,
+              sessionId: params.claim.sessionId,
+            }),
+          },
+        },
+        memory.authority,
+      );
+      if (
+        !snapshot.entry ||
+        !snapshot.validInput ||
+        !getOwedHarnessCompletionTask(params.claim, snapshot.entry)
+      ) {
+        throw createSessionWorkStartChangedError(target.sessionKey);
+      }
+    };
+    const prepare = async (): Promise<PreparedSessionSourceAuthority> => ({
+      assertCurrent,
+      checks: [],
+    });
+    return composeSessionSourceAssertion([
+      params.priorAssertion,
+      Object.assign(assertCurrent, {
+        prepareSessionSource: prepare,
+        prepareSessionSourceScope: prepare,
+      }),
+    ]);
+  }
   const binding = captureIncognitoSessionBinding(target);
   const capturedClaim = binding?.actor.sessions.captureCurrent(target.sessionKey);
   const refuse = (): never => {

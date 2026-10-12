@@ -201,6 +201,7 @@ describe("history text chip source admission", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       const current = observations.at(-1);
       render(null, view.container);
+      await settle(view.container);
       current?.show();
       await settle(view.container);
       expect(fetchMock).not.toHaveBeenCalled();

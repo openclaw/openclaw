@@ -1,5 +1,6 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -33,6 +34,7 @@ import {
   captureUsageCostIncognitoBinding,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
+import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 // Per-agent SQLite storage for rebuildable per-session usage rollups.
@@ -228,6 +230,10 @@ export async function isSessionCostUsageRefreshRunning(
   databasePath?: string,
   suppliedIncognito?: UsageCostIncognitoBinding,
 ): Promise<boolean> {
+  const memory = getSessionActorStorageBinding({ agentId, storePath: databasePath });
+  if (memory) {
+    return isSessionActorUsageRefreshRunning(memory);
+  }
   const options = captureCacheDatabaseOptions({
     agentId: normalizeAgentId(agentId),
     path: databasePath,

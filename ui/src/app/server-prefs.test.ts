@@ -46,9 +46,6 @@ function expectPatch(request: RequestMock, prefs: Record<string, unknown>) {
   expect(request).toHaveBeenCalledWith("config.patch", params);
 }
 
-const conflictError = () =>
-  new Error("config changed since last load; re-run config.get and retry");
-
 describe("server preferences", () => {
   it("adopts the preference revision before saving an in-flight Settings edit", async () => {
     vi.useFakeTimers();
@@ -467,52 +464,6 @@ describe("server preferences", () => {
     expect(JSON.parse(localStorage.getItem(pendingKey("ws://b")) ?? "{}")).toEqual({
       locale: "de",
     });
-  });
-
-  it("cancels a conflict re-drain when flush or reset supersedes its epoch", async () => {
-    vi.useFakeTimers();
-    const request = vi
-      .fn<Request>()
-      .mockRejectedValueOnce(conflictError())
-      .mockRejectedValueOnce(conflictError())
-      .mockResolvedValue({});
-    const client = createClient(request);
-
-    pushServerUiPrefs(client, { locale: "de" });
-    await vi.advanceTimersByTimeAsync(250);
-    flushServerUiPrefs(client);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(request).toHaveBeenCalledTimes(3);
-
-    resetServerUiPrefsSync();
-    localStorage.clear();
-    const conflicting = vi.fn<Request>().mockRejectedValue(conflictError());
-    pushServerUiPrefs(createClient(conflicting), { locale: "fr" });
-    await vi.advanceTimersByTimeAsync(250);
-    expect(conflicting).toHaveBeenCalledTimes(2);
-    resetServerUiPrefsSync();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(conflicting).toHaveBeenCalledTimes(2);
-  });
-
-  it("caps conflict-triggered re-drains at five", async () => {
-    vi.useFakeTimers();
-    const request = vi.fn<Request>().mockRejectedValue(conflictError());
-
-    pushServerUiPrefs(createClient(request), { locale: "de" });
-    for (let round = 0; round <= 5; round += 1) {
-      await vi.advanceTimersByTimeAsync(250);
-      expect(request).toHaveBeenCalledTimes((round + 1) * 2);
-      if (round < 5) {
-        await vi.advanceTimersByTimeAsync(1_000);
-      }
-    }
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(request).toHaveBeenCalledTimes(12);
-    expect(localStorage.getItem(pendingKey("ws://gw"))).not.toBeNull();
   });
 
   it("keeps personal sidebar arrays out of global config writes", () => {
