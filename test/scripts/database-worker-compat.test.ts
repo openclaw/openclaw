@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { inspectDatabaseWorkerCompatibility } from "../../scripts/lib/database-worker-compat.mts";
+import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
 const legacyFile = "src/plugin-sdk/sqlite-runtime-legacy.ts";
 const secondFile = "src/sessions/session-upstream-links.ts";
@@ -16,7 +16,7 @@ export function ${second}() { return ${first}(); }
 `;
 
 function inspect(extra: Record<string, string>, source = legacy) {
-  return inspectDatabaseWorkerCompatibility(
+  return inspectDatabaseWorkerBoundaries(
     process.cwd(),
     new Map(Object.entries({ [legacyFile]: source, [secondFile]: owner, ...extra })),
   );
@@ -184,9 +184,11 @@ it("retires deleted operations even when their module keeps other exports", () =
 });
 
 it("does not read missing compatibility files from the current checkout", () => {
-  expect(inspectDatabaseWorkerCompatibility(process.cwd(), new Map())).toEqual({
+  expect(inspectDatabaseWorkerBoundaries(process.cwd(), new Map())).toEqual({
     operations: new Map(),
     callLocations: new Map(),
+    nonRuntimeOperations: new Map(),
+    nonRuntimeCallLocations: new Map(),
     violations: [],
   });
 });
@@ -528,4 +530,143 @@ it("does not confuse a nested function path with a live top-level namesake", () 
     export function same() { return 2; }`,
   });
   expect(result.operations.get("src/wrapper.ts")?.has("same")).toBe(false);
+});
+
+const maintenanceFile = "src/state/openclaw-state-db-maintenance.ts";
+const maintenanceSource = `
+export function writeCurrentStateSchemaMetadata() { return persistSchema(); }
+function persistSchema() { return executeSqliteQuerySync(query); }
+export function runStateSchemaMigrationTransaction(db, path, operation) { return operation(); }
+`;
+const doctorSource = `
+  import { writeCurrentStateSchemaMetadata, runStateSchemaMigrationTransaction } from '../state/openclaw-state-db-maintenance.js';
+  export function doctor() {
+    return runStateSchemaMigrationTransaction(db, path, () => writeCurrentStateSchemaMetadata());
+  }
+`;
+
+function inspectMaintenance(extra: Record<string, string> = {}) {
+  return inspectDatabaseWorkerBoundaries(
+    process.cwd(),
+    new Map(
+      Object.entries({
+        [maintenanceFile]: maintenanceSource,
+        "src/commands/doctor.ts": doctorSource,
+        ...extra,
+      }),
+    ),
+    (file) =>
+      file.startsWith("src/commands/") || file.includes("migration") || file.endsWith(".worker.ts"),
+    (file) =>
+      file === "src/commands/doctor.ts"
+        ? "T3"
+        : file === "src/read.worker.ts" || file === "src/state/user-github-connections.worker.ts"
+          ? "W"
+          : undefined,
+  );
+}
+
+it("proves maintenance-only kernels through the exact synchronous migration scope", () => {
+  const result = inspectMaintenance({
+    "src/read.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      writeCurrentStateSchemaMetadata();`,
+  });
+  expect(result.violations).toEqual([]);
+  expect(result.operations.size).toBe(0);
+  expect(result.nonRuntimeOperations.get(maintenanceFile)).toEqual(
+    new Map([
+      ["writeCurrentStateSchemaMetadata", "T3"],
+      ["persistSchema", "T3"],
+    ]),
+  );
+  expect(result.nonRuntimeCallLocations.get(maintenanceFile)).toEqual(new Set(["2:60", "3:35"]));
+});
+
+it.each([
+  [
+    "Gateway caller",
+    "src/gateway/consumer.ts",
+    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
+    export function handle() { return write(); }`,
+  ],
+  [
+    "escaped Doctor callback",
+    "src/commands/doctor.ts",
+    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
+    export function doctor() { return () => write(); }`,
+  ],
+  [
+    "migration filename lead",
+    "src/infra/state-migrations.unreviewed.ts",
+    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
+    export function migrate() { return write(); }`,
+  ],
+  [
+    "SDK reexport",
+    "src/plugin-sdk/schema.ts",
+    `export { writeCurrentStateSchemaMetadata } from '../state/openclaw-state-db-maintenance.js';`,
+  ],
+])("keeps maintenance candidates live after a %s", (_label, file, source) => {
+  const result = inspectMaintenance({ [file]: source });
+  expect(result.violations).toEqual([]);
+  expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
+});
+
+it("does not trust a same-named callback scope from another module", () => {
+  const result = inspectMaintenance({
+    "src/commands/doctor.ts":
+      doctorSource.replace(
+        "writeCurrentStateSchemaMetadata, runStateSchemaMigrationTransaction",
+        "writeCurrentStateSchemaMetadata",
+      ) + `import { runStateSchemaMigrationTransaction } from '../impostor.js';`,
+    "src/impostor.ts": `export function runStateSchemaMigrationTransaction(db, path, operation) { return operation; }`,
+  });
+  expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
+});
+
+it("keeps a kernel live through an unreviewed worker-named wrapper called by the Gateway", () => {
+  const result = inspectMaintenance({
+    "src/unregistered.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      export function writeSchema() { return writeCurrentStateSchemaMetadata(); }`,
+    "src/gateway/consumer.ts": `import { writeSchema } from '../unregistered.worker.js';
+      export function handle() { return writeSchema(); }`,
+  });
+  expect(result.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
+});
+
+it("classifies a shared kernel with exclusively worker callers as worker-owned", () => {
+  const result = inspectMaintenance({
+    "src/commands/doctor.ts": "export {};",
+    "src/read.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      writeCurrentStateSchemaMetadata();`,
+  });
+  expect(result.nonRuntimeOperations.get(maintenanceFile)).toEqual(
+    new Map([
+      ["writeCurrentStateSchemaMetadata", "W"],
+      ["persistSchema", "W"],
+    ]),
+  );
+});
+
+it("requires the registered worker module, table, and operation for a handler callback", () => {
+  const file = "src/state/user-github-connections.worker.ts";
+  const handler = `import { writeCurrentStateSchemaMetadata } from './openclaw-state-db-maintenance.js';
+    export const userGitHubConnectionOperations = {
+      "userGitHubConnections.list": () => writeCurrentStateSchemaMetadata(),
+    } satisfies Handlers;`;
+  const result = inspectMaintenance({ "src/commands/doctor.ts": "export {};", [file]: handler });
+  expect(
+    result.nonRuntimeOperations.get(maintenanceFile)?.get("writeCurrentStateSchemaMetadata"),
+  ).toBe("W");
+  for (const [caller, source] of [
+    [file, handler.replace("userGitHubConnections.list", "unregistered")],
+    [file, handler.replace("userGitHubConnectionOperations", "unregistered")],
+    ["src/state/unregistered.worker.ts", handler],
+  ] as const) {
+    const escaped = inspectMaintenance({
+      "src/commands/doctor.ts": "export {};",
+      [caller]: source,
+    });
+    expect(escaped.nonRuntimeOperations.has(maintenanceFile)).toBe(false);
+  }
 });
