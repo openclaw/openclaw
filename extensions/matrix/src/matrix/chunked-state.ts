@@ -14,20 +14,23 @@ export function chunkMatrixStateJson(
     }
     chunks.push(chunk);
   };
-  let current = "";
+  let chunkStart = 0;
   let currentBytes = 0;
-  for (const char of value) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    if (current && currentBytes + charBytes > maxBytes) {
-      pushChunk(current);
-      current = "";
+  // Slice whole code points instead of allocating and concatenating one string
+  // per character. Crypto snapshots can contain millions of characters.
+  for (let index = 0; index < value.length;) {
+    const codePoint = value.codePointAt(index)!;
+    const charBytes = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    if (index > chunkStart && currentBytes + charBytes > maxBytes) {
+      pushChunk(value.slice(chunkStart, index));
+      chunkStart = index;
       currentBytes = 0;
     }
-    current += char;
     currentBytes += charBytes;
+    index += codePoint > 0xffff ? 2 : 1;
   }
-  if (current) {
-    pushChunk(current);
+  if (chunkStart < value.length) {
+    pushChunk(value.slice(chunkStart));
   }
   return chunks;
 }

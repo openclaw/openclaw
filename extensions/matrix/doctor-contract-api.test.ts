@@ -144,6 +144,22 @@ describe("matrix doctor contract state migrations", () => {
     vi.restoreAllMocks();
   });
 
+  it("reports crypto refusal in Doctor without auto-clearing it", async () => {
+    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
+    const storageRootDir = accountStorageRoot(stateDir);
+    fs.mkdirSync(storageRootDir, { recursive: true });
+    const markerPath = path.join(storageRootDir, `${MATRIX_IDB_SNAPSHOT_FILENAME}.owner.poisoned`);
+    fs.writeFileSync(markerPath, "unsafe\n");
+    const migration = migrationById("matrix-crypto-unsafe-state");
+    expect((await migration.detectLegacyState(createMigrationParams(stateDir)))?.preview).toEqual([
+      expect.stringContaining("recovery is never automatic"),
+    ]);
+    const result = await migration.migrateLegacyState(createMigrationParams(stateDir));
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("remains blocked")]);
+    expect(fs.existsSync(markerPath)).toBe(true);
+  });
+
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = accountStorageRoot(stateDir);

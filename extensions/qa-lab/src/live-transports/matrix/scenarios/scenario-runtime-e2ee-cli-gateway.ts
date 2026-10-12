@@ -20,6 +20,7 @@ import {
   registerMatrixQaCliE2eeAccount,
   runMatrixQaSetupCliJson,
   type MatrixQaCliEncryptionSetupStatus,
+  type MatrixQaCliVerificationStatus,
 } from "./scenario-runtime-e2ee-cli-shared.js";
 import { buildMatrixE2eeReplyArtifact } from "./scenario-runtime-e2ee-room.js";
 import {
@@ -275,6 +276,17 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
     await context.waitGatewayAccountReady?.(accountId, {
       timeoutMs: context.timeoutMs,
     });
+    // The Gateway now owns encrypted state. Exercise a real CLI crypto command
+    // against the same account, then require the Gateway to resume and reply.
+    const { artifacts: handoffArtifacts, payload: handoffPayload } = await runMatrixQaSetupCliJson(
+      cli,
+      "verify-status-during-gateway",
+      ["matrix", "verify", "status", "--account", accountId, "--json"],
+      context.timeoutMs,
+    );
+    // SAFETY: the shared CLI JSON helper returns the verification-status payload for this command.
+    const handoffStatus = handoffPayload as MatrixQaCliVerificationStatus;
+    assertMatrixQaCliE2eeStatus("Matrix CLI verification during Gateway ownership", handoffStatus);
     const driverClient = await createMatrixQaE2eeAccountClient(context, {
       accessToken: driverAccount.accessToken,
       actorId: `driver-cli-setup-gateway-${randomUUID().slice(0, 8)}`,
@@ -339,6 +351,8 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
         "Matrix CLI encryption setup left the gateway able to reply in an encrypted room",
         `setup stdout: ${setupArtifacts.stdoutPath}`,
         `setup stderr: ${setupArtifacts.stderrPath}`,
+        `handoff CLI stdout: ${handoffArtifacts.stdoutPath}`,
+        `handoff CLI stderr: ${handoffArtifacts.stderrPath}`,
         `driver user: ${driverAccount.userId}`,
         `gateway user: ${account.userId}`,
         `encrypted room key: ${roomKey}`,

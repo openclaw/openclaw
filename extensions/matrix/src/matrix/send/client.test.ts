@@ -82,7 +82,7 @@ describe("matrix send client helpers", () => {
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 
-  it("keeps borrowed control clients unstarted and releases without persistence", async () => {
+  it("keeps borrowed control clients unstarted and requests final persistence", async () => {
     const result = await withResolvedMatrixControlClient(
       { cfg: TEST_CFG, accountId: "default" },
       async () => "ok",
@@ -91,7 +91,7 @@ describe("matrix send client helpers", () => {
     await expectOneOffSharedMatrixClient({
       prepareForOneOffCalls: 0,
       startCalls: 0,
-      releaseMode: "stop",
+      releaseMode: "persist",
     });
     expect(result).toBe("ok");
   });

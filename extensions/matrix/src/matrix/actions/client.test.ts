@@ -154,7 +154,7 @@ describe("action client helpers", () => {
       }),
     ).rejects.toThrow("boom");
 
-    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 
   it("resolves room ids before running wrapped room actions", async () => {
@@ -174,6 +174,6 @@ describe("action client helpers", () => {
 
     expect(resolveMatrixRoomIdMock).toHaveBeenCalledWith(sharedClient, "room:#ops:example.org");
     expect(result).toBe("!room:example.org");
-    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 });

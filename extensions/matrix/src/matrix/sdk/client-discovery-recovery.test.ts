@@ -8,7 +8,11 @@ import {
 } from "matrix-js-sdk/lib/matrix.js";
 import { RustCrypto } from "matrix-js-sdk/lib/rust-crypto/rust-crypto.js";
 import { SyncState } from "matrix-js-sdk/lib/sync.js";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { MatrixClient } from "../sdk.js";
 
 const fixture = vi.hoisted(() => ({
@@ -34,6 +38,8 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
   };
 });
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
+
 const healthy = "!healthy:example.org";
 const missing = "!missing:example.org";
 const encryption = { algorithm: "m.megolm.v1.aes-sha2" };
@@ -44,6 +50,9 @@ describe("Matrix startup with unavailable joined-room discovery", () => {
   let crypto: RustCrypto | undefined;
 
   beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("matrix-discovery-state-"));
     crypto = undefined;
     discovery = async () => Response.json({ errcode: "M_UNKNOWN" }, { status: 503 });
     fixture.fetch.mockReset().mockImplementation(async (input) => {
@@ -87,7 +96,10 @@ describe("Matrix startup with unavailable joined-room discovery", () => {
 
   afterEach(async () => {
     await client.stopWithoutPersist();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it.each(["503", "429", "connection", "401", "403", "abort", "malformed"])(

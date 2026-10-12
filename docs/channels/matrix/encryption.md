@@ -23,6 +23,16 @@ Account preparation and shutdown can persist crypto data, so offline commands
 retain exclusive ownership through that cleanup. Unsupported Gateway versions
 and failed routed requests never fall back to local writes.
 
+For a managed installation, use the normal [`openclaw update` flow](/install/updating). The updater stops and restarts the managed Gateway and updates the official npm Matrix plugin with OpenClaw. If separate Gateway or CLI installations share the account state, stop their older processes and upgrade those installations before resuming concurrent use. An older process does not honor the crypto-store owner lock.
+
+The first upgrade still depends on the installed version completing its final save. The new version cannot recover keys that an older process failed to persist or retroactively detect that failure. Keys received after that process's last successful snapshot may be lost.
+
+Once the upgraded version owns the account, a failed final save or abnormal process exit makes OpenClaw refuse another crypto owner. A small `.owner.poisoned` guard stays on disk after clean shutdown and must match a seal in the canonical SQLite snapshot. The seal is written after the final crypto snapshot and sync cursor; losing that final publication also blocks reuse. Guard presence alone does not mean the account is blocked. Missing or malformed guards for sealed snapshots require recovery.
+
+Run `openclaw matrix doctor inspect` to list blocked account stores; `openclaw doctor` also reports them but `--fix` never clears this refusal. Preserve a copy of the state directory for investigation. Once **all** Gateway and CLI processes are stopped, inspect the canonical SQLite snapshot and any backup. If you accept that keys received after the last successful snapshot may be lost, run `openclaw matrix doctor recover --account <id> --accept-snapshot-rollback`, then restart the Gateway. Recovery requires exactly one blocked store for that account, an exclusive owner lock, and a SQLite snapshot that passes complete IndexedDB replay in isolation. It publishes a new guard and seal; it does not prove the snapshot contains the failed owner's latest keys. If the snapshot is absent/invalid or the account has multiple blocked stores, recovery refuses; seek storage-owner assistance. Do not delete `.owner.poisoned` manually. If Rust initialization fails, custody remains held until the process exits because backend teardown cannot be confirmed.
+
+An invalid canonical SQLite snapshot also stops startup and prevents snapshot replacement, even without a blocked-owner marker. Missing metadata with leftover chunks, malformed metadata or payloads, missing chunks, and checksum failures are errors, not a new account. Preserve the account state and backups, stop all processes using it, and restore a valid backup or seek storage-owner assistance. Doctor recovery does not repair corrupt snapshots. Startup also replays the complete candidate snapshot in isolation before replacing retained account databases; invalid keys, schemas, or index constraints refuse startup without changing those databases.
+
 ### Enable encryption
 
 ```bash

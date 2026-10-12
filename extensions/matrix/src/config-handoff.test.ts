@@ -160,7 +160,7 @@ describe("Matrix command config handoff", () => {
         },
       });
       expect(mocks.recoveryKey).toHaveBeenCalledTimes(includeRecoveryKey ? 1 : 0);
-      expect(mocks.release).toHaveBeenCalledWith({ mode: "discard" });
+      expect(mocks.release).toHaveBeenCalledWith({ mode: "persist" });
     },
   );
 });
