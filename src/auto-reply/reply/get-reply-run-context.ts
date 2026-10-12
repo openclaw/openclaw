@@ -86,7 +86,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     resetTriggered,
     systemSent,
     sessionKey,
-    storePath,
     workspaceDir: configuredWorkspaceDir,
     sessionEntryHandle,
     sessionStore,

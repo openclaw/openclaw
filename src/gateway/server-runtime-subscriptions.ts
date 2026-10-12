@@ -38,10 +38,7 @@ import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import {
-  onInternalSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -661,7 +658,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     const agentHandler = agentEventHandlerLoader.peek();
     const publication = createDeferredCore();
     const dispatch = runOutsideAsyncWorkScope(() =>
-      dispatchEventHandler<InternalSessionTranscriptUpdate>({
+      dispatchEventHandler({
         loadHandler: agentHandler
           ? () =>
               agentHandler

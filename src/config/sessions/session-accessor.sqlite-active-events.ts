@@ -31,7 +31,6 @@ import {
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
-  iterateVisibleMessageMetadata,
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
@@ -39,7 +38,6 @@ import {
 import {
   createVisibleMessageCursor,
   encodeVisibleMessageCursor,
-  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleDeltaLimits,
   parseVisibleMessageCursor,
 } from "./session-accessor.sqlite-visible-cursor.js";

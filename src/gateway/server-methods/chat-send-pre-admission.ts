@@ -334,6 +334,15 @@ export async function runChatSendPreAdmission(
     sessionRoutingChanged,
   } = session;
 
+  const reloadEntry = async () =>
+    (
+      await loadGatewaySessionEntryReadOnlyInWorker({
+        excludeInternalEffects: true,
+        cfg,
+        key: sessionLoadKey,
+        ...sessionLoadOptions,
+      })
+    ).entry;
   const resolveClaim = (currentEntry: typeof entry, warn: (message: string) => void) =>
     resolveDurableChatClaim({
       canonicalSessionKey: sessionKey,
@@ -341,15 +350,7 @@ export async function runChatSendPreAdmission(
       clientRunId,
       entry: currentEntry,
       persistedSessionKey: legacyKey ?? sessionKey,
-      reloadEntry: async () =>
-        (
-          await loadGatewaySessionEntryReadOnlyInWorker({
-            excludeInternalEffects: true,
-            cfg,
-            key: sessionLoadKey,
-            ...sessionLoadOptions,
-          })
-        ).entry,
+      reloadEntry,
       storePath,
       recoveryRuntime: context.recoveryRuntime,
       warn,
@@ -636,14 +637,7 @@ export async function runChatSendPreAdmission(
           workerPlacementContext: resolveSessionWorkerPlacementContext(context),
         });
       }
-      durableEntry = (
-        await loadGatewaySessionEntryReadOnlyInWorker({
-          excludeInternalEffects: true,
-          cfg,
-          key: sessionLoadKey,
-          ...sessionLoadOptions,
-        })
-      ).entry;
+      durableEntry = await reloadEntry();
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
