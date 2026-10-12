@@ -11,8 +11,8 @@ This page covers removing and updating installed plugins, and reloading edited
 plugin code without restarting the Gateway.
 
 With a running Gateway, ordinary uninstall waits for the package runtime owners
-to stop before removing files, and update refreshes the Gateway after the local
-package operation finishes. Without a running Gateway, these commands save changes
+to stop before removing files. Plugin updates require the Gateway to be stopped;
+they do not write alongside a running owner. Without a running Gateway, these commands save changes
 for its next startup. See [Install plugins](/cli/plugins/install#install) for
 installation sources and Gateway-host path requirements.
 
@@ -31,6 +31,10 @@ openclaw plugins uninstall <ids...> --force
 
 `uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
 
+Plugin entry and allow/deny cleanup uses case-insensitive policy IDs. A mixed-case
+manifest ID leaves one lowercase disable marker, not conflicting entries
+with different spellings. Package install records retain their exact owner ID.
+
 Matching load-path references are removed before package files so symlink aliases cannot leave invalid config. With a running Gateway, runtime drain also precedes removal of the install record, including with `--keep-files` or a linked install. If runtime drain or file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
 
 If a matching load-path reference is added again while the runtime drains, uninstall keeps the files and asks you to remove that reference before retrying. Config writes through OpenClaw wait until file cleanup settles, including writes to shared config includes. Cleanup rechecks its authority before each deletion and stops if the operation is revoked.
@@ -46,7 +50,7 @@ the selection before any package is removed.
 
 If a tracked package has no discovered plugin entries, uninstall can remove its exact install record and same-owner policy, including owner-keyed channel config that no other discovered plugin claims. This recovery is allowed only when no other install record shares its package path and no discovered plugin matches its id or recorded paths. Unrelated policy remains unchanged. Registry refresh rebuilds discovery metadata; it does not remove these orphan install records.
 
-Discovered packages with missing, ambiguous, or conflicting ownership still fail closed without changing package files, config, or the installed index. Run `openclaw plugins registry --refresh`, inspect `openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy index state. If ownership is still ambiguous, reinstall the package before retrying update or uninstall.
+Discovered packages with missing, ambiguous, or conflicting ownership are still rejected without changing package files, config, or the installed index. Run `openclaw plugins registry --refresh`, inspect `openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy index state. If ownership is still ambiguous, reinstall the package before retrying update or uninstall.
 
 <Note>
 `--keep-config` is supported as a deprecated alias for `--keep-files`.
@@ -65,14 +69,34 @@ openclaw plugins update openclaw-codex-app-server --acknowledge-install-policy-w
 
 Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in shared SQLite state. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
 
+Eligible official OpenClaw npm plugins follow the running host's release cohort
+when their recorded selector is bare, `latest`, or an older OpenClaw release.
+This applies to named updates and `--all`, so recovering a stale plugin uses the
+same target as `openclaw update` and `openclaw update repair`. An explicit version
+or tag supplied in the current command still takes precedence.
+
 Supply multiple IDs or npm specs to update a selection, or use `--all` without
 IDs. Repeated targets and sibling plugin IDs update their package once. An
 explicit npm spec overrides an ID-only selection of the same package; two
 different explicit specs for one package are rejected. Unknown targets and
 conflicting selections fail before updates start, including with `--dry-run`.
 The existing bulk updater processes plugin packages and then hook packs, retains
-successful updates when another package fails, and applies saved changes to the
-running Gateway with one final refresh.
+successful updates when another package fails, and saves changes for the next
+Gateway start. Stop the Gateway through its service owner before updating.
+
+Before activating a replacement, plugin updates apply its Doctor config repairs
+through the normal backed-up config writer. This preserves settings such as a
+previously configured webhook endpoint. Retrying an already-current package also
+finishes pending config-only repairs. Replacement installs (`plugins install
+--force`) use the same repair owner. If a required Doctor artifact cannot load or
+a recorded data migration still needs maintenance, the command fails before
+activation and names the repair to complete. Follow the reported repair guidance
+before retrying; data migrations require `openclaw doctor --fix`. Disabled plugins
+keep their pending inputs without running state migrations; unrelated pending
+migrations remain preserved.
+
+Recovery keeps the published package generation when config rollback is not
+confirmed. The command reports the failure without claiming runtime activation.
 
 If update finalization fails, the error reports the original cause first and retains any rollback failures as additional diagnostic context. A failed rollback remains retryable; a successfully committed or rolled-back install is not applied again during cleanup.
 
@@ -107,11 +131,14 @@ During `openclaw update`, a locally linked plugin with an explicit load path kee
   </Accordion>
   <Accordion title="Existing plugin source choices">
     Updates retain the recorded npm or ClawHub source. Older install records do not distinguish automatic ClawHub selection from an explicit `clawhub:` request, so OpenClaw does not silently switch those records to npm. To change an existing plugin deliberately, review and run `openclaw plugins install npm:<package> --force`. Automatic externalization of an image-owned bundled plugin uses npm first and its declared ClawHub source second.
+
+    Version checks report the compatible update available from that recorded source. ClawHub and npm can publish at different times, so the reported target can be older than core or the latest npm package. Updating core does not require switching registries.
+
   </Accordion>
   <Accordion title="Version checks and integrity drift">
     Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, it avoids downloading or reinstalling. A requested selector change or managed release-pin recovery can still update the plugin index without rewriting `openclaw.json`.
 
-    When a stored integrity hash exists and the fetched artifact hash changes, OpenClaw treats that as npm artifact drift. The interactive `openclaw plugins update` command prints the expected and actual hashes and asks for confirmation before proceeding. Non-interactive update helpers fail closed unless the caller supplies an explicit continuation policy.
+    When a stored integrity hash exists and the fetched artifact hash changes, OpenClaw treats that as npm artifact drift. The interactive `openclaw plugins update` command prints the expected and actual hashes and asks for confirmation before proceeding. Non-interactive update helpers refuse the update unless the caller supplies an explicit continuation policy.
 
   </Accordion>
   <Accordion title="--acknowledge-install-policy-warning on update">
@@ -171,11 +198,15 @@ The receipt can also include cleanup warnings. Modules and native libraries may
 remain loaded after their registrations are removed.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
-Compiled bundled plugins reuse their process-loaded code when their registrations
-reload. If the plugin's files changed while its original module remains loaded,
+Reload follows the selected bundled copy even when a dormant registry install
+record remains after a source update; that record stays unchanged.
+Bundled plugins, including TypeScript source entries, reuse their process-loaded
+code when their registrations reload. If the plugin's files changed while its
+original module remains loaded,
 the result reports `restartRequired: true` with a warning, and CLI and tool
 output explain that a Gateway restart is needed to load edited code. Reload does
-not rebuild compiled bundled code; source installations also need a build.
+not rebuild bundled code. Rebuild before restarting when the installation loads
+compiled output.
 External captured sources return `restartRequired: false` after replacement.
 Reloading unchanged bundled files also returns `restartRequired: false`; channel
 and service registrations can be replaced without restarting the Gateway.

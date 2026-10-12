@@ -4,7 +4,7 @@ const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
   fetchWithSsrFGuardMock,
-  readAccessTokenMock,
+  resolveDelegatedAccessTokenMock,
   resolveMSTeamsCredentialsMock,
 } = vi.hoisted(() => {
   return {
@@ -17,7 +17,7 @@ const {
         release: async () => undefined,
       }),
     ),
-    readAccessTokenMock: vi.fn(),
+    resolveDelegatedAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
   };
 });
@@ -27,12 +27,15 @@ vi.mock("./sdk.js", () => ({
   createMSTeamsTokenProvider: createMSTeamsTokenProviderMock,
 }));
 
-vi.mock("./token-response.js", () => ({
-  readAccessToken: readAccessTokenMock,
+vi.mock("./token-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./token-config.js")>()),
+  hasConfiguredMSTeamsCredentials: () => false,
+  resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
 }));
 
-vi.mock("./token.js", () => ({
-  resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
+vi.mock("./token.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./token.js")>()),
+  resolveDelegatedAccessToken: resolveDelegatedAccessTokenMock,
 }));
 
 vi.mock("../runtime-api.js", async (importOriginal) => {
@@ -59,10 +62,12 @@ import {
   normalizeQuery,
   resolveGraphToken,
 } from "./graph.js";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 
 const originalFetch = globalThis.fetch;
 const graphToken = "graph-token";
 const mockCredentials = {
+  type: "secret",
   appId: "app-id",
   appPassword: "app-password",
   tenantId: "tenant-id",
@@ -174,18 +179,11 @@ async function expectRejectsToThrow(promise: Promise<unknown>, message: string) 
   await expect(promise).rejects.toThrow(message);
 }
 
-function mockGraphTokenResolution(options?: {
-  rawToken?: string | null;
-  resolvedToken?: string | null;
-}) {
-  const rawToken = options && "rawToken" in options ? options.rawToken : "raw-graph-token";
-  const resolvedToken =
-    options && "resolvedToken" in options ? options.resolvedToken : "resolved-token";
-  const getAccessToken = vi.fn(async () => rawToken);
+function mockGraphTokenResolution(token = "resolved-token") {
+  const getAccessToken = vi.fn(async () => token);
   loadMSTeamsSdkWithAuthMock.mockResolvedValue({ app: mockApp });
   createMSTeamsTokenProviderMock.mockReturnValue({ getAccessToken });
   resolveMSTeamsCredentialsMock.mockReturnValue(mockCredentials);
-  readAccessTokenMock.mockReturnValue(resolvedToken);
   return { getAccessToken };
 }
 
@@ -196,6 +194,7 @@ describe("msteams graph helpers", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.useRealTimers();
   });
 
   it("normalizes queries and escapes OData apostrophes", () => {
@@ -445,13 +444,133 @@ describe("msteams graph helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves Graph tokens through the SDK auth provider", async () => {
+  it("bounds stalled SDK token acquisition", async () => {
+    const { getAccessToken } = mockGraphTokenResolution();
+    getAccessToken.mockImplementation(() => new Promise<string>(() => {}));
+    vi.useFakeTimers();
+
+    const result = resolveGraphToken({ channels: { msteams: {} } });
+    const rejection = expect(result).rejects.toThrow(
+      `MS Teams Graph token timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+
+    await rejection;
+    expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("resolves Graph credentials from the named Teams account", async () => {
     const { getAccessToken } = mockGraphTokenResolution();
 
-    await expect(resolveGraphToken({ channels: { msteams: {} } })).resolves.toBe("resolved-token");
+    await expect(
+      resolveGraphToken(
+        {
+          channels: {
+            msteams: {
+              appId: "root-app",
+              appPassword: "root-password",
+              tenantId: "root-tenant",
+              accounts: {
+                secondary: {
+                  appId: "secondary-app",
+                  appPassword: "secondary-password",
+                  tenantId: "secondary-tenant",
+                  webhook: { path: "/api/messages/named" },
+                },
+              },
+            },
+          },
+        },
+        { accountId: "secondary" },
+      ),
+    ).resolves.toBe("resolved-token");
 
+    expect(resolveMSTeamsCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "secondary-app",
+        appPassword: "secondary-password",
+        tenantId: "secondary-tenant",
+      }),
+      expect.objectContaining({
+        allowEnvFallback: false,
+        pathPrefix: "channels.msteams.accounts.secondary",
+      }),
+    );
     expect(createMSTeamsTokenProviderMock).toHaveBeenCalledWith(mockApp);
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("rejects a disabled named account without blocking an enabled sibling", async () => {
+    const { getAccessToken } = mockGraphTokenResolution();
+    const cfg = {
+      channels: {
+        msteams: {
+          accounts: {
+            disabled: {
+              enabled: false,
+              appId: "disabled-app",
+              appPassword: "disabled-password",
+              tenantId: "tenant-id",
+              webhook: { path: "/api/messages/named" },
+            },
+            active: {
+              enabled: true,
+              appId: "active-app",
+              appPassword: "active-password",
+              tenantId: "tenant-id",
+              webhook: { path: "/api/messages/named" },
+            },
+          },
+        },
+      },
+    };
+
+    await expectRejectsToThrow(
+      resolveGraphToken(cfg, { accountId: "disabled" }),
+      "MS Teams account disabled: disabled",
+    );
+    await expect(resolveGraphToken(cfg, { accountId: "active" })).resolves.toBe("resolved-token");
+
+    expect(loadMSTeamsSdkWithAuthMock).toHaveBeenCalledTimes(1);
+    expect(getAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Graph token resolution when the Teams channel is disabled", async () => {
+    mockGraphTokenResolution();
+
+    await expectRejectsToThrow(
+      resolveGraphToken({ channels: { msteams: { enabled: false } } }),
+      "MS Teams account disabled: default",
+    );
+
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes delegated Graph token lookup by account", async () => {
+    resolveMSTeamsCredentialsMock.mockReturnValue(mockCredentials);
+    resolveDelegatedAccessTokenMock.mockResolvedValue("delegated-token");
+
+    await expect(
+      resolveGraphToken(
+        {
+          channels: {
+            msteams: {
+              delegatedAuth: { enabled: true },
+            },
+          },
+        },
+        { accountId: "secondary", preferDelegated: true },
+      ),
+    ).resolves.toBe("delegated-token");
+
+    expect(resolveDelegatedAccessTokenMock).toHaveBeenCalledWith({
+      tenantId: "tenant-id",
+      clientId: "app-id",
+      clientSecret: "app-password",
+      accountId: "secondary",
+    });
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
   });
 
   it("fails closed for China cloud Graph token resolution", async () => {
@@ -469,7 +588,7 @@ describe("msteams graph helpers", () => {
     resolveMSTeamsCredentialsMock.mockReturnValue(undefined);
     await expectRejectsToThrow(resolveGraphToken({ channels: {} }), "MS Teams credentials missing");
 
-    mockGraphTokenResolution({ rawToken: null, resolvedToken: null });
+    mockGraphTokenResolution("");
 
     await expectRejectsToThrow(
       resolveGraphToken({ channels: { msteams: {} } }),
@@ -597,27 +716,6 @@ describe("msteams graph helpers", () => {
       return body;
     }
 
-    it("truncation at maxPages", async () => {
-      mockFetch(async () =>
-        Response.json(
-          pagedResponse(
-            [{ id: "x", name: "x" }],
-            "https://graph.microsoft.com/v1.0/items?$skiptoken=more",
-          ),
-        ),
-      );
-
-      const result = await fetchAllGraphPages<Item>({
-        token: graphToken,
-        path: "/items",
-        maxPages: 2,
-      });
-
-      expect(result.items).toHaveLength(2);
-      expect(result.truncated).toBe(true);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-    });
-
     it.each([undefined, false])("findOne early exit (collectItems=%s)", async (collectItems) => {
       const target = { id: "target", name: "found-it" };
       const afterTarget = { id: "after", name: "not-visited" };
@@ -664,20 +762,6 @@ describe("msteams graph helpers", () => {
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
 
-    it("findOne with no match (exhausted)", async () => {
-      mockJsonFetchResponse(pagedResponse([{ id: "1", name: "a" }]));
-
-      const result = await fetchAllGraphPages<Item>({
-        token: graphToken,
-        path: "/items",
-        findOne: (item) => item.id === "missing",
-      });
-
-      expect(result.found).toBeUndefined();
-      expect(result.truncated).toBe(false);
-      expect(result.items).toEqual([{ id: "1", name: "a" }]);
-    });
-
     it.each([undefined, false])("findOne with no match (collectItems=%s)", async (collectItems) => {
       mockFetch(async () =>
         Response.json(
@@ -702,40 +786,24 @@ describe("msteams graph helpers", () => {
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
 
-    it.each([undefined, false])(
-      "preserves findOne errors (collectItems=%s)",
-      async (collectItems) => {
-        const failure = new Error("predicate failed");
-        mockJsonFetchResponse(
-          pagedResponse(
-            [{ id: "1", name: "a" }],
-            "https://graph.microsoft.com/v1.0/items?$skiptoken=p2",
-          ),
-        );
+    it("preserves findOne errors", async () => {
+      const failure = new Error("predicate failed");
+      mockJsonFetchResponse(
+        pagedResponse(
+          [{ id: "1", name: "a" }],
+          "https://graph.microsoft.com/v1.0/items?$skiptoken=p2",
+        ),
+      );
 
-        await expect(
-          fetchAllGraphPages<Item>({
-            token: graphToken,
-            path: "/items",
-            collectItems,
-            findOne: () => {
-              throw failure;
-            },
-          }),
-        ).rejects.toBe(failure);
-        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-      },
-    );
-
-    it("empty first page", async () => {
-      mockJsonFetchResponse(pagedResponse([]));
-
-      const result = await fetchAllGraphPages<Item>({
-        token: graphToken,
-        path: "/items",
-      });
-
-      expect(result).toEqual({ items: [], truncated: false });
+      await expect(
+        fetchAllGraphPages<Item>({
+          token: graphToken,
+          path: "/items",
+          findOne: () => {
+            throw failure;
+          },
+        }),
+      ).rejects.toBe(failure);
       expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     });
 

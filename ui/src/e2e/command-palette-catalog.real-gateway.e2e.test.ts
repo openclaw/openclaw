@@ -74,10 +74,10 @@ const suite = createControlUiE2eSuite({
               model: "fixture/anchor",
               modelPolicy: { allow: ["fixture/*", "ollama/*"] },
             },
-            list: [
-              { id: "main", identity: { name: "Main fixture" } },
-              { id: "reviewer", identity: { name: "Reviewer fixture" } },
-            ],
+            entries: {
+              main: { identity: { name: "Main fixture" } },
+              reviewer: { identity: { name: "Reviewer fixture" } },
+            },
           },
           models: {
             catalogRefresh: { enabled: false },
@@ -394,7 +394,7 @@ suite.define(() => {
     }
   }, 120_000);
 
-  it("shows actual acquisition failures in Automations and model search without losing compatible rows", async () => {
+  it("shows acquisition failures in Automations while keeping model search quiet and usable", async () => {
     const outcomes: unknown[] = [];
     const refresh = async () => {
       const payload = requireRecord(
@@ -447,10 +447,9 @@ suite.define(() => {
         });
         await model.waitFor({ state: "visible" });
         expect(await model.count()).toBe(1);
-        await page
-          .locator(".cmd-palette")
-          .getByText(warning, { exact: true })
-          .waitFor({ state: "visible" });
+        expect(await page.locator(".cmd-palette").getByText(warning, { exact: true }).count()).toBe(
+          0,
+        );
         if (captureEnabled) {
           await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-failed.png") });
         }
@@ -475,7 +474,7 @@ suite.define(() => {
             providerTraffic,
             outcomes,
             automationsWarning: true,
-            paletteWarning: true,
+            paletteWarning: false,
             retainedModelCount: 1,
             successfulEmptyClearedModelAndWarnings: true,
           }),
@@ -641,9 +640,7 @@ suite.define(() => {
           rejectCatalogReplies = true;
           const sidebar = page.locator("openclaw-app-sidebar");
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-          await sidebar
-            .getByRole("menuitemradio", { name: "Reviewer fixture", exact: true })
-            .click();
+          await sidebar.getByRole("menuitem", { name: "Reviewer fixture", exact: true }).click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/reviewer");
           const requestsBeforeOpen = catalogParams.length;
           await page.keyboard.press("ControlOrMeta+K");

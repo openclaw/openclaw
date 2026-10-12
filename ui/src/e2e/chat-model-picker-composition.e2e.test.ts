@@ -170,13 +170,15 @@ suite.define(() => {
         expect(toggleContentsRight).toBeLessThanOrEqual(authBox!.x);
         await openai.click({ trial: true });
         await captureUiProof(suite, page, "model-account-identity", `${width}.png`);
-        await expect.poll(() => alpha.isVisible()).toBe(false);
+        await expect.poll(() => alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
-        expect(await openai.getAttribute("aria-expanded")).toBe("false");
+        expect(await openai.getAttribute("aria-expanded")).toBe("true");
         await expect
           .poll(() => openai.evaluate((button) => button.getBoundingClientRect().height))
           .toBeGreaterThanOrEqual(minimumTarget);
         await openai.focus();
+        await page.keyboard.press("Enter");
+        await expect.poll(() => alpha.isVisible()).toBe(false);
         await page.keyboard.press("Enter");
         await expect.poll(() => alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
@@ -196,16 +198,23 @@ suite.define(() => {
         expect(await search.inputValue()).toBe("");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
+        await openai.click();
+        await expect.poll(() => alpha.isVisible()).toBe(false);
         await search.press("Escape");
         await expect.poll(() => picker.getAttribute("open")).toBeNull();
         await trigger.click();
         await expect.poll(() => alpha.isVisible()).toBe(false);
         expect(await openai.getAttribute("aria-expanded")).toBe("false");
+        expect(await search.inputValue()).toBe("");
         await search.fill("shared");
         await search.press("ArrowDown");
         await search.press("Enter");
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toMatchObject({ model: "anthropic/shared-beta" });
+        await expect.poll(() => picker.getAttribute("open")).toBeNull();
+        await trigger.click();
+        await expect.poll(() => beta.isVisible()).toBe(true);
+        expect(await alpha.isVisible()).toBe(false);
       });
     },
   );
@@ -232,7 +241,9 @@ suite.define(() => {
           const search = picker.locator("[data-chat-model-search]");
           const query = key.startsWith("Arrow") ? "" : "anthropic";
           if (key.startsWith("Arrow")) {
-            for (const toggle of await picker.locator("[data-chat-model-provider-toggle]").all()) {
+            for (const toggle of await picker
+              .locator('[data-chat-model-provider-toggle][aria-expanded="false"]')
+              .all()) {
               await toggle.focus();
               await toggle.press("Enter");
             }

@@ -53,7 +53,7 @@ type ChatAbortTestContext = Record<string, unknown> & {
   agentRunSeq: Map<string, number>;
   broadcast: (...args: unknown[]) => void;
   nodeSendToSession: (...args: unknown[]) => void;
-  logGateway: { warn: (...args: unknown[]) => void };
+  logGateway: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void };
 };
 
 type ChatAbortRespondMock = Mock<RespondFn>;
@@ -77,7 +77,7 @@ export function createChatAbortContext(
     getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
-    logGateway: { warn: vi.fn() },
+    logGateway: { info: vi.fn(), warn: vi.fn() },
     ...overrides,
   } as ChatAbortTestContext;
   return context;
@@ -91,6 +91,7 @@ export async function invokeChatAbortHandler(params: {
     agentId?: string;
     runId?: string;
     preserveSideRuns?: boolean;
+    discardPendingInput?: boolean;
   };
   client?: {
     connId?: string;

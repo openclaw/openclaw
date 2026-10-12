@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import {
   isArchivePathWithin,
@@ -18,94 +19,82 @@ const recoveryPath = z
   .refine((value) => !value.includes("\0") && path.resolve(value) === value);
 const recoveryDigest = z.string().regex(/^[a-f0-9]{64}$/u);
 const recoveryEntry = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("file"),
-      sourcePath: recoveryPath,
-      archivePath: z.string().regex(/^payload\/\d+$/u),
-      size: z.number().int().nonnegative(),
-      sha256: recoveryDigest,
-      sqlite: z.boolean(),
-      mode: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("directory"),
-      sourcePath: recoveryPath,
-      mode: z.number().int().nonnegative(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("symlink"),
-      sourcePath: recoveryPath,
-      target: z.string().refine((value) => !value.includes("\0")),
-      contentPath: recoveryPath.optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("missing"),
-      sourcePath: recoveryPath,
-      sqlite: z.boolean(),
-      directory: z.boolean(),
-    })
-    .strict(),
+  z.strictObject({
+    kind: z.literal("file"),
+    sourcePath: recoveryPath,
+    archivePath: z.string().regex(/^payload\/\d+$/u),
+    size: z.number().int().nonnegative(),
+    sha256: recoveryDigest,
+    sqlite: z.boolean(),
+    mode: z.number().int().nonnegative(),
+  }),
+  z.strictObject({
+    kind: z.literal("directory"),
+    sourcePath: recoveryPath,
+    mode: z.number().int().nonnegative(),
+  }),
+  z.strictObject({
+    kind: z.literal("symlink"),
+    sourcePath: recoveryPath,
+    target: z.string().refine((value) => !value.includes("\0")),
+    contentPath: recoveryPath.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("missing"),
+    sourcePath: recoveryPath,
+    sqlite: z.boolean(),
+    directory: z.boolean(),
+  }),
 ]);
 
-const updateRecoveryManifestSchema = z
-  .object({
-    schemaVersion: z.union([z.literal(1), z.literal(2)]),
-    kind: z.literal("update-recovery"),
-    generation: z
-      .discriminatedUnion("kind", [
-        z.object({ kind: z.literal("baseline") }).strict(),
-        z.object({ kind: z.literal("candidate"), baselineSha256: recoveryDigest }).strict(),
-        z
-          .object({
-            kind: z.literal("prepared"),
-            baselineSha256: recoveryDigest,
-            candidateSha256: recoveryDigest,
-          })
-          .strict(),
-      ])
-      .optional(),
-    databases: z
-      .array(
-        z.discriminatedUnion("role", [
-          z.object({ path: recoveryPath, role: z.literal("global") }).strict(),
-          z
-            .object({ path: recoveryPath, role: z.literal("agent"), agentId: z.string().min(1) })
-            .strict(),
-        ]),
-      )
-      .optional(),
-    runId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u),
-    installRoot: recoveryPath,
-    stateDir: recoveryPath,
-    configPath: recoveryPath,
-    configPaths: z.array(recoveryPath).min(1).max(512),
-    creator: UpdateRunDriverSchema,
-    drivers: z.array(UpdateRunDriverSchema).max(32),
-    createdAt: z.string().datetime(),
-    roots: z.array(recoveryPath).min(1),
-    excludedRoots: z.array(recoveryPath),
-    protectedPaths: z.array(recoveryPath),
-    entries: z.array(recoveryEntry).max(1_000_000),
-    warnings: z
-      .array(
-        z
-          .object({
-            kind: z.literal("undeclared-migration-resources"),
-            pluginId: z.string().min(1),
-            message: z.string().min(1),
-          })
-          .strict(),
-      )
-      .optional(),
-  })
-  .strict();
+const updateRecoveryManifestSchema = z.strictObject({
+  schemaVersion: z.union([z.literal(1), z.literal(2)]),
+  kind: z.literal("update-recovery"),
+  generation: z
+    .discriminatedUnion("kind", [
+      z.strictObject({ kind: z.literal("baseline") }),
+      z.strictObject({ kind: z.literal("candidate"), baselineSha256: recoveryDigest }),
+      z.strictObject({
+        kind: z.literal("prepared"),
+        baselineSha256: recoveryDigest,
+        candidateSha256: recoveryDigest,
+      }),
+    ])
+    .optional(),
+  databases: z
+    .array(
+      z.discriminatedUnion("role", [
+        z.strictObject({ path: recoveryPath, role: z.literal("global") }),
+        z.strictObject({
+          path: recoveryPath,
+          role: z.literal("agent"),
+          agentId: z.string().min(1),
+        }),
+      ]),
+    )
+    .optional(),
+  runId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/u),
+  installRoot: recoveryPath,
+  stateDir: recoveryPath,
+  configPath: recoveryPath,
+  configPaths: z.array(recoveryPath).min(1).max(512),
+  creator: UpdateRunDriverSchema,
+  drivers: z.array(UpdateRunDriverSchema).max(32),
+  createdAt: z.string().datetime(),
+  roots: z.array(recoveryPath).min(1),
+  excludedRoots: z.array(recoveryPath),
+  protectedPaths: z.array(recoveryPath),
+  entries: z.array(recoveryEntry).max(1_000_000),
+  warnings: z
+    .array(
+      z.strictObject({
+        kind: z.literal("undeclared-migration-resources"),
+        pluginId: z.string().min(1),
+        message: z.string().min(1),
+      }),
+    )
+    .optional(),
+});
 
 export type UpdateRecoveryBackupManifest = z.infer<typeof updateRecoveryManifestSchema>;
 
@@ -133,9 +122,21 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
       globalDatabasePath = database.path;
     }
   }
-  const sources = new Set<string>();
+  const sources = new Map<string, (typeof manifest.entries)[number]>();
   const payloads = new Set<string>();
+  const excluded = new Set(manifest.excludedRoots);
+  if (
+    excluded.size !== manifest.excludedRoots.length ||
+    [...manifest.roots, ...manifest.protectedPaths, ...manifest.configPaths].some((pathname) =>
+      excluded.has(pathname),
+    )
+  ) {
+    throw new Error("Update recovery exclusions conflict with retained resource inventory.");
+  }
   for (const entry of manifest.entries) {
+    if (excluded.has(entry.sourcePath)) {
+      throw new Error(`Excluded update recovery source has a retained entry: ${entry.sourcePath}`);
+    }
     if (entry.kind === "missing" && entry.sqlite && entry.directory) {
       throw new Error("Missing SQLite inventory cannot describe a directory.");
     }
@@ -151,7 +152,7 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
     ) {
       throw new Error(`Invalid update recovery source: ${entry.sourcePath}`);
     }
-    sources.add(entry.sourcePath);
+    sources.set(entry.sourcePath, entry);
     if (entry.kind === "file") {
       if (payloads.has(entry.archivePath)) {
         throw new Error(`Duplicate update recovery payload: ${entry.archivePath}`);
@@ -160,7 +161,7 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
     }
   }
   for (const database of manifest.databases ?? []) {
-    const entry = manifest.entries.find((item) => item.sourcePath === database.path);
+    const entry = sources.get(database.path);
     if (
       !entry ||
       !((entry.kind === "file" || (entry.kind === "missing" && !entry.directory)) && entry.sqlite)
@@ -181,7 +182,11 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
   // from the lexical target through symlinked ancestors. It must bind captured
   // terminal content, never another symlink that stands in for missing bytes.
   for (const pathname of manifest.configPaths) {
-    const config = manifest.entries.find((entry) => entry.sourcePath === pathname);
+    const config = sources.get(pathname);
+    const content =
+      config?.kind === "symlink" && config.contentPath
+        ? sources.get(config.contentPath)
+        : undefined;
     if (
       !config ||
       config.kind === "directory" ||
@@ -190,11 +195,10 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
       (config.kind === "symlink" &&
         (!config.contentPath ||
           !manifest.configPaths.includes(config.contentPath) ||
-          !manifest.entries.some(
-            (entry) =>
-              entry.sourcePath === config.contentPath &&
-              ((entry.kind === "file" && !entry.sqlite) ||
-                (entry.kind === "missing" && !entry.sqlite && !entry.directory)),
+          !content ||
+          !(
+            (content.kind === "file" || (content.kind === "missing" && !content.directory)) &&
+            !content.sqlite
           )))
     ) {
       throw new Error("Update recovery manifest is missing its configuration inventory.");
@@ -349,6 +353,18 @@ function parseBackupManifestSqliteSnapshots(
   });
 }
 
+function readRequiredManifestString(
+  record: Record<string, unknown>,
+  key: string,
+  label = "Backup manifest",
+): string {
+  const value = readNonBlankString(record[key]);
+  if (value === undefined) {
+    throw new Error(`${label} is missing ${key}.`);
+  }
+  return value;
+}
+
 export function parseBackupManifest(raw: string): BackupManifest {
   let parsed: unknown;
   try {
@@ -363,36 +379,22 @@ export function parseBackupManifest(raw: string): BackupManifest {
   if (parsed.schemaVersion !== 1) {
     throw new Error(`Unsupported backup manifest schemaVersion: ${String(parsed.schemaVersion)}`);
   }
-  if (typeof parsed.archiveRoot !== "string" || !parsed.archiveRoot.trim()) {
-    throw new Error("Backup manifest is missing archiveRoot.");
-  }
-  if (typeof parsed.createdAt !== "string" || !parsed.createdAt.trim()) {
-    throw new Error("Backup manifest is missing createdAt.");
-  }
+  const archiveRoot = readRequiredManifestString(parsed, "archiveRoot");
+  const createdAt = readRequiredManifestString(parsed, "createdAt");
   if (!Array.isArray(parsed.assets)) {
     throw new Error("Backup manifest is missing assets.");
   }
 
-  const assets: BackupManifest["assets"] = [];
-  for (const asset of parsed.assets) {
+  const assets = parsed.assets.map((asset) => {
     if (!isRecord(asset)) {
       throw new Error("Backup manifest contains a non-object asset.");
     }
-    if (typeof asset.kind !== "string" || !asset.kind.trim()) {
-      throw new Error("Backup manifest asset is missing kind.");
-    }
-    if (typeof asset.sourcePath !== "string" || !asset.sourcePath.trim()) {
-      throw new Error("Backup manifest asset is missing sourcePath.");
-    }
-    if (typeof asset.archivePath !== "string" || !asset.archivePath.trim()) {
-      throw new Error("Backup manifest asset is missing archivePath.");
-    }
-    assets.push({
-      kind: asset.kind,
-      sourcePath: asset.sourcePath,
-      archivePath: asset.archivePath,
-    });
-  }
+    return {
+      kind: readRequiredManifestString(asset, "kind", "Backup manifest asset"),
+      sourcePath: readRequiredManifestString(asset, "sourcePath", "Backup manifest asset"),
+      archivePath: readRequiredManifestString(asset, "archivePath", "Backup manifest asset"),
+    };
+  });
 
   const externalSymbolicLinks: BackupSymbolicLink[] = [];
   if (parsed.externalSymbolicLinks !== undefined) {
@@ -413,12 +415,9 @@ export function parseBackupManifest(raw: string): BackupManifest {
 
   return {
     schemaVersion: 1,
-    archiveRoot: parsed.archiveRoot,
-    createdAt: parsed.createdAt,
-    runtimeVersion:
-      typeof parsed.runtimeVersion === "string" && parsed.runtimeVersion.trim()
-        ? parsed.runtimeVersion
-        : "unknown",
+    archiveRoot,
+    createdAt,
+    runtimeVersion: readNonBlankString(parsed.runtimeVersion) ?? "unknown",
     platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
     nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
     paths: isRecord(parsed.paths)
@@ -492,9 +491,7 @@ export function verifyBackupSqliteCoverage(
             (verified.role === "agent" && verified.agentId === required.agentId)),
       )
     ) {
-      throw new Error(
-        `Backup lacks verified canonical SQLite coverage for ${required.sourcePath}.`,
-      );
+      throw new Error(`Backup lacks verified SQLite database coverage for ${required.sourcePath}.`);
     }
   }
 }

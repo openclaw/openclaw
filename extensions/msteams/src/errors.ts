@@ -11,23 +11,14 @@ export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
   }
-  if (typeof err === "string") {
-    return err;
-  }
-  if (err === null) {
-    return "null";
-  }
-  if (err === undefined) {
-    return "undefined";
-  }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    return String(err);
-  }
   if (typeof err === "symbol") {
     return err.description ?? err.toString();
   }
   if (typeof err === "function") {
     return err.name ? `[function ${err.name}]` : "[function]";
+  }
+  if (err === null || typeof err !== "object") {
+    return String(err);
   }
   try {
     return JSON.stringify(err) ?? "unknown error";
@@ -146,7 +137,6 @@ function extractRetryAfterMs(err: unknown): number | null {
     }
   }
 
-  // Fetch Headers-like interface
   if (
     typeof headers === "object" &&
     headers !== null &&

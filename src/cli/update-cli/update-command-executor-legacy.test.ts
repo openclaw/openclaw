@@ -13,6 +13,7 @@ import { killProcessTree } from "../../process/kill-tree.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const LEAF_CLEANUP_GUARD_MS = 5_000;
 
 it.skipIf(process.platform === "win32").each([
   { managed: false, generation: false, lifetime: "live" },
@@ -41,7 +42,8 @@ it.skipIf(process.platform === "win32").each([
     const leaf = `
       import fs from 'node:fs';
       import {setTimeout} from 'node:timers/promises';
-      const {grant,root}=JSON.parse(fs.readFileSync(0,'utf8'));
+      import {text} from 'node:stream/consumers';
+      const {grant,root}=JSON.parse(await text(process.stdin));
       fs.writeFileSync(root+'/leaf-pid',String(process.pid));
       const {withDelegatedUpdateCommandExecutor}=await import(${JSON.stringify(owner.href)});
       const parentPid=grant.originalParent.executor.pid;
@@ -309,7 +311,11 @@ it.skipIf(process.platform === "win32").each([
       await closed.finally(() => termination?.force());
       const leafPidFile = path.join(root, "leaf-pid");
       if (fs.existsSync(leafPidFile)) {
-        await waitForDead(Number(fs.readFileSync(leafPidFile, "utf8")), 5_000);
+        // Cleanup hang guard after the owner released/killed the group, not a readiness race.
+        await waitForDead(
+          Number(fs.readFileSync(leafPidFile, "utf8")),
+          AbortSignal.timeout(LEAF_CLEANUP_GUARD_MS),
+        );
       }
     }
   },

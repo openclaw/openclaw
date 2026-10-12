@@ -29,15 +29,6 @@ const LAUNCHER_ENCODING_MARKER_PREFIX = "@rem openclaw-launcher-encoding=";
 const LAUNCHER_ENCODING_MARKER_RE = /^@rem openclaw-launcher-encoding=(\S+)\s*$/;
 const LAUNCHER_CODEPAGE_PREAMBLE_RE = /^@chcp \d+ >nul\s*$/;
 
-function isAsciiOnly(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    if (value.charCodeAt(index) > 0x7f) {
-      return false;
-    }
-  }
-  return true;
-}
-
 /**
  * wscript.exe reads .vbs only as ANSI or UTF-16 LE with BOM, and cmd.exe reads
  * .cmd in the console (OEM) code page; plain UTF-8 garbles non-ASCII profile
@@ -52,7 +43,7 @@ export function encodeWindowsLauncherScript(params: {
     // UTF-16 LE with BOM is the one wscript encoding that works on every locale.
     return Buffer.concat([UTF16LE_BOM, Buffer.from(params.content, "utf16le")]);
   }
-  if (isAsciiOnly(params.content)) {
+  if (!/[^\p{ASCII}]/u.test(params.content)) {
     if (process.platform === "win32") {
       const codePage = resolveWindowsOemCodePage();
       if (codePage === null || codePage === 864) {

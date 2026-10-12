@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar selection overflow",
@@ -49,6 +51,8 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        // The active row can render before roster admission; overflow needs the full roster.
+        await waitForSessionRosterHydration(page);
         // Exercise the authored classic scrollbar regardless of macOS overlay preferences.
         // Either non-auto standard property would override the existing WebKit styles.
         await page.addStyleTag({
@@ -59,13 +63,19 @@ suite.define(() => {
             .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
             .first()
             .click();
+          // Navigation skips the closed drawer; geometry needs its full roster after opening.
+          await waitForControlUiInitialRoster(page);
+        }
+        if (overflow) {
+          await page.getByRole("button", { name: "Show more", exact: true }).click();
+          await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(20);
         }
         const active = page.locator(
           `.sidebar-recent-session--active[data-session-key="${sessionKey}"]`,
         );
         await active.waitFor();
         const geometry = await active.evaluate((row) => {
-          const sidebar = row.closest<HTMLElement>(".sidebar");
+          const sidebar = row.closest<HTMLElement>(".sidebar-shell");
           const scroller = row.closest<HTMLElement>(".sidebar-shell__body");
           if (!sidebar || !scroller) {
             throw new Error("sidebar session geometry owner not found");
@@ -73,13 +83,13 @@ suite.define(() => {
           const rowRect = row.getBoundingClientRect();
           const sidebarRect = sidebar.getBoundingClientRect();
           const scrollbarWidth = scroller.offsetWidth - scroller.clientWidth;
-          const navRect = sidebar.querySelector(".sidebar-nav")!.getBoundingClientRect();
+          const listRect = row.closest(".sidebar-recent-sessions__list")!.getBoundingClientRect();
           const scrollerStyle = getComputedStyle(scroller);
           return {
             leftInset: rowRect.left - sidebarRect.left,
             rightInset: sidebarRect.right - rowRect.right - scrollbarWidth,
-            navLeft: navRect.left,
-            navRight: navRect.right,
+            listLeft: listRect.left,
+            listRight: listRect.right,
             rowLeft: rowRect.left,
             rowRight: rowRect.right,
             scrollbarWidth,
@@ -101,8 +111,8 @@ suite.define(() => {
         expect(geometry.overflows).toBe(overflow);
         expect(geometry.scrollbarWidth > 0).toBe(overflow);
         expect(geometry.rightInset, JSON.stringify(geometry)).toBeCloseTo(geometry.leftInset, 1);
-        expect(geometry.rowLeft).toBeCloseTo(geometry.navLeft, 1);
-        expect(geometry.rowRight).toBeCloseTo(geometry.navRight, 1);
+        expect(geometry.rowLeft).toBeCloseTo(geometry.listLeft, 1);
+        expect(geometry.rowRight).toBeCloseTo(geometry.listRight, 1);
         expect(geometry.clearance).toBeGreaterThanOrEqual(8);
         if (overflow) {
           expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);

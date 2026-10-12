@@ -38,51 +38,10 @@ const ADD_ON_PREAUTH_TIMEOUT_MS = 3_000;
 const GOOGLECHAT_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const GOOGLECHAT_WEBHOOK_ACCEPTED_VALUE = "durable";
 
-type ParsedGoogleChatInboundSuccess = {
-  raw: Record<string, unknown>;
-  addOnBearerToken: string;
-};
-
-function parseGoogleChatInboundPayloadOrReject(
-  raw: unknown,
-  res: ServerResponse,
-): ParsedGoogleChatInboundSuccess | null {
-  if (!isRecord(raw)) {
-    res.statusCode = 400;
-    res.end("invalid payload");
-    return null;
-  }
-  const commonEventObject = isRecord(raw.commonEventObject) ? raw.commonEventObject : null;
-  const authorizationEventObject = isRecord(raw.authorizationEventObject)
-    ? raw.authorizationEventObject
-    : null;
-  let addOnBearerToken = "";
-  if (
-    commonEventObject?.hostApp === "CHAT" &&
-    typeof authorizationEventObject?.systemIdToken === "string"
-  ) {
-    addOnBearerToken = authorizationEventObject.systemIdToken.trim();
-  }
-  return { raw, addOnBearerToken };
-}
-
 type GoogleChatWebhookAuthRejection = {
   target: WebhookTarget;
   reason: string;
 };
-
-async function verifyGoogleChatTargetAuth(
-  target: WebhookTarget,
-  bearer: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const verification = await verifyGoogleChatRequest({
-    bearer,
-    audienceType: target.audienceType,
-    audience: target.audience,
-    expectedAddOnPrincipal: target.account.config.appPrincipal,
-  });
-  return verification.ok ? { ok: true } : { ok: false, reason: verification.reason ?? "unknown" };
-}
 
 function logGoogleChatWebhookAuthRejections(rejections: GoogleChatWebhookAuthRejection[]): void {
   for (const rejection of rejections) {
@@ -103,12 +62,17 @@ async function resolveGoogleChatWebhookTargetWithAuthOrReject(params: {
     targets: params.targets,
     res: params.res,
     isMatch: async (target) => {
-      const verification = await verifyGoogleChatTargetAuth(target, params.bearer);
+      const verification = await verifyGoogleChatRequest({
+        bearer: params.bearer,
+        audienceType: target.audienceType,
+        audience: target.audience,
+        expectedAddOnPrincipal: target.account.config.appPrincipal,
+      });
       if (verification.ok) {
         verifiedTargetCount += 1;
         return true;
       }
-      rejections.push({ target, reason: verification.reason });
+      rejections.push({ target, reason: verification.reason ?? "unknown" });
       return false;
     },
   });
@@ -167,31 +131,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
       inFlightLimiter: params.webhookInFlightLimiter,
       handle: async ({ targets }) => {
         const headerBearer = extractBearerToken(req.headers.authorization);
-        let selectedTarget: WebhookTarget | null;
-        let parsedInbound: ParsedGoogleChatInboundSuccess;
-        const readAndParseEvent = async (
-          profile: "pre-auth" | "post-auth",
-        ): Promise<ParsedGoogleChatInboundSuccess | null> => {
-          const body = await readJsonWebhookBodyOrReject({
-            req,
-            res,
-            profile,
-            ...(profile === "pre-auth"
-              ? {
-                  maxBytes: ADD_ON_PREAUTH_MAX_BYTES,
-                  timeoutMs: ADD_ON_PREAUTH_TIMEOUT_MS,
-                }
-              : {}),
-            emptyObjectOnEmpty: false,
-            invalidJsonMessage: "invalid payload",
-          });
-          if (!body.ok) {
-            return null;
-          }
-
-          return parseGoogleChatInboundPayloadOrReject(body.value, res);
-        };
-
+        let selectedTarget: WebhookTarget | null = null;
         if (headerBearer) {
           selectedTarget = await resolveGoogleChatWebhookTargetWithAuthOrReject({
             targets,
@@ -201,20 +141,35 @@ export function createGoogleChatWebhookRequestHandler(params: {
           if (!selectedTarget) {
             return true;
           }
-
-          const parsed = await readAndParseEvent("post-auth");
-          if (!parsed) {
-            return true;
-          }
-          parsedInbound = parsed;
-        } else {
-          const parsed = await readAndParseEvent("pre-auth");
-          if (!parsed) {
-            return true;
-          }
-          parsedInbound = parsed;
-
-          if (!parsed.addOnBearerToken) {
+        }
+        const body = await readJsonWebhookBodyOrReject({
+          req,
+          res,
+          profile: headerBearer ? "post-auth" : "pre-auth",
+          ...(!headerBearer
+            ? { maxBytes: ADD_ON_PREAUTH_MAX_BYTES, timeoutMs: ADD_ON_PREAUTH_TIMEOUT_MS }
+            : {}),
+          emptyObjectOnEmpty: false,
+          invalidJsonMessage: "invalid payload",
+        });
+        if (!body.ok) {
+          return true;
+        }
+        const raw = body.value;
+        if (!isRecord(raw)) {
+          res.statusCode = 400;
+          res.end("invalid payload");
+          return true;
+        }
+        if (!headerBearer) {
+          const addOnBearerToken =
+            isRecord(raw.commonEventObject) &&
+            raw.commonEventObject.hostApp === "CHAT" &&
+            isRecord(raw.authorizationEventObject) &&
+            typeof raw.authorizationEventObject.systemIdToken === "string"
+              ? raw.authorizationEventObject.systemIdToken.trim()
+              : "";
+          if (!addOnBearerToken) {
             logGoogleChatWebhookAuthRejections(
               targets.map((target) => ({ target, reason: "missing token" })),
             );
@@ -226,17 +181,17 @@ export function createGoogleChatWebhookRequestHandler(params: {
           selectedTarget = await resolveGoogleChatWebhookTargetWithAuthOrReject({
             targets,
             res,
-            bearer: parsed.addOnBearerToken,
+            bearer: addOnBearerToken,
           });
-          if (!selectedTarget) {
-            return true;
-          }
+        }
+        if (!selectedTarget) {
+          return true;
         }
 
         const dispatchTarget = selectedTarget;
         dispatchTarget.statusSink?.({ lastInboundAt: Date.now() });
         try {
-          const admission = await dispatchTarget.ingress.receive(parsedInbound.raw);
+          const admission = await dispatchTarget.ingress.receive(raw);
           if (admission.kind === "invalid") {
             res.statusCode = 400;
             res.end("invalid payload");
@@ -246,7 +201,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
             // Non-turn actions preserve their existing detached webhook path.
             let event: GoogleChatEvent;
             try {
-              event = normalizeGoogleChatInboundPayload(parsedInbound.raw);
+              event = normalizeGoogleChatInboundPayload(raw);
             } catch {
               res.statusCode = 400;
               res.end("invalid payload");

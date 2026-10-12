@@ -3,7 +3,6 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import {
   computeBackoff,
   logVerbose,
-  shouldLogVerbose,
   sleepWithAbort,
   type BackoffPolicy,
   type RuntimeEnv,
@@ -73,13 +72,6 @@ export async function runSignalSseLoop({
   };
   let reconnectAttempts = 0;
 
-  const logReconnectVerbose = (message: string) => {
-    if (!shouldLogVerbose()) {
-      return;
-    }
-    logVerbose(message);
-  };
-
   for (;;) {
     if (abortSignal?.aborted) {
       break;
@@ -109,7 +101,7 @@ export async function runSignalSseLoop({
       publishSignalRecovering(statusSink);
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-      logReconnectVerbose(`Signal stream ended, reconnecting in ${delayMs / 1000}s...`);
+      logVerbose(`Signal stream ended, reconnecting in ${delayMs / 1000}s...`);
       await sleepWithAbort(delayMs, abortSignal);
     } catch (err) {
       if (abortSignal?.aborted) {

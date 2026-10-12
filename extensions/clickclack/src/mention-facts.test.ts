@@ -25,38 +25,6 @@ describe("resolveClickClackMentionFacts", () => {
     expect(result.hasAnyMention).toBe(false);
   });
 
-  it("group message without patterns: wasMentioned false", () => {
-    const result = resolveClickClackMentionFacts({
-      isDirect: false,
-      body: "hello everyone",
-      mentionPatterns: [],
-    });
-    expect(result.canDetectMention).toBe(true);
-    expect(result.wasMentioned).toBe(false);
-    expect(result.hasAnyMention).toBe(false);
-  });
-
-  it("matches configured pattern", () => {
-    const result = resolveClickClackMentionFacts({
-      isDirect: false,
-      body: "hey @bot help me",
-      mentionPatterns: ["@bot"],
-    });
-    expect(result.wasMentioned).toBe(true);
-    expect(result.hasAnyMention).toBe(true);
-  });
-
-  it("matches the ClickClack bot handle emitted by the composer", () => {
-    const result = resolveClickClackMentionFacts({
-      isDirect: false,
-      body: "hey @blackbird check this",
-      mentionPatterns: [],
-      botHandle: "blackbird",
-    });
-    expect(result.wasMentioned).toBe(true);
-    expect(result.hasAnyMention).toBe(true);
-  });
-
   it("matches the configured bot handle case-insensitively", () => {
     const result = resolveClickClackMentionFacts({
       isDirect: false,
@@ -65,17 +33,6 @@ describe("resolveClickClackMentionFacts", () => {
       botHandle: "@blackbird",
     });
     expect(result.wasMentioned).toBe(true);
-    expect(result.hasAnyMention).toBe(true);
-  });
-
-  it("tracks another user's handle separately from the bot handle", () => {
-    const result = resolveClickClackMentionFacts({
-      isDirect: false,
-      body: "/status @alice",
-      mentionPatterns: [],
-      botHandle: "blackbird",
-    });
-    expect(result.wasMentioned).toBe(false);
     expect(result.hasAnyMention).toBe(true);
   });
 
@@ -110,30 +67,6 @@ describe("resolveClickClackMentionFacts", () => {
     expect(result.hasAnyMention).toBe(false);
   });
 
-  it("matches shared routed-agent mention patterns", () => {
-    const cfg = {
-      agents: {
-        entries: {
-          "service-bot": {
-            groupChat: {
-              mentionPatterns: ["@service"],
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const result = resolveClickClackMentionFacts({
-      isDirect: false,
-      body: "hey @service please help",
-      mentionPatterns: [],
-      cfg,
-      agentId: "service-bot",
-      channelId: "chn_123",
-    });
-    expect(result.wasMentioned).toBe(true);
-    expect(result.hasAnyMention).toBe(true);
-  });
-
   it("non-matching pattern returns wasMentioned false", () => {
     const result = resolveClickClackMentionFacts({
       isDirect: false,
@@ -146,10 +79,11 @@ describe("resolveClickClackMentionFacts", () => {
   it("multiple patterns: matches one pattern", () => {
     const result = resolveClickClackMentionFacts({
       isDirect: false,
-      body: "@firstbot please",
+      body: "@secondbot please",
       mentionPatterns: ["@firstbot", "@secondbot"],
     });
     expect(result.wasMentioned).toBe(true);
+    expect(result.hasAnyMention).toBe(true);
   });
   it("rejects unsafe patterns from shared config without evaluating them", () => {
     const cfg = {

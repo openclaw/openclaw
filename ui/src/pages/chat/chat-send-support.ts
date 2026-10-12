@@ -5,7 +5,8 @@ import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
-import { chatOutboxDeliveryKey, type StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -17,6 +18,7 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   readQueuedMessageById,
@@ -37,10 +39,11 @@ import {
   prepareOutboxPayload,
 } from "./outbox-payloads.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.";
+  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -71,15 +74,38 @@ export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
   return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
 }
 
-export function chatSendHoldReason(
+/** Local queue admission does not require the initial turn to have settled. */
+export function chatSendAdmissionHoldReason(
   host: ChatHost,
   sessionKey: string,
-  initialTurnPending = false,
+  agentId?: string,
 ): string | null {
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
   }
-  return chatSendPendingReason(host, sessionKey, initialTurnPending);
+  const sendDisabledReason = chatProviderReviewRow(host, sessionKey, agentId)?.sendDisabledReason;
+  if (sendDisabledReason) {
+    return sendDisabledReason;
+  }
+  return chatConnectionPendingReason(host);
+}
+
+export function chatSendHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  initialTurnPending = false,
+  agentId?: string,
+): string | null {
+  return (
+    chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
+    chatSendPendingReason(host, sessionKey, initialTurnPending)
+  );
+}
+
+function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
+  return host.connected && host.client && !host.client.recoveryScopeReady
+    ? t("chat.queue.connectionPending")
+    : null;
 }
 
 // Hello permits RPCs before account recovery has claimed any retained first turn.
@@ -89,12 +115,12 @@ export function chatSendPendingReason(
   sessionKey: string,
   initialTurnPending = false,
 ): string | null {
-  if (host.connected && host.client && !host.client.recoveryScopeReady) {
-    return t("chat.queue.connectionPending");
-  }
-  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
-    ? t("chat.queue.initialTurnPending")
-    : null;
+  return (
+    chatConnectionPendingReason(host) ??
+    (initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+      ? t("chat.queue.initialTurnPending")
+      : null)
+  );
 }
 
 export function formatTerminalChatSendAckError(
@@ -153,17 +179,17 @@ export function retireDeliveredQueuedUserTurn(
   const owner = client ?? host;
   const submissions = host.chatSubmissions;
   const deliveryKey = chatOutboxDeliveryKey(host, scope, runId);
-  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope);
   if (options?.inputConsumed && runId) {
     const remembered = submissions.readDelivered(deliveryKey, owner);
-    if (remembered) {
+    if (remembered && !persistedSteerTargetRunId(remembered.message)) {
       remembered.pending = false;
     }
     if (
       visibleSessionMatches(host, scope.sessionKey, scope.agentId) &&
       (!stored?.sessionId || stored.sessionId === host.currentSessionId)
     ) {
-      retireChatSubmissionDisplay(host, new Set([runId]));
+      retireChatSubmissionDisplay(host, new Set([runId]), { awaitTranscriptReceipt: true });
     }
     return !stored || removeDeliveredQueuedChatSendForRun(host, runId, scope)
       ? "retired"
@@ -180,7 +206,7 @@ export function retireDeliveredQueuedUserTurn(
     host.connected === connected &&
     host.connectionEpoch === connectionEpoch &&
     payloadOwnerIsCurrent();
-  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope);
   const commit = (
     message: NonNullable<ReturnType<typeof buildLocalUserMessage>>,
   ): DeliveredTurnRetirement => {
@@ -194,14 +220,12 @@ export function retireDeliveredQueuedUserTurn(
       // attempt still owns the row; an absent row must not swallow chat.final.
       return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
     }
-    if (!sameQueuedDeliveryVersion(current, stored)) {
-      return "stale";
-    }
-    if (!stored.sendRunId) {
+    if (!sameQueuedDeliveryVersion(current, stored) || !stored.sendRunId) {
       return "stale";
     }
     // Every pane receives the terminal. Retain complete message bytes before
     // the first pane removes the outbox item and releases its Blob/preview URLs.
+    const remembered = submissions.readDelivered(deliveryKey, owner);
     const submission = submissions.retain({
       kind: "delivered",
       deliveryKey,
@@ -210,7 +234,12 @@ export function retireDeliveredQueuedUserTurn(
       agentId: stored.agentId,
       sessionId: stored.sessionId,
       pendingRunId: stored.sendRunId,
-      message,
+      message:
+        remembered?.kind === "delivered" &&
+        remembered.pending &&
+        persistedSteerTargetRunId(remembered.message)
+          ? remembered.message
+          : message,
     });
     preserveDeliveredUserTurn(host, submission);
     const beforeRemoval = currentItem();

@@ -37,6 +37,7 @@ const mixed = ["ci", "openclaw-performance", "plugin-npm-release"];
 // GitHub-hosted labels (npm trusted publishing rejects self-hosted runners).
 const publishing = new Set([
   "openclaw-release-publish",
+  "openclaw-release-promote",
   "openclaw-npm-release",
   "plugin-npm-release",
   "plugin-clawhub-release",
@@ -86,70 +87,88 @@ function credentialed(name: string, job: Job) {
 }
 
 describe("release runner reservation", () => {
-  it.each([...workflows])(
-    "routes every %s worker while preserving its selected labels",
-    (name, workflow) => {
+  it("keeps the credentialed Linux promotion dispatcher on GitHub-hosted runners", () => {
+    const name = "openclaw-release-promote";
+    const workflow = parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")) as Workflow;
+    const job = workflow.jobs.publish_linux!;
+    expect(credentialed(name, job)).toBe(true);
+    expect(evaluateWorkflowRunner(job["runs-on"], releaseDispatch)).toBe("ubuntu-latest");
+  });
+
+  it("reserves release workers while preserving ordinary and credentialed runner labels", () => {
+    const credentialedJobs: Record<string, string> = {
+      "openclaw-npm-release": "publish_openclaw_npm",
+      "plugin-npm-release": "publish_plugins_npm",
+      "plugin-clawhub-release": "approve_plugins_clawhub_release",
+      "docker-release": "publish",
+    };
+    const defaultLabels: [unknown, string][] = [
+      [
+        Object.values(workflows.get("openclaw-release-publish")!.jobs)[0]?.["runs-on"],
+        "ubuntu-latest",
+      ],
+      [workflows.get("full-release-validation")?.jobs.resolve_target?.["runs-on"], "ubuntu-24.04"],
+      [workflows.get("ci")?.jobs["macos-swift"]?.["runs-on"], "xcode-27"],
+      [workflows.get("ci")?.jobs["checks-windows"]?.["runs-on"], "windows-2025"],
+    ];
+    for (const [selector, label] of defaultLabels) {
+      expect(evaluateWorkflowRunner(selector, context)).toBe(label);
+    }
+    for (const [name, workflow] of workflows) {
+      const pinnedJob = credentialedJobs[name];
+      if (pinnedJob) {
+        expect(credentialed(name, workflow.jobs[pinnedJob]!)).toBe(true);
+      }
+      const cases = [
+        { release: true, eventName: "workflow_dispatch" as const },
+        ...([...shared, ...mixed].includes(name)
+          ? (["pull_request", "push", "schedule", "workflow_dispatch"] as const).map(
+              (eventName) => ({ release: false, eventName }),
+            )
+          : []),
+      ];
       for (const [jobName, job] of Object.entries(workflow.jobs)) {
         if (!job["runs-on"]) {
           continue;
         }
-        if (name === "ci" && jobName === "pr-fail-fast") {
-          expect(
-            evaluateWorkflowExpression(job.if!, {
-              ...context,
-              eventName: "workflow_dispatch",
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-              preflightOutputs: { run_checks_node_core_nondist: "true" },
-            }),
-          ).toBe(false);
-          continue;
+        for (const { release, eventName } of cases) {
+          const ordinary = { ...context, eventName, ...(release ? {} : { releaseGate: true }) };
+          if (
+            name === "ci" &&
+            ((jobName === "pr-fail-fast" && eventName !== "pull_request") ||
+              jobName === "check-extension-package-boundary")
+          ) {
+            expect(
+              evaluateWorkflowExpression(
+                job.if!.startsWith("${{") ? job.if! : `\${{ ${job.if} }}`,
+                {
+                  ...ordinary,
+                  repository: "openclaw/openclaw",
+                  runAttempt: 1,
+                  preflightOutputs: {
+                    run_checks_node_core_nondist: "true",
+                    shared_sdk_declarations: "false",
+                  },
+                },
+              ),
+            ).toBe(false);
+            continue;
+          }
+          const baseline = evaluateWorkflowRunner(job["runs-on"], release ? context : ordinary);
+          if (release) {
+            expect(baseline, `${name}/${jobName}`).toBeTypeOf("string");
+            expect(baseline).not.toBe("");
+          }
+          const routed = evaluateWorkflowRunner(
+            job["runs-on"],
+            release
+              ? { ...releaseDispatch, runnerGroup: shared.includes(name) ? group : "" }
+              : { ...ordinary, releaseRunnerGroup: group },
+          );
+          expect(routed, `${name}/${jobName}/${eventName}/${release}`).toEqual(
+            !release || credentialed(name, job) ? baseline : { group, labels: baseline },
+          );
         }
-        const baseline = evaluateWorkflowRunner(job["runs-on"], context);
-        expect(baseline, `${name}/${jobName}`).toBeTypeOf("string");
-        expect(baseline).not.toBe("");
-        const routed = evaluateWorkflowRunner(job["runs-on"], {
-          ...releaseDispatch,
-          runnerGroup: shared.includes(name) ? group : "",
-        });
-        expect(routed, `${name}/${jobName}`).toEqual(
-          credentialed(name, job) ? baseline : { group, labels: baseline },
-        );
-      }
-    },
-  );
-
-  it.each([
-    ["openclaw-npm-release", "publish_openclaw_npm"],
-    ["plugin-npm-release", "publish_plugins_npm"],
-    ["plugin-clawhub-release", "approve_plugins_clawhub_release"],
-    ["docker-release", "publish"],
-  ])("classifies %s/%s as credentialed", (name, jobName) => {
-    expect(credentialed(name, workflows.get(name)!.jobs[jobName]!)).toBe(true);
-  });
-
-  it.each([...shared, ...mixed])("keeps unrelated %s callers outside the release group", (name) => {
-    const workflow = workflows.get(name)!;
-    for (const [jobName, job] of Object.entries(workflow.jobs)) {
-      if (!job["runs-on"]) {
-        continue;
-      }
-      for (const eventName of ["pull_request", "push", "schedule", "workflow_dispatch"] as const) {
-        const ordinary = { ...context, eventName, releaseGate: true };
-        if (name === "ci" && jobName === "pr-fail-fast" && eventName !== "pull_request") {
-          expect(
-            evaluateWorkflowExpression(job.if!, {
-              ...ordinary,
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-              preflightOutputs: { run_checks_node_core_nondist: "true" },
-            }),
-          ).toBe(false);
-          continue;
-        }
-        expect(
-          evaluateWorkflowRunner(job["runs-on"], { ...ordinary, releaseRunnerGroup: group }),
-        ).toEqual(evaluateWorkflowRunner(job["runs-on"], ordinary));
       }
     }
   });
@@ -173,26 +192,5 @@ describe("release runner reservation", () => {
         ).toBe(group);
       }
     }
-  });
-
-  it("retains the public Linux and native default labels", () => {
-    expect(
-      evaluateWorkflowRunner(
-        Object.values(workflows.get("openclaw-release-publish")!.jobs)[0]?.["runs-on"],
-        context,
-      ),
-    ).toBe("ubuntu-latest");
-    expect(
-      evaluateWorkflowRunner(
-        workflows.get("full-release-validation")?.jobs.resolve_target?.["runs-on"],
-        context,
-      ),
-    ).toBe("ubuntu-24.04");
-    expect(
-      evaluateWorkflowRunner(workflows.get("ci")?.jobs["macos-swift"]?.["runs-on"], context),
-    ).toBe("xcode-27");
-    expect(
-      evaluateWorkflowRunner(workflows.get("ci")?.jobs["checks-windows"]?.["runs-on"], context),
-    ).toBe("windows-2025");
   });
 });

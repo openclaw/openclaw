@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import { createApplicationOverlays } from "../app/overlays.ts";
 import { updateRunHarness } from "../app/update-run.test-support.ts";
-import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -13,6 +12,7 @@ import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import {
   renderSidebarIssueItem,
   renderSidebarMentionItem,
+  renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
 
@@ -53,6 +53,24 @@ describe("renderSidebarIssueItem", () => {
   });
 });
 
+describe("renderSidebarScopeUpgradeItem", () => {
+  it("shows the exact approval command for the pending access request", () => {
+    render(
+      renderSidebarScopeUpgradeItem({
+        state: { phase: "pending", requestId: "9c21fe9d-6f53-4420-a273-f447920314dd" },
+        onCancel: vi.fn(),
+        onRequest: vi.fn(),
+        onRetry: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "openclaw devices approve 9c21fe9d-6f53-4420-a273-f447920314dd",
+    );
+  });
+});
+
 describe("renderSidebarMentionItem", () => {
   beforeEach(() => {
     document.body.append(container);
@@ -77,7 +95,7 @@ describe("renderSidebarMentionItem", () => {
   const pathname = "/team/chat/writer/chat/12345678-90ab-cdef-1234-567890abcdef";
   const navigation = {
     pathname,
-    search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(mention.sessionKey)}`,
+    search: undefined,
   };
 
   function renderMention(overrides: Partial<Parameters<typeof renderSidebarMentionItem>[0]> = {}) {
@@ -218,7 +236,7 @@ describe("renderSidebarUpdateSurface", () => {
         if (state === "acknowledged") {
           overlays.acknowledgeUpdateRun();
         }
-        const dismissal = resolveSidebarUpdateAttention(context).dismissal;
+        const dismissal = resolveSidebarUpdateAttention(context)?.dismissal;
         const expected = {
           kind: "updateAvailable",
           signature: JSON.stringify(

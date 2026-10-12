@@ -2,7 +2,6 @@ import { posix as pathPosix } from "node:path";
 import type { SandboxFsStat } from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import {
-  assertFsSandboxAccess,
   assertNoReadOnlyDescendant,
   assertResolvedFsSandboxAccess,
   joinSandboxChildPath,
@@ -13,7 +12,6 @@ import {
 import {
   JSON_RPC_NOT_FOUND,
   JsonRpcProtocolError,
-  requireBase64String,
   requireNumber,
   requireObject,
   requireString,
@@ -61,7 +59,8 @@ export async function openFile(
   }
 
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
   const fsBridge = execServer.fsBridge;
   // Claim the handle before even stat so slow or cancelled stats cannot bypass
   // the connection's handle cap or lose their cancellation and ownership.
@@ -71,14 +70,27 @@ export async function openFile(
     reservedBytes: 0,
   };
   handles.set(handleId, handle);
-  try {
-    const stat = await fsBridge.stat({ filePath, signal: handle.abortController.signal });
+  const assertCurrent = () => {
     if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
       throw new JsonRpcProtocolError(
         JSON_RPC_NOT_FOUND,
         `unknown file read handle \`${handleId}\``,
       );
     }
+  };
+  try {
+    const readPolicy = await authorizePhysicalReadPath(
+      fsBridge,
+      fsSandboxPolicy,
+      filePath,
+      handle.abortController.signal,
+    );
+    const stat = await fsBridge.stat({
+      filePath,
+      signal: handle.abortController.signal,
+      ...readPolicy,
+    });
+    assertCurrent();
     if (!stat) {
       throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
     }
@@ -104,13 +116,9 @@ export async function openFile(
       filePath,
       maxBytes: handle.reservedBytes,
       signal: handle.abortController.signal,
+      ...readPolicy,
     });
-    if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
-      throw new JsonRpcProtocolError(
-        JSON_RPC_NOT_FOUND,
-        `unknown file read handle \`${handleId}\``,
-      );
-    }
+    assertCurrent();
     if (data.byteLength > handle.reservedBytes) {
       throw new JsonRpcProtocolError(
         -32600,
@@ -215,112 +223,95 @@ function requireFileReadHandleId(value: unknown): string {
   return handleId;
 }
 
-export async function readFile(
+export async function readFileOrMetadata(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
+  method: "fs/readFile" | "fs/getMetadata",
 ): Promise<JsonObject> {
-  const record = requireObject(params, "fs/readFile params");
-  const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const record = requireObject(params, `${method} params`);
+  const metadataOnly = method === "fs/getMetadata";
+  const filePath = resolveExecServerPath(
+    requireString(record.path, "path"),
+    metadataOnly ? "metadata path" : "read path",
+  );
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
   const fsBridge = execServer.fsBridge;
-  const stat = await fsBridge.stat({ filePath });
+  const readPolicy = await authorizePhysicalReadPath(fsBridge, fsSandboxPolicy, filePath);
+  // Content reads retain their bridge; metadata reads observe the current bridge after authorization.
+  const stat = await (metadataOnly ? execServer.fsBridge : fsBridge).stat({
+    filePath,
+    ...readPolicy,
+  });
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
+  }
+  if (metadataOnly) {
+    return {
+      isDirectory: stat.type === "directory",
+      isFile: stat.type === "file",
+      isSymlink: false,
+      size: stat.size,
+      createdAtMs: 0,
+      modifiedAtMs: stat.mtimeMs ?? 0,
+    };
   }
   assertSandboxFileReadWithinLimit(stat);
   const data = await fsBridge.readFile({
     filePath,
     maxBytes: CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES,
+    ...readPolicy,
   });
   return { dataBase64: data.toString("base64") };
 }
 
-export async function writeFile(
+export async function writeFileOrDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
+  method: "fs/writeFile" | "fs/createDirectory",
 ): Promise<void> {
-  const record = requireObject(params, "fs/writeFile params");
-  const filePath = resolveExecServerPath(requireString(record.path, "path"), "write path");
-  const fsBridge = execServer.fsBridge;
-  // Authorize the canonical destination before pinning the mutation so a
-  // symlinked parent cannot redirect an approved write into a protected path
-  // after authorization.
-  const canonicalDestination = await fsBridge.resolvePinnedMutationTarget?.({
-    filePath,
-    action: "write",
-  });
-  assertFsSandboxAccess(execServer, record, [
-    { path: filePath, access: "write" },
-    ...(canonicalDestination
-      ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
-      : []),
-  ]);
-  const parent = await fsBridge.stat({ filePath: pathPosix.dirname(filePath) });
-  if (parent?.type !== "directory") {
-    throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "parent directory not found");
-  }
-  await fsBridge.writeFile({
-    filePath,
-    data: Buffer.from(requireBase64String(record.dataBase64, "dataBase64"), "base64"),
-    mkdir: false,
-    pinnedPath: canonicalDestination?.pinnedPath,
-  });
-}
-
-export async function createDirectory(
-  execServer: OpenClawExecServer,
-  params: JsonValue | undefined,
-): Promise<void> {
-  const record = requireObject(params, "fs/createDirectory params");
+  const record = requireObject(params, `${method} params`);
+  const directory = method === "fs/createDirectory";
   const filePath = resolveExecServerPath(
     requireString(record.path, "path"),
-    "create-directory path",
+    directory ? "create-directory path" : "write path",
   );
   const fsBridge = execServer.fsBridge;
+  // Authorize the canonical destination before pinning the mutation so a
+  // symlinked parent cannot redirect an approved write into a protected path.
   const canonicalDestination = await fsBridge.resolvePinnedMutationTarget?.({
     filePath,
-    action: "mkdir",
+    action: directory ? "mkdir" : "write",
   });
-  assertFsSandboxAccess(execServer, record, [
+  assertResolvedFsSandboxAccess(resolveFsSandboxPolicy(execServer, record), [
     { path: filePath, access: "write" },
     ...(canonicalDestination
       ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
       : []),
   ]);
-  if (record.recursive === false) {
-    const parentPath = pathPosix.dirname(filePath);
-    const parent = await fsBridge.stat({ filePath: parentPath });
+  if (!directory || record.recursive === false) {
+    const parent = await fsBridge.stat({ filePath: pathPosix.dirname(filePath) });
     if (parent?.type !== "directory") {
       throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "parent directory not found");
     }
   }
-  await fsBridge.mkdirp({
-    filePath,
-    pinnedPath: canonicalDestination?.pinnedPath,
-  });
+  if (directory) {
+    await fsBridge.mkdirp({ filePath, pinnedPath: canonicalDestination?.pinnedPath });
+  } else {
+    await fsBridge.writeFile({
+      filePath,
+      data: decodeFileData(record.dataBase64),
+      mkdir: false,
+      pinnedPath: canonicalDestination?.pinnedPath,
+    });
+  }
 }
 
-export async function getMetadata(
-  execServer: OpenClawExecServer,
-  params: JsonValue | undefined,
-): Promise<JsonObject> {
-  const record = requireObject(params, "fs/getMetadata params");
-  const filePath = resolveExecServerPath(requireString(record.path, "path"), "metadata path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
-  const stat = await execServer.fsBridge.stat({
-    filePath,
-  });
-  if (!stat) {
-    throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
+function decodeFileData(value: unknown): Buffer {
+  if (typeof value !== "string") {
+    throw new Error("dataBase64 must be a string.");
   }
-  return {
-    isDirectory: stat.type === "directory",
-    isFile: stat.type === "file",
-    isSymlink: false,
-    size: stat.size,
-    createdAtMs: 0,
-    modifiedAtMs: stat.mtimeMs ?? 0,
-  };
+  return Buffer.from(value, "base64");
 }
 
 export async function readDirectory(
@@ -349,7 +340,7 @@ async function listDirectoryEntries(
   }
   const result = await execServer.backend.runShellCommand({
     script:
-      'find "$1" -mindepth 1 -maxdepth 1 -exec sh -c \'for path do name=${path##*/}; if [ -L "$path" ]; then kind=o; elif [ -d "$path" ]; then kind=d; elif [ -f "$path" ]; then kind=f; else kind=o; fi; printf "%s\\t%s\\n" "$kind" "$name"; done\' sh {} +',
+      'find "$1" -mindepth 1 -maxdepth 1 -exec sh -c \'for path do name=${path##*/}; if [ -L "$path" ]; then kind=o; elif [ -d "$path" ]; then kind=d; elif [ -f "$path" ]; then kind=f; else kind=o; fi; printf "%s%s\\000" "$kind" "$name"; done\' sh {} +',
     args: [resolved.containerPath],
     allowFailure: true,
   });
@@ -357,15 +348,30 @@ async function listDirectoryEntries(
     const stderr = result.stderr.toString("utf8").trim();
     throw new Error(stderr || `sandbox directory listing failed with code ${result.code}`);
   }
-  const lines = result.stdout.toString("utf8").split("\n").filter(Boolean);
-  return lines.map((line) => {
-    const [kind = "o", fileName = ""] = line.split("\t");
-    return {
-      fileName,
-      isDirectory: kind === "d",
-      isFile: kind === "f",
-    };
-  });
+  // POSIX basenames can contain tabs and newlines, but never a NUL byte.
+  return result.stdout
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean)
+    .map((entry) => ({
+      fileName: entry.slice(1),
+      isDirectory: entry[0] === "d",
+      isFile: entry[0] === "f",
+    }));
+}
+
+async function authorizePhysicalReadPath(
+  fsBridge: OpenClawExecServer["fsBridge"],
+  policy: ResolvedFsSandboxPolicy | undefined,
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<{ expectedPolicyPath?: string }> {
+  if (!policy || policy.unrestricted || !fsBridge.resolveReadPolicyPath) {
+    return {};
+  }
+  const expectedPolicyPath = await fsBridge.resolveReadPolicyPath({ filePath, signal });
+  assertResolvedFsSandboxAccess(policy, [{ path: expectedPolicyPath, access: "read" }]);
+  return { expectedPolicyPath };
 }
 
 export async function removePath(

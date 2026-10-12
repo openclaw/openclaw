@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -44,6 +45,23 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
+  @Test
+  fun browserFocusAvailabilityFollowsOperatorHelloAndDisconnect() {
+    val runtime = createConnectedRuntime()
+    try {
+      for (capabilities in listOf(null, setOf("control-ui-browser-focus"), emptySet())) {
+        reconnectOperator(runtime, capabilities = capabilities)
+        assertEquals(capabilities?.contains("control-ui-browser-focus") == true, runtime.gatewayControlPage.value?.browserFocusAvailable)
+      }
+      reconnectOperator(runtime, capabilities = setOf("control-ui-browser-focus"))
+      val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+      ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")("Gateway closed")
+      assertEquals(false, runtime.gatewayControlPage.value?.browserFocusAvailable)
+    } finally {
+      closeNodeRuntimeTestFixture(runtime)
+    }
+  }
+
   @Test
   fun selectedAgentPublishesRefreshFailureAndSuccessfulEmptyResult() =
     runBlocking {
@@ -1097,10 +1115,12 @@ class NodeRuntimeAgentSelectionTest {
         val archive =
           async {
             chat.patchSession(
-              key = chosenKey,
-              ownerAgentId = "scout",
-              expectedSessionId = archiveSessionId,
-              archived = true,
+              ChatSessionPatch(
+                key = chosenKey,
+                ownerAgentId = "scout",
+                expectedSessionId = archiveSessionId,
+                archived = true,
+              ),
             )
           }
         withTimeout(2_000) { archiveRequested.await() }
@@ -1576,6 +1596,7 @@ class NodeRuntimeAgentSelectionTest {
   private fun reconnectOperator(
     runtime: NodeRuntime,
     disconnectCallbacks: Int = 1,
+    capabilities: Set<String>? = null,
   ) {
     val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
     val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")
@@ -1588,6 +1609,7 @@ class NodeRuntimeAgentSelectionTest {
         mainSessionKey = "agent:main:main",
         updateAvailable = null,
         authScopes = listOf("operator.read"),
+        capabilities = capabilities,
       ),
     )
   }

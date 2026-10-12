@@ -723,7 +723,10 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const effortSelect = pane.locator('[data-chat-thinking-select="true"]');
+      // Summary click actionability does not wait for our history-loading disabled state.
+      const effortSelect = pane.locator(
+        '[data-chat-thinking-select="true"][aria-disabled="false"]',
+      );
       await effortSelect.click();
       const thinkingSlider = pane.locator('[data-chat-thinking-slider="true"]');
       await thinkingSlider.waitFor({ state: "visible" });
@@ -819,6 +822,7 @@ suite.define(() => {
     const sessionKey = "agent:main:session-a";
     const session = {
       key: sessionKey,
+      sessionId: `session:${sessionKey}`,
       kind: "direct",
       label: "Session A",
       model: "gpt-5.6-sol",
@@ -865,16 +869,21 @@ suite.define(() => {
       }
       await expectRequestCountStable(gateway, "sessions.patch", 0);
 
-      await gateway.setMethodResponse(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
-      );
+      await gateway.deferNext("sessions.patch");
       await thinkingSlider.evaluate((input) => {
         input.dispatchEvent(new Event("change", { bubbles: true }));
       });
       const thinkingPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(thinkingPatch.params)).toMatchObject({
         key: sessionKey,
+        thinkingLevel: "ultra",
+      });
+      await gateway.setSessionsListResponse(
+        chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
+      );
+      await gateway.resolveDeferred("sessions.patch");
+      expect(await gateway.getSessionRow(sessionKey)).toMatchObject({
+        sessionId: session.sessionId,
         thinkingLevel: "ultra",
       });
       await expect.poll(() => effortPicker.getAttribute("data-chat-thinking-value")).toBe("ultra");
@@ -885,9 +894,8 @@ suite.define(() => {
       const search = main.locator('[data-chat-model-search="true"]');
       await expect
         .poll(() => search.evaluate((element) => element === document.activeElement))
-        .toBe(false);
-      await search.focus();
-      await search.fill("anthropic");
+        .toBe(true);
+      await page.keyboard.type("anthropic");
       const anthropicModel = main.locator('[data-chat-model-option="anthropic/claude-fable-5"]');
       await expect.poll(() => anthropicModel.isVisible()).toBe(true);
       await expect

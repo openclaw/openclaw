@@ -12,14 +12,11 @@ import {
   resolveClaudeCliAnthropicModelRefs,
   resolveKnownAnthropicModelRef,
 } from "./claude-model-refs.js";
-import {
-  CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
-  CLAUDE_CLI_PROFILE_ID,
-} from "./cli-constants.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
 const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = [
+  "anthropic/claude-sonnet-5-5",
   "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
 ] as const;
@@ -280,10 +277,7 @@ export function applyAnthropicConfigDefaults(params: {
     authMode === "oauth" &&
     (usesClaudeCliModelSelection(params.config) || usesSelectedClaudeCliAuthProfile(params.config))
   ) {
-    const runtimeRefs = new Set([
-      ...collectClaudeCliRuntimeRefsFromConfig(params.config),
-      ...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
-    ]);
+    const runtimeRefs = collectClaudeCliRuntimeRefsFromConfig(params.config);
     for (const ref of runtimeRefs) {
       const current = nextModels[ref];
       const updated = modelEntryWithClaudeCliRuntime(current);

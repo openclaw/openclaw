@@ -1,9 +1,9 @@
-import { compareToolCallShape, stableHash } from "./parity-shared.js";
+import { resolveNonNegativeIntegerOption as readCount } from "openclaw/plugin-sdk/number-runtime";
+import { compareParityBehavior, stableHash } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type {
-  RuntimeId,
   RuntimeParityCell,
   RuntimeParityDrift,
-  RuntimeParityToolCall,
   RuntimeParityUsage,
 } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
@@ -12,10 +12,6 @@ type HarnessVariant = {
   id: string;
   label: string;
   runtime?: RuntimeId;
-  model?: string;
-  configPatch?: Record<string, unknown>;
-  systemPromptOverlay?: string;
-  toolDescriptionOverlay?: Record<string, string>;
 };
 
 export type HarnessParityDrift =
@@ -24,15 +20,7 @@ export type HarnessParityDrift =
   | "tool-description"
   | "tool-schema";
 
-type HarnessParityPromptStats = {
-  systemPromptChars: number;
-  projectContextChars: number;
-  nonProjectContextChars: number;
-  skillPromptChars: number;
-  toolSummaryChars: number;
-  toolSchemaChars: number;
-  toolCount: number;
-};
+type HarnessParityPromptStats = ReturnType<typeof buildPromptStats>;
 
 export type RuntimeParitySystemPromptReport = {
   systemPrompt?: {
@@ -69,15 +57,7 @@ export type HarnessRuntimeParityCell = RuntimeParityCell & {
   systemPromptReport?: RuntimeParitySystemPromptReport;
 };
 
-type HarnessParityCell = HarnessRuntimeParityCell & {
-  variant: HarnessVariant;
-  promptStats: HarnessParityPromptStats;
-  systemPromptHash: string;
-  toolDescriptionHash: string;
-  toolSchemaHash: string;
-  tokenUsage: RuntimeParityUsage;
-  tokenUsageSource: "live-usage" | "mock-estimate";
-};
+type HarnessParityCell = ReturnType<typeof buildHarnessParityCell>;
 
 type HarnessParityResult = {
   scenarioId: string;
@@ -97,47 +77,15 @@ type HarnessParityResult = {
   firstDriftTurn?: number;
 };
 
-function countComparableTranscriptRecords(transcriptBytes: string) {
-  let count = 0;
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as {
-        message?: { role?: unknown };
-        role?: unknown;
-      };
-      if (
-        (parsed.message && typeof parsed.message.role === "string") ||
-        typeof parsed.role === "string"
-      ) {
-        count += 1;
-      }
-    } catch {
-      // Ignore malformed QA transcript rows and keep parity classification deterministic.
-    }
-  }
-  return count;
-}
-
-function readPositiveNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
 function buildPromptStats(report: RuntimeParitySystemPromptReport | undefined) {
   const toolEntries = Array.isArray(report?.tools?.entries) ? report.tools.entries : [];
   return {
-    systemPromptChars: readPositiveNumber(report?.systemPrompt?.chars),
-    projectContextChars: readPositiveNumber(report?.systemPrompt?.projectContextChars),
-    nonProjectContextChars: readPositiveNumber(report?.systemPrompt?.nonProjectContextChars),
-    skillPromptChars: readPositiveNumber(report?.skills?.promptChars),
-    toolSummaryChars: toolEntries.reduce(
-      (sum, entry) => sum + readPositiveNumber(entry.summaryChars),
-      0,
-    ),
-    toolSchemaChars: readPositiveNumber(report?.tools?.schemaChars),
+    systemPromptChars: readCount(report?.systemPrompt?.chars, 0),
+    projectContextChars: readCount(report?.systemPrompt?.projectContextChars, 0),
+    nonProjectContextChars: readCount(report?.systemPrompt?.nonProjectContextChars, 0),
+    skillPromptChars: readCount(report?.skills?.promptChars, 0),
+    toolSummaryChars: toolEntries.reduce((sum, entry) => sum + readCount(entry.summaryChars, 0), 0),
+    toolSchemaChars: readCount(report?.tools?.schemaChars, 0),
     toolCount: toolEntries.length,
   };
 }
@@ -162,28 +110,6 @@ function estimateUsage(
   };
 }
 
-function normalizeTextForParity(text: string) {
-  return text.replace(/\s+/gu, " ").trim();
-}
-
-function compareToolResultShape(left: RuntimeParityToolCall[], right: RuntimeParityToolCall[]) {
-  const total = Math.min(left.length, right.length);
-  for (let index = 0; index < total; index += 1) {
-    const leftCall = left[index];
-    const rightCall = right[index];
-    if (!leftCall || !rightCall) {
-      continue;
-    }
-    if (
-      leftCall.resultHash !== rightCall.resultHash ||
-      (leftCall.errorClass ?? "") !== (rightCall.errorClass ?? "")
-    ) {
-      return `tool result ${index + 1} differs (${leftCall.tool})`;
-    }
-  }
-  return undefined;
-}
-
 function firstDriftTurn(leftTranscript: string, rightTranscript: string): number | undefined {
   const leftLines = leftTranscript.trim().length ? leftTranscript.trim().split(/\r?\n/u) : [];
   const rightLines = rightTranscript.trim().length ? rightTranscript.trim().split(/\r?\n/u) : [];
@@ -199,8 +125,8 @@ function firstDriftTurn(leftTranscript: string, rightTranscript: string): number
 export function buildHarnessParityCell(params: {
   variant: HarnessVariant;
   cell: HarnessRuntimeParityCell;
-  tokenUsageSource: HarnessParityCell["tokenUsageSource"];
-}): HarnessParityCell {
+  tokenUsageSource: "live-usage" | "mock-estimate";
+}) {
   const report = params.cell.systemPromptReport;
   const promptStats = buildPromptStats(report);
   const toolEntries = report?.tools?.entries ?? [];
@@ -211,34 +137,29 @@ export function buildHarnessParityCell(params: {
   return {
     ...params.cell,
     variant: params.variant,
-    ...(report ? { systemPromptReport: report } : {}),
     promptStats,
     systemPromptHash: stableHash({
       systemPrompt: report?.systemPrompt ?? null,
       skills: report?.skills ?? null,
     }),
     toolDescriptionHash: stableHash(
-      toolEntries.map((entry) => {
-        return {
-          name: entry.name,
-          summary: entry.summary,
-          summaryHash: entry.summaryHash,
-          summaryChars: entry.summaryChars,
-        };
-      }),
+      toolEntries.map((entry) => ({
+        name: entry.name,
+        summary: entry.summary,
+        summaryHash: entry.summaryHash,
+        summaryChars: entry.summaryChars,
+      })),
     ),
     toolSchemaHash: stableHash({
       listChars: report?.tools?.listChars,
       schemaChars: report?.tools?.schemaChars,
-      entries: toolEntries.map((entry) => {
-        return {
-          name: entry.name,
-          schema: entry.schema,
-          schemaHash: entry.schemaHash,
-          schemaChars: entry.schemaChars,
-          propertiesCount: entry.propertiesCount,
-        };
-      }),
+      entries: toolEntries.map((entry) => ({
+        name: entry.name,
+        schema: entry.schema,
+        schemaHash: entry.schemaHash,
+        schemaChars: entry.schemaChars,
+        propertiesCount: entry.propertiesCount,
+      })),
     }),
     tokenUsage,
     tokenUsageSource: params.tokenUsageSource,
@@ -303,38 +224,16 @@ export function buildHarnessParityResult(params: {
   if (params.left.toolSchemaHash !== params.right.toolSchemaHash) {
     return driftResult("tool-schema", "tool schema shape differs");
   }
-  const compareToolShapes =
-    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
-  const compareTranscriptStructure =
-    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
-
-  if (compareToolShapes) {
-    const toolCallDrift = compareToolCallShape(params.left.toolCalls, params.right.toolCalls);
-    if (toolCallDrift) {
-      return driftResult("tool-call-shape", toolCallDrift);
-    }
-    const toolResultDrift = compareToolResultShape(params.left.toolCalls, params.right.toolCalls);
-    if (toolResultDrift) {
-      return driftResult("tool-result-shape", toolResultDrift);
-    }
-  }
-  const leftTranscriptRecords = countComparableTranscriptRecords(params.left.transcriptBytes);
-  const rightTranscriptRecords = countComparableTranscriptRecords(params.right.transcriptBytes);
-  if (
-    compareTranscriptStructure &&
-    (leftTranscriptRecords !== rightTranscriptRecords ||
-      (!params.left.finalText && Boolean(params.right.finalText)) ||
-      (Boolean(params.left.finalText) && !params.right.finalText))
-  ) {
-    return driftResult(
-      "structural",
-      `transcript/final-text structure differs (${leftTranscriptRecords} message records vs ${rightTranscriptRecords} message records)`,
-    );
-  }
-  if (
-    normalizeTextForParity(params.left.finalText) !== normalizeTextForParity(params.right.finalText)
-  ) {
-    return driftResult("text-only", "final text differs after whitespace normalization");
+  const behavior = compareParityBehavior({
+    left: params.left,
+    right: params.right,
+    compareStructure:
+      params.comparisonMode !== "codex-native-workspace" &&
+      params.comparisonMode !== "outcome-only",
+    transcriptMode: "messages",
+  });
+  if (behavior.drift !== "none") {
+    return driftResult(behavior.drift, behavior.driftDetails);
   }
   return {
     scenarioId: params.scenarioId,

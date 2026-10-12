@@ -3,17 +3,13 @@
 // per-process cleanup. Domain modules own record fields and display keys.
 import { randomUUID } from "node:crypto";
 import { getProcessStartTime } from "../shared/pid-alive.js";
-import { createCorePluginStateSyncKeyedStore } from "./plugin-state-store.js";
-
-/** Envelope persisted with every cross-process runtime health record. */
-export type RuntimeHealthRecordEnvelope = {
-  processId: number;
-  /** Random per-process identity; proves incarnation for own-PID records. */
-  processToken: string;
-  /** Linux /proc starttime for sibling verification; null when unavailable. */
-  processStartTime: number | null;
-  failedAtMs: number;
-};
+import { createCorePluginStateKeyedStore } from "./plugin-state-store.js";
+import { clearRuntimeHealthInWorker } from "./plugin-state-worker-client.js";
+import {
+  hasValidRuntimeHealthEnvelope,
+  type RuntimeHealthClearSelection,
+  type RuntimeHealthRecordEnvelope,
+} from "./runtime-health-records.js";
 
 // One token per process lifetime: a restarted process (even with a recycled
 // PID) can never match records written by its predecessor.
@@ -32,37 +28,6 @@ type RuntimeHealthStoreOptions<T extends RuntimeHealthRecordEnvelope> = {
   /** Which failedAtMs wins per display group: root cause vs most recent reason. */
   pick: "earliest" | "latest";
 };
-
-type RuntimeHealthStore<T extends RuntimeHealthRecordEnvelope> = {
-  /** Persists a record under the key, overwriting any prior value. */
-  register(key: string, record: T): void;
-  /** One record per display group, restricted to live recorder processes. */
-  list(): T[];
-  /** Removes records recorded by the process, optionally narrowed by predicate. */
-  clearForProcess(processId: number, matches?: (record: T) => boolean): void;
-};
-
-function hasValidEnvelope(
-  value: unknown,
-): value is Record<string, unknown> & RuntimeHealthRecordEnvelope {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const record = value as Partial<RuntimeHealthRecordEnvelope>;
-  return (
-    typeof record.processId === "number" &&
-    Number.isInteger(record.processId) &&
-    record.processId > 0 &&
-    typeof record.processToken === "string" &&
-    record.processToken.length > 0 &&
-    (record.processStartTime === null ||
-      (typeof record.processStartTime === "number" &&
-        Number.isFinite(record.processStartTime) &&
-        record.processStartTime >= 0)) &&
-    typeof record.failedAtMs === "number" &&
-    Number.isFinite(record.failedAtMs)
-  );
-}
 
 /** Builds the common health envelope for records owned by this process. */
 export function createRuntimeHealthRecordEnvelope(failedAt: Date): RuntimeHealthRecordEnvelope {
@@ -91,28 +56,29 @@ function processLooksLive(record: RuntimeHealthRecordEnvelope): boolean {
 /** Opens a SQLite-backed health record namespace shared across runtime processes. */
 export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
   options: RuntimeHealthStoreOptions<T>,
-): RuntimeHealthStore<T> {
+) {
   // The keyed store is opened per operation so records follow the state dir
   // active at call time (tests and embedded runtimes swap OPENCLAW_STATE_DIR).
-  const openStore = () =>
-    createCorePluginStateSyncKeyedStore<T>({
-      ownerId: options.ownerId,
-      namespace: options.namespace,
-      maxEntries: options.maxEntries,
-      ...(options.ttlMs != null ? { defaultTtlMs: options.ttlMs } : {}),
-    });
+  const storeOptions = () => ({
+    ownerId: options.ownerId,
+    namespace: options.namespace,
+    maxEntries: options.maxEntries,
+    ...(options.ttlMs != null ? { defaultTtlMs: options.ttlMs } : {}),
+  });
 
   const normalize = (value: unknown): T | undefined =>
-    hasValidEnvelope(value) ? options.normalizeRecord(value) : undefined;
+    hasValidRuntimeHealthEnvelope(value) ? options.normalizeRecord(value) : undefined;
 
   return {
-    register(key, record) {
-      openStore().register(key, record);
+    async register(key: string, record: T, assertCurrent?: () => void) {
+      await createCorePluginStateKeyedStore<T>(storeOptions()).register(key, record, {
+        assertCurrent,
+      });
     },
-    list() {
+    async list() {
       try {
         const byGroup = new Map<string, T>();
-        for (const entry of openStore().entries()) {
+        for (const entry of await createCorePluginStateKeyedStore<T>(storeOptions()).entries()) {
           const record = normalize(entry.value);
           if (!record || !processLooksLive(record)) {
             continue;
@@ -133,17 +99,26 @@ export function createRuntimeHealthStore<T extends RuntimeHealthRecordEnvelope>(
         return [];
       }
     },
-    clearForProcess(processId, matches) {
+    async clearForProcess(
+      processId: number,
+      selection: RuntimeHealthClearSelection,
+      assertCurrent?: () => void,
+    ) {
       try {
-        const store = openStore();
-        for (const entry of store.entries()) {
-          const record = normalize(entry.value);
-          if (record?.processId === processId && (!matches || matches(record))) {
-            store.delete(entry.key);
-          }
-        }
+        await clearRuntimeHealthInWorker({
+          pluginId: options.ownerId,
+          namespace: options.namespace,
+          processId,
+          selection:
+            selection.kind === "tool-schema"
+              ? { ...selection, keys: [...selection.keys] }
+              : { ...selection },
+          assertCurrent,
+        });
+        return true;
       } catch {
         // Best-effort cleanup; callers also clear their in-memory state.
+        return false;
       }
     },
   };

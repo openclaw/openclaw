@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import * as fetchRuntimeSdk from "openclaw/plugin-sdk/fetch-runtime";
 import {
-  createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
   resolveEnvHttpProxyAgentOptions,
@@ -20,6 +20,9 @@ import { withValidatedDiscordProxy } from "../proxy-fetch.js";
 // The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
 const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
   proxyCaptureSdk;
+
+// The 2026.9.6 SDK has only the environment-aware factory; retire with that host floor.
+const fetchSdk: Partial<Pick<typeof fetchRuntimeSdk, "createHttp1Agent">> = fetchRuntimeSdk;
 
 const discordDnsLookup = createDiscordDnsLookup();
 
@@ -82,6 +85,13 @@ export function resolveDiscordRestFetch(
 
   return createDiscordRestFetchWithDispatcher(
     createEnvProxyDiscordRestDispatcher(runtime) ??
-      createHttp1Agent({ connect: { lookup: discordDnsLookup } }),
+      fetchSdk.createHttp1Agent?.({ connect: { lookup: discordDnsLookup } }) ??
+      createHttp1EnvHttpProxyAgent({
+        // Empty overrides keep the direct fallback independent of invalid proxy environment.
+        httpProxy: "",
+        httpsProxy: "",
+        noProxy: "*",
+        connect: { lookup: discordDnsLookup },
+      }),
   );
 }

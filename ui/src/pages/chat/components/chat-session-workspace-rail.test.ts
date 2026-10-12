@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
+import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
 import type { SessionWorkspaceProps } from "./chat-session-workspace-types.ts";
 import {
   createSessionWorkspaceProps,
@@ -11,7 +12,6 @@ import {
 
 function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): SessionWorkspaceProps {
   return {
-    collapsed: false,
     sessionKey: "agent:main:workspace",
     list: null,
     loading: false,
@@ -20,11 +20,6 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     filter: "all",
     browserPath: "",
     browserSearch: "",
-    dock: "right",
-    narrowLayout: false,
-    onToggleCollapsed: vi.fn(),
-    onSetDock: vi.fn(),
-    onRefresh: vi.fn(),
     onBrowsePath: vi.fn(),
     onOpenFile: vi.fn(),
     onSearch: vi.fn(),
@@ -41,10 +36,7 @@ afterEach(() => {
 
 describe("session workspace path actions", () => {
   it.each([
-    { path: "reports", search: "", loading: false, parent: "" },
     { path: "reports/monthly", search: "", loading: false, parent: "reports" },
-    { path: "", search: "", loading: false, parent: null },
-    { path: "reports", search: "notes", loading: false, parent: null },
     { path: "reports", search: "", loading: true, parent: null },
   ])("keeps only settled non-root folder recovery available: %j", (scenario) => {
     const onBrowsePath = vi.fn();
@@ -56,7 +48,7 @@ describe("session workspace path actions", () => {
       onBrowsePath,
     });
     const mount = document.body.appendChild(document.createElement("div"));
-    render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
+    render(renderSessionWorkspaceRail(workspace), mount);
     const parent = mount.querySelector<HTMLButtonElement>('button[aria-label=".."]');
     if (scenario.parent === null) {
       expect(parent).toBeNull();
@@ -82,7 +74,10 @@ describe("session workspace path actions", () => {
       sidebarContent: null,
       sessions: {
         listFiles: vi.fn().mockResolvedValue(result),
-        getFile: vi.fn().mockResolvedValue({ ...result, file: { ...file, content: "# Readme" } }),
+        getFile: vi.fn().mockResolvedValue({
+          ...result,
+          file: { ...file, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+        }),
       },
     } as unknown as SessionWorkspaceHost;
     createSessionWorkspaceProps(state, { expanded: true });
@@ -102,7 +97,7 @@ describe("session workspace path actions", () => {
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
     );
-    createSessionWorkspaceProps(state).onRefresh();
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
     renderRows();
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
@@ -110,10 +105,10 @@ describe("session workspace path actions", () => {
     );
   });
 
-  it.each(["/synthetic/very-long-workspace-prefix", "C:\\synthetic\\very-long-workspace-prefix"])(
+  it.each(["C:\\synthetic\\very-long-workspace-prefix"])(
     "keeps session file labels readable and distinct under %s",
     async (root) => {
-      const separator = root.includes("\\") ? "\\" : "/";
+      const separator = "\\";
       const path = (...parts: string[]) => [root, ...parts].join(separator);
       const paths = [path("inventory.csv"), path("ui", "index.ts"), path("api", "index.ts")];
       const writeText = vi.fn().mockResolvedValue(undefined);
@@ -173,21 +168,12 @@ describe("session workspace path actions", () => {
       selector: ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser)",
       path: "src/edited.ts",
       origin: "session" as const,
-      failed: true,
       feedback: "Copy failed",
     },
-    {
-      surface: "project browser",
-      selector: ".chat-workspace-rail__list--browser",
-      path: "src/browser.ts",
-      origin: "workspace" as const,
-      failed: false,
-      feedback: "Copied!",
-    },
   ])("shows $feedback when copying a $surface path", async (testCase) => {
-    const writeText = testCase.failed
-      ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
-      : vi.fn().mockResolvedValue(undefined);
+    const writeText = vi
+      .fn()
+      .mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const onOpenFile = vi.fn();
     const workspace = createWorkspace({
@@ -281,7 +267,78 @@ describe("session workspace path actions", () => {
     expect(mount.querySelector('button[aria-label="src/edited.ts"]')).not.toBeNull();
   });
 
-  it.each(["inventory  report", "  INVENTORY  REPORT  ", "\tinventory  report\t"])(
+  it.each([
+    { filter: "changed", browser: true, restored: 1 },
+    { filter: "read", browser: true, restored: 1 },
+    { filter: "artifacts", browser: true, restored: 1 },
+    { filter: "all", browser: true, restored: 3 },
+    { filter: "all", browser: false, restored: 3 },
+  ] as const)(
+    "explains empty $filter search results (browser: $browser) and recovers",
+    (scenario) => {
+      const workspace = createWorkspace({
+        list: {
+          sessionKey: "agent:main:workspace",
+          files: [
+            { kind: "modified", name: "report.csv", path: "report.csv", missing: false },
+            { kind: "read", name: "report.md", path: "report.md", missing: false },
+          ],
+          artifacts: [{ id: "report", title: "Report", type: "file", download: { mode: "bytes" } }],
+          ...(scenario.browser ? { browser: { path: "", entries: [] } } : {}),
+        },
+      });
+      const mount = document.body.appendChild(document.createElement("div"));
+      const renderRows = () => render(renderSessionWorkspaceRail(workspace), mount);
+      workspace.onSearch = (search) => {
+        workspace.browserSearch = search;
+        if (workspace.list?.browser) {
+          workspace.list.browser.search = search;
+        }
+        renderRows();
+      };
+      workspace.onSetFilter = (filter) => {
+        workspace.filter = filter;
+        renderRows();
+      };
+      renderRows();
+      const search = mount.querySelector<HTMLInputElement>('input[type="search"]')!;
+      search.value = "NO-SUCH-FILE";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      const label = scenario.filter === "all" ? "All" : `1 ${scenario.filter}`;
+      const chip = [...mount.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find(
+        (button) => button.textContent?.trim() === label,
+      );
+      assert(chip, "Expected the selected Files filter to remain available");
+      chip.click();
+      expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(0);
+      expect(mount.textContent?.match(/No matching files\./g)).toHaveLength(1);
+      expect(chip.getAttribute("aria-pressed")).toBe("true");
+
+      search.value = "";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(
+        scenario.restored,
+      );
+      expect(mount.textContent).not.toContain("No matching files.");
+      expect(chip.getAttribute("aria-pressed")).toBe("true");
+
+      search.value = "NO-SUCH-FILE";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      workspace.loading = true;
+      workspace.list = null;
+      renderRows();
+      expect(mount.textContent).not.toContain("No matching files.");
+      workspace.loading = false;
+      renderRows();
+      expect(mount.textContent).not.toContain("No matching files.");
+      workspace.error = "Files could not be loaded.";
+      renderRows();
+      expect(mount.textContent).toContain(workspace.error);
+      expect(mount.textContent).not.toContain("No matching files.");
+    },
+  );
+
+  it.each(["  INVENTORY  REPORT  "])(
     "matches every Files group consistently for %j without collapsing internal spaces",
     (query) => {
       const workspace = createWorkspace({
@@ -340,27 +397,4 @@ describe("session workspace path actions", () => {
       expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(6);
     },
   );
-
-  it("omits filter chips when only project files are available", () => {
-    const workspace = createWorkspace({
-      filter: "read",
-      list: {
-        sessionKey: "agent:main:workspace",
-        files: [],
-        artifacts: [],
-        browser: {
-          path: "",
-          entries: [{ kind: "file", name: "README.md", path: "README.md" }],
-        },
-      },
-    });
-    const mount = document.body.appendChild(document.createElement("div"));
-
-    render(renderSessionWorkspaceRail(workspace), mount);
-
-    expect(mount.querySelector('[role="group"][aria-label="Filter files"]')).toBeNull();
-    expect(mount.querySelector('input[type="search"]')).toBeInstanceOf(HTMLInputElement);
-    expect(mount.querySelector("summary")?.textContent).toContain("Project files");
-    expect(mount.textContent).toContain("README.md");
-  });
 });

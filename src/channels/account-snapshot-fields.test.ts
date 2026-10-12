@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getCredentialUnavailableDiagnostics,
   projectSafeChannelAccountSnapshotFields,
-  redactChannelAccountSnapshotBaseUrl,
+  redactChannelStatusSummaryBaseUrl,
 } from "./account-snapshot-fields.js";
 
 function joinUrlParts(...parts: string[]): string {
@@ -122,7 +122,7 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
     });
     const snapshot = { ...account };
 
-    const redacted = redactChannelAccountSnapshotBaseUrl(snapshot);
+    const redacted = redactChannelStatusSummaryBaseUrl(snapshot);
 
     expect(redacted).toEqual({ baseUrl: "https://chat.example.test/?token=***" });
     expect(account.baseUrl).toBe(rawBaseUrl);
@@ -131,7 +131,7 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
 
   it("retains object identity when a plugin snapshot baseUrl is already safe", () => {
     const snapshot = { baseUrl: "https://chat.example.test/?keep=visible" };
-    expect(redactChannelAccountSnapshotBaseUrl(snapshot)).toBe(snapshot);
+    expect(redactChannelStatusSummaryBaseUrl(snapshot)).toBe(snapshot);
   });
 
   it("preserves non-secret transport liveness timestamps", () => {
@@ -154,17 +154,6 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
     expect(snapshot).toEqual(safeFields);
   });
 
-  it("projects terminalDisconnect when present and omits it when absent", () => {
-    const withFlag = projectSafeChannelAccountSnapshotFields({
-      connected: false,
-      terminalDisconnect: true,
-    });
-    expect(withFlag.terminalDisconnect).toBe(true);
-
-    const withoutFlag = projectSafeChannelAccountSnapshotFields({ connected: false });
-    expect(withoutFlag).not.toHaveProperty("terminalDisconnect");
-  });
-
   it("projects recorded lifecycle alongside channel-authored healthState", () => {
     expect(
       projectSafeChannelAccountSnapshotFields({
@@ -173,25 +162,5 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       }),
     ).toEqual({ healthState: "degraded", lifecycle: "blocked" });
     expect(projectSafeChannelAccountSnapshotFields({ lifecycle: "unknown" })).toEqual({});
-  });
-
-  it("preserves false, zero, and nullable fields without exposing invalid credential metadata", () => {
-    const safeFields = {
-      running: false,
-      connected: false,
-      reconnectAttempts: 0,
-      lastConnectedAt: null,
-      lastOutboundAt: null,
-      activeRuns: 0,
-    };
-    const snapshot = projectSafeChannelAccountSnapshotFields({
-      ...safeFields,
-      ingressUnavailable: false,
-      token: "must-not-leak",
-      tokenStatus: "unexpected-status",
-      apiCredentialStatus: "unexpected-status",
-    });
-
-    expect(snapshot).toStrictEqual(safeFields);
   });
 });

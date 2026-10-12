@@ -1,4 +1,3 @@
-// Litellm plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   definePluginEntry,
@@ -57,7 +56,7 @@ export default definePluginEntry({
       envVar: "LITELLM_API_KEY",
       promptMessage: "Enter LiteLLM API key",
       defaultModel: LITELLM_DEFAULT_MODEL_REF,
-      applyConfig: (cfg) => applyLitellmConfig(cfg),
+      applyConfig: applyLitellmConfig,
       noteTitle: "LiteLLM",
       noteMessage: [
         "LiteLLM provides a unified API to 100+ LLM providers.",

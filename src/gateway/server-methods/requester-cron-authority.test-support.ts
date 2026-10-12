@@ -8,6 +8,7 @@ import {
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import {
@@ -43,6 +44,7 @@ import { loadCronStore } from "../../cron/store.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
@@ -83,8 +85,10 @@ export function installRequesterCronAuthorityTestHooks() {
 
   afterEach(async () => {
     cron?.stop();
+    await cron?.waitForIdle();
     revokeRequesterCronAuthority(SESSION);
     await cleanupSessionStateForTest({ stateDir });
+    closeOpenClawAgentDatabasesForTest(stateDir);
     clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
   });
@@ -128,9 +132,11 @@ export async function inRun<T>(
   runId: string,
   admitted: GatewayCronCreatorAuthorityAdmission | undefined,
   run: RequesterRun<T>,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ) {
   const runAdmission = prepareAgentRunAdmission({
     cfg: getRuntimeConfig(),
+    operatorAuthority,
     operationalRunInstance: createOperationalRunInstanceRef(runId),
     facts: {
       runId,
@@ -255,7 +261,7 @@ export async function createCreatorTransportTools(params: {
           }),
           toolsAllow,
           false,
-          resolveAdmittedRunActiveAssertion(admitted),
+          { assertCurrent: resolveAdmittedRunActiveAssertion(admitted) },
         ),
         "prepared CLI grant",
       ),

@@ -2,33 +2,43 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { notifyListeners } from "../../../../src/shared/listeners.js";
+import { readOfflineStorageScope, type OfflineStorageClient } from "../../app/boot-record.ts";
 import {
-  DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
   hasUiSessionDefaults,
   resolveUiConversationIdentity,
 } from "../sessions/session-key.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
-import { removeOutboxPayloads } from "./outbox-payload-store.runtime.ts";
 import {
   MAX_STORED_SESSIONS,
   normalizeStoredSession,
+  type StoredComposerRecovery,
   type StoredComposerSession,
+  type StoredComposerState,
 } from "./outbox-store-codec.ts";
 import { observeDraftRevision, rememberDraftRevision } from "./outbox-store-draft-state.ts";
+import { retireRemovedOutboxPayloads } from "./outbox-store-payload-retirement.ts";
+import {
+  storedChatOutboxScopeKey,
+  UNRESOLVED_GLOBAL_AGENT_SCOPE,
+  type ComposerStorageTarget,
+  type StoredChatOutboxScope,
+} from "./outbox-store-scope.ts";
+
+export type { StoredComposerRecovery, StoredComposerState } from "./outbox-store-codec.ts";
+export { storedChatOutboxScopeKey } from "./outbox-store-scope.ts";
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const PREVIOUS_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
 const BLOB_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
-const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
 const storedChatOutboxChangeListeners = new Set<() => void>();
 let storageChangeListenerInstalled = false;
 
 export type ChatComposerScope = {
-  client?: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
+  client?: OfflineStorageClient | null;
   connected?: boolean;
   selectedChatSessionIncognito?: boolean;
   settings?: { gatewayUrl?: string | null };
@@ -37,34 +47,24 @@ export type ChatComposerScope = {
   hello?: { snapshot?: unknown } | null;
 };
 
-type ComposerStorageTarget = {
-  key: string;
-  legacyKey: string;
-  previousKey: string;
-  blobKey: string;
-  gatewayOwner: string;
-  legacyOwnerIsUnambiguous: boolean;
-};
+/** Sidebar draft presence for a tab row; attachments exist only in durable drafts. */
+export function hasStoredComposerDraftInput(session: {
+  draft?: string;
+  goalMode?: unknown;
+  replyTarget?: unknown;
+}): boolean {
+  return Boolean(session.draft || session.goalMode || session.replyTarget);
+}
 
-export type StoredChatOutboxScope = {
-  sessionKey: string;
-  agentId?: string;
-};
-
-export type StoredComposerState = {
-  version: 4;
-  gatewayOwner: string;
-  sessions: Record<string, StoredComposerSession>;
-  recovery: Record<string, StoredComposerRecovery>;
-  legacyReceipts?: Partial<Record<"1" | "2" | "3", string>>;
-  recoveryBlocked?: true;
-};
-
-export type StoredComposerRecovery = {
-  sourceVersion: 1 | 2 | 3 | 4;
-  sourceScopeKey: string;
-  session: StoredComposerSession;
-};
+/** Content-only edits stay silent so projection subscribers cannot re-persist a stale pane. */
+export function notifyDraftPresence(
+  before: Parameters<typeof hasStoredComposerDraftInput>[0],
+  after: Parameters<typeof hasStoredComposerDraftInput>[0],
+): void {
+  if (hasStoredComposerDraftInput(before) !== hasStoredComposerDraftInput(after)) {
+    notifyStoredChatOutboxChanges();
+  }
+}
 
 export function clearStoredComposerDraftInput(session: {
   draft?: unknown;
@@ -98,6 +98,21 @@ function retireStoredIncognitoDrafts(store: StoredComposerState): boolean {
 
 // Keep the original recovery bound; excess whole legacy sources remain available.
 const MAX_RECOVERY_ROWS = 80;
+
+function retireEmptyComposerRecovery(store: StoredComposerState): void {
+  for (const [key, { session }] of Object.entries(store.recovery)) {
+    if (
+      !hasStoredComposerDraftInput(session) &&
+      !session.queue?.length &&
+      session.draftRevision !== undefined
+    ) {
+      // Draft writers consult sessions, not recovery snapshots. Keep those
+      // canonical clear fences and legacyReceipts (which prevent source replay),
+      // but retire empty recovery copies before they consume the bounded budget.
+      delete store.recovery[key];
+    }
+  }
+}
 const pendingLegacyTransfers = new WeakMap<
   StoredComposerState,
   Array<{ key: string; raw: string }>
@@ -125,22 +140,14 @@ export function subscribeStoredChatOutboxChanges(listener: () => void): () => vo
 }
 
 export function notifyStoredChatOutboxChanges(): void {
-  for (const listener of storedChatOutboxChangeListeners) {
-    try {
-      listener();
-    } catch (error) {
-      console.error("[openclaw] stored chat outbox listener failed", error);
-    }
-  }
+  notifyListeners(storedChatOutboxChangeListeners, undefined, (error) =>
+    console.error("[openclaw] stored chat outbox listener failed", error),
+  );
 }
 
 function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
-  if (event.key === null && event.storageArea) {
-    projectedStoreByStorage.get(event.storageArea)?.clear();
-    notifyStoredChatOutboxChanges();
-    return;
-  }
   if (
+    (event.key === null && event.storageArea) ||
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(PREVIOUS_STORAGE_KEY_PREFIX) ||
@@ -155,11 +162,14 @@ function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
 
 export function storageTargetForGateway(
   gatewayUrl: string | null | undefined,
+  recoveryScope?: string,
 ): ComposerStorageTarget {
   const gatewayOwner = gatewayUrl?.trim() || "default";
   const encodedOwner = encodeURIComponent(gatewayOwner);
   return {
-    key: `${STORAGE_KEY_PREFIX}${encodedOwner}`,
+    key: `${STORAGE_KEY_PREFIX}${encodedOwner}${recoveryScope ? `:account:${encodeURIComponent(recoveryScope)}` : ""}`,
+    unscopedKey: `${STORAGE_KEY_PREFIX}${encodedOwner}`,
+    recoveryScope,
     legacyKey: `${LEGACY_STORAGE_KEY_PREFIX}${encodedOwner.slice(0, 240)}`,
     previousKey: `${PREVIOUS_STORAGE_KEY_PREFIX}${encodedOwner}`,
     blobKey: `${BLOB_STORAGE_KEY_PREFIX}${encodedOwner}`,
@@ -167,6 +177,14 @@ export function storageTargetForGateway(
     // Shipped v1 keys omitted the owner and truncated its encoded value. A
     // truncated row cannot prove which same-prefix gateway owns its outbox.
     legacyOwnerIsUnambiguous: encodedOwner.length < 240,
+  };
+}
+
+export function storageTargetForComposer(state: ChatComposerScope): ComposerStorageTarget {
+  const owner = readOfflineStorageScope(state);
+  return {
+    ...storageTargetForGateway(state.settings?.gatewayUrl, owner),
+    unavailable: Boolean(state.client && !owner),
   };
 }
 
@@ -213,10 +231,7 @@ export function resolvePendingComposerSessions(
       const existingIds = new Set(destination.queue?.map((item) => item.id));
       const conflict = session.queue?.some((item) => existingIds.has(item.id));
       const sourceNewer = (session.draftRevision ?? 0) > (destination.draftRevision ?? 0);
-      if (
-        conflict ||
-        ((session.draft || session.goalMode || session.replyTarget) && !sourceNewer)
-      ) {
+      if (conflict || (hasStoredComposerDraftInput(session) && !sourceNewer)) {
         holdComposerRecovery(store, `pending:${key}`, 4, key, session);
       } else {
         const draftOwner = sourceNewer ? session : destination;
@@ -251,25 +266,11 @@ export function captureChatOutboxAdmission(
   agentId?: string,
 ) {
   return {
+    owner: readOfflineStorageScope(state),
+    gatewayOwner: storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner,
     scope: resolveUiConversationIdentity(state, sessionKey, agentId),
     awaitingDefaults: !hasUiSessionDefaults(state),
   };
-}
-
-// Captured scopes never consult current defaults. Fill only an omitted agent;
-// explicit conflicting facts must remain visible to stored-scope validation.
-function storedChatOutboxAgentId(scope: StoredChatOutboxScope): string | undefined {
-  return scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
-}
-
-export function storedChatOutboxScopeKey(scope: StoredChatOutboxScope): string {
-  const normalizedSessionKey = scope.sessionKey.trim().toLowerCase();
-  const agentScope =
-    storedChatOutboxAgentId(scope) ??
-    (normalizedSessionKey === "global" || normalizedSessionKey === DEFAULT_MAIN_KEY
-      ? UNRESOLVED_GLOBAL_AGENT_SCOPE
-      : DEFAULT_AGENT_ID);
-  return `${scope.sessionKey}\u0000agent:${agentScope}`;
 }
 
 /** Logical client ownership plus this key fences a retained delivery's display. */
@@ -296,12 +297,7 @@ function holdComposerRecovery(
 ): void {
   const { queue, ...draft } = session;
   const groups = new Map<string | undefined, ChatQueueItem[]>();
-  if (
-    draft.draft ||
-    draft.goalMode ||
-    draft.replyTarget ||
-    (!queue?.length && draft.draftRevision !== undefined)
-  ) {
+  if (hasStoredComposerDraftInput(draft)) {
     groups.set(undefined, []);
   }
   for (const item of queue ?? []) {
@@ -363,6 +359,9 @@ export function readStoredOutboxStore(
   storage: Storage,
   target: ComposerStorageTarget,
 ): StoredComposerState {
+  if (target.unavailable) {
+    throw new Error("Offline account recovery is unavailable");
+  }
   const raw = storage.getItem(target.key);
   const store: StoredComposerState = raw
     ? JSON.parse(raw)
@@ -390,6 +389,9 @@ export function readStoredOutboxStore(
       observeDraftRevision(session.draftRevision);
       rememberDraftRevision(storage, target.key, key, session.draftRevision);
     }
+  }
+  if (target.recoveryScope) {
+    return store;
   }
   const sources: Array<{ key: string; raw: string }> = [];
   for (const [key, version] of [
@@ -490,9 +492,7 @@ export function readStoredOutboxStore(
         }
       }
       if (
-        session.draft ||
-        session.goalMode ||
-        session.replyTarget ||
+        hasStoredComposerDraftInput(session) ||
         session.draftRevision !== undefined ||
         session.queue?.length
       ) {
@@ -508,6 +508,7 @@ export function readStoredOutboxStore(
         );
       }
     }
+    retireEmptyComposerRecovery(store);
     if (Object.keys(store.recovery).length > MAX_RECOVERY_ROWS) {
       // Keep existing recovery usable while the next whole source waits for space.
       store.sessions = previousSessions;
@@ -545,6 +546,9 @@ export function readProjectedOutboxStore(
   storage: Storage,
   target: ComposerStorageTarget,
 ): StoredComposerState {
+  if (target.unavailable) {
+    throw new Error("Offline account recovery is unavailable");
+  }
   const byKey = projectedStoreByStorage.get(storage);
   const cached = byKey?.get(target.key);
   if (cached) {
@@ -561,10 +565,15 @@ export function writeStoredOutboxStore(
   storage: Storage,
   target: ComposerStorageTarget,
   store: StoredComposerState,
+  options: { requiredSessionKey?: string; beforeCommit?: () => void } = {},
 ): void {
+  if (target.unavailable) {
+    throw new Error("Offline account recovery is unavailable");
+  }
   // Queue and recovery mutations share this owner: none may carry a legacy
   // private draft forward alongside the separately retained submitted message.
   retireStoredIncognitoDrafts(store);
+  retireEmptyComposerRecovery(store);
   const previous = storage.getItem(target.key);
   projectedStoreByStorage.get(storage)?.delete(target.key);
   if (Object.keys(store.recovery).length > MAX_RECOVERY_ROWS) {
@@ -592,9 +601,7 @@ export function writeStoredOutboxStore(
       .filter(
         ([sessionKey, session]) =>
           sessionKey !== unresolvedGlobalKey &&
-          !session.draft &&
-          !session.goalMode &&
-          !session.replyTarget &&
+          !hasStoredComposerDraftInput(session) &&
           session.draftRevision !== undefined,
       )
       .toSorted(byNewest),
@@ -605,19 +612,33 @@ export function writeStoredOutboxStore(
       ...drafts
         .filter(
           ([sessionKey, session]) =>
-            sessionKey !== unresolvedGlobalKey &&
-            Boolean(session.draft || session.goalMode || session.replyTarget),
+            sessionKey !== unresolvedGlobalKey && hasStoredComposerDraftInput(session),
         )
         .toSorted(byNewest),
     ].slice(0, MAX_STORED_SESSIONS),
     ...protectedDrafts,
   ];
+  // A recovery move consumes its remaining source. Unlike an ordinary bounded
+  // cache write, it must retain both that destination and every existing input.
+  if (options.requiredSessionKey !== undefined) {
+    const retainedKeys = new Set(retained.map(([key]) => key));
+    if (
+      !retainedKeys.has(options.requiredSessionKey) ||
+      entries.some(
+        ([key, session]) =>
+          (session.queue?.length || hasStoredComposerDraftInput(session)) && !retainedKeys.has(key),
+      )
+    ) {
+      throw new Error("Required chat outbox destination exceeds retention; source retained");
+    }
+  }
   if (
     retained.length === 0 &&
     Object.keys(store.recovery).length === 0 &&
     !pendingLegacyTransfers.has(store) &&
     !store.legacyReceipts
   ) {
+    options.beforeCommit?.();
     storage.removeItem(target.key);
     if (storage.getItem(target.key) !== null) {
       throw new Error("Chat outbox removal verification failed");
@@ -637,6 +658,7 @@ export function writeStoredOutboxStore(
   };
   const payload = JSON.stringify(retainedStore);
   // Verification precedes deleting any legacy source, including quota/no-op writes.
+  options.beforeCommit?.();
   storage.setItem(target.key, payload);
   if (storage.getItem(target.key) !== payload) {
     throw new Error("Chat outbox write verification failed");
@@ -663,88 +685,12 @@ export function writeStoredOutboxStore(
   retireRemovedOutboxPayloads(storage, target, previous, retainedStore);
 }
 
-// Cleanup follows a verified metadata commit, never a credential-filtered view.
-function retireRemovedOutboxPayloads(
-  storage: Storage,
-  target: ComposerStorageTarget,
-  previous: string | null,
-  current: StoredComposerState | null,
-): void {
-  if (!previous) {
-    return;
-  }
-  try {
-    // An unclassified, deferred, or undeletable source can still own these bytes.
-    // Keep bounded orphans rather than introduce a second garbage-collection store.
-    if (
-      [target.legacyKey, target.previousKey, target.blobKey].some(
-        (key) => storage.getItem(key) !== null,
-      )
-    ) {
-      return;
-    }
-    const references = (value: unknown) => {
-      if (value === null) {
-        return [];
-      }
-      if (
-        !isRecord(value) ||
-        value.version !== 4 ||
-        value.gatewayOwner !== target.gatewayOwner ||
-        !isRecord(value.sessions) ||
-        !isRecord(value.recovery)
-      ) {
-        throw new Error("Unreadable outbox retention source");
-      }
-      const rows = [
-        ...Object.values(value.sessions),
-        ...Object.values(value.recovery).map((entry) => {
-          if (!isRecord(entry)) {
-            throw new Error("Unreadable recovery source");
-          }
-          return entry.session;
-        }),
-      ];
-      return rows.flatMap((row) => {
-        if (!isRecord(row) || (row.queue !== undefined && !Array.isArray(row.queue))) {
-          throw new Error("Unreadable outbox row");
-        }
-        return (row.queue ?? []).flatMap((item: unknown) => {
-          if (!isRecord(item)) {
-            throw new Error("Unreadable outbox item");
-          }
-          const ref = item.attachmentPayload;
-          if (ref === undefined) {
-            return [];
-          }
-          if (
-            !isRecord(ref) ||
-            typeof ref.key !== "string" ||
-            typeof ref.recoveryScope !== "string" ||
-            typeof ref.tabId !== "string"
-          ) {
-            throw new Error("Unreadable outbox payload reference");
-          }
-          return [{ key: ref.key, recoveryScope: ref.recoveryScope, tabId: ref.tabId }];
-        });
-      });
-    };
-    const remaining = new Set(references(current).map((ref) => ref.key));
-    const removed = references(JSON.parse(previous)).filter((ref) => !remaining.has(ref.key));
-    if (removed.length) {
-      void removeOutboxPayloads(removed);
-    }
-  } catch {
-    // Missing/unreadable storage cannot authorize deletion; the Blob budget bounds retention.
-  }
-}
-
 export function applyStoredChatOutboxScope(
   item: ChatQueueItem,
   scope: StoredChatOutboxScope,
 ): ChatQueueItem {
   const { agentId: _agentId, ...withoutAgentId } = item;
-  const agentId = storedChatOutboxAgentId(scope);
+  const agentId = scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
   return {
     ...withoutAgentId,
     sessionKey: scope.sessionKey,

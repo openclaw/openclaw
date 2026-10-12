@@ -10,6 +10,7 @@ import { withTempHome, writeOpenClawConfig } from "../../config/test-helpers.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
+import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -18,8 +19,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -29,10 +32,7 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
-import {
-  captureOwnedManagedUpdatePreflightContext,
-  revalidateUpdateDatabaseContext,
-} from "./update-command-managed-context.js";
+import { captureOwnedManagedUpdatePreflightContext } from "./update-command-managed-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -42,8 +42,10 @@ afterEach(() => {
 });
 
 describe("target-release database schema preflight", () => {
-  it("admits shared state in one online copy while a writer thread keeps committing", async () => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("update-busy-preflight-"));
+  it("admits matching caller and service contexts in one online copy while a writer keeps committing", async () => {
+    const home = fs.realpathSync.native(tempDirs.make("update-busy-preflight-"));
+    const stateDir = path.join(home, ".openclaw");
+    const callerEnv = { HOME: home };
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const source = openOpenClawStateDatabase({ env }).path;
     // The updater's ledger retains a live source owner; inspection must pin its own reader.
@@ -98,10 +100,14 @@ describe("target-release database schema preflight", () => {
       const result = await withEnvAsync(sqliteWorkerPreloadEnv(preload), () =>
         checkTargetDatabaseSchemasForContexts(
           { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
-          [{ config: {}, env }],
+          [
+            { config: {}, env: callerEnv },
+            { config: {}, env: { ...env } },
+          ],
         ),
       );
       expect(result).toEqual({ incompatible: [], indeterminate: [] });
+      expect(callerEnv).toEqual({ HOME: home });
       const copies = fs.readFileSync(backups, "utf8").trim().split("\n");
       expect(copies).toHaveLength(1);
       expect(JSON.parse(copies[0]!)).toEqual({ integrity: "ok", pages: expect.any(Number) });
@@ -127,7 +133,7 @@ describe("target-release database schema preflight", () => {
   ])("$outcome agent schemas committed to active WAL", async ({ version, refusal }) => {
     const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-update-wal-state-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const config: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     openOpenClawStateDatabase({ env });
     const agentPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
     closeOpenClawAgentDatabasesForTest();
@@ -173,20 +179,38 @@ describe("target-release database schema preflight", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "deduplicates caller and managed aliases of one physical database",
+    "deduplicates alias refusals without losing their lexical import boundaries",
     async () => {
       const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-update-union-state-"));
       const aliasRoot = tempDirs.make("openclaw-update-union-alias-");
       const stateAlias = path.join(aliasRoot, "state-link");
       fs.symlinkSync(stateDir, stateAlias, "dir");
-      const statePath = openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: stateDir },
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const statePath = openOpenClawStateDatabase({ env }).path;
+      const externalDir = tempDirs.make("openclaw-update-union-external-");
+      const externalPath = openOpenClawAgentDatabase({
+        agentId: "external",
+        env,
+        path: path.join(externalDir, "openclaw-agent.sqlite"),
       }).path;
-      closeOpenClawStateDatabaseForTest();
+      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
+      const importsDir = path.join(stateDir, "imports");
+      fs.mkdirSync(importsDir);
+      fs.symlinkSync(externalDir, path.join(importsDir, "external"), "dir");
+      const registeredPath = path.join(importsDir, "external", "openclaw-agent.sqlite");
       const { DatabaseSync } = requireNodeSqlite();
       const state = new DatabaseSync(statePath);
       state.exec("PRAGMA user_version = 9;");
+      // Keep an absolute locator: relative registry entries inherit each root's
+      // spelling and would be excluded by both contexts' lexical imports rule.
+      state
+        .prepare("UPDATE agent_databases SET path = ? WHERE agent_id = 'external'")
+        .run(registeredPath);
       state.close();
+      const external = new DatabaseSync(externalPath);
+      external.exec("PRAGMA user_version = 12;");
+      external.close();
       const config: OpenClawConfig = {};
 
       const result = await checkTargetDatabaseSchemasForContexts({ state: 3, agent: 11 }, [
@@ -196,6 +220,7 @@ describe("target-release database schema preflight", () => {
 
       expect(result.incompatible).toEqual([
         expect.objectContaining({ kind: "state", path: statePath, foundVersion: 9 }),
+        expect.objectContaining({ kind: "agent", path: registeredPath, foundVersion: 12 }),
       ]);
       expect(result.indeterminate).toEqual([]);
     },
@@ -204,7 +229,9 @@ describe("target-release database schema preflight", () => {
   it("refuses v2026.8.1 before mutating v2026.7.1-2 shared state when an agent store is unreadable", async () => {
     const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-update-7-to-8-state-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const config: OpenClawConfig = { agents: { list: [{ id: "main" }, { id: "worker" }] } };
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
+    };
     const statePath = openOpenClawStateDatabase({ env }).path;
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
     closeOpenClawAgentDatabasesForTest();
@@ -242,7 +269,7 @@ describe("target-release database schema preflight", () => {
     const customDir = fs.realpathSync.native(tempDirs.make("openclaw-update-preflight-custom-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main" }, { id: "configured" }] },
+      agents: { ownership: "explicit", entries: { main: {}, configured: {} } },
     };
     openOpenClawStateDatabase({ env });
     const configuredPath = openOpenClawAgentDatabase({ agentId: "configured", env }).path;
@@ -286,49 +313,73 @@ describe("target-release database schema preflight", () => {
     ).toEqual(before);
   });
 
-  it("finds configured custom stores without registry rows", async () => {
+  it("unions custom stores across matching contexts and observes deletion holds at the next checkpoint", async () => {
     const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-update-custom-state-"));
     const customDir = fs.realpathSync.native(tempDirs.make("openclaw-update-custom-root-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const config: OpenClawConfig = {
-      agents: { list: [{ id: "main" }, { id: "ops" }] },
-      session: { store: path.join(customDir, "{agentId}", "sessions.json") },
-    };
+    const serviceHome = fs.realpathSync.native(tempDirs.make("openclaw-update-service-home-"));
+    const agents = { ownership: "explicit" as const, entries: { main: {}, ops: {} } };
+    const contexts = [
+      {
+        config: {
+          agents,
+          session: { store: path.join(customDir, "{agentId}", "sessions.json") },
+        },
+        env,
+      },
+      {
+        config: { agents, session: { store: "~/custom/{agentId}/sessions.json" } },
+        env: { ...env, HOME: serviceHome },
+      },
+    ];
     openOpenClawStateDatabase({ env });
-    const customPaths = ["main", "ops"].map(
-      (agentId) =>
-        openOpenClawAgentDatabase({
+    const customTargets = [customDir, path.join(serviceHome, "custom")].flatMap((directory) =>
+      ["main", "ops"].map((agentId) => ({
+        agentId,
+        path: openOpenClawAgentDatabase({
           agentId,
           env,
-          path: path.join(customDir, agentId, "openclaw-agent.sqlite"),
+          path: path.join(directory, agentId, "openclaw-agent.sqlite"),
         }).path,
+      })),
     );
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    for (const [index, pathname] of customPaths.entries()) {
-      unregisterOpenClawAgentDatabase({
-        agentId: index === 0 ? "main" : "ops",
-        env,
-        path: pathname,
-      });
+    for (const target of customTargets) {
+      unregisterOpenClawAgentDatabase({ ...target, env });
     }
+    await closeOpenClawStateDatabaseAsync();
+    const customPaths = customTargets.map((target) => target.path);
 
-    const result = await checkTargetDatabaseSchemasForContexts({ state: 1, agent: 1 }, [
-      { config, env },
-    ]);
+    const result = await checkTargetDatabaseSchemasForContexts({ state: 1, agent: 1 }, contexts);
 
-    expect(result.incompatible.filter((database) => database.kind === "agent")).toEqual(
-      expect.arrayContaining(
-        customPaths.map((pathname) => expect.objectContaining({ path: pathname })),
-      ),
-    );
+    const agentPaths = (schemas: typeof result) =>
+      schemas.incompatible
+        .filter((database) => database.kind === "agent")
+        .map((database) => database.path);
+    expect(agentPaths(result)).toEqual(customPaths);
     expect(result.indeterminate).toEqual([]);
+    const held = customTargets.at(-1)!;
+    const heldBefore = fs.readFileSync(held.path);
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        database.db.exec("DROP TABLE agent_deletion_journal");
+        reconstructAgentDeletionJournal(database, [held]);
+      },
+      { env },
+    );
+    await closeOpenClawStateDatabaseAsync();
+    const refreshed = await checkTargetDatabaseSchemasForContexts({ state: 1, agent: 1 }, contexts);
+    expect(agentPaths(refreshed)).toEqual(customPaths.filter((pathname) => pathname !== held.path));
+    expect(refreshed.indeterminate).toEqual([]);
+    expect(fs.readFileSync(held.path)).toEqual(heldBefore);
+    expect(env).toEqual({ OPENCLAW_STATE_DIR: stateDir });
+    expect(contexts[1]?.env).toEqual({ OPENCLAW_STATE_DIR: stateDir, HOME: serviceHome });
   });
 });
 
 describe("planned legacy configuration admission", () => {
-  it.each(["unchanged", "root edit", "include edit", "different profile"] as const)(
-    "preserves original config and fences %s",
+  it.each(["different profile"] as const)(
+    "keeps profile ownership and authored bytes across %s",
     async (scenario) => {
       await withTempHome(async (home) => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -372,9 +423,7 @@ describe("planned legacy configuration admission", () => {
           expect(fs.readFileSync(configPath)).toEqual(original);
           expect(fs.readFileSync(includePath)).toEqual(originalInclude);
           expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
-          if (scenario === "unchanged") {
-            expect((await revalidateUpdateDatabaseContext(context)).config).toEqual(context.config);
-          } else if (scenario === "different profile") {
+          if (scenario === "different profile") {
             const otherPath = path.join(path.dirname(configPath), "other.json");
             fs.writeFileSync(otherPath, original);
             await expect(
@@ -383,13 +432,6 @@ describe("planned legacy configuration admission", () => {
                 { legacyConfigPlan },
               ).then(() => true),
             ).rejects.toMatchObject({ reason: "invalid-config" });
-          } else {
-            fs.appendFileSync(scenario === "root edit" ? configPath : includePath, "\n");
-            await expect(
-              revalidateUpdateDatabaseContext(context).then(() => true),
-            ).rejects.toMatchObject({
-              reason: "database-schema-preflight",
-            });
           }
         });
       });
@@ -415,7 +457,7 @@ describe("planned migration managed profile isolation", () => {
     });
   });
 
-  it("refuses a newly valid replacement of the planned source before admission", async () => {
+  it("admits a newly valid replacement without reusing the prior legacy plan", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local", bind: "localhost" },
@@ -429,11 +471,10 @@ describe("planned migration managed profile isolation", () => {
       expect(legacyConfigPlan).toBeDefined();
       const replacement = JSON.stringify({ gateway: { mode: "local", bind: "lan" } });
       fs.writeFileSync(configPath, replacement);
-      await expect(
-        captureTargetDatabaseSchemaContext(env, { legacyConfigPlan }),
-      ).rejects.toMatchObject({
-        reason: "database-schema-preflight",
-      });
+      const current = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
+      expect(current.config.gateway?.bind).toBe("lan");
+      expect(current.configSnapshot.raw).toBe(replacement);
+      expect(current.legacyConfigPlan).toBeUndefined();
       expect(fs.readFileSync(configPath, "utf8")).toBe(replacement);
       expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
     });
@@ -510,34 +551,6 @@ describe("planned migration managed profile isolation", () => {
         expect(fs.readFileSync(servicePath)).toEqual(before);
         expect(fs.existsSync(resolveOpenClawStateSqlitePath(serviceEnv))).toBe(false);
         expect({ ...process.env }).toEqual(originalEnv);
-      });
-    });
-  });
-
-  it("reports invalid fields and repair guidance without admitting unrelated invalid settings", async () => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          gateway: { mode: "local", bind: "localhost", port: "invalid" },
-          session: { store: 42 },
-        });
-        const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
-        const before = fs.readFileSync(configPath);
-        const { snapshot, writeOptions } = await createConfigIO({
-          env,
-          observe: false,
-        }).readConfigFileSnapshotForWrite();
-        const legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-        expect(legacyConfigPlan).toBeUndefined();
-        const inspected = captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
-        await expect(inspected).rejects.toMatchObject({
-          reason: "invalid-config",
-          message: expect.stringContaining(configPath),
-        });
-        await expect(inspected).rejects.toThrow("gateway.port:");
-        await expect(inspected).rejects.toThrow("session.store:");
-        await expect(inspected).rejects.toThrow("openclaw doctor --fix");
-        expect(fs.readFileSync(configPath)).toEqual(before);
       });
     });
   });

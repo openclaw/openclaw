@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Test Env Mutation Report script supports OpenClaw repository automation.
-
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +7,7 @@ import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-u
 import { renderFindingGroups } from "./lib/grouped-findings.js";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
+import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 type EnvMutationOperation = "assign" | "delete" | "replace" | "stubEnv";
 
@@ -67,12 +66,6 @@ const DEFAULT_ALLOWED_FILES = new Map([
   ],
 ]);
 
-function listCandidateFiles(repoRoot: string): string[] {
-  return listRepoFilesSync(repoRoot, {
-    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
-  });
-}
-
 function isIdentifier(node: ts.Node, text: string): boolean {
   return ts.isIdentifier(node) && node.text === text;
 }
@@ -102,22 +95,14 @@ function envKeyFromExpression(node: ts.Node): string | null {
   return null;
 }
 
-function propertyNameText(name: ts.PropertyName | undefined): string | null {
-  if (!name) {
-    return null;
-  }
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
-}
-
 function envKeysFromObjectLiteral(node: ts.Expression): string[] {
   if (!ts.isObjectLiteralExpression(node)) {
     return [];
   }
   return node.properties
-    .map((property) => (ts.isPropertyAssignment(property) ? propertyNameText(property.name) : null))
+    .map((property) =>
+      ts.isPropertyAssignment(property) ? getPropertyNameText(property.name) : null,
+    )
     .filter((key): key is string => key !== null && TRACKED_ENV_KEYS.has(key));
 }
 
@@ -133,30 +118,6 @@ function stubEnvKeyFromCall(node: ts.CallExpression): string | null {
   return stringLiteralText(node.arguments[0]);
 }
 
-function createFinding(params: {
-  allowedFiles: ReadonlyMap<string, string>;
-  file: string;
-  key: string;
-  lines: string[];
-  node: ts.Node;
-  operation: EnvMutationOperation;
-  sourceFile: ts.SourceFile;
-}): TestEnvMutationFinding {
-  const { line } = params.sourceFile.getLineAndCharacterOfPosition(
-    params.node.getStart(params.sourceFile),
-  );
-  const allowReason = params.allowedFiles.get(params.file);
-  return {
-    allowed: allowReason !== undefined,
-    ...(allowReason ? { allowReason } : {}),
-    excerpt: params.lines[line]?.trim() ?? "",
-    file: params.file,
-    key: params.key,
-    line: line + 1,
-    operation: params.operation,
-  };
-}
-
 function scanFile(params: {
   allowedFiles: ReadonlyMap<string, string>;
   file: string;
@@ -170,17 +131,17 @@ function scanFile(params: {
     if (key !== DYNAMIC_ENV_KEY && !TRACKED_ENV_KEYS.has(key)) {
       return;
     }
-    findings.push(
-      createFinding({
-        allowedFiles: params.allowedFiles,
-        file: params.file,
-        key,
-        lines,
-        node,
-        operation,
-        sourceFile,
-      }),
-    );
+    const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+    const allowReason = params.allowedFiles.get(params.file);
+    findings.push({
+      allowed: allowReason !== undefined,
+      ...(allowReason ? { allowReason } : {}),
+      excerpt: lines[line]?.trim() ?? "",
+      file: params.file,
+      key,
+      line: line + 1,
+      operation,
+    });
   }
 
   function visit(node: ts.Node): void {
@@ -224,7 +185,9 @@ export function collectTestEnvMutationReport(
 ): TestEnvMutationReport {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const allowedFiles = params.allowedFiles ?? DEFAULT_ALLOWED_FILES;
-  const files = listCandidateFiles(repoRoot);
+  const files = listRepoFilesSync(repoRoot, {
+    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
+  });
   const findings: TestEnvMutationFinding[] = [];
   const parser = createNativeTypeScriptParser({ cwd: repoRoot });
   try {

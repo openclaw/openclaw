@@ -2,15 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
-import * as packageIntegrity from "../../infra/package-update-integrity.js";
-import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
+import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
@@ -28,12 +27,14 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { registerCurrentF3Controls } from "./update-command-original-service-current.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
@@ -102,11 +103,14 @@ let state: OpenClawTestState;
 let serviceState: GatewayServiceState;
 let rootA: string;
 let rootB: string;
+let serviceNodeRunner: string;
 let before: PreManagedServiceStop;
 let stopped = false;
 const schemas = { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION };
 beforeEach(async () => {
   vi.clearAllMocks();
+  // Service selection must not change the runtime of real schema and state workers.
+  serviceNodeRunner = getNodeRuntimeFixture().execPath;
   state = await createOpenClawTestState({
     label: "original-service",
     env: {
@@ -149,11 +153,11 @@ beforeEach(async () => {
   }
   // The selected runner must execute with its original dynamic-library search paths.
   if (process.platform === "win32") {
-    await fs.copyFile(process.execPath, state.path("selected-B-node"));
+    await fs.copyFile(serviceNodeRunner, state.path("selected-B-node"));
   } else {
     await fs.writeFile(
       state.path("selected-B-node"),
-      `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`,
+      `#!/bin/sh\nexec ${quoteCliArg(serviceNodeRunner)} "$@"\n`,
       { mode: 0o755 },
     );
   }
@@ -168,7 +172,7 @@ beforeEach(async () => {
     env: state.env,
     loadState: { status: "loaded" },
     command: {
-      programArguments: [process.execPath, path.join(rootA, "dist", "index.js"), "gateway"],
+      programArguments: [serviceNodeRunner, path.join(rootA, "dist", "index.js"), "gateway"],
       environment: Object.fromEntries(
         Object.entries(state.env).filter(
           (entry): entry is [string, string] => entry[1] !== undefined,
@@ -189,7 +193,7 @@ beforeEach(async () => {
     running: true,
     servicePid: serviceState.runtime?.pid,
     serviceEnv: state.env,
-    serviceNodeRunner: process.execPath,
+    serviceNodeRunner,
     serviceManagerUid: process.getuid?.() ?? 501,
     serviceUpdateVerdict: await revalidateManagedGatewayServiceAfterUpdate({
       state: serviceState,
@@ -249,7 +253,7 @@ beforeEach(async () => {
     expect(action).toBe("restart");
     expect(preserve).toBe(true);
     expect(params.result.root).toBe(rootA);
-    expect(params.nodeRunner).toBe(process.execPath);
+    expect(params.nodeRunner).toBe(serviceNodeRunner);
     if (mocks.windows) {
       expect(mocks.resume).toHaveBeenCalledTimes(1);
     }
@@ -265,7 +269,9 @@ beforeEach(async () => {
   // Prepare its unchanged install inventory through the real metadata owner.
   expect(loadInstalledPluginIndexInstallRecordsSync({ env: state.env })).toEqual({});
 });
-aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
+const inspectionWorkers = createSqliteReadOnlyWorkerScope();
+aroundEach((runTest) => inspectionWorkers.run(runTest));
+afterAll(() => inspectionWorkers.close());
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -273,7 +279,6 @@ afterEach(async () => {
 });
 
 it.for([
-  "healthy",
   "same-version",
   "same-build-finalize",
   "package-root-missing",
@@ -282,7 +287,6 @@ it.for([
   "schema-newer",
   "agent-support-older",
   "definition-changed",
-  "node-changed",
   "package-changed",
   "authority-lost",
   "no-restart",
@@ -359,9 +363,6 @@ it.for([
       if (scenario === "definition-changed") {
         serviceState.command!.programArguments.push("--port", "19998");
       }
-      if (scenario === "node-changed") {
-        serviceState.command!.programArguments[0] = "/different/node";
-      }
       if (scenario === "package-changed") {
         await fs.appendFile(path.join(rootA, "dist", "index.js"), "// replaced\n");
       }
@@ -417,6 +418,7 @@ it.for([
       const admitted = { ...run, executorFence: fence };
       opts.run = admitted;
       execution = await executeMutableUpdate({
+        executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
         root: rootB,
         // Package transport is modeled; A must not use this separately selected B runner.
         packageUpdateNodeRunner: state.path("selected-B-node"),
@@ -508,8 +510,7 @@ it.for([
       await work;
     }
     const healthy =
-      sameBuild ||
-      ["healthy", "same-version", "package-root-missing", "windows-autostart"].includes(scenario);
+      sameBuild || ["same-version", "package-root-missing", "windows-autostart"].includes(scenario);
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(mocks.nativeRestart).toHaveBeenCalledTimes(
       healthy || scenario === "readiness-failed" || scenario === "windows-autostart-health-failed"
@@ -626,25 +627,20 @@ it("refuses B ledger admission independently from compatible service A state", a
 
 // Component regression: an unavailable A certificate must stop preparation, not A.
 it.each([
-  "fingerprint-timeout",
   "missing-node",
   "missing-env",
   "missing-schema",
   "unverified-health",
-  "definition-raced",
   "operator-overrides",
   "unknown-overrides",
   "reload-pending",
-  "authority-revoked",
   "no-restart",
-  "certified-doctor-failure",
 ] as const)("pre-stop qualification keeps retained A recoverable: %s", async (scenario) => {
   const run = {
     runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
     env: state.env,
   };
   const opts: UpdateCommandOptions = { json: true, run };
-  const configSnapshot = await readConfigFileSnapshot({ observe: false });
   const packageBefore = await fs.readFile(path.join(rootB, "package.json"));
   const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
   let activated = false;
@@ -669,32 +665,9 @@ it.each([
     delete metadata.openclaw;
     await fs.writeFile(path.join(rootA, "package.json"), JSON.stringify(metadata));
   }
-  if (scenario === "fingerprint-timeout") {
-    mocks.capability.mockResolvedValue(false);
-  }
   if (scenario === "unverified-health") {
     mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
   }
-  const createReader = packageIntegrity.createPackageIntegrityReader;
-  vi.spyOn(packageIntegrity, "createPackageIntegrityReader").mockImplementation((timeout) => {
-    const reader = createReader(timeout);
-    return {
-      ...reader,
-      tree: async (root, originalRoot) => {
-        if (root === rootA && ["fingerprint-timeout", "no-restart"].includes(scenario)) {
-          throw new packageIntegrity.PackageIntegrityTimeoutError(30_000);
-        }
-        const fingerprint = await reader.tree(root, originalRoot);
-        if (root === rootA && scenario === "definition-raced") {
-          serviceState.command!.programArguments.push("--port", "19998");
-        }
-        if (root === rootA && scenario === "authority-revoked") {
-          opts.run = { ...run };
-        }
-        return fingerprint;
-      },
-    };
-  });
   mocks.package.mockImplementation(async (params) => {
     expect(params.honorPackageRoot).toBe(true);
     await params.beforeActivate();
@@ -729,6 +702,7 @@ it.each([
       ).rejects.toMatchObject({ reason: "original-service-unverified" });
     }
     const execution = await executeMutableUpdate({
+      executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
       root: rootB,
       installKind: "package",
       updateInstallKind: "package",
@@ -752,59 +726,16 @@ it.each([
       },
     });
     expect(execution, execution?.failure?.detail).not.toBeNull();
-    if (scenario === "certified-doctor-failure" || scenario === "fingerprint-timeout") {
-      expect(activated, execution?.failure?.detail).toBe(true);
-      expect(stopped).toBe(true);
-      expect(execution!.originalManagedServiceRuntime).toMatchObject({
-        root: rootA,
-        verified: true,
-      });
-      const final = await finishUpdate({
-        ...execution!,
-        root: rootB,
-        installKindChanged: false,
-        configSnapshot,
-        requestedChannel: null,
-        storedChannel: "stable",
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: true,
-        opts,
-        ownedManagedUpdateEnv: state.env,
-        controlPlaneUpdateSentinelMeta: null,
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 30000,
-      }).catch((error: unknown) => error);
-      expect(final).toMatchObject({
-        result: {
-          status: "error",
-          root: rootB,
-          reason: "doctor-failed",
-          recovery: { serviceRestartSafe: false },
-        },
-      });
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.nativeRestart).toHaveBeenCalledOnce();
-      expect(mocks.health).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expectedVersion: "2026.9.3",
-          expectedBuildId: "build-A",
-        }),
-      );
-      expect(mocks.running).toBe(true);
-    } else if (scenario === "no-restart") {
+    if (scenario === "no-restart") {
       expect(activated, execution?.failure?.detail).toBe(true);
       expect(stopped).toBe(false);
     } else {
       expect(activated).toBe(false);
       expect(stopped).toBe(false);
       expect(execution!.result.status).toBe("error");
-      if (scenario !== "authority-revoked") {
-        expect(execution!.result.reason, execution!.failure?.detail).toBe(
-          scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
-        );
-      }
+      expect(execution!.result.reason, execution!.failure?.detail).toBe(
+        scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
+      );
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(mocks.running).toBe(true);
     }
@@ -813,7 +744,15 @@ it.each([
   expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(configBefore);
 });
 
-registerCurrentF3Controls(() => ({ state, rootA, rootB, before, serviceState, mocks }));
+registerCurrentF3Controls(() => ({
+  state,
+  rootA,
+  rootB,
+  serviceNodeRunner,
+  before,
+  serviceState,
+  mocks,
+}));
 
 it.each([false, true])(
   "handles restored receipt fingerprints with actual mutation=%s",

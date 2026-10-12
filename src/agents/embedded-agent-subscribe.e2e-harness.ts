@@ -4,6 +4,7 @@
 import { expect } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type SubscribeEmbeddedAgentSession = typeof subscribeEmbeddedAgentSession;
@@ -27,6 +28,7 @@ export function createStubSessionHarness(): {
 } {
   let handlers: Array<(evt: unknown) => void> = [];
   const session = {
+    sessionManager: { [sessionManagerReadTranscriptStart]: () => null },
     subscribe: (fn: (evt: unknown) => void) => {
       handlers = [...handlers, fn];
       return () => {

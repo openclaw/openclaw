@@ -153,7 +153,7 @@ cases.push(
     message: () => ({
       type: "flex",
       altText: "Menu",
-      contents: createActionCard("Menu", "Choose", [{ label: "Choose", action }], {
+      contents: createActionCard("Menu", "Choose", [action], {
         imageUrl: "http://example.com/cover.jpg",
       }),
     }),

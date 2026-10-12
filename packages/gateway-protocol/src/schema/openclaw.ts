@@ -15,6 +15,7 @@ import {
   SetupInferenceActivationRejectionSchema,
   SetupInferenceFailureStatusSchema,
 } from "./setup-inference.js";
+import { withSince } from "./since.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
 export const SystemAgentWizardCancelSchema = closedObject({
@@ -398,17 +399,7 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
   modelTarget: Type.Optional(Type.Literal("utility")),
   /** Agent that owns the verified and persisted inference route. */
   agentId: Type.Optional(NonEmptyString),
-  kind: Type.Union([
-    Type.Literal("existing-model"),
-    Type.Literal("openai-api-key"),
-    Type.Literal("anthropic-api-key"),
-    Type.Literal("claude-cli"),
-    Type.Literal("codex-cli"),
-    Type.Literal("gemini-cli"),
-    ProviderAutoSetupInferenceKind,
-    SavedAuthSetupInferenceKind,
-    Type.Literal("api-key"),
-  ]),
+  kind: Type.Union([...SetupInferenceKind.anyOf, Type.Literal("api-key")]),
   /** Exact detected model for this route; prevents detect/activate drift. */
   modelRef: Type.Optional(NonEmptyString),
   /** Manual step only: opaque provider-auth choice returned by detection. */
@@ -447,6 +438,7 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
 
 /** Starts one provider-owned interactive login as a gateway wizard session. */
 export const SystemAgentSetupAuthStartParamsSchema = closedObject({
+  expectedOwnerId: Type.Optional(withSince("2026.9.9", Type.String({ minLength: 1 }))),
   modelTarget: Type.Optional(Type.Literal("utility")),
   /** Client-generated so cancellation remains possible if the start reply is lost. */
   sessionId: NonEmptyString,

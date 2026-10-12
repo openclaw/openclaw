@@ -3,22 +3,14 @@ import path from "node:path";
 import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
-import {
-  buildQaSuiteEvidenceSummary,
-  QA_EVIDENCE_FILENAME,
-  validateQaEvidenceSummaryJson,
-  type QaEvidenceSummaryJson,
-} from "./evidence-summary.js";
-import type { QaProviderMode } from "./model-selection.js";
+import { qaEvidenceSummaryV3Schema } from "./evidence-summary-schema.js";
+import { QA_EVIDENCE_FILENAME, type QaEvidenceSummaryV3Json } from "./evidence-summary.js";
+import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport } from "./report.js";
-import type { RuntimeId } from "./runtime-parity.js";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import { splitModelRef } from "./suite-planning.js";
+import type { RuntimeId } from "./runtime-id.js";
 import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
-import { createQaSuiteReportNotes } from "./suite-support.js";
 import {
   rejectRemovedQaChannelDriverSelection,
   type QaSuiteScenarioResult,
@@ -52,7 +44,7 @@ export async function invalidateQaSuiteArtifactGeneration(outputDir: string) {
   }
 }
 
-export type QaSuiteSummaryJsonParams = {
+type QaSuiteSummaryJsonParams = {
   status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -89,8 +81,8 @@ export type QaSuiteGatewayHeapSnapshot = NonNullable<
  */
 export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSuiteSummaryJson {
   rejectRemovedQaChannelDriverSelection(params);
-  const primarySplit = splitModelRef(params.primaryModel);
-  const alternateSplit = splitModelRef(params.alternateModel);
+  const primarySplit = splitQaModelRef(params.primaryModel);
+  const alternateSplit = splitQaModelRef(params.alternateModel);
   return {
     scenarios: params.scenarios,
     counts: {
@@ -131,11 +123,8 @@ export async function writeQaSuiteArtifacts(
     QaSuiteSummaryJsonParams,
     "evidence" | "channelCapabilityMatrixPath" | "channelDriverSmokePath"
   > & {
-    repoRoot?: string;
     outputDir: string;
-    scenarioDefinitions?: readonly QaSeedScenarioWithSource[];
-    evidenceMode?: QaScorecardEvidenceMode;
-    recordedEvidence?: QaEvidenceSummaryJson;
+    recordedEvidence: QaEvidenceSummaryV3Json;
     transport: QaTransportAdapter;
     transportArtifacts?: QaRunnerTransportArtifacts;
     isolatedWorkers?: boolean;
@@ -158,33 +147,12 @@ export async function writeQaSuiteArtifacts(
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
     scenarios: params.scenarios,
-    notes: createQaSuiteReportNotes({
-      ...params,
-      transportArtifactNotes: params.transportArtifacts?.reportNotes,
-    }),
+    notes: [
+      ...params.transport.createReportNotes(params),
+      ...(params.transportArtifacts?.reportNotes ?? []),
+    ],
   });
-  const artifactPaths = [
-    { kind: "summary", path: path.basename(summaryPath) },
-    { kind: "report", path: path.basename(reportPath) },
-    ...transportEvidenceArtifacts,
-  ];
-  const evidence = params.recordedEvidence
-    ? validateQaEvidenceSummaryJson(params.recordedEvidence)
-    : params.scenarioDefinitions && params.scenarioDefinitions.length > 0
-      ? buildQaSuiteEvidenceSummary({
-          artifactPaths,
-          evidenceMode: params.evidenceMode,
-          channelId: params.channel ?? params.transport.id,
-          channelDriver: params.channelDriver ?? undefined,
-          env: process.env,
-          generatedAt: params.finishedAt.toISOString(),
-          primaryModel: params.primaryModel,
-          providerMode: params.providerMode,
-          repoRoot: params.repoRoot,
-          scenarioDefinitions: params.scenarioDefinitions,
-          scenarioResults: params.scenarios,
-        })
-      : undefined;
+  const evidence = qaEvidenceSummaryV3Schema.parse(params.recordedEvidence);
   const writeEvidenceFile = params.status !== "running" && (params.writeEvidenceFile ?? true);
   if (!writeEvidenceFile) {
     await fs.rm(evidencePath, { force: true });
@@ -193,7 +161,7 @@ export async function writeQaSuiteArtifacts(
     outputDir: params.outputDir,
     files: [
       { filePath: reportPath, content: report },
-      ...(evidence && writeEvidenceFile
+      ...(writeEvidenceFile
         ? [{ filePath: evidencePath, content: `${JSON.stringify(evidence, null, 2)}\n` }]
         : []),
       {
@@ -203,7 +171,7 @@ export async function writeQaSuiteArtifacts(
             ...params,
             // Publication must not rewrite rows already admitted by a parent.
             // The gallery reads final presentation paths from this summary.
-            ...(params.recordedEvidence ? { evidence } : {}),
+            evidence,
             channelCapabilityMatrixPath: channelCapabilityMatrixPath ?? null,
             channelDriverSmokePath: channelDriverSmokePath ?? null,
           }),
@@ -215,7 +183,7 @@ export async function writeQaSuiteArtifacts(
   });
   await assertQaSuiteArtifactWritten("report", reportPath);
   await assertQaSuiteArtifactWritten("summary", summaryPath);
-  if (evidence && writeEvidenceFile) {
+  if (writeEvidenceFile) {
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
   }
   return { evidence, evidencePath, report, reportPath, summaryPath };

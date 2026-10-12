@@ -412,7 +412,7 @@ describe("resolvePluginWebSearchProviders", () => {
       diagnostics: [],
     });
     const config = { plugins: { allow: ["moonshot"] } };
-    const providers = resolvePluginWebSearchProviders({ config, mode: "setup", activate: false });
+    const providers = resolvePluginWebSearchProviders({ config, mode: "setup" });
     const provider = providers[0];
     if (!provider?.runSetup) {
       throw new Error("Expected Moonshot web-search setup from the public artifact");

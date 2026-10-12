@@ -1,20 +1,15 @@
 import type { OpenClawPluginGatewayEvents } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  SessionEntryCurrentCheck,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 // Browser plugin runtime state shared across lazy bundles and duplicate SDK module instances.
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import type {
-  BrowserDashboardDefinition,
-  SessionBrowserDashboard,
-} from "./browser-dashboard.types.js";
+import type { SessionBrowserDashboard } from "./browser-dashboard.types.js";
 
-export type BrowserDashboardOperation = {
+type BrowserDashboardOperation = {
   promise: Promise<unknown>;
-  readonly materializationFailure?: {
-    error: unknown;
-    definition: BrowserDashboardDefinition;
-    callerCancelled: boolean;
-  };
 };
 
 export type BrowserDashboardRegistration = {
@@ -24,6 +19,13 @@ export type BrowserDashboardRegistration = {
   closeDispatched?: true;
 };
 export type BrowserSessionTabOperationKey = string | symbol | BrowserDashboardRegistration;
+
+export type BrowserSessionTabAuthority = {
+  runtime?: BrowserStateRuntime;
+  assertCurrent?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+  dashboardRegistration?: BrowserDashboardRegistration;
+};
 
 export type BrowserStateRuntime = {
   sessionTabs: PluginStateKeyedStore<unknown>;
@@ -45,6 +47,23 @@ const {
 });
 
 export { getBrowserStateRuntime, getOptionalBrowserStateRuntime, setBrowserStateRuntime };
+
+export function assertBrowserSessionTabAuthority(authority: BrowserSessionTabAuthority) {
+  const runtime = authority.runtime ?? getBrowserStateRuntime();
+  if (getOptionalBrowserStateRuntime() !== runtime) {
+    throw new Error("Browser session tab store owner changed");
+  }
+  authority.assertCurrent?.();
+}
+
+export function captureBrowserSessionTabAuthority(
+  authority: BrowserSessionTabAuthority = {},
+): BrowserSessionTabAuthority {
+  return {
+    ...authority,
+    runtime: authority.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
+  };
+}
 
 export function isBrowserStateRuntimeCurrent(
   runtime: BrowserStateRuntime | undefined,

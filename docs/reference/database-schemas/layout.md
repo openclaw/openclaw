@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Which SQLite database holds what, and the tables behind individual features"
 read_when:
   - "Locating the global state database or a per-agent database on disk"
@@ -13,7 +14,13 @@ title: "Database layout"
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
-The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
+On Windows, plain drive/UNC paths and their extended-length (`\\?\`) spellings
+identify the same shared-state database owner. Opens, write admission, retained
+connections, and cleanup use the same path identity; native SQLite opens still
+support long filenames. This requires no schema or stored-data migration and
+does not change update backups or rollback.
+
+The shared-state database retains `task_runs`, `task_delivery_state`, and `flow_runs`, including their existing columns and indexes. The Tasks and TaskFlow runtime, tools, and UI are removed; their non-Cron rows remain untouched and unused by the runtime. Cron owns only the `runtime = 'cron'` rows in `task_runs` through its history store. It does not move history to another table. Native execution and completion remain with the subagent registry and harness-binding owners; native Codex pending assignments use metadata in the existing parent binding, not a new table. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 In agent schema 23, `transcript_events` retains original event JSON as either
 `event_json` TEXT or `event_zstd` BLOB, with byte counts and bounded navigation
@@ -22,23 +29,128 @@ to reconstruct history; selecting `event_json` alone omits compressed events.
 Memory chunk/cache embeddings are little-endian Float64 BLOBs. See
 [compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage).
 
-Doctor normalizes historical task run and child-session identifiers together
-with their related subagent bindings, so scoped mutations can use the existing
-indexes. Legacy sidecar imports use the same transactional repair. Gateway
-restore and reads consume stored identifiers without repairing them. New task
-records and explicit identifier changes normalize before persistence and receipt
-publication; unrelated patches preserve the existing identity. Schema versions
-and retention are unchanged. `openclaw update` runs Doctor before activation;
-after a direct binary replacement or using an older writer, run
-`openclaw doctor --fix` before starting the new Gateway.
+Retired Task and TaskFlow feature records remain in place. The Codex plugin's
+[Doctor migration](/gateway/doctor/config-migrations#native-codex-recovery-after-tasks-removal)
+copies eligible, owner-stamped native child recovery facts into existing parent
+binding metadata, while leaving source Task rows byte-identical. This is a
+migration-only read, with no replacement ledger or runtime Task reader. Their
+historical UI and API are removed while the database layout remains unchanged. Retired pre-June sidecar
+imports stay retired; [upgrading very old versions](/install/updating#upgrading-very-old-versions)
+describes the bridge-release path. Run the current Doctor after a direct binary
+replacement before starting the new Gateway.
+
+### Linux database page cache
+
+After readiness, the Gateway samples Linux file-cache residency and checks it again
+every 15 minutes. The sample observes up to 256 file pages without reading their
+contents; it estimates whole-file residency, not the residency of every hot query.
+Other platforms do not run this maintenance.
+Sampling requires effective write permission to the file; Linux can otherwise mask
+residency as fully cached. A denied or unavailable sample produces a maintenance
+warning instead of a residency estimate.
+
+A cold sample (below 80%) or a slow bounded session-projection read starts background
+warming through an independent read-only SQLite worker. Shared state is read
+sequentially. Agent warming reads at most 4,096 session projections updated within
+seven days and bounded ranges of their history metadata indexes. Projection values
+larger than 256 KiB are skipped. After metadata, it warms the newest 32 active messages
+per session for sessions updated within 48 hours, newest sessions first. Payload
+reads use batches of eight and skip stored JSON or compressed values above 64 KiB;
+compressed messages are not decoded. Cold snapshot values and older transcript
+payloads are not scanned.
+Each bounded query finishes before yielding, so pacing holds no SQLite read transaction.
+Warming yields between chunks, targets 16 MiB/s, and stops at a 2 GiB pass budget
+or three minutes per database. A final chunk can exceed the byte budget slightly.
+Shutdown cancels and joins the worker; no page map or read snapshot survives a pass.
+
+The journal records `database page-cache residency`. Startup diagnostics include
+sample scope, progress, logical read bytes, disk bytes, warmed payload bytes and
+message counts, and bounded projection-query
+timings before and after warming. These timings do not measure the full
+`chat.history` request. Older history, oversized messages, and cold snapshots can
+still require disk reads.
+No schema, stored data, configuration, or update behavior changes.
+
+### Session reactions
+
+The per-agent `session_reactions` table stores reaction rows as side data for
+persisted transcript messages. Its key combines `session_key`,
+`session_id`, `message_id`, `emoji`, and `identity_id`; the row also records an
+optional identity label and creation time. `message_id` is the transcript event
+identity exposed as `__openclaw.id`. Reactions never modify transcript payloads.
+Rows cascade with their session node, and reads select the transcript session ID
+so reactions from a previous reset instance remain inert.
+The table is not secret storage. See the
+[same-version contract](/reference/database-schemas/versioning#versioning-contract).
+
+### Session run outcomes and liveness
+
+The canonical session entry's optional `status` stores only `done`, `failed`,
+`killed`, `timeout`, or `interrupted`. Starting a run clears the previous outcome.
+`GatewaySessionRow.status` may also expose `running` or `queued`, derived from the
+run registry and queue owner rather than durable session metadata. Storage workers
+receive live session keys from their scheduling owner and revalidate protection
+before committing maintenance or cold-storage changes.
+
+Restart and crash recovery use the existing recovery claim, run-fence, reply-phase,
+and delivery fields. Eligible admissions arm their claim with the user-turn write,
+including turns without a channel route. An interrupted outcome alone does not
+authorize resumption or delivery. See [Restart recovery](/gateway/restart-recovery).
+
+Doctor and startup share a one-time normalization of legacy persisted `running`
+and `queued` entries to `interrupted`, before canonical session reads; verified legacy
+yields retain an unset outcome so their child continuation keeps ownership. Eligible
+legacy `running` entries acquire recovery custody if they lack a claim; existing
+claims, transcripts, and activity timestamps remain intact. This changes no table or schema
+version: the existing SQL status index still projects `interrupted` as `failed`;
+canonical entry JSON retains the distinct outcome. Older releases still infer
+activity from their persisted flag, so they cannot provide the new liveness or
+claim-only recovery behavior when reopened on these entries.
 
 ### Activity session recaps
 
 [Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains canonical. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.
 
-Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the generated prose format; revision 2 uses one to three concise sentences. Missing or older format revisions retain their text and coverage while the existing queue refreshes the prose. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
+Since [agent schema 24](/reference/database-schemas/agent-schema-history#session-hot-facts-and-snapshots),
+`session_nodes.entry_json` contains hot session facts. The separately keyed
+`session_entry_snapshots` rows own diff baselines, saved skills, and system-prompt
+reports. Exact readers select only the snapshots their caller needs: metadata
+reads omit all three, usage context reads the system-prompt report, and session
+diff reads the diff baseline. Selected snapshots, entry metadata, and lifecycle
+facts remain in the same read transaction. Replacement and initialization reads
+retain complete entries so saved snapshots survive writeback. The logical
+session node owns their retention and deletion; no migration is required.
+
+Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the cache format. Revision 2 introduced the current prose (one to three concise sentences); revision 3 keeps that prose and certifies that the oversized-omission flag counts only skipped user or assistant messages, not oversized tool results such as screenshots. Missing or pre-revision-2 records retain their text and coverage while the existing queue refreshes the prose with a model call. Revision-2 records are rechecked once without a model call unless new messages arrived: the stale omission notice is removed when only tool results were skipped, and kept when an earlier user or assistant message was genuinely omitted. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
+
+### User-turn model prompt projections
+
+Canonical user messages may include the optional private field
+`__openclaw.modelPromptProjection: { version: 1, text: string }`. The user-turn
+transcript recorder stores the first model-facing text, including prompt-hook
+prepend/append context or a model-prompt replacement, before provider dispatch.
+The ordinary `content` remains the original user transcript. Projection text is
+stored after transcript redaction and before deterministic timestamp and sender
+normalization. Both the first dispatch and replay use that recorded text, then
+apply the same normalization.
+
+The existing transcript writer binds capture to the exact active user message
+and rechecks live authority before committing. Capture is immutable: repeats
+can only confirm identical text. Later media cannot change a sent projection
+or copy it onto the media's new user message. Compaction retires the projection
+with its source message, and reset or replacement cannot transfer it to another
+turn. No separate table, cache, sidecar, or configuration option is added.
+
+Messages without the field retain legacy replay behavior. The version-1 reader
+rejects malformed or unsupported projection formats before provider dispatch
+and asks for a compatible OpenClaw version or a new session. This stored-shape
+addition leaves the numeric database schema version unchanged. Older builds
+that do not understand the optional field can still read the original user
+content, but cannot reproduce the recorded model prompt and may lose prompt
+cache reuse. Downgrading therefore does not preserve this replay guarantee;
+resume affected sessions with a compatible build or start a new session.
 
 ### Transcript search row ownership
 
@@ -227,11 +339,17 @@ These observations do not grant execution authority. No column, table, or schema
 version changes; older records can omit them. See
 [candidate-owned admission](/cli/update#candidate-owned-admission).
 
-Asynchronous history lookup and listing run their queries and record decoding
-in the shared-state read worker. They preserve source artifacts and inherited
-snapshot or disposable-read scopes, and return empty history without creating
-a missing database or ledger table. Reconciliation and ledger writes retain
-their existing owners.
+Asynchronous history lookup, listing, and status projections run their queries
+and record decoding in the shared-state read worker. They preserve source
+artifacts and inherited snapshot or disposable-read scopes, reuse a retained
+identity-matched warm source without copying it, and return empty
+history without creating a missing database or ledger table. Reconciliation
+retains the selected physical database through its asynchronous lookup and
+shared-state write-worker operation. Its synchronous existing-schema transaction
+rechecks rows, recovery descriptors, and driver liveness before terminalizing;
+source custody and cancellation are checked again before commit. Lightweight
+repair also rechecks newer post-core history in that transaction. Ordinary run
+creation, progress, and terminal writes retain their current ledger owner.
 
 New drivers store optional `origin.driver` fields `host` (the hostname), `pid`,
 and `startIdentity` (the operating system's process-start identity as a decimal
@@ -334,7 +452,7 @@ latest interrupted verification or correct its `abandoned` result to `succeeded`
 only after all recorded drivers are positively dead and fresh installed-build,
 serving-build, readiness, and generation checks agree. Recovery descriptors and
 recorded repair, failure, or rollback evidence prevent that correction. The transaction
-rechecks the complete row and latest-run identity after probing, then records the
+rechecks the complete row and latest-run identity after checking, then records the
 verification, outcome, and an explanatory warning together. Older rows without
 the target identity remain unchanged, and Doctor explains the missing evidence.
 This uses existing step and verification fields; schemas and rollback readers
@@ -367,6 +485,22 @@ The normal handoff parent prepares this database before launching its sealed
 helper. The helper receives the captured database identity and operates only on
 that existing database, without resolving installation packages or recreating
 missing or empty state.
+Package recovery helpers are also self-contained: their status and recovery
+commands do not need neighboring installation assets or service controllers.
+
+Current update, Doctor, and handoff owners serialize coordinator writes before
+pinning a read snapshot. They prepare an existing-directory capability and use
+the coordinator's existing lock file, carrying the remaining five-second wait
+budget into SQLite. Other installations can still inspect their leases while a
+writer is active. SQLite admission remains non-waiting while the protective
+snapshot is held, so it cannot deadlock a writer's commit or replay a hot journal.
+Already-published synchronous helpers retain that conservative SQLite refusal;
+the new serialization does not change their protocol or lease rows.
+When an older update or Doctor holds SQLite, the current caller explains the
+contention and asks the operator to wait for it to finish, then rerun the command.
+If a holder removes its lock during inspection, admission re-observes the absent
+slot through the same directory capability and remaining budget. A replacement
+sidecar that is still present or a changed directory identity is refused.
 
 File creation applies private permissions before SQLite opens the file, including
 a protected ACL on Windows. Initialization follows the existing directory-durability
@@ -381,7 +515,7 @@ This change requires no schema migration. See the
 
 [Managed worktree acceleration](/concepts/managed-worktrees#filesystem-acceleration) uses the first-use `worktree_templates` table in the shared state database. Each row records a reconstructible source template: repository and Git common directory, destination root, filesystem backend, artifact path, source commit, checkout content key, preparation status, and creation and last-use timestamps. The cache key allows one template per repository and destination root. The template contains no provisioned ignored files or repository setup output.
 
-The worktree service owns template creation, reuse, invalidation, and cleanup under its existing allocation lease. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Durable mutations recheck the lease inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
+The worktree service owns template creation, reuse, invalidation, and cleanup under a mutation lease for each template cache key. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Persisted readers retain the generation while checkouts clone independently; cleanup and replacement defer while readers remain. Durable mutations recheck custody inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
 
 The additive table is ensured on first use and does not change the numeric database schema version. Existing worktree and snapshot records retain their meaning; no existing checkout is migrated or moved. Template artifacts are reconstructible, while registered worktree contents and recovery snapshots retain their existing preservation rules.
 
@@ -460,3 +594,138 @@ The reservation is canonical recovery state. Do not delete it to clear a provide
 error. Before downgrading to a version without reservation support, disable the
 backend and reconcile its pending leases using the current version. Older readers
 can open the database but do not implement this lifecycle.
+
+## Package-publication recovery receipt
+
+The package-only activation owner keeps one operation in
+`<installation-parent>/.openclaw.package-activation-<install-key-hash>.control/operation.sqlite`.
+This is the existing single-slot `package_activation` table, not the shared
+state database. Its columns and numeric schema version are unchanged. The
+strict descriptor records the original executor database identity, exact
+package/launcher identities, pre-move custody, helper identity and a revision.
+The control directory also holds the operation-scoped `recovery.mjs` until
+retirement. It is published once with the complete journal and helper; the
+disposable package directory is a separate sibling. The descriptor distinguishes
+the installation parent, control directory, and original executor database parent.
+
+An existing journal is opened without creation or migration. The external-helper
+layout is explicit in the descriptor; legacy flat and in-directory journals are refused
+and remain with their original recovery owner. A successful retirement retains
+one bounded completion receipt after the directory and helper are gone. Only a
+new original-store-admitted operation can replace that slot. Status reads do
+not grant admission or perform cleanup.
+
+## Immutable installation preparation
+
+The immutable adapter uses that same installation-sibling control database path,
+with one `immutable_installation` row instead of a package operation. The accepted
+[immutable update design](/reference/team-immutable-update-design#detect-and-adopt-an-immutable-installation)
+binds explicit adoption to the physical installation and current generation,
+system service and account, state/config/profile, pinned external runtime, and
+official source. Its strict descriptor is canonical adoption state: version 1
+records preparation-only adoption, and version 2 records explicitly enabled
+activation. The revision and optional prepared-generation receipt record verified
+preparation. The activation record owns pointer publication, service effects,
+verification, and recovery; preparation alone grants none of that authority.
+
+Initial adoption refuses existing package control rather than migrating or
+replacing package journals. Existing package descriptors and permissions stay
+unchanged. Immutable controls are root-owned directories with mode `0755` and a
+root-owned `0644` database: the service account may read these non-secret facts, but only the
+updater may write. Runtime observations use the existing read-only worker;
+CLI adoption and preparation use synchronous, revision-checked transactions with
+current executor checks at admission and commit. The existing rollback-journal
+durability and directory-sync owners publish the completed adoption record.
+
+A prepared receipt can be replaced only at the observed revision; this does not
+delete its previously referenced tree. Rollback of runtime bytes does not
+authorize pointer or state changes. Retained recovery runtimes consume the same
+strict control record, so a descriptor upgrade must preserve their ability to
+read it before the new owner writes that format.
+
+### Immutable release-retention inventory
+
+Release-retention inspection requires a compatible serving bridge. This
+foundation supplies the reader and storage contract but does not advertise the
+version-3 capability in its package manifest, so installing it alone does not
+enable inspection. Until the combined build, migration, and retained-recovery
+contracts qualify that bridge, inspection is exercised only with synthetic
+bridge fixtures.
+
+Descriptor version 3 may include this explicit, inspection-only policy:
+
+```json
+{
+  "releaseRetention": {
+    "version": 1,
+    "mode": "inspect",
+    "keepVerifiedGenerations": 3,
+    "pins": []
+  }
+}
+```
+
+Each pin is an object with a full commit `sha` and the recorded directory
+`identity`. The count records the intended retention of the three most recently
+successfully verified native generations, ordered by owner-recorded verification
+revision; it includes the current generation when that generation has successful
+verification evidence. A future collector must additionally protect current,
+previous, live, prepared, journal-referenced, pinned, and recovery-runtime roots;
+a changed pin identity must not release its protection. This policy records
+future collection intent: `inspect` is the only supported mode, and no release
+directory is deleted.
+
+The installation's existing control database owns the normalized inventory:
+
+```sql
+CREATE TABLE immutable_release_generations (
+  sha TEXT PRIMARY KEY NOT NULL,
+  path TEXT NOT NULL,
+  identity TEXT NOT NULL,
+  build_digest TEXT NOT NULL,
+  published_revision INTEGER NOT NULL,
+  verified_revision INTEGER
+) STRICT;
+```
+
+`path` is the canonical contained release path; `identity` binds it to the physical
+directory, and `build_digest` identifies the verified sealed build. Preparation
+records ownership and `published_revision` in the same transaction as a changed
+prepared-generation receipt. Successful activation records `verified_revision`
+for an existing inventory row in the transaction that completes acceptance.
+Accepting a legacy prepared generation does not backfill an ownership row.
+Moving current, previous, or prepared references does not remove inventory rows.
+A built or sealed generation alone does not establish successful activation
+verification.
+
+The immutable installation owner admits this table and validates stored paths,
+identities, digests, and revision ordering. There is no filename scan or implicit
+backfill: earlier and unknown directories remain outside the inventory. Backup
+and migration snapshots stay with their existing recovery owners and are not
+release inventory entries.
+
+The inventory is bounded to 4,096 rows, and the combined control record and
+inventory projection is limited to 1 MiB. A write that exceeds either limit
+rolls back; it does not evict ownership evidence or remove artifacts. Status
+includes the policy and a `generations` list with `publishedRevision` and nullable
+`verifiedRevision` for inspection.
+
+Existing version-1 and version-2 descriptors remain unchanged. Future explicit
+adoption requires a qualified bridge whose installed `package.json` declares
+`openclaw.immutableInstallDescriptorVersion: 3`, activated through the existing
+version-2 owner. After that bridge and any recovery have settled, the adoption
+interface accepts `--inspect-release-retention` together with
+`--enable-activation --previous-updater-stopped` and the original installation
+bindings. New adoption with inspection requires the same marker on the installed
+current generation. A candidate's marker alone does not qualify the installed
+runtime. Do not add the marker manually to enable the option.
+
+Adoption verifies the serving bridge, refuses pending operations, and checks the
+installed format marker before metadata admission. It upgrades only the known
+version-2 standalone launcher through the existing backup owner, retaining
+`openclaw-gateway.v2` before writing the version-3 descriptor. The installed
+updater and retained recovery runtimes must understand version 3 before it is
+written. Subsequent preparation, activation, and recovery reject unsupported
+generations before drain. Status and preview do not adopt the policy or migrate
+the control database. The inventory does not enable collection, disk-space
+reclamation, or host-maintenance deletion.

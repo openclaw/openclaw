@@ -1,5 +1,5 @@
-import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { fetchGraphJson, type GraphResponse } from "./graph.js";
+import { htmlToPlainText } from "./inbound.js";
 import type { MSTeamsRequestDeadline } from "./request-timeout.js";
 
 export type GraphThreadMessage = {
@@ -17,14 +17,7 @@ export type GraphThreadMessage = {
  * Teams wraps mentions in <at>Name</at> tags.
  */
 export function stripHtmlFromTeamsMessage(html: string): string {
-  // Preserve mention display names by replacing <at>Name</at> with @Name.
-  let text = html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1");
-  // Strip remaining HTML tags.
-  text = text.replace(/<[^>]*>/g, " ");
-  // Single-pass decoding preserves literally typed entity text such as "&lt;".
-  text = decodeHtmlEntities(text).replaceAll("\u00a0", " ");
-  // Normalize whitespace.
-  return text.replace(/\s+/g, " ").trim();
+  return htmlToPlainText(html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1"));
 }
 
 /**
@@ -99,11 +92,9 @@ export async function fetchThreadReplies(
   groupId: string,
   channelId: string,
   messageId: string,
-  limit = 50,
   deadline?: MSTeamsRequestDeadline,
 ): Promise<GraphThreadMessage[]> {
-  const top = Math.min(Math.max(limit, 1), 50);
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}`;
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=50`;
   const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({
     token,
     path,

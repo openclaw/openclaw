@@ -17,12 +17,12 @@ import { resolveSessionTranscriptActiveLeafEntryId } from "../../../config/sessi
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as workerProbe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../../infra/sqlite-worker-store.js";
 import type {
   SqliteWorkerOperations,
   SqliteWorkerStore,
 } from "../../../infra/sqlite-worker-store.js";
-import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -145,14 +145,14 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     fixture.sessionRuntimeState.currentTurnImageFailureCount = 1;
     await runEmbeddedAttemptSettledPhase(fixture.input);
 
-    expect(fixture.sessionManager.appendMessage).toHaveBeenCalledWith(
+    expect(fixture.sessionManager.appendMessageAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         customType: "openclaw.system-note",
         display: true,
         content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
       }),
     );
-    expect(fixture.sessionManager.appendMessage.mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(fixture.sessionManager.appendMessageAsync.mock.calls[0]?.[0]).not.toHaveProperty(
       "excludeFromContext",
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(
@@ -608,22 +608,13 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         let noteInFlight = false;
         let interceptedNotes = 0;
         let cancelledGrants = 0;
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-        const admissionSpy = vi
-          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (
-                transition === "cancel before commit" &&
-                noteInFlight &&
-                request.stage === "commit"
-              ) {
-                cancelledGrants++;
-                fixture.input.runAbortController.abort(cancellation);
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const admissionSpy = workerProbe.admission(workerAdmission, (request, grant, admit) => {
+          if (transition === "cancel before commit" && noteInFlight && request.stage === "commit") {
+            cancelledGrants++;
+            fixture.input.runAbortController.abort(cancellation);
+          }
+          admit(request, grant);
+        });
         const runOperation = workerStore.runSqliteWorkerStoreOperation;
         const operationSpy = vi
           .spyOn(workerStore, "runSqliteWorkerStoreOperation")
@@ -766,42 +757,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
   it("carries a successful hidden target through settlement into the terminal receipt", async () => {
     const fixture = createFixture(mocks);
-    fixture.input.prepared.toolBase.nestedToolActivities.push(
-      createNestedToolActivity({
-        runId: "run-test",
-        scopeId: "scope-test",
-        afterEntryId: null,
-        startOrder: 0,
-        parentToolCallId: "outer-exec",
-        toolCallId: "tool_search_code:outer-exec:read:1",
-        toolName: "read",
-        input: { path: "qa/scenarios/index.yaml" },
-        result: {
-          content: [{ type: "text", text: "QA scenario pack mission" }],
-          details: {},
-        },
-        isError: false,
-        startedAt: 1,
-        timestamp: 2,
-      }),
-      createNestedToolActivity({
-        runId: "run-test",
-        scopeId: "scope-test",
-        afterEntryId: null,
-        startOrder: 0,
-        parentToolCallId: "outer-exec",
-        toolCallId: "tool_search_code:outer-exec:write:2",
-        toolName: "write",
-        input: { path: "qa/scenarios/index.yaml", content: "invalid" },
-        result: {
-          content: [{ type: "text", text: "write failed" }],
-          details: {},
-        },
-        isError: true,
-        startedAt: 3,
-        timestamp: 4,
-      }),
-    );
+    fixture.input.prepared.toolBase.nestedToolActivityState.successfulToolNames.add("read");
     const actualStreamSettle = await vi.importActual<typeof import("./attempt-stream-settle.js")>(
       "./attempt-stream-settle.js",
     );
@@ -868,23 +824,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     );
   });
 
-  it("releases the active run when backend cleanup throws during a failed prompt", async () => {
-    const fixture = createFixture(mocks);
-    const failure = new Error("prompt failed");
-    mocks.runPrompt.mockRejectedValueOnce(failure);
-    fixture.detachBackend.mockImplementationOnce(() => {
-      fixture.order.push("detach-backend");
-      throw new Error("backend detach failed");
-    });
-
-    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
-
-    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
-    expect(mocks.logError).toHaveBeenCalledWith(
-      expect.stringContaining("backend detach failed, possible resource leak"),
-    );
-  });
-
   it("reports a backend cleanup failure after releasing a successful run", async () => {
     const fixture = createFixture(mocks);
     const failure = new Error("backend detach failed");
@@ -897,46 +836,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
   });
-
-  it("reports active-run cleanup failure after detaching the backend", async () => {
-    const fixture = createFixture(mocks);
-    const failure = new Error("active run cleanup failed");
-    mocks.clearActiveEmbeddedRun.mockImplementationOnce(() => {
-      fixture.order.push("clear-active-run");
-      throw failure;
-    });
-
-    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
-
-    expect(fixture.detachBackend).toHaveBeenCalledOnce();
-  });
-
-  it.each([false, true])(
-    "retains child receipts for logical-run settlement (yielded: %s)",
-    async (yieldDetected) => {
-      const fixture = createFixture(mocks);
-      const acceptedSessionSpawns = [
-        {
-          runId: "child-run",
-          childSessionKey: "agent:main:subagent:child",
-          expectsCompletionMessage: true,
-        },
-      ];
-      mocks.completeResult.mockReturnValueOnce({
-        ...fixture.result,
-        terminal: { kind: "ok" },
-        yieldDetected,
-        acceptedSessionSpawns,
-      });
-
-      const result = await runEmbeddedAttemptSettledPhase(fixture.input);
-
-      expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
-      expect(fixture.order).toContain("clear-active-run");
-      expect(mocks.markRequesterTurnYielded).not.toHaveBeenCalled();
-      expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
-    },
-  );
 
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture(mocks);

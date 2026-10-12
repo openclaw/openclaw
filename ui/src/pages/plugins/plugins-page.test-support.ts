@@ -1,4 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import { createComponent, flush } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -12,19 +13,14 @@ import type {
   PluginCatalogItem,
   PluginDiscoveryDetailResult,
   PluginListResult,
-  PluginMutationResult,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import type { PluginRowMessage } from "./plugin-row-message.ts";
-import type { PluginsConsentController } from "./plugins-consent-controller.ts";
-import type { PluginMutationAction } from "./plugins-page-model.ts";
+import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { PluginsPage } from "./plugins-page.tsx";
 import type { PluginsRouteData } from "./route-data.ts";
-import "./plugins-page.ts";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
@@ -40,6 +36,7 @@ const PLUGINS_GATEWAY_HELLO = gatewayHelloForMethods([
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
+  publishPlugins: () => void;
   emit: (
     client: GatewayBrowserClient | null,
     connected: boolean,
@@ -50,24 +47,7 @@ type GatewayHarness = {
 type TestPluginsPage = HTMLElement & {
   surface: "discovery" | "settings";
   routeData?: PluginsRouteData;
-  updateComplete: Promise<boolean>;
-  result: PluginListResult | null;
-  loading: boolean;
-  busy: Record<string, PluginMutationAction>;
-  messages: Record<string, PluginRowMessage>;
-  detail: {
-    pluginId: string;
-    inspection: PluginsInspectResult | null;
-    error: string | null;
-  } | null;
-  pluginConfigEditPending: boolean;
-  applyMutationResult: (result: PluginMutationResult) => void;
-  consentController: Pick<
-    PluginsConsentController,
-    "install" | "mutateInstalledPlugin" | "installProgress"
-  >;
-  refreshCatalog: () => Promise<void>;
-  uninstall: (pluginId: string, rowKey: string) => Promise<void>;
+  readonly updateComplete: Promise<boolean>;
 };
 
 export type RuntimeConfigTestState = {
@@ -113,11 +93,12 @@ export function createDiscoveryDetail(plugin = createPlugin()): PluginDiscoveryD
         categories: [],
       },
       local: {
+        pluginId: plugin.installed ? plugin.id : undefined,
         present: plugin.installed,
         installed: plugin.installed,
         enabled: plugin.enabled,
         state: plugin.state,
-        action: "install",
+        action: plugin.installed ? "manage" : "install",
         install: plugin.install,
       },
     },
@@ -231,6 +212,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -244,6 +226,23 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
   } satisfies ApplicationGateway;
   return {
     gateway,
+    publishPlugins() {
+      snapshot = {
+        ...snapshot,
+        pluginCapabilities: {
+          ok: true,
+          generation: (snapshot.pluginCapabilities?.generation ?? 0) + 1,
+          descriptors: [],
+          methods: snapshot.hello?.features?.methods ?? [],
+          controlUiTabs: [],
+          controlUiWidgetKinds: [],
+          pluginSurfaceUrls: {},
+        },
+      };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
     emit(nextClient, nextConnected, overrides = {}) {
       snapshot = { ...createSnapshot(nextClient, nextConnected), ...overrides };
       for (const listener of listeners) {
@@ -389,59 +388,52 @@ export function createContext(
   } as unknown as ApplicationContext;
 }
 
+export async function settlePlugins(): Promise<boolean> {
+  flush();
+  await Promise.resolve();
+  flush();
+  await Promise.resolve();
+  flush();
+  return true;
+}
+
 export async function mountPage(
   context: ApplicationContext,
   routeData?: PluginsRouteData,
   surface: TestPluginsPage["surface"] = routeData?.location.pathname.includes("/settings/plugins")
     ? "settings"
     : "discovery",
-): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
-  page.surface = surface;
-  page.routeData = routeData;
-  provider.append(page);
-  document.body.append(provider);
-  await page.updateComplete;
-  return { page, provider };
+): Promise<{ page: TestPluginsPage }> {
+  const provider = createSolidApplicationContextProvider(context);
+  const mounted = mountSolid(() => createComponent(PluginsPage, { routeData, surface }), {
+    wrapper: provider.wrapper,
+  });
+  await settlePlugins();
+  const page = mounted.container.querySelector("openclaw-plugins-page") as TestPluginsPage;
+  if (!page) {
+    throw new Error("Plugins page did not render its host element");
+  }
+  page.remove = () => mounted.unmount();
+  return { page };
 }
 
-export async function activatePluginControl(
-  page: TestPluginsPage,
-  pluginSelector: string,
-  label: string,
-) {
-  const controls = [
-    ...page.querySelectorAll<HTMLElement>(`${pluginSelector} button, ${pluginSelector} wa-switch`),
-  ];
-  const control =
-    controls.find((element) =>
-      (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
-    ) ?? controls.find((element) => element.tagName.toLowerCase() === "wa-switch");
-  if (!control) {
-    const pluginId = /data-plugin-id=["']([^"']+)["']/u.exec(pluginSelector)?.[1];
-    const plugin = page.result?.plugins.find((entry) => entry.id === pluginId);
-    if (!plugin) {
-      throw new Error(`No plugin control matching ${label} under ${pluginSelector}`);
-    }
-    void page.consentController.mutateInstalledPlugin(
-      plugin.id,
-      plugin.enabled ? "disable" : "enable",
+export async function clickPluginAction(page: HTMLElement, label: string): Promise<void> {
+  const button = await waitForSolid(() => {
+    const control = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (element) =>
+        element.getAttribute("aria-label") === label || element.textContent?.trim() === label,
     );
-    await page.updateComplete;
-    return;
-  }
-  if (control.tagName.toLowerCase() === "wa-switch") {
-    const toggle = control as HTMLElement & { checked: boolean };
-    toggle.checked = !toggle.checked;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
-  } else {
-    control.click();
-  }
-  await page.updateComplete;
+    if (!control) {
+      throw new Error(`No plugin action matching ${label}`);
+    }
+    return control;
+  });
+  button.click();
+  await settlePlugins();
 }
 
 export function resetPluginsPageTestState(): void {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();

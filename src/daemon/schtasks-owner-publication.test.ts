@@ -2,7 +2,7 @@ import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTaskScriptPath } from "./schtasks-layout.js";
@@ -15,13 +15,11 @@ import {
 } from "./test-helpers/schtasks-fixtures.js";
 
 const timeState = vi.hoisted(() => ({ now: 0 }));
+const readWindowsProcessStartTime = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessStartTimeSync>(),
+);
 const readGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
-);
-const sleepMock = vi.hoisted(() =>
-  vi.fn(async (ms: number) => {
-    timeState.now += ms;
-  }),
 );
 const spawnSync = vi.hoisted(() =>
   vi.fn<
@@ -44,9 +42,15 @@ vi.mock("node:child_process", async (original) => ({
   spawnSync,
 }));
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
+  readWindowsProcessStartTimeSync: readWindowsProcessStartTime,
+}));
 vi.mock("../utils.js", async (original) => ({
   ...(await original<typeof import("../utils.js")>()),
-  sleep: sleepMock,
+  sleep: async (ms: number) => {
+    timeState.now += ms;
+  },
 }));
 const { terminateScheduledTaskGatewayListeners } = await import("./schtasks-process.js");
 const INSTALLED_GATEWAY_COMMAND_LINE =
@@ -95,10 +99,8 @@ function taskkillPids() {
 beforeEach(() => {
   resetSchtasksBaseMocks();
   readGatewayOwnerLease.mockReset();
+  readWindowsProcessStartTime.mockReset().mockReturnValue(null);
   spawnSync.mockReset();
-  sleepMock.mockReset().mockImplementation(async (ms) => {
-    timeState.now += ms;
-  });
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
 });
@@ -166,6 +168,9 @@ it.each(["snapshot", "per-pid"])(
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const legacy = acquireGatewayStateOwner({ databasePath });
       let forced = false;
+      readWindowsProcessStartTime.mockImplementation(() =>
+        forced ? null : Date.parse("2026-09-27T00:00:00.000Z"),
+      );
       let firstSnapshot = true;
       inspectPortUsageMock.mockResolvedValue({
         port: 18789,

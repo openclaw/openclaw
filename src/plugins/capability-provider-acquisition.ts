@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { acquireBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
   preparePluginCapabilityProviderLookup,
@@ -130,16 +131,13 @@ export async function acquirePluginCapabilityProviders<
         const loadOptions = load.resolveLoadOptions();
         if (!isPluginRegistryLoadInFlight(loadOptions)) {
           const key = resolvePluginRegistryLoadCacheKey(loadOptions);
-          let pending = loads.get(key);
-          if (!pending) {
-            pending = acquirePluginRegistryForInspection(loadOptions).then((acquired) => {
+          registry = await getOrCreatePromise(loads, key, () =>
+            acquirePluginRegistryForInspection(loadOptions).then((acquired) => {
               releases.push(acquired.release);
               captureAuthority(acquired.registry);
               return acquired.registry;
-            });
-            loads.set(key, pending);
-          }
-          registry = await pending;
+            }),
+          );
         }
       }
       const fallback = load.fallback(registry);
@@ -204,25 +202,21 @@ export async function finishCapabilityOperation<T>(
   outcome: Result<T, unknown>,
   release: () => Promise<void>,
 ): Promise<T> {
-  let result = outcome;
   try {
     await release();
   } catch (cleanupError) {
-    result = {
-      ok: false,
-      error: outcome.ok
-        ? cleanupError
-        : new AggregateError(
-            [outcome.error, cleanupError],
-            "Capability operation and registration cleanup failed",
-            { cause: outcome.error },
-          ),
-    };
+    throw outcome.ok
+      ? cleanupError
+      : new AggregateError(
+          [outcome.error, cleanupError],
+          "Capability operation and registration cleanup failed",
+          { cause: outcome.error },
+        );
   }
-  if (!result.ok) {
-    throw result.error;
+  if (!outcome.ok) {
+    throw outcome.error;
   }
-  return result.value;
+  return outcome.value;
 }
 
 /** Keeps callback-shaped operations on the same acquisition and actual-work owner. */

@@ -215,16 +215,17 @@ async function digestSnapshotFileHandle(
   const hash = createHash("sha256").update(hashPrefix);
   const buffer = Buffer.alloc(SNAPSHOT_HASH_BUFFER_BYTES);
   let position = 0;
-  try {
-    const opened = await handle.stat();
+  const assertUnchanged = (current: SnapshotEntry["stat"], phase: "before" | "while") => {
     if (
-      expectedStat.dev !== opened.dev ||
-      expectedStat.ino !== opened.ino ||
-      expectedStat.size !== opened.size ||
-      expectedStat.mtimeMs !== opened.mtimeMs
+      (["dev", "ino", "size", "mtimeMs"] as const).some(
+        (field) => expectedStat[field] !== current[field],
+      )
     ) {
-      throw new Error(`Snapshot file changed before hashing: ${filePath}`);
+      throw new Error(`Snapshot file changed ${phase} hashing: ${filePath}`);
     }
+  };
+  try {
+    assertUnchanged(await handle.stat(), "before");
     for (;;) {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
       if (bytesRead === 0) {
@@ -241,15 +242,7 @@ async function digestSnapshotFileHandle(
       hash.update(chunk);
       position += bytesRead;
     }
-    const after = await handle.stat();
-    if (
-      expectedStat.dev !== after.dev ||
-      expectedStat.ino !== after.ino ||
-      expectedStat.size !== after.size ||
-      expectedStat.mtimeMs !== after.mtimeMs
-    ) {
-      throw new Error(`Snapshot file changed while hashing: ${filePath}`);
-    }
+    assertUnchanged(await handle.stat(), "while");
   } finally {
     await handle.close();
   }

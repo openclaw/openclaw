@@ -114,6 +114,12 @@
           - "extensions/teams-meetings/**"
           - "docs/plugins/teams-meetings.md"
           - "docs/plugins/reference/teams-meetings.md"
+"plugin: slack-huddles":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/slack-huddles/**"
+          - "docs/plugins/slack-huddles.md"
+          - "docs/plugins/reference/slack-huddles.md"
 "plugin: zoom":
   - changed-files:
       - any-glob-to-any-file:
@@ -281,6 +287,12 @@
       - any-glob-to-any-file:
           - "extensions/whatsapp/**"
           - "docs/channels/whatsapp.md"
+"channel: x":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/x/**"
+          - "docs/channels/x.md"
+          - "docs/plugins/reference/x.md"
 "channel: zalo":
   - changed-files:
       - any-glob-to-any-file:
@@ -343,14 +355,6 @@
           - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
-
-"fleet":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "src/fleet/**"
-          - "src/cli/fleet-cli/**"
-          - "docs/gateway/multi-tenant-hosting.md"
-          - "docs/cli/fleet.md"
 
 "docs":
   - changed-files:
@@ -582,6 +586,11 @@
           - "extensions/anthropic/**"
           - "docs/providers/anthropic.md"
           - "docs/plugins/reference/anthropic.md"
+"extensions: cloudflare":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cloudflare/**"
+          - "docs/plugins/cloudflare.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
@@ -657,6 +666,12 @@
           - "extensions/copilot/**"
           - "docs/plugins/copilot.md"
           - "docs/plugins/reference/copilot.md"
+"extensions: kie":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kie/**"
+          - "docs/providers/kie.md"
+          - "docs/plugins/reference/kie.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:

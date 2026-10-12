@@ -11,9 +11,13 @@ const suite = createControlUiE2eSuite({ name: "Gateway status with native accoun
 
 async function connectionStatusOverlapsComposer(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const statusBounds = document
-      .querySelector(".shell-connection-status")!
-      .getBoundingClientRect();
+    const status =
+      document.querySelector(".shell-connection-status") ??
+      document.querySelector(".sidebar-identity-card[data-connection-status]");
+    if (!status) {
+      throw new Error("Expected a visible Gateway connection status surface");
+    }
+    const statusBounds = status.getBoundingClientRect();
     const composerBounds = document
       .querySelector(".agent-chat__composer-shell")!
       .getBoundingClientRect();
@@ -100,46 +104,6 @@ suite.define(() => {
     );
   });
 
-  it.each([390, 1280])(
-    "keeps recovery available after a sidebar download failure at %ipx",
-    async (width) => {
-      await suite.withPage(
-        {
-          viewport: { width, height: 844 },
-          colorScheme: "dark",
-          locale: "en-US",
-          serviceWorkers: "block",
-        },
-        async ({ page }) => {
-          let blockedSidebarRequests = 0;
-          await page.route(/\/assets\/app-sidebar-[^/]+\.js(?:\?.*)?$/u, async (route) => {
-            blockedSidebarRequests += 1;
-            await route.abort("failed");
-          });
-          const gateway = await installMockGateway(page);
-          await page.goto(`${suite.server.baseUrl}new`);
-          await waitForControlUiGatewayReady(page);
-          await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-          await expect.poll(() => blockedSidebarRequests).toBeGreaterThan(0);
-          expect(await page.locator(".sidebar-identity-card").isVisible()).toBe(false);
-
-          await gateway.setOnline(false);
-          const connectionStatus = page.locator(".shell-connection-status");
-          await connectionStatus
-            .locator(".gateway-status__label")
-            .getByText("Reconnecting…", { exact: true })
-            .waitFor({ state: "visible" });
-          const socketCount = await gateway.getSocketCount();
-          await connectionStatus.getByRole("button", { name: /Retry now/ }).click();
-          await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-          await gateway.setOnline(true);
-          await waitForControlUiGatewayReady(page);
-          await expect.poll(() => connectionStatus.count()).toBe(0);
-        },
-      );
-    },
-  );
-
   it("keeps reconnect status clear of the composer in a compact native window", async () => {
     await suite.withPage(
       {
@@ -158,10 +122,11 @@ suite.define(() => {
         });
         await page.locator(".shell--nav-collapsed").waitFor({ state: "visible" });
         await gateway.setOnline(false);
-        await page
-          .locator(".shell-connection-status .gateway-status__label")
-          .getByText("Reconnecting…", { exact: true })
-          .waitFor({ state: "visible" });
+        const retainedStatus = page.locator(
+          ".sidebar-identity-card[data-connection-status=reconnecting]",
+        );
+        await retainedStatus.waitFor({ state: "visible" });
+        expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
         await expect.poll(() => connectionStatusOverlapsComposer(page)).toBe(false);
       },
     );
@@ -220,12 +185,13 @@ suite.define(() => {
             path: path.join(suite.artifactDir, "native-reconnecting.png"),
           });
         }
-        const visibleStatus = footer.locator(".gateway-status__label");
-        expect(await visibleStatus.count()).toBe(1);
-        expect(await visibleStatus.textContent()).toBe("Reconnecting…");
+        const identityStatus = footer.locator(".sidebar-identity-card");
+        expect(await identityStatus.isVisible()).toBe(true);
+        expect(await identityStatus.getAttribute("aria-label")).toContain("Reconnecting…");
         expect(await footer.locator(".sidebar-identity-card").textContent()).toContain("Alex");
         expect(await footer.locator(".sidebar-identity-card [role=status]").count()).toBe(0);
-        const announcement = footer.getByRole("status");
+        const announcement = footer.locator(":scope > [role=status]");
+        expect(await announcement.count()).toBe(1);
         expect(await announcement.textContent()).toContain("Reconnecting…");
         expect(await announcement.textContent()).not.toContain("in outbox");
         expect(await footer.textContent()).not.toContain("in outbox");

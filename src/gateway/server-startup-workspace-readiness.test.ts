@@ -236,7 +236,8 @@ describe("Gateway workspace migration readiness", () => {
       state.envVars.OPENCLAW_TEST_MINIMAL_GATEWAY = undefined;
       state.applyEnv();
       const oldWorkspace = state.workspaceDir;
-      const nextWorkspace = state.path("retained");
+      // A long path must not crowd repair guidance out of the RPC error preview.
+      const nextWorkspace = state.path("retained", "workspace-".repeat(10));
       const reloadError = vi.spyOn(gatewayKernelLogs.logReload, "error");
       const cfg: OpenClawConfig = {
         gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },

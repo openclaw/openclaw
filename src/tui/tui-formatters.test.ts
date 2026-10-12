@@ -24,34 +24,37 @@ describe("resolveFinalAssistantText", () => {
     const rendered = resolveFinalAssistantText({ errorMessage: raw });
 
     expect(rendered).toBe(
-      "The AI service is temporarily unavailable (HTTP 502). Please try again in a moment.",
+      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     );
     expect(rendered).not.toContain("<html>");
   });
 });
 
 describe("formatTuiFooter", () => {
-  it("shows session modes and the process delivery mode in one compact summary", () => {
-    expect(
-      formatTuiFooter({
-        agentLabel: "Main",
-        sessionLabel: "work",
-        sessionInfo: {
-          model: "gpt-5.6-luna@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
-          fastMode: "auto",
-          verboseLevel: "full",
-          traceLevel: "raw",
-          reasoningLevel: "stream",
-          totalTokens: 1_200,
-          contextTokens: 128_000,
-        },
-        thinkingLevel: "high",
-        deliver: true,
-      }),
-    ).toBe(
-      "agent Main | session work | gpt-5.6-luna high | fast:auto | verbose full | trace:raw | reasoning:stream | deliver:on | tokens 1.2k/128k (1%)",
-    );
-  });
+  it.each(["auto", "ultrafast"] as const)(
+    "shows %s and session modes in one compact summary",
+    (fastMode) => {
+      expect(
+        formatTuiFooter({
+          agentLabel: "Main",
+          sessionLabel: "work",
+          sessionInfo: {
+            model: "gpt-5.6-luna@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
+            fastMode,
+            verboseLevel: "full",
+            traceLevel: "raw",
+            reasoningLevel: "stream",
+            totalTokens: 1_200,
+            contextTokens: 128_000,
+          },
+          thinkingLevel: "high",
+          deliver: true,
+        }),
+      ).toBe(
+        `agent Main | session work | gpt-5.6-luna high | fast:${fastMode} | verbose full | trace:raw | reasoning:stream | deliver:on | tokens 1.2k/128k (1%)`,
+      );
+    },
+  );
 
   it("keeps disabled session modes hidden while reporting disabled delivery", () => {
     expect(

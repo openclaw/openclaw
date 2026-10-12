@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChannelIngressMonitor } from "../channels/message/ingress-monitor.js";
 import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createEmptyPluginRegistry, createPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -33,11 +33,12 @@ describe("channel startup trust refusal", () => {
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
   });
 
-  it("records a path plugin's wrapped trust refusal once without restarting its channel", async () => {
+  it("records a path plugin's wrapped hook refusal once without restarting its channel", async () => {
     const source = "/fixture/plugins-local/discord/index.js";
+    const dispatchHookAgentTurn = vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>();
     const builder = createPluginRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime: { state: {} } as PluginRuntime,
+      runtime: createPluginRuntimeMock({ hooks: { dispatchHookAgentTurn } }),
       activateGlobalSideEffects: false,
     });
     const record = createPluginRecord({
@@ -53,24 +54,20 @@ describe("channel startup trust refusal", () => {
     });
     const api = builder.createApi(record, { config: {} });
     const healthAtHandoff: Array<string | undefined> = [];
-    const startAccount = vi.fn(async ({ abortSignal, getStatus }: ChannelGatewayContext) => {
+    const startAccount = vi.fn(async ({ getStatus }: ChannelGatewayContext) => {
       healthAtHandoff.push(getStatus().healthState);
-      const monitor = createChannelIngressMonitor<string, string, string>({
-        queue: () => api.runtime.state.openChannelIngressQueue<string>(),
-        inspect: () => null,
-        payload: {
-          version: 1,
-          storage: "raw-event",
-          serialize: (raw) => raw,
-          deserialize: (body) => body,
-          createClaimError: () => new Error("invalid fixture event"),
-        },
-        deliver: async () => {},
-        pollIntervalMs: 10,
-        retention: "standard",
-        abortSignal,
-      });
-      monitor.start();
+      try {
+        await api.runtime.hooks.dispatchHookAgentTurn({
+          name: "Local watcher",
+          agentId: "main",
+          sessionKey: "hook:local:1",
+          message: "Local event",
+          externalContentSource: "email",
+          deliver: false,
+        });
+      } catch (cause) {
+        throw new Error("Channel hook startup failed", { cause });
+      }
     });
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
@@ -88,6 +85,7 @@ describe("channel startup trust refusal", () => {
     setActivePluginRegistry(builder.registry);
     const log = createSubsystemLogger("gateway/channel-trust-refusal-test");
     manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => ({}),
       getPluginRegistry: () => builder.registry,
       channelLogs: { discord: log },
@@ -104,9 +102,9 @@ describe("channel startup trust refusal", () => {
       await vi.advanceTimersByTimeAsync(20 * 60_000);
       expect(startAccount).toHaveBeenCalledTimes(1);
       await expect(startAccount.mock.results[0]?.value).rejects.toMatchObject({
-        code: "CHANNEL_INGRESS_UNAVAILABLE",
         cause: { code: "PLUGIN_TRUST_REFUSED" },
       });
+      expect(dispatchHookAgentTurn).not.toHaveBeenCalled();
       const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
       expect(account).toMatchObject({
         running: false,

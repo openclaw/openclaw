@@ -11,6 +11,7 @@ import {
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
+import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import * as modelControls from "./components/chat-model-controls.ts";
 import {
@@ -39,9 +40,12 @@ const model: ModelCatalogEntry = {
 it.each(
   (["absent", "placeholder"] as const).flatMap((initialState) =>
     settings.flatMap((setting) =>
-      (initialState === "placeholder" || setting === "thinking" ? [false, true] : [false]).map(
-        (returnToInitial) => ({ initialState, setting, returnToInitial }),
-      ),
+      (initialState === "placeholder"
+        ? [true]
+        : setting === "thinking"
+          ? [false, true]
+          : [false]
+      ).map((returnToInitial) => ({ initialState, setting, returnToInitial })),
     ),
   ),
 )(
@@ -100,6 +104,7 @@ it.each(
       });
     });
     const { sessions, mount, context } = createMountedPanes(rows, "main", undefined, {
+      "models.list": () => ({ models: [model] }),
       "sessions.list": () => ({
         ...sessionsResult(rows, 1),
         defaults: {
@@ -122,8 +127,18 @@ it.each(
       await sessions.refresh({ agentId: "main", force: true });
       const pane = mount(key);
       await refreshPane(pane);
-      pane.state.chatModelCatalog = [model];
+      await refreshChatModelCatalogOnDemand(pane.state);
       const container = document.createElement("div");
+      const controlValues = () => {
+        const effort = container.querySelector<HTMLElement>("[data-chat-thinking-select]");
+        return {
+          thinking: effort?.dataset.chatThinkingValue,
+          fast: effort?.dataset.chatFastMode,
+          context: container
+            .querySelector("[data-chat-context-window-toggle]")
+            ?.getAttribute("aria-checked"),
+        };
+      };
       const draw = () => {
         const access = readChatPaneMutationAccess(context.gateway.snapshot, key);
         expect(access.effort.allowed).toBe(true);
@@ -167,20 +182,15 @@ it.each(
       expect(patch.mock.calls[0]?.[1]).not.toHaveProperty("expectedSessionId");
       // The RPC is still held; a real render must keep the admitted selection.
       const pendingProps = draw();
-      const latest = container.querySelector<HTMLElement>("[data-chat-thinking-select]");
-      if (setting === "thinking") {
-        expect.soft(latest?.dataset.chatThinkingValue).toBe("high");
-      } else if (setting === "speed") {
-        expect.soft(latest?.dataset.chatFastMode).toBe("true");
-      } else {
-        expect
-          .soft(
-            container
-              .querySelector("[data-chat-context-window-toggle]")
-              ?.getAttribute("aria-checked"),
-          )
-          .toBe("true");
-      }
+      expect
+        .soft(controlValues())
+        .toMatchObject(
+          setting === "thinking"
+            ? { thinking: "high" }
+            : setting === "speed"
+              ? { fast: "true" }
+              : { context: "true" },
+        );
       expect(selectedChatSessionRow(pane.state)?.sessionId).toBeUndefined();
       expect(sessions.state.result?.sessions).toHaveLength(initialState === "placeholder" ? 1 : 0);
       if (returnToInitial) {
@@ -193,16 +203,9 @@ it.each(
         );
         expect(patch).toHaveBeenCalledOnce();
         draw();
-        const returnedEffort = container.querySelector<HTMLElement>("[data-chat-thinking-select]");
-        expect.soft(returnedEffort?.dataset.chatThinkingValue).toBe(initialThinking);
-        expect.soft(returnedEffort?.dataset.chatFastMode).toBe("false");
         expect
-          .soft(
-            container
-              .querySelector("[data-chat-context-window-toggle]")
-              ?.getAttribute("aria-checked"),
-          )
-          .toBe("false");
+          .soft(controlValues())
+          .toEqual({ thinking: initialThinking, fast: "false", context: "false" });
         // The first write creates the row; its ACK alone authorizes the queued target.
         rows.splice(0, rows.length, materialized);
         reply.resolve({ ok: true, key, path: "", entry: materialized });
@@ -226,16 +229,11 @@ it.each(
         await expect(operation).resolves.toBe(false);
       }
       draw();
-      expect(
-        container.querySelector<HTMLElement>("[data-chat-thinking-select]")?.dataset
-          .chatThinkingValue,
-      ).toBe(initialThinking);
-      expect(
-        container.querySelector<HTMLElement>("[data-chat-thinking-select]")?.dataset.chatFastMode,
-      ).toBe("false");
-      expect(
-        container.querySelector("[data-chat-context-window-toggle]")?.getAttribute("aria-checked"),
-      ).toBe("false");
+      expect(controlValues()).toEqual({
+        thinking: initialThinking,
+        fast: "false",
+        context: "false",
+      });
       if (returnToInitial) {
         expect(pane.state.chatError).toBeNull();
       } else {

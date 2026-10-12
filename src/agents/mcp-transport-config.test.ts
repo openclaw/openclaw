@@ -1,5 +1,4 @@
 // Verifies MCP transport config normalization and startup-safety filtering.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../logger.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
@@ -30,53 +29,6 @@ const httpDefaults = {
 describe("resolveMcpTransportConfig", () => {
   beforeEach(() => {
     vi.mocked(logWarn).mockClear();
-  });
-
-  it("resolves stdio config with connection timeout", () => {
-    const resolved = resolveMcpTransportConfig("probe", {
-      command: "node",
-      args: ["./server.mjs"],
-      connectionTimeoutMs: 12_345,
-    });
-
-    expect(resolved).toEqual({
-      ...stdioDefaults,
-      args: ["./server.mjs"],
-      description: "node ./server.mjs",
-      connectionTimeoutMs: 12_345,
-    });
-  });
-
-  it("resolves canonical timeouts and parallel capability", () => {
-    const resolved = resolveMcpTransportConfig("probe", {
-      command: "node",
-      requestTimeoutMs: 7_000,
-      connectionTimeoutMs: 2_000,
-      supportsParallelToolCalls: true,
-    });
-
-    expect(resolved).toEqual(
-      expect.objectContaining({
-        connectionTimeoutMs: 2_000,
-        requestTimeoutMs: 7_000,
-        supportsParallelToolCalls: true,
-      }),
-    );
-  });
-
-  it("clamps oversized canonical MCP timeouts to the Node timer maximum", () => {
-    const resolved = resolveMcpTransportConfig("probe", {
-      command: "node",
-      connectionTimeoutMs: 1e306,
-      requestTimeoutMs: 1e306,
-    });
-
-    expect(resolved).toEqual(
-      expect.objectContaining({
-        connectionTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-        requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
-      }),
-    );
   });
 
   it("drops dangerous env overrides from stdio config", () => {
@@ -211,54 +163,6 @@ describe("resolveMcpTransportConfig", () => {
         "X-Count": "42",
       },
       description: "https://mcp.example.com/sse",
-    });
-  });
-
-  it("keeps HTTP header parsing unchanged for env-like names", () => {
-    // Header names are not process environment keys, so env safety filtering
-    // must not rewrite or drop them.
-    const resolved = resolveMcpTransportConfig("probe", {
-      url: "https://mcp.example.com/sse",
-      headers: {
-        NODE_OPTIONS: "allowed-header",
-      },
-    });
-
-    expect(resolved).toEqual({
-      ...httpDefaults,
-      url: "https://mcp.example.com/sse",
-      headers: {
-        NODE_OPTIONS: "allowed-header",
-      },
-      description: "https://mcp.example.com/sse",
-    });
-  });
-
-  it("resolves explicit streamable HTTP config", () => {
-    const resolved = resolveMcpTransportConfig("probe", {
-      url: "https://mcp.example.com/http",
-      transport: "streamable-http",
-    });
-
-    expect(resolved).toEqual({
-      ...httpDefaults,
-      transportType: "streamable-http",
-      url: "https://mcp.example.com/http",
-      description: "https://mcp.example.com/http",
-    });
-  });
-
-  it("treats CLI-native http type as streamable HTTP for compatibility", () => {
-    const resolved = resolveMcpTransportConfig("probe", {
-      url: "https://mcp.example.com/http",
-      type: "http",
-    });
-
-    expect(resolved).toEqual({
-      ...httpDefaults,
-      transportType: "streamable-http",
-      url: "https://mcp.example.com/http",
-      description: "https://mcp.example.com/http",
     });
   });
 

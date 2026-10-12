@@ -7,12 +7,13 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   type FollowupRun,
   type QueueSettings,
 } from "../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "../auto-reply/reply/queue/drain.js";
+import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import {
@@ -44,7 +45,10 @@ describe("stuck session follow-up recovery", () => {
   const queueKeys = new Set<string>();
 
   afterEach(() => {
-    clearSessionQueues([...queueKeys]);
+    for (const key of queueKeys) {
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
+    }
     queueKeys.clear();
     embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
@@ -63,7 +67,7 @@ describe("stuck session follow-up recovery", () => {
     { allowance: "mixed tool deadlines", requestTimeoutMs: undefined, progress: "mixed-tools" },
   ])("rechecks repeated requests before releasing a lane with $allowance", async (testCase) => {
     vi.useFakeTimers({
-      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
     setDiagnosticsEnabledForProcess(true);
     startDiagnosticRunActivityTracking();

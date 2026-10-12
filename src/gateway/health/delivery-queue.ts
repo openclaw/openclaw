@@ -13,17 +13,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const healthLog = createSubsystemLogger("health");
 
-const debugHealth = (message: string, error: unknown) => {
-  if (isDiagnosticFlagEnabled("health")) {
-    healthLog.info(message, { error: formatErrorMessage(error) });
-  }
-};
-
 async function readQueueHealth<T>(message: string, read: () => T[] | Promise<T[]>): Promise<T[]> {
   try {
     return await read();
   } catch (error) {
-    debugHealth(message, error);
+    if (isDiagnosticFlagEnabled("health")) {
+      healthLog.info(message, { error: formatErrorMessage(error) });
+    }
     return [];
   }
 }

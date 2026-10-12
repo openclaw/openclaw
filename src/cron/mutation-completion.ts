@@ -1,7 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
-import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
 
 const mutationMethods = new Set([
   "cron.add",
@@ -33,8 +31,7 @@ export function createCronMutationCompletion(method: string): CronMutationComple
     method,
     open: true,
     committed: false,
-    // Gateway dispatch installs its own work scope. Keep the originating tool's
-    // resource owner on this exact receipt, without capturing authorization.
+    // Gateway dispatch installs its own scope; admission retains the originating tool.
     ...(method === "cron.run" ? { trackAdmission: captureAsyncWorkTracker() } : {}),
   };
   return {
@@ -52,7 +49,7 @@ export function createCronMutationCompletion(method: string): CronMutationComple
   };
 }
 
-/** Capture before acceptance; late callbacks cannot retain a settled or successor invocation. */
+/** Capture resource ownership before acknowledgement, independently of authorization. */
 export function captureCronRunAdmissionTracker():
   | ReturnType<typeof captureAsyncWorkTracker>
   | undefined {
@@ -80,23 +77,5 @@ export function captureCronMutationCommit(method: string): (() => undefined) | u
       state.committed = true;
     }
     return undefined;
-  };
-}
-
-/** Record the SQL commit before fallible reporting, preserving existing hooks. */
-export function withCronMutationCommitHook(
-  method: string,
-  hooks?: CronStoreTransactionHooks,
-): CronStoreTransactionHooks | undefined {
-  const committed = captureCronMutationCommit(method);
-  if (!committed) {
-    return hooks;
-  }
-  return {
-    ...hooks,
-    afterWrite: (db) => {
-      deferSqlitePostCommitPublication(db, committed);
-      return hooks?.afterWrite?.(db);
-    },
   };
 }

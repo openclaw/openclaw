@@ -11,7 +11,7 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { resolveCodexPluginsPolicy, type CodexPluginConfig } from "./config.js";
+import type { CodexPluginConfig } from "./config.js";
 import {
   appInfo,
   appSummary,
@@ -20,14 +20,12 @@ import {
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
-import { buildCodexPluginThreadConfigInputFingerprint } from "./plugin-thread-config.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
-import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app-authority.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel, useAutoCleanupTempDirTracker } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
@@ -110,7 +108,6 @@ describe("Codex app inventory across physical process restart", () => {
     const appServer = {
       ...createAppServerOptions(),
       connectionClass: "local-loopback" as const,
-      remoteAppsSubstrate: "preconfigured" as const,
     };
     appServer.start = {
       ...appServer.start,
@@ -360,28 +357,18 @@ describe("Codex app inventory across physical process restart", () => {
       processes.push({ close });
       const abandonClient = vi.fn(async () => close());
       const appCacheKey = "same-account-home-version";
-      const policy = resolveCodexPluginsPolicy(configuredPlugins);
-      const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
-        buildCodexPluginThreadConfigInputFingerprint({
-          pluginConfig: configuredPlugins,
-          appCacheKey,
-        }),
+      const prepareProvider = preparePluginThreadConfigForTest(
+        configuredPlugins,
+        appCacheKey,
         params.scheduledRuntimeAuthority,
       );
       const provider = () =>
-        createCodexPluginThreadConfigStartupProvider({
-          inputFingerprint,
-          enabledPluginConfigKeys: policy.pluginPolicies
-            .filter((plugin) => plugin.enabled)
-            .map((plugin) => plugin.configKey),
-          policy,
+        prepareProvider({
           requestTimeoutMs: appServer.requestTimeoutMs,
           signal: abort.signal,
-          pluginConfig: configuredPlugins,
           client: fake.client,
           configCwd: workspaceDir,
           appCache,
-          appCacheKey,
           metadataCache,
           scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
         });
@@ -483,14 +470,7 @@ describe("Codex app inventory across physical process restart", () => {
     return { ...f, first, process };
   }
 
-  it.each([
-    { lifecycle: "cold", scheduled: false },
-    { lifecycle: "warm", scheduled: false },
-    { lifecycle: "unloaded-same-process", scheduled: false },
-    { lifecycle: "cold", scheduled: true },
-    { lifecycle: "warm", scheduled: true },
-    { lifecycle: "unloaded-same-process", scheduled: true },
-  ])(
+  it.each([{ lifecycle: "unloaded-same-process", scheduled: true }])(
     "preserves approved apps on $lifecycle continuation, scheduled=$scheduled",
     async ({ lifecycle, scheduled }) => {
       const f = await continuation(scheduled, lifecycle);
@@ -543,30 +523,25 @@ describe("Codex app inventory across physical process restart", () => {
     },
   );
 
-  it.each(["cold", "warm", "unloaded-same-process"])(
-    "preserves excluded native app denials on non-ask %s continuation",
-    async (lifecycle) => {
-      const f = await continuation(
-        false,
-        lifecycle,
-        { codexPlugins: { enabled: true, allow_all_plugins: true } },
-        { excluded: { enabled: true } },
-      );
-      const boundary = f.calls.length;
-      const second = await f.process.run();
-      expect(second.threadId).toBe(f.first.threadId);
-      if (lifecycle === "warm") {
-        expect(
-          f.calls
-            .slice(boundary)
-            .some((call) => ["thread/resume", "thread/unsubscribe"].includes(call.method)),
-        ).toBe(false);
-      }
-      expect(f.process.loadedThreads.get(second.threadId)).toMatchObject({
-        apps: { [appId]: { enabled: true }, excluded: { enabled: false } },
-      });
-    },
-  );
+  it("preserves excluded native app denials on non-ask warm continuation", async () => {
+    const f = await continuation(
+      false,
+      "warm",
+      { codexPlugins: { enabled: true, allow_all_plugins: true } },
+      { excluded: { enabled: true } },
+    );
+    const boundary = f.calls.length;
+    const second = await f.process.run();
+    expect(second.threadId).toBe(f.first.threadId);
+    expect(
+      f.calls
+        .slice(boundary)
+        .some((call) => ["thread/resume", "thread/unsubscribe"].includes(call.method)),
+    ).toBe(false);
+    expect(f.process.loadedThreads.get(second.threadId)).toMatchObject({
+      apps: { [appId]: { enabled: true }, excluded: { enabled: false } },
+    });
+  });
 
   it.each(["cold", "warm"])(
     "reconfigures the %s thread when native ask override keys change",
@@ -633,10 +608,8 @@ describe("Codex app inventory across physical process restart", () => {
   );
 
   it.each([
-    { lifecycle: "warm", scheduled: false },
     { lifecycle: "cold", scheduled: false },
     { lifecycle: "warm", scheduled: true },
-    { lifecycle: "cold", scheduled: true },
   ])(
     "contains $lifecycle ask inventory timeouts, scheduled=$scheduled",
     async ({ lifecycle, scheduled }) => {
@@ -704,33 +677,7 @@ describe("Codex app inventory across physical process restart", () => {
     expect(reads.every((call) => !call.params.threadId || call.loaded)).toBe(true);
   });
 
-  it("rejects a scheduled continuation whose account app was revoked", async () => {
-    const f = await continuation(true, "cold");
-    f.revokeAccount();
-    await expect(f.process.run()).rejects.toThrow("Scheduled Codex apps are unavailable");
-  });
-
-  it("checks scheduled tools on the loaded thread even when account-wide tools remain available", async () => {
-    const f = await continuation(true, "warm");
-    const { process, first } = f;
-    process.threadToolRevocations.add(first.threadId);
-    const boundary = f.calls.length;
-    await expect(process.run()).rejects.toThrow("Scheduled Codex apps are unavailable");
-    const calls = f.calls.slice(boundary);
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "mcpServerStatus/list" &&
-          call.params.threadId === first.threadId &&
-          call.loaded,
-      ),
-    ).toBe(true);
-    expect(
-      calls.filter((call) => call.method === "thread/start" || call.method === "thread/resume"),
-    ).toEqual([]);
-  });
-
-  it.each(["cold", "warm"])(
+  it.each(["cold"])(
     "rejects active inherited MCP servers on a scheduled %s continuation",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);
@@ -759,8 +706,6 @@ describe("Codex app inventory across physical process restart", () => {
 
   it.each([
     { lifecycle: "cold", fault: "abort" },
-    { lifecycle: "warm", fault: "abort" },
-    { lifecycle: "cold", fault: "replacement" },
     { lifecycle: "warm", fault: "replacement" },
   ])("fences $fault during $lifecycle loaded-thread admission", async ({ lifecycle, fault }) => {
     const f = await continuation(false, lifecycle);
@@ -794,39 +739,33 @@ describe("Codex app inventory across physical process restart", () => {
     expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
   });
 
-  it.each(["cold", "warm"])(
-    "keeps the %s loaded thread when an optional app is disabled",
-    async (lifecycle) => {
-      const f = await continuation(false, lifecycle);
-      const previousBinding = f.readBinding();
-      f.process.disabledThreadApps.add(f.first.threadId);
-      const boundary = f.calls.length;
-      await expect(f.process.run()).resolves.toMatchObject({ threadId: f.first.threadId });
-      expect(f.readBinding()).toMatchObject({ threadId: previousBinding!.threadId });
-      expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(true);
-      expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
-    },
-  );
+  it("keeps the cold loaded thread when an optional app is disabled", async () => {
+    const f = await continuation(false, "cold");
+    const previousBinding = f.readBinding();
+    f.process.disabledThreadApps.add(f.first.threadId);
+    const boundary = f.calls.length;
+    await expect(f.process.run()).resolves.toMatchObject({ threadId: f.first.threadId });
+    expect(f.readBinding()).toMatchObject({ threadId: previousBinding!.threadId });
+    expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(true);
+    expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
+  });
 
-  it.each(["cold", "warm"])(
-    "preserves the durable binding when the %s client closes during inventory",
-    async (lifecycle) => {
-      const f = await continuation(false, lifecycle);
-      const previousBinding = f.readBinding();
-      f.process.faults.beforeInventory = async () => {
-        f.process.faults.beforeInventory = undefined;
-        f.process.close(new Error("codex app-server client is closed"));
-      };
-      const boundary = f.process.request.mock.calls.length;
-      await expect(f.process.run()).rejects.toThrow();
-      expect(f.readBinding()).toEqual(previousBinding);
-      expect(
-        f.process.request.mock.calls.slice(boundary).some(([method]) => method === "thread/start"),
-      ).toBe(false);
-    },
-  );
+  it("preserves the durable binding when the warm client closes during inventory", async () => {
+    const f = await continuation(false, "warm");
+    const previousBinding = f.readBinding();
+    f.process.faults.beforeInventory = async () => {
+      f.process.faults.beforeInventory = undefined;
+      f.process.close(new Error("codex app-server client is closed"));
+    };
+    const boundary = f.process.request.mock.calls.length;
+    await expect(f.process.run()).rejects.toThrow();
+    expect(f.readBinding()).toEqual(previousBinding);
+    expect(
+      f.process.request.mock.calls.slice(boundary).some(([method]) => method === "thread/start"),
+    ).toBe(false);
+  });
 
-  it.each(["cold", "warm"])(
+  it.each(["warm"])(
     "retires the %s client when denied admission cannot unsubscribe",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);

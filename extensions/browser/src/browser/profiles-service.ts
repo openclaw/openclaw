@@ -1,9 +1,3 @@
-/**
- * Browser profile service.
- *
- * Implements profile listing, creation, and deletion using browser config
- * mutation helpers and route context runtime state.
- */
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -15,7 +9,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { assertCdpEndpointAllowed, redactCdpUrl } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
-import type { BrowserDeleteProfileResult } from "./client.js";
+import type { BrowserCreateProfileResult, BrowserDeleteProfileResult } from "./client.js";
 import {
   createBrowserProfileConfig,
   deleteBrowserProfileConfig,
@@ -50,7 +44,6 @@ import {
 } from "./system-profiles.js";
 import { movePathToTrash } from "./trash.js";
 
-/** Input accepted when creating a browser profile. */
 type CreateProfileParams = {
   name: string;
   color?: string;
@@ -59,19 +52,10 @@ type CreateProfileParams = {
   driver?: "openclaw" | "existing-session";
 };
 
-/** Result returned after creating a browser profile. */
-type CreateProfileResult = {
-  ok: true;
-  profile: string;
+type CreateProfileResult = BrowserCreateProfileResult & {
   transport: "cdp" | "chrome-mcp";
-  cdpPort: number | null;
-  cdpUrl: string | null;
-  userDataDir: string | null;
-  color: string;
-  isRemote: boolean;
 };
 
-/** Create a profile service bound to one browser route context. */
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
@@ -87,14 +71,10 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     }
 
     const state = ctx.state();
-    const resolvedProfiles = state.resolved.profiles;
-    if (getOwnBrowserProfile(resolvedProfiles, name)) {
-      throw new BrowserConflictError(`profile "${name}" already exists`);
-    }
-
-    const cfg = getRuntimeConfig();
-    const rawProfiles = cfg.browser?.profiles ?? {};
-    if (getOwnBrowserProfile(rawProfiles, name)) {
+    if (
+      getOwnBrowserProfile(state.resolved.profiles, name) ||
+      getOwnBrowserProfile(getRuntimeConfig().browser?.profiles, name)
+    ) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
@@ -128,11 +108,10 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
       ...(driver ? { driver } : {}),
     });
-    if (!profileConfig) {
-      throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
+    if (profileConfig) {
+      state.resolved.profiles[name] = profileConfig;
     }
-    state.resolved.profiles[name] = profileConfig;
-    const resolved = resolveProfile(state.resolved, name);
+    const resolved = profileConfig && resolveProfile(state.resolved, name);
     if (!resolved) {
       throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
     }
@@ -272,7 +251,6 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         runtime,
         reason: "profile deletion requested",
         terminal: "deleted",
-        advanceConfigRevision: true,
         closeRelay: resolved.driver === "extension",
         managedChrome: "release-profile-data",
         afterCleanup: persistDelete,

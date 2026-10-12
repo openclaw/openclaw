@@ -1,5 +1,6 @@
 import AVFAudio
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
@@ -28,13 +29,13 @@ struct ChatProTab: View {
     }
 
     private enum PendingChatAction {
-        case backgroundTasks
         case exportTranscript
         case gatewaySettings
         case newSessionOptions
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
@@ -44,7 +45,6 @@ struct ChatProTab: View {
 
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
-    @State private var showsBackgroundTasks = false
     @State private var showsNewSessionOptions = false
     @State private var showsChatActions = false
     @State private var pendingChatAction: PendingChatAction?
@@ -111,9 +111,6 @@ struct ChatProTab: View {
             .sheet(item: self.$transcriptShareItem) { item in
                 OpenClawChatFileShareSheet(fileURL: item.fileURL)
             }
-            .sheet(isPresented: self.$showsBackgroundTasks) {
-                BackgroundTasksScreen(agentID: self.currentAgentID)
-            }
             .sheet(isPresented: self.$showsNewSessionOptions) {
                 if let viewModel {
                     ChatNewSessionOptionsPopover(viewModel: viewModel) {
@@ -152,6 +149,8 @@ struct ChatProTab: View {
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
                 assistantAvatarTint: OpenClawBrand.accent,
+                // Narrow layouts drop the avatar column, as the web chat does at phone widths.
+                showsAssistantAvatars: self.horizontalSizeClass != .compact,
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
                 isAttachmentInputEnabled: self.gatewayConnected || self.canQueueOffline,
@@ -175,6 +174,10 @@ struct ChatProTab: View {
                 })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                 .environment(\.openClawAssistantBubblesInCleanChrome, true)
+                .environment(
+                    \.openClawEmbeddedBrowserUnavailableReason,
+                    self.appModel.activeGatewayConnectConfig?.ingressAuthorization == nil ? nil :
+                        "This widget needs browser access. Use native chat or open Gateway settings.")
                 .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
@@ -482,13 +485,6 @@ struct ChatProTab: View {
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
 
                 self.chatActionButton(
-                    title: "Background tasks",
-                    systemImage: "clock.arrow.circlepath",
-                    disabled: !self.appModel.isOperatorGatewayConnected)
-                {
-                    self.pendingChatAction = .backgroundTasks
-                }
-                self.chatActionButton(
                     title: "Export transcript",
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
@@ -524,11 +520,9 @@ struct ChatProTab: View {
     }
 
     private func performPendingChatAction() {
-        guard let pendingChatAction = self.pendingChatAction else { return }
+        guard let pendingChatAction else { return }
         self.pendingChatAction = nil
         switch pendingChatAction {
-        case .backgroundTasks:
-            self.showsBackgroundTasks = true
         case .exportTranscript:
             self.exportTranscript()
         case .gatewaySettings:
@@ -677,7 +671,7 @@ struct ChatProTab: View {
     }
 
     private var currentAgentID: String {
-        self.normalized(self.appModel.chatAgentId) ?? "main"
+        self.appModel.chatAgentId.trimmedNonEmpty ?? "main"
     }
 
     private var currentActiveAgent: AgentSummary? {
@@ -700,7 +694,7 @@ struct ChatProTab: View {
     }
 
     private var currentAgentDisplayName: String {
-        self.normalized(self.currentActiveAgent?.name) ?? self.appModel.chatAgentName
+        self.currentActiveAgent?.name?.trimmedNonEmpty ?? self.appModel.chatAgentName
     }
 
     private var agentDisplayName: String {
@@ -732,10 +726,4 @@ struct ChatProTab: View {
             title: String(localized: "Help me start voice chat"),
             prompt: String(localized: "Help me start a realtime voice session from this phone.")),
     ]
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }

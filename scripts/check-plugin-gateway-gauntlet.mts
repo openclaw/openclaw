@@ -12,6 +12,7 @@ import {
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
 import { normalizeCsvOrLooseStringList } from "../packages/normalization-core/src/string-normalization.ts";
+import { chunkItems } from "../src/utils/chunk-items.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import {
@@ -341,10 +342,6 @@ function openclawCommand(repoRoot: string, args: string[]) {
   };
 }
 
-function builtEntryPath(repoRoot: string) {
-  return path.join(repoRoot, "dist", "entry.js");
-}
-
 function selectSlashHelpAliases(plugin: PluginEntry, includePluginOwnedCliAliases: boolean) {
   return includePluginOwnedCliAliases
     ? plugin.cliCommandAliases
@@ -361,22 +358,7 @@ function requiresBuiltEntry(options: ReturnType<typeof parseArgs>, selectedPlugi
   if (options.skipSlashHelp) {
     return false;
   }
-  return selectedPlugins.some((plugin) => selectSlashHelpAliases(plugin, true).length > 0);
-}
-
-function sourceOpenclawCommand(repoRoot: string, args: string[]) {
-  return {
-    command: process.execPath,
-    args: [path.join(repoRoot, "scripts", "run-node.mjs"), ...args],
-  };
-}
-
-function chunkArray<Value>(values: Value[], chunkSize: number) {
-  const chunks: Value[][] = [];
-  for (let index = 0; index < values.length; index += chunkSize) {
-    chunks.push(values.slice(index, index + chunkSize));
-  }
-  return chunks;
+  return selectedPlugins.some((plugin) => plugin.cliCommandAliases.length > 0);
 }
 
 export function toRepoRelativePath(repoRoot: string, absolutePath: string) {
@@ -385,12 +367,6 @@ export function toRepoRelativePath(repoRoot: string, absolutePath: string) {
     throw new Error(`Output path must stay inside repo root: ${absolutePath}`);
   }
   return relativePath;
-}
-
-function validateOutputDir(options: ReturnType<typeof parseArgs>, repoRoot: string) {
-  if (!options.skipQa) {
-    toRepoRelativePath(repoRoot, path.join(options.outputDir, "qa-suite"));
-  }
 }
 
 function createIsolatedEnv(repoRoot: string, runRoot: string) {
@@ -798,7 +774,7 @@ async function runSlashHelpProbes(params: GauntletContext) {
 async function runQaChunks(params: GauntletContext) {
   const chunks = [
     ...(params.qaBaseline ? [{ label: "baseline", plugins: [] }] : []),
-    ...chunkArray(params.plugins, params.qaPluginChunkSize).map((plugins, index) => ({
+    ...chunkItems(params.plugins, params.qaPluginChunkSize).map((plugins, index) => ({
       label: `chunk-${String(index).padStart(2, "0")}`,
       plugins,
     })),
@@ -819,7 +795,9 @@ async function runQaChunks(params: GauntletContext) {
       cwd: params.repoRoot,
       env: params.env,
       logDir: path.join(params.outputDir, "logs", "qa-suite"),
-      ...sourceOpenclawCommand(params.repoRoot, [
+      command: process.execPath,
+      args: [
+        path.join(params.repoRoot, "scripts", "run-node.mjs"),
         "qa",
         "suite",
         "--provider-mode",
@@ -830,7 +808,7 @@ async function runQaChunks(params: GauntletContext) {
         outputArg,
         ...params.qaScenarios.flatMap((scenario) => ["--scenario", scenario]),
         ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
-      ]),
+      ],
       label: `qa-${chunk.label}`,
       phase: "qa:rpc",
       timeoutMs: params.qaTimeoutMs,
@@ -859,7 +837,9 @@ async function runQaChunks(params: GauntletContext) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = path.resolve(options.repoRoot);
-  validateOutputDir(options, repoRoot);
+  if (!options.skipQa) {
+    toRepoRelativePath(repoRoot, path.join(options.outputDir, "qa-suite"));
+  }
   fs.mkdirSync(options.outputDir, { recursive: true });
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-gauntlet-"));
   let preserveRunRoot = options.keepRunRoot;
@@ -913,7 +893,7 @@ async function main() {
     const prebuildFailed = rows.some(
       (row) => row.phase === "prebuild" && (row.status !== 0 || row.timedOut),
     );
-    const entryPath = builtEntryPath(repoRoot);
+    const entryPath = path.join(repoRoot, "dist", "entry.js");
     const missingSkippedPrebuildEntry =
       selectedPlugins.length > 0 &&
       options.skipPrebuild &&

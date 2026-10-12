@@ -10,16 +10,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   AgentParamsSchema,
-  ArtifactsDownloadParamsSchema,
-  ArtifactsGetParamsSchema,
   ArtifactsListParamsSchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
-  EnvironmentsDestroyParamsSchema,
-  EnvironmentsDestroyResultSchema,
-  EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
-  EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
 } from "../../packages/gateway-protocol/src/index.js";
 import { AgentWaitParamsSchema } from "../../packages/gateway-protocol/src/schema/agent.js";
@@ -42,6 +36,7 @@ import { withTimeout } from "../utils/with-timeout.js";
 import { environmentsHandlers } from "./server-methods/environments.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
   installGatewayTestHooks,
   startServer,
@@ -78,7 +73,6 @@ type FakeGatewayRequest = {
 };
 type FakeGateway = {
   url: string;
-  requests: FakeGatewayRequest[];
   close: () => Promise<void>;
 };
 
@@ -110,14 +104,14 @@ async function closeFakeServer(server: WebSocketServer): Promise<void> {
   });
 }
 
-function workerRecord(state: "requested" | "ready" | "destroyed"): WorkerEnvironmentServiceRecord {
+function workerRecord(): WorkerEnvironmentServiceRecord {
   return {
     environmentId: "worker-sdk-e2e",
     providerId: "testbox",
     profileId: "development",
     leaseId: "lease-sdk-e2e",
     sharedHost: null,
-    state,
+    state: "requested",
     ownerEpoch: 1,
     createdAtMs: 1_000,
     idleSinceAtMs: null,
@@ -135,104 +129,12 @@ async function createFakeGateway(): Promise<FakeGateway> {
   await new Promise<void>((resolve) => {
     server.once("listening", resolve);
   });
-  const requests: FakeGatewayRequest[] = [];
   let seq = 1;
-  let worker = workerRecord("ready");
-  const workerEnvironmentService = {
-    getDedicatedNodeLeaseSignal: () => undefined,
-    captureSessionAttachment: () => {
-      throw new Error("conversation attachments are outside the SDK environment RPC proof");
-    },
-    getSessionAttachment: () => undefined,
-    findSessionAttachment: () => undefined,
-    getSessionAttachmentStatus: () => undefined,
-    assertSessionAttachment: () => {},
-    touchSessionAttachment: async () => {},
-    createSessionAttachment: async () => {
-      throw new Error("conversation attachments are outside the SDK environment RPC proof");
-    },
-    destroySessionAttachment: async () => undefined,
-    execSessionAttachment: async () => {
-      throw new Error("attached execution is outside the SDK environment RPC proof");
-    },
-    openNodePortal: async () => {
-      throw new Error("attached portals are outside the SDK environment RPC proof");
-    },
-    list: () => [worker],
-    get: (environmentId: string) => (environmentId === worker.environmentId ? worker : undefined),
-    inventoryVersion: () => 0,
-    readMachineShape: () => undefined,
-    machineShapeVersion: () => 0,
-    supportsExecutionMode: (profileId, mode) =>
-      profileId === "development" && mode === "worker-turn",
-    readProviderDisplayId: () => undefined,
-    readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
-    readReadyWorkerTarget: () => 1,
-    listMachineOptions: async () => undefined,
-    listOperatingSystems: async () => undefined,
-    prepare: async () => {
-      throw new Error("build preparation is outside the SDK environment RPC proof");
-    },
-    create: async () => {
-      const requested = workerRecord("requested");
-      worker = workerRecord("ready");
-      return requested;
-    },
-    destroy: async (_environmentId: string) => {
-      worker = workerRecord("destroyed");
-      return worker;
-    },
-    destroyUnattached: async (_environmentId: string) => {
-      worker = workerRecord("destroyed");
-      return worker;
-    },
-    observeDesktop: async () => {
-      throw new Error("desktop observation is outside the SDK environment RPC proof");
-    },
-    launchDesktopApp: async () => {
-      throw new Error("desktop launch is outside the SDK environment RPC proof");
-    },
-    startTunnel: async () => {
-      throw new Error("tunnel start is outside the SDK environment RPC proof");
-    },
-    stopTunnel: async () => {},
-  } satisfies WorkerEnvironmentServiceContract;
   const environmentContext = {
-    logGateway: { warn: vi.fn() },
-    nodeRegistry: { listConnectedForPairingStates: () => [] },
-    workerEnvironmentService,
-    workerPlacementDispatchService: {
-      dispatch: async () => {
-        throw new Error("placement dispatch is outside the SDK environment RPC proof");
-      },
-      reconcileActive: vi.fn(async () => {}),
-    },
-    getRuntimeConfig: () => ({
-      cloudWorkers: {
-        profiles: {
-          development: { provider: "testbox", settings: {} },
-        },
-      },
-    }),
+    workerEnvironmentService: {
+      create: async () => workerRecord(),
+    } satisfies Pick<WorkerEnvironmentServiceContract, "create">,
   } as unknown as GatewayRequestHandlerOptions["context"];
-  const environmentSchemas = {
-    "environments.list": {
-      params: EnvironmentsListParamsSchema,
-      result: EnvironmentsListResultSchema,
-    },
-    "environments.create": {
-      params: EnvironmentsCreateParamsSchema,
-      result: EnvironmentsCreateResultSchema,
-    },
-    "environments.status": {
-      params: EnvironmentsStatusParamsSchema,
-      result: EnvironmentsStatusResultSchema,
-    },
-    "environments.destroy": {
-      params: EnvironmentsDestroyParamsSchema,
-      result: EnvironmentsDestroyResultSchema,
-    },
-  } as const;
 
   server.on("connection", (socket) => {
     socket.binaryType = "nodebuffer";
@@ -246,7 +148,6 @@ async function createFakeGateway(): Promise<FakeGateway> {
     socket.on("message", (raw) => {
       void (async () => {
         const frame = JSON.parse(rawDataToString(raw)) as FakeGatewayRequest;
-        requests.push(frame);
         const reply = (payload: unknown): void => {
           sendJson(socket, { type: "res", id: frame.id, ok: true, payload });
         };
@@ -257,18 +158,7 @@ async function createFakeGateway(): Promise<FakeGateway> {
             protocol: 1,
             server: { version: "sdk-a2", connId: "conn-sdk-a2" },
             features: {
-              methods: [
-                "agent",
-                "agent.wait",
-                "artifacts.download",
-                "artifacts.get",
-                "artifacts.list",
-                "connect",
-                "environments.create",
-                "environments.destroy",
-                "environments.list",
-                "environments.status",
-              ],
+              methods: ["agent", "agent.wait", "artifacts.list", "connect", "environments.create"],
               events: ["agent"],
             },
             snapshot: {
@@ -323,7 +213,6 @@ async function createFakeGateway(): Promise<FakeGateway> {
                   runId: "run-sdk-e2e",
                   sessionId: "session-sdk-e2e",
                   sessionKey: "main",
-                  taskId: "task-sdk-e2e",
                   agentId: "main",
                   ...payload,
                 },
@@ -345,59 +234,37 @@ async function createFakeGateway(): Promise<FakeGateway> {
           return;
         }
 
-        const artifact = {
-          id: "artifact-sdk-e2e",
-          type: "file",
-          title: "sdk-result.txt",
-          mimeType: "text/plain",
-          sizeBytes: 5,
-          runId: "run-sdk-e2e",
-          download: { mode: "bytes" as const },
-        };
         if (frame.method === "artifacts.list") {
-          const params = frame.params ?? {};
-          const result = { artifacts: [artifact] };
-          assertSchema(ArtifactsListParamsSchema, params, "artifacts.list params");
+          assertSchema(ArtifactsListParamsSchema, frame.params ?? {}, "artifacts.list params");
+          expect(frame.params).toEqual({ runId: "run-sdk-e2e" });
+          const result = {
+            artifacts: [
+              {
+                id: "artifact-sdk-e2e",
+                type: "file",
+                title: "sdk-result.txt",
+                download: { mode: "bytes" },
+              },
+            ],
+          };
           assertSchema(ArtifactsListResultSchema, result, "artifacts.list result");
           reply(result);
           return;
         }
-        if (frame.method === "artifacts.get") {
-          const params = frame.params ?? {};
-          const result = { artifact };
-          assertSchema(ArtifactsGetParamsSchema, params, "artifacts.get params");
-          assertSchema(ArtifactsGetResultSchema, result, "artifacts.get result");
-          reply(result);
-          return;
-        }
-        if (frame.method === "artifacts.download") {
-          const params = frame.params ?? {};
-          const result = { artifact, encoding: "base64" as const, data: "aGVsbG8=" };
-          assertSchema(ArtifactsDownloadParamsSchema, params, "artifacts.download params");
-          assertSchema(ArtifactsDownloadResultSchema, result, "artifacts.download result");
-          reply(result);
-          return;
-        }
 
-        if (frame.method in environmentSchemas) {
-          const method = frame.method as keyof typeof environmentSchemas;
-          const schemas = environmentSchemas[method];
-          const params = requireJsonObject(frame.params ?? {}, `${method} params`);
-          assertSchema(schemas.params, params, `${method} params`);
-          const handler = environmentsHandlers[method];
-          if (!handler) {
-            throw new Error(`missing Gateway handler for ${method}`);
-          }
+        if (frame.method === "environments.create") {
+          const params = requireJsonObject(frame.params ?? {}, "environments.create params");
+          assertSchema(EnvironmentsCreateParamsSchema, params, "environments.create params");
           const respond: RespondFn = (ok, payload, error) => {
             if (!ok) {
               sendJson(socket, { type: "res", id: frame.id, ok: false, error });
               return;
             }
-            assertSchema(schemas.result, payload, `${method} result`);
+            assertSchema(EnvironmentsCreateResultSchema, payload, "environments.create result");
             reply(payload);
           };
-          await handler({
-            req: { type: "req", id: frame.id, method, params },
+          await environmentsHandlers[frame.method]!({
+            req: { type: "req", id: frame.id, method: frame.method, params },
             params,
             client: null,
             isWebchatConnect: () => false,
@@ -431,7 +298,6 @@ async function createFakeGateway(): Promise<FakeGateway> {
   const address = server.address() as AddressInfo;
   return {
     url: `ws://127.0.0.1:${address.port}`,
-    requests,
     close: async () => {
       const index = fakeServers.indexOf(server);
       if (index >= 0) {
@@ -479,89 +345,43 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       }),
       run.wait({ timeoutMs: 2_000 }),
     ]);
-    const expectedEvents: OpenClawEvent[] = [
-      {
-        version: 1,
-        id: "2:agent:run-sdk-e2e:main:1001",
-        ts: 1_001,
-        type: "run.started",
-        runId: "run-sdk-e2e",
-        sessionId: "session-sdk-e2e",
-        sessionKey: "main",
-        taskId: "task-sdk-e2e",
-        agentId: "main",
-        data: { phase: "start" },
-        raw: {
-          event: "agent",
-          seq: 2,
-          stateVersion: { presence: 7, health: 9 },
-          payload: {
-            runId: "run-sdk-e2e",
-            sessionId: "session-sdk-e2e",
-            sessionKey: "main",
-            taskId: "task-sdk-e2e",
-            agentId: "main",
-            stream: "lifecycle",
-            ts: 1_001,
-            data: { phase: "start" },
-          },
-        },
-      },
-      {
-        version: 1,
-        id: "3:agent:run-sdk-e2e:main:1002",
-        ts: 1_002,
-        type: "assistant.delta",
-        runId: "run-sdk-e2e",
-        sessionId: "session-sdk-e2e",
-        sessionKey: "main",
-        taskId: "task-sdk-e2e",
-        agentId: "main",
-        data: { delta: "hello from fake gateway" },
-        raw: {
-          event: "agent",
+    const expectedEvents = (
+      [
+        { seq: 2, ts: 1_001, type: "run.started", stream: "lifecycle", data: { phase: "start" } },
+        {
           seq: 3,
-          stateVersion: { presence: 7, health: 9 },
-          payload: {
-            runId: "run-sdk-e2e",
-            sessionId: "session-sdk-e2e",
-            sessionKey: "main",
-            taskId: "task-sdk-e2e",
-            agentId: "main",
-            stream: "assistant",
-            ts: 1_002,
-            data: { delta: "hello from fake gateway" },
-          },
+          ts: 1_002,
+          type: "assistant.delta",
+          stream: "assistant",
+          data: { delta: "hello from fake gateway" },
+        },
+        { seq: 4, ts: 1_003, type: "run.completed", stream: "lifecycle", data: { phase: "end" } },
+      ] as const
+    ).map<OpenClawEvent>(({ seq, ts, type, stream, data }) => ({
+      version: 1,
+      id: `${seq}:agent:run-sdk-e2e:main:${ts}`,
+      ts,
+      type,
+      runId: "run-sdk-e2e",
+      sessionId: "session-sdk-e2e",
+      sessionKey: "main",
+      agentId: "main",
+      data,
+      raw: {
+        event: "agent",
+        seq,
+        stateVersion: { presence: 7, health: 9 },
+        payload: {
+          runId: "run-sdk-e2e",
+          sessionId: "session-sdk-e2e",
+          sessionKey: "main",
+          agentId: "main",
+          stream,
+          ts,
+          data,
         },
       },
-      {
-        version: 1,
-        id: "4:agent:run-sdk-e2e:main:1003",
-        ts: 1_003,
-        type: "run.completed",
-        runId: "run-sdk-e2e",
-        sessionId: "session-sdk-e2e",
-        sessionKey: "main",
-        taskId: "task-sdk-e2e",
-        agentId: "main",
-        data: { phase: "end" },
-        raw: {
-          event: "agent",
-          seq: 4,
-          stateVersion: { presence: 7, health: 9 },
-          payload: {
-            runId: "run-sdk-e2e",
-            sessionId: "session-sdk-e2e",
-            sessionKey: "main",
-            taskId: "task-sdk-e2e",
-            agentId: "main",
-            stream: "lifecycle",
-            ts: 1_003,
-            data: { phase: "end" },
-          },
-        },
-      },
-    ];
+    }));
     expect(appEvents).toEqual(expectedEvents);
     expect(runEvents).toEqual(expectedEvents);
     expect(result).toMatchObject({
@@ -572,15 +392,16 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       endedAt: 456,
     });
 
-    const artifacts = await oc.artifacts.list({ runId: "run-sdk-e2e" });
-    expect(artifacts.artifacts).toHaveLength(1);
-    const artifact = artifacts.artifacts[0];
-    await expect(oc.artifacts.get(artifact?.id ?? "", { runId: "run-sdk-e2e" })).resolves.toEqual({
-      artifact,
+    await expect(oc.artifacts.list({ runId: "run-sdk-e2e" })).resolves.toEqual({
+      artifacts: [
+        {
+          id: "artifact-sdk-e2e",
+          type: "file",
+          title: "sdk-result.txt",
+          download: { mode: "bytes" },
+        },
+      ],
     });
-    await expect(
-      oc.artifacts.download(artifact?.id ?? "", { runId: "run-sdk-e2e" }),
-    ).resolves.toEqual({ artifact, encoding: "base64", data: "aGVsbG8=" });
 
     const created = await oc.environments.create({
       profileId: "development",
@@ -598,63 +419,6 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
         attachedSessionIds: ["session-sdk-e2e"],
         tunnelStatus: "stopped",
       },
-    });
-    const environments = await oc.environments.list();
-    expect(environments.profiles).toEqual([
-      {
-        id: "development",
-        providerId: "testbox",
-        executionMode: "worker-turn",
-        executionModes: ["worker-turn"],
-      },
-    ]);
-    expect(environments.environments).toContainEqual({
-      id: "worker-sdk-e2e",
-      type: "worker",
-      status: "available",
-      worker: {
-        providerId: "testbox",
-        profileId: "development",
-        leaseId: "lease-sdk-e2e",
-        state: "ready",
-        ageMs: 9_000,
-        attachedSessionIds: ["session-sdk-e2e"],
-        tunnelStatus: "stopped",
-      },
-    });
-    await expect(oc.environments.status("worker-sdk-e2e")).resolves.toMatchObject({
-      id: "worker-sdk-e2e",
-      status: "available",
-      worker: { state: "ready", ageMs: 9_000 },
-    });
-    await expect(oc.environments.destroy("worker-sdk-e2e")).resolves.toMatchObject({
-      id: "worker-sdk-e2e",
-      status: "unavailable",
-      worker: { state: "destroyed", ageMs: 9_000 },
-    });
-
-    const requestParams = new Map(
-      gateway.requests.map((request) => [request.method, request.params]),
-    );
-    expect(requestParams.get("artifacts.list")).toEqual({ runId: "run-sdk-e2e" });
-    expect(requestParams.get("artifacts.get")).toEqual({
-      artifactId: "artifact-sdk-e2e",
-      runId: "run-sdk-e2e",
-    });
-    expect(requestParams.get("artifacts.download")).toEqual({
-      artifactId: "artifact-sdk-e2e",
-      runId: "run-sdk-e2e",
-    });
-    expect(requestParams.get("environments.create")).toEqual({
-      profileId: "development",
-      idempotencyKey: "sdk-environment-create",
-    });
-    expect(requestParams.get("environments.list")).toEqual({});
-    expect(requestParams.get("environments.status")).toEqual({
-      environmentId: "worker-sdk-e2e",
-    });
-    expect(requestParams.get("environments.destroy")).toEqual({
-      environmentId: "worker-sdk-e2e",
     });
   } finally {
     await oc.close();
@@ -677,23 +441,24 @@ async function proveRealGatewayContracts(): Promise<void> {
     `${timeoutRunId}:start`,
     `${timeoutRunId}:error`,
   ]);
-  const lifecycleWritesStarted = createDeferred();
-  const lifecycleWrites: Promise<void>[] = [];
-  const persistLifecycle = lifecycleState.persistGatewaySessionLifecycleEvent;
+  const lifecycleWritesAccepted = createDeferred();
+  const lifecycleWrites = createPreparedLifecycleWriteTracker();
+  const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
   const lifecyclePersistence = vi
-    .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+    .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
     .mockImplementation((params) => {
-      const write = persistLifecycle(params);
+      const persist = prepareLifecycle(params);
       const phase = params.event.data?.phase;
       if (
-        (params.event.runId === runId || params.event.runId === timeoutRunId) &&
-        (phase === "start" || phase === "end" || phase === "error")
+        (params.event.runId !== runId && params.event.runId !== timeoutRunId) ||
+        (phase !== "start" && phase !== "end" && phase !== "error")
       ) {
-        lifecycleWrites.push(write);
-        pendingLifecycleEvents.delete(`${params.event.runId}:${phase}`);
-        if (pendingLifecycleEvents.size === 0) {
-          lifecycleWritesStarted.resolve();
-        }
+        return persist;
+      }
+      const write = lifecycleWrites.track(persist);
+      pendingLifecycleEvents.delete(`${params.event.runId}:${phase}`);
+      if (pendingLifecycleEvents.size === 0) {
+        lifecycleWritesAccepted.resolve();
       }
       return write;
     });
@@ -818,9 +583,9 @@ async function proveRealGatewayContracts(): Promise<void> {
       error: { message: "provider timed out" },
     });
 
-    // run.wait observes events before persistence finishes registering the report writer's store.
-    await lifecycleWritesStarted.promise;
-    await Promise.all(lifecycleWrites);
+    // run.wait can precede acceptance, and accepted writes may still wait in the owner queue.
+    await lifecycleWritesAccepted.promise;
+    await lifecycleWrites.drain();
     expect(loadSessionEntry({ storePath: testState.sessionStorePath, sessionKey })).toMatchObject({
       sessionId,
       status: "timeout",
@@ -886,10 +651,14 @@ async function proveRealGatewayContracts(): Promise<void> {
       await oc?.close();
       await started?.server.close();
     } finally {
-      lifecyclePersistence.mockRestore();
-      started?.envSnapshot.restore();
-      testState.sessionStorePath = previousSessionStorePath;
-      await fs.rm(tempDir, { recursive: true, force: true });
+      try {
+        await lifecycleWrites.drain();
+      } finally {
+        lifecyclePersistence.mockRestore();
+        started?.envSnapshot.restore();
+        testState.sessionStorePath = previousSessionStorePath;
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
     }
   }
 }

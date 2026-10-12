@@ -1,4 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
@@ -6,23 +8,32 @@ import {
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
+import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as sessionReaders from "../../config/sessions/session-transcript-worker-runtime.js";
+import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
-import { enqueueFollowupRun, scheduleFollowupDrain, type QueueSettings } from "./queue.js";
+import { createQueueCase } from "./queue.case.test-support.js";
+import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
+  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   createQueueSettings,
-  createDrainRecorder,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./queue/delivery-context.js";
+import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
-
 installQueueRuntimeErrorSilencer();
-
 function createOperatorAuthority() {
   let references = 1;
   const controller = new AbortController();
@@ -56,6 +67,84 @@ function createOperatorAuthority() {
 }
 
 describe("followup queue authority", () => {
+  it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
+    const q = createQueueCase({ mode: "collect" }, 2);
+    const conversationToolPolicy = {
+      allow: ["read", "sessions_spawn", "sessions_yield", "subagents"],
+      deny: ["exec"],
+    };
+    for (const restricted of [true, false]) {
+      const run = createRun({
+        prompt: restricted ? "guest request" : "later unrestricted request",
+        originatingChannel: "telegram",
+        originatingTo: "chat-1",
+      });
+      run.run = {
+        ...run.run,
+        senderId: "sender-1",
+        senderIsOwner: false,
+        conversationToolPolicy: restricted ? conversationToolPolicy : undefined,
+        sessionRoot: "/tmp/requester-task",
+        workspaceDir: "/tmp/requester-task",
+        thinkingCatalog: [{ provider: "openai", id: "gpt-test", input: ["text"] }],
+        skipProviderRuntimeHints: true,
+      };
+      q.add(run);
+    }
+    try {
+      await q.drain();
+      expect(q.calls).toHaveLength(2);
+      const observed = [];
+      for (const queued of q.calls) {
+        const params = await buildEmbeddedRunExecutionParams({
+          run: queued.run,
+          provider: "openai",
+          model: "gpt-test",
+          runId: `queued-${observed.length}`,
+          sessionCtx: {},
+          hasRepliedRef: undefined,
+        });
+        const policy = resolveRequesterToolPolicies({
+          config: params.config,
+          agentId: queued.run.agentId,
+          senderId: queued.run.senderId,
+          conversationPolicy: params.conversationToolPolicy,
+        });
+        observed.push({
+          senderId: queued.run.senderId,
+          senderIsOwner: params.senderIsOwner,
+          source: policy.inheritedToolPolicySource,
+          canSpawn: isToolAllowedByPolicies("sessions_spawn", [policy.groupPolicy]),
+          canExec: isToolAllowedByPolicies("exec", [policy.groupPolicy]),
+          sessionRoot: params.sessionRoot,
+          workspaceDir: params.workspaceDir,
+        });
+      }
+      expect(observed).toEqual([
+        {
+          senderId: "sender-1",
+          senderIsOwner: false,
+          source: "sender",
+          canSpawn: true,
+          canExec: false,
+          sessionRoot: "/tmp/requester-task",
+          workspaceDir: "/tmp/requester-task",
+        },
+        {
+          senderId: "sender-1",
+          senderIsOwner: false,
+          source: undefined,
+          canSpawn: true,
+          canExec: true,
+          sessionRoot: "/tmp/requester-task",
+          workspaceDir: "/tmp/requester-task",
+        },
+      ]);
+    } finally {
+      clearFollowupQueueForTest(q.key);
+    }
+  });
+
   it("admits consecutive compatible operator input in FIFO order after its request returns", async () => {
     const key = "test-collect-original-operator";
     const source = createOperatorAuthority();
@@ -115,7 +204,6 @@ describe("followup queue authority", () => {
         }
       });
       await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-
       expect(failures).toEqual([]);
       expect(observed.map((run) => run.profileId)).toEqual([
         "guest",
@@ -211,10 +299,7 @@ describe("followup queue authority", () => {
         for (let index = 0; index < 5; index += 1) {
           enqueueFollowupRun(
             key,
-            {
-              ...createRun({ prompt: `request ${index}` }),
-              operatorAuthority: source.authority,
-            },
+            { ...createRun({ prompt: `request ${index}` }), operatorAuthority: source.authority },
             createQueueSettings({ cap: 1, dropPolicy }),
           );
         }
@@ -275,9 +360,7 @@ describe("followup queue authority", () => {
   });
 
   it("splits collect batches when queued authority facts change", async () => {
-    const key = `test-collect-queued-authority-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 3);
     const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
     const pluginGrant = createRun({ prompt: "plugin grant", ...route });
     pluginGrant.run.runtimePluginToolGrant = {
@@ -295,66 +378,29 @@ describe("followup queue authority", () => {
       provider: "openai",
       model: "gpt-5.6-luna",
     };
-
-    enqueueFollowupRun(key, pluginGrant, settings);
-    enqueueFollowupRun(key, scheduled, settings);
-    enqueueFollowupRun(key, handoff, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls.map((call) => call.prompt)).toEqual([
+    q.add(pluginGrant);
+    q.add(scheduled);
+    q.add(handoff);
+    q.start();
+    await q.done.promise;
+    expect(q.calls.map((call) => call.prompt)).toEqual([
       expect.stringContaining("plugin grant"),
       expect.stringContaining("scheduled authority"),
       expect.stringContaining("trusted handoff"),
     ]);
-    expect(calls[0]?.run.runtimePluginToolGrant).toEqual(pluginGrant.run.runtimePluginToolGrant);
-    expect(calls[1]?.run.scheduledToolPolicy).toEqual(scheduled.run.scheduledToolPolicy);
-    expect(calls[2]?.run.trustedInternalHandoff).toEqual(handoff.run.trustedInternalHandoff);
-  });
-
-  it("drains different provider and model routes under their own run snapshots", async () => {
-    const key = `test-collect-route-authority-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
-    const first = createRun({ prompt: "first route", ...route });
-    first.run.provider = "openai";
-    first.run.model = "gpt-primary";
-    const second = createRun({ prompt: "second route", ...route });
-    second.run.provider = "openai";
-    second.run.model = "gpt-fallback";
-    const third = createRun({ prompt: "third route", ...route });
-    third.run.provider = "anthropic";
-    third.run.model = "gpt-fallback";
-
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, third, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls.map((call) => [call.prompt, call.run.provider, call.run.model])).toEqual([
-      [expect.stringContaining("first route"), "openai", "gpt-primary"],
-      [expect.stringContaining("second route"), "openai", "gpt-fallback"],
-      [expect.stringContaining("third route"), "anthropic", "gpt-fallback"],
-    ]);
+    expect(q.calls[0]?.run.runtimePluginToolGrant).toEqual(pluginGrant.run.runtimePluginToolGrant);
+    expect(q.calls[1]?.run.scheduledToolPolicy).toEqual(scheduled.run.scheduledToolPolicy);
+    expect(q.calls[2]?.run.trustedInternalHandoff).toEqual(handoff.run.trustedInternalHandoff);
   });
 
   it.each([
     { mode: "enabled", groups: [[0], [1, 2], [3], [4], [5]] },
     { mode: "disabled", groups: [[0, 1, 2, 3, 4, 5]] },
     { mode: "policy-deny", groups: [[0, 1, 2], [3], [4], [5]] },
-    { mode: "runtime-cap", groups: [[0, 1, 2, 3, 4, 5]] },
-    { mode: "runtime-theme", groups: [[0, 1, 2], [3], [4], [5]] },
-    { mode: "non-owner", groups: [[0, 1, 2], [3], [4], [5]] },
-    { mode: "no-capability", groups: [[0, 1, 2], [3], [4], [5]] },
-    { mode: "theme-deny", groups: [[0, 1, 2, 3, 4, 5]] },
   ])(
     "collects turns in order within effective screen and theme authority: $mode",
     async ({ mode, groups }) => {
-      const key = `test-collect-ui-requester-${Date.now()}`;
-      const { calls, runFollowup } = createDrainRecorder();
-      const settings = createQueueSettings();
+      const q = createQueueCase({}, 1);
       const targets = [
         { connId: "browser-a", profileId: "profile-a" },
         { connId: "browser-b", profileId: "profile-a" },
@@ -366,31 +412,20 @@ describe("followup queue authority", () => {
       for (const [index, gatewayUiCommandTarget] of targets.entries()) {
         const run = createRun({ prompt: `selection ${index + 1}`, originatingChannel: "webchat" });
         run.run.gatewayUiCommandTarget = gatewayUiCommandTarget;
-        run.run.clientCaps = mode === "no-capability" ? [] : ["ui-commands"];
-        run.run.senderIsOwner = mode !== "non-owner";
+        run.run.clientCaps = ["ui-commands"];
+        run.run.senderIsOwner = true;
         run.run.approvalReviewerDeviceId = "shared-device";
         run.disableTools = mode === "disabled";
         if (mode === "policy-deny") {
           run.run.config = { tools: { deny: ["screen"] } };
         }
-        if (mode === "runtime-cap") {
-          run.toolsAllow = ["read"];
-        }
-        if (mode === "runtime-theme") {
-          run.toolsAllow = ["theme"];
-        }
-        if (mode === "theme-deny") {
-          run.run.config = { tools: { deny: ["screen", "theme"] } };
-        }
-        enqueueFollowupRun(key, run, settings);
+        q.add(run);
       }
-
-      scheduleFollowupDrain(key, runFollowup);
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-
-      expect(calls).toHaveLength(groups.length);
+      q.start();
+      await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
+      expect(q.calls).toHaveLength(groups.length);
       for (const [callIndex, group] of groups.entries()) {
-        const call = calls[callIndex];
+        const call = q.calls[callIndex];
         expect(call?.run.gatewayUiCommandTarget).toEqual(targets[group.at(-1)!]);
         for (const index of targets.keys()) {
           const selection = `selection ${index + 1}`;
@@ -404,13 +439,172 @@ describe("followup queue authority", () => {
     },
   );
 
+  it.each(["collect", "overflow"] as const)(
+    "rechecks screen policy after an earlier %s delivery waits",
+    async (mode) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const settled = createDeferredCore();
+      const q = createQueueCase({ cap: mode === "overflow" ? 3 : 50 });
+      const sources = Array.from({ length: mode === "overflow" ? 9 : 3 }, (_, index) =>
+        createRun({ prompt: `selection ${index}`, originatingChannel: "webchat" }),
+      );
+      sources[0]!.run.provider = "earlier-provider";
+      for (const index of [1, 2]) {
+        const source = sources[index]!;
+        source.run.config = { tools: { deny: ["screen", "theme"] } };
+        source.run.gatewayUiCommandTarget = { connId: `browser-${index}`, profileId: "viewer" };
+        source.run.clientCaps = ["ui-commands"];
+        source.run.senderIsOwner = true;
+      }
+      sources.at(-1)!.turnAdoptionLifecycle = {
+        admission: "cancel-only",
+        onAdopted: () => {},
+        onSettled: settled.resolve,
+      };
+      try {
+        sources.forEach((source) => q.add(source));
+        q.start(async (run) => {
+          q.calls.push(run);
+          if (q.calls.length === 1) {
+            entered.resolve();
+            await release.promise;
+          }
+        });
+        await entered.promise;
+        sources[1]!.run.config = {};
+        sources[2]!.run.config = {};
+        release.resolve();
+        await settled.promise;
+        const selected = q.calls.filter((run) => /selection [12]/.test(run.prompt));
+        expect(selected.map((run) => run.prompt.match(/selection [12]/g))).toEqual([
+          ["selection 1"],
+          ["selection 2"],
+        ]);
+        expect(selected.map((run) => run.run.gatewayUiCommandTarget?.connId)).toEqual([
+          "browser-1",
+          "browser-2",
+        ]);
+      } finally {
+        release.resolve();
+        clearFollowupQueue(q.key);
+      }
+    },
+  );
+
+  it("rechecks the first collect policy while the second store admission awaits", async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:collect-policy";
+      const firstStore = state.statePath("collect-first.sqlite");
+      const secondStore = state.statePath("collect-second.sqlite");
+      for (const storePath of [firstStore, secondStore]) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey, storePath, env: state.env },
+          { sessionId: "collect-policy", updatedAt: 1, sandboxMode: "off" },
+        );
+      }
+      // Settle setup owners before observing reads, including their WAL maintenance.
+      await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+      const sources = [firstStore, secondStore].map((storePath, index) => {
+        const run = createRun({
+          prompt: `policy selection ${index}`,
+          originatingChannel: "webchat",
+        });
+        Object.assign(run.run, {
+          agentId: "main",
+          sessionKey,
+          runtimePolicySessionKey: sessionKey,
+          senderIsOwner: true,
+          gatewayUiCommandTarget: { connId: "shared-browser", profileId: "viewer" },
+          clientCaps: ["ui-commands"],
+          config: {
+            session: { store: storePath },
+            agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+            tools: {
+              sandbox: { tools: { allow: ["*"], deny: index === 0 ? ["screen", "theme"] : [] } },
+            },
+          },
+        });
+        return run;
+      });
+      const q = createQueueCase({ debounceMs: 0 }, 2);
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const firstDelivery = createDeferredCore();
+      const failed = createDeferredCore<never>();
+      void failed.promise.catch(() => {});
+      const awaitProgress = <T>(progress: PromiseLike<T>) =>
+        withinTest(Promise.race([progress, failed.promise]), signal);
+      const reportFailure = vi.spyOn(defaultRuntime, "error").mockImplementation((message) => {
+        if (String(message).includes(q.key)) {
+          clearFollowupQueue(q.key);
+          failed.reject(new Error(String(message)));
+        }
+      });
+      const read = sessionReaders.withSessionHistoryWorkerDatabase;
+      let delayed = false;
+      const admission = vi
+        .spyOn(sessionReaders, "withSessionHistoryWorkerDatabase")
+        .mockImplementation(async (options, consume, lane) => {
+          if (!delayed && options.path === secondStore) {
+            delayed = true;
+            entered.resolve();
+            await resume.promise;
+          }
+          return read(options, consume, lane);
+        });
+      sources.forEach((source) => q.add(source));
+      const calls = observeMainThreadSql();
+      try {
+        q.start(async (run) => {
+          await q.runFollowup(run);
+          firstDelivery.resolve();
+        });
+        await awaitProgress(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            firstDelivery.promise,
+            "Second policy store was not admitted",
+          ),
+        );
+        calls.expectIdle();
+        const foreign = new DatabaseSync(firstStore);
+        try {
+          foreign
+            .prepare(
+              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
+            )
+            .run(sessionKey);
+        } finally {
+          foreign.close();
+        }
+        calls.clear();
+        resume.resolve();
+        await awaitProgress(firstDelivery.promise);
+        expect(q.calls[0]?.prompt).not.toContain("policy selection 1");
+        await awaitProgress(q.done.promise);
+        expect(q.calls.map((run) => run.prompt.match(/policy selection [01]/g))).toEqual([
+          ["policy selection 0"],
+          ["policy selection 1"],
+        ]);
+        expect(q.calls[0]?.run.config).toBe(sources[0]!.run.config);
+        expect(q.calls[1]?.run.config).toBe(sources[1]!.run.config);
+        calls.expectIdle();
+      } finally {
+        resume.resolve();
+        clearFollowupQueue(q.key);
+        calls.restore();
+        admission.mockRestore();
+        reportFailure.mockRestore();
+      }
+    });
+  });
+
   it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
     const createAuthorityRun = () =>
-      createRun({
-        prompt: "authority",
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-      });
+      createRun({ prompt: "authority", originatingChannel: "slack", originatingTo: "channel:A" });
     const baseline = createAuthorityRun();
     const toolsAllow = createAuthorityRun();
     toolsAllow.toolsAllow = ["exec"];
@@ -425,13 +619,12 @@ describe("followup queue authority", () => {
       ["exec"],
       [["exec"], ["message"]],
     );
-
-    const baselineKey = resolveFollowupDeliveryContextKey(baseline);
-    expect(resolveFollowupDeliveryContextKey(toolsAllow)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(disabled)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(roles)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(firstIntersection)).not.toBe(
-      resolveFollowupDeliveryContextKey(secondIntersection),
+    const baselineKey = resolveFollowupDeliveryStorageKey(baseline);
+    expect(resolveFollowupDeliveryStorageKey(toolsAllow)).not.toBe(baselineKey);
+    expect(resolveFollowupDeliveryStorageKey(disabled)).not.toBe(baselineKey);
+    expect(resolveFollowupDeliveryStorageKey(roles)).not.toBe(baselineKey);
+    expect(resolveFollowupDeliveryStorageKey(firstIntersection)).not.toBe(
+      resolveFollowupDeliveryStorageKey(secondIntersection),
     );
   });
 });

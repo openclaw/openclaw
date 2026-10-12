@@ -3,26 +3,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commands from "../../process/exec.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { listTemplatesAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
 const exec = promisify(execFile);
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    vi.unstubAllEnvs();
-    cleanup();
-  }),
-);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "source-only-filters-");
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const initialize = useManagedWorktreeTestRepository();
 const git = async (cwd: string, ...args: string[]) =>
   (await exec("git", ["-C", cwd, ...args])).stdout.trim();
@@ -31,9 +29,10 @@ let root: string,
   globalConfig: string,
   marker: string,
   script: string,
-  service: ManagedWorktreeService;
+  service: ManagedWorktreeService,
+  backend: ReturnType<typeof createCopyWorktreeBackend>;
 beforeEach(async () => {
-  root = tempDirs.make("source-only-filters-");
+  root = sessionDirs.make();
   globalConfig = path.join(root, "global-config");
   await fs.writeFile(globalConfig, "");
   vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
@@ -48,12 +47,43 @@ beforeEach(async () => {
     script,
     'const fs = require("node:fs"); fs.appendFileSync(process.argv[2], "executed\\n"); if (process.argv[3] === "process") process.exit(1); process.stdout.write(fs.readFileSync(0));',
   );
+  await fs.mkdir(path.join(repo, ".openclaw"));
+  await fs.writeFile(
+    path.join(repo, ".openclaw/worktree-setup.sh"),
+    `#!/bin/sh\nprintf executed >> "${marker}"\n`,
+    { mode: 0o755 },
+  );
   await fs.writeFile(path.join(repo, ".gitattributes"), "README.md filter=late\n");
   await git(repo, "add", ".gitattributes");
   await git(repo, "commit", "-qm", "filter attributes");
-  vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(createCopyWorktreeBackend());
+  backend = createCopyWorktreeBackend();
+  vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(backend);
   service = new ManagedWorktreeService({ getConfig: () => ({}) });
 });
+
+async function createSourceOnly(name: string, sessionId?: string) {
+  const created = await service.create({
+    repoRoot: repo,
+    name,
+    baseRef: "HEAD",
+    ownerKind: "session",
+    ownerId: `agent:main:${name}`,
+    runSetupScript: false,
+    provisionIgnoredFiles: false,
+  });
+  if (sessionId) {
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: created.ownerId! },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        sandbox: "required",
+        worktree: { id: created.id, branch: created.branch, repoRoot: repo },
+      },
+    );
+  }
+  return created;
+}
 
 async function configure(scope: string, kind: string, cwd: string) {
   const command = `"${process.execPath}" "${script}" "${marker}" ${kind}`;
@@ -70,9 +100,52 @@ async function configure(scope: string, kind: string, cwd: string) {
   }
 }
 
+it("keeps source-only clones away from an inherited external Git index", async () => {
+  const externalIndex = path.join(root, "external-index");
+  vi.stubEnv("GIT_INDEX_FILE", externalIndex);
+  await git(repo, "read-tree", "HEAD");
+  const originalIndex = await fs.readFile(externalIndex);
+
+  const created = await createSourceOnly("external-index");
+  expect(backend.createTemplate).not.toHaveBeenCalled();
+  expect(await fs.readFile(externalIndex)).toEqual(originalIndex);
+  vi.stubEnv("GIT_INDEX_FILE", undefined);
+  expect(await git(created.path, "status", "--porcelain")).toBe("");
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+});
+
+it("reuses and refreshes source-only templates without running host filters", async () => {
+  await configure("repository", "smudge", repo);
+  const first = await createSourceOnly("template-first");
+  const [original] = await listTemplatesAsync(process.env);
+  expect(original?.status).toBe("ready");
+  await fs.writeFile(path.join(first.path, "README.md"), "independent edit\n");
+  const second = await createSourceOnly("template-second");
+  expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("base\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(1);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
+  expect((await listTemplatesAsync(process.env))[0]?.id).toBe(original?.id);
+
+  await git(repo, "config", "core.autocrlf", "true");
+  const policy = await createSourceOnly("template-policy");
+  expect(await fs.readFile(path.join(policy.path, "README.md"), "utf8")).toBe("base\r\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  const policyId = (await listTemplatesAsync(process.env))[0]?.id;
+  expect(policyId).not.toBe(original?.id);
+
+  await fs.writeFile(path.join(repo, "README.md"), "new revision\n");
+  await git(repo, "add", "README.md");
+  await git(repo, "commit", "-qm", "advance source template");
+  const third = await createSourceOnly("template-third");
+  expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new revision\r\n");
+  expect(backend.createTemplate).toHaveBeenCalledTimes(3);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
+  expect((await listTemplatesAsync(process.env))[0]?.id).not.toBe(policyId);
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it.each([
   ["repository", "smudge"],
-  ["include", "process"],
   ["worktree", "process"],
 ])(
   "does not execute a late %s %s filter during source-only materialization",
@@ -95,15 +168,7 @@ it.each([
       }
       return await run(...args);
     });
-    const created = await service.create({
-      repoRoot: repo,
-      name: "guest",
-      baseRef: "HEAD",
-      ownerKind: "session",
-      ownerId: "agent:main:guest",
-      runSetupScript: false,
-      provisionIgnoredFiles: false,
-    });
+    const created = await createSourceOnly("guest");
     expect(injected).toBe(true);
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
     await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
@@ -111,39 +176,80 @@ it.each([
     expect(await git(created.path, "rev-parse", "--git-common-dir")).toBe(
       await git(repo, "rev-parse", "--absolute-git-dir"),
     );
-    const replayed = await service.create({
-      repoRoot: repo,
-      name: "guest",
-      baseRef: "HEAD",
-      ownerKind: "session",
-      ownerId: "agent:main:guest",
-      runSetupScript: false,
-      provisionIgnoredFiles: false,
-    });
+    const replayed = await createSourceOnly("guest");
     expect(replayed.id).toBe(created.id);
     await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
 
-it("archives before first execution and restores without running late clean/smudge programs", async () => {
+it("fast-forwards the source default without executing clean or smudge filters", async () => {
+  await git(repo, "add", ".openclaw");
+  await git(repo, "commit", "-qm", "source setup");
+  await fs.writeFile(path.join(repo, "README.md"), "remote update\n");
+  await git(repo, "add", "README.md");
+  const tree = await git(repo, "write-tree");
+  await fs.writeFile(path.join(repo, "README.md"), "base\n");
+  await git(repo, "add", "README.md");
+  const commit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "remote update");
+  await git(repo, "push", "origin", `${commit}:refs/heads/main`);
+  await git(path.join(root, "remote.git"), "symbolic-ref", "HEAD", "refs/heads/main");
+  await configure("repository", "clean", repo);
+  await configure("repository", "smudge", repo);
+  // Force status to examine file contents instead of reusing its index stat cache.
+  await fs.writeFile(path.join(repo, "README.md"), "base\n");
+
   const created = await service.create({
     repoRoot: repo,
-    name: "before-run",
-    baseRef: "HEAD",
+    name: "fresh-guest",
     ownerKind: "session",
-    ownerId: "agent:main:before-run",
+    ownerId: "agent:main:fresh-guest",
     runSetupScript: false,
     provisionIgnoredFiles: false,
   });
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: created.ownerId! },
-    {
-      sessionId: "first-run-not-admitted",
-      updatedAt: Date.now(),
-      sandbox: "required",
-      worktree: { id: created.id, branch: created.branch, repoRoot: repo },
-    },
-  );
+
+  expect(await git(repo, "rev-parse", "HEAD")).toBe(commit);
+  expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe("remote update\n");
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("remote update\n");
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.skipIf(process.platform === "win32")(
+  "reads signed commit age without running the host signature verifier",
+  async () => {
+    const unsigned = await git(repo, "cat-file", "commit", "HEAD");
+    const signed = unsigned.replace(
+      "\n\n",
+      "\ngpgsig -----BEGIN PGP SIGNATURE-----\n test-only\n -----END PGP SIGNATURE-----\n\n",
+    );
+    const objectFile = path.join(root, "signed-commit");
+    await fs.writeFile(objectFile, signed);
+    const commit = await git(repo, "hash-object", "-t", "commit", "-w", objectFile);
+    const verifier = path.join(root, "verify-signature");
+    await fs.writeFile(
+      verifier,
+      `#!${process.execPath}\nrequire("node:fs").appendFileSync(${JSON.stringify(marker)}, "verified\\n");\n`,
+      { mode: 0o755 },
+    );
+    await git(repo, "config", "log.showSignature", "true");
+    await git(repo, "config", "gpg.program", verifier);
+    // Prove the configured verifier is executable before exercising creation.
+    await git(repo, "show", "-s", "--format=%ct", commit);
+    expect(await fs.readFile(marker, "utf8")).toContain("verified");
+    await fs.unlink(marker);
+
+    await service.create({
+      repoRoot: repo,
+      name: "signed",
+      baseRef: commit,
+      runSetupScript: false,
+      provisionIgnoredFiles: false,
+    });
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+it("archives before first execution and restores without running late clean/smudge programs", async () => {
+  const created = await createSourceOnly("before-run", "first-run-not-admitted");
   const ignore = path.join(root, "global-ignore");
   await fs.writeFile(ignore, "private.secret\n");
   await git(repo, "config", "--file", globalConfig, "core.excludesFile", ignore);
@@ -168,24 +274,7 @@ it("archives before first execution and restores without running late clean/smud
 it("does not execute a clean filter inserted after publication preflight", async () => {
   const { captureGitHubPublicationWorkspaceSnapshot } =
     await import("../../gateway/github-publication-git-transport.js");
-  const created = await service.create({
-    repoRoot: repo,
-    name: "publication",
-    baseRef: "HEAD",
-    ownerKind: "session",
-    ownerId: "agent:main:publication",
-    runSetupScript: false,
-    provisionIgnoredFiles: false,
-  });
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: created.ownerId! },
-    {
-      sessionId: "publication",
-      updatedAt: Date.now(),
-      sandbox: "required",
-      worktree: { id: created.id, branch: created.branch, repoRoot: repo },
-    },
-  );
+  const created = await createSourceOnly("publication", "publication");
   await fs.writeFile(path.join(created.path, "README.md"), "changed for publication\n");
   const head = await git(created.path, "rev-parse", "HEAD");
   const index = path.resolve(
@@ -211,56 +300,25 @@ it("does not execute a clean filter inserted after publication preflight", async
   expect(await git(created.path, "rev-parse", "HEAD")).toBe(head);
 });
 
-it.each([false, true])(
-  "keeps native lossless removal checks with filters configured (late file=%s)",
-  async (lateFile) => {
-    await git(repo, "push", "origin", "main");
-    const created = await service.create({
-      repoRoot: repo,
-      name: "lossless",
-      baseRef: "HEAD",
-      ownerKind: "session",
-      ownerId: "agent:main:lossless",
-      runSetupScript: false,
-      provisionIgnoredFiles: false,
-    });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: created.ownerId! },
-      {
-        sessionId: "lossless",
-        updatedAt: Date.now(),
-        sandbox: "required",
-        worktree: { id: created.id, branch: created.branch, repoRoot: repo },
-      },
-    );
-    await configure("repository", "clean", created.path);
-    await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
-    const run = commands.runCommandWithTimeout;
-    let reachedRemoval = false;
-    vi.spyOn(commands, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      if (args[0][0] === "git" && args[0].includes("worktree") && args[0].includes("remove")) {
-        reachedRemoval = true;
-        if (lateFile) {
-          await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
-        }
-      }
-      return await run(...args);
-    });
-    if (lateFile) {
-      await expect(service.removeIfLossless(created.id)).rejects.toThrow();
-      expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe(
-        "preserved user bytes",
-      );
-    } else {
-      expect(await service.removeIfLossless(created.id)).toBe(true);
+it("keeps native lossless removal checks when a late file appears with filters configured", async () => {
+  await git(repo, "push", "origin", "main");
+  const created = await createSourceOnly("lossless", "lossless");
+  await configure("repository", "clean", created.path);
+  await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
+  const run = gitExec.executeGitCommand;
+  const removals: string[][] = [];
+  vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+    if (args[0] === "worktree" && args[1] === "remove") {
+      removals.push(args);
+      await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
     }
-    expect(reachedRemoval).toBe(true);
-    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
-
-it("preserves ordinary trusted checkout filter semantics", async () => {
-  await configure("repository", "smudge", repo);
-  await service.create({ repoRoot: repo, name: "trusted", baseRef: "HEAD" });
-  expect(await fs.readFile(marker, "utf8")).toContain("executed");
+    return await run(cwd, args, options);
+  });
+  await expect(service.removeIfLossless(created.id)).rejects.toThrow();
+  expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe(
+    "preserved user bytes",
+  );
+  expect(removals).toHaveLength(1);
+  expect(removals[0]).not.toContain("--force");
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
 });

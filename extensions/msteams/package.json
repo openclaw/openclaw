@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.9.6",
+  "version": "2026.10.1",
   "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
   "repository": {
     "type": "git",
@@ -22,7 +22,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.6"
+    "openclaw": ">=2026.10.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -63,7 +63,58 @@
         "warnOnEmptyGroupSenderAllowlist": true
       },
       "setup": {
-        "fields": []
+        "fields": [
+          {
+            "key": "appId",
+            "kind": "string",
+            "cli": {
+              "flags": "--app-id <id>",
+              "description": "Microsoft Teams application id"
+            }
+          },
+          {
+            "key": "appPassword",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--app-password <secret>",
+              "description": "Microsoft Teams app password"
+            }
+          },
+          {
+            "key": "tenantId",
+            "kind": "string",
+            "cli": {
+              "flags": "--tenant-id <id>",
+              "description": "Microsoft Teams tenant id"
+            }
+          },
+          {
+            "key": "webhookPath",
+            "kind": "string",
+            "cli": {
+              "flags": "--webhook-path <path>",
+              "description": "Microsoft Teams webhook path"
+            }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": {
+              "flags": "--use-env",
+              "description": "Use Microsoft Teams environment credentials"
+            },
+            "envVars": [
+              "MSTEAMS_APP_ID",
+              "MSTEAMS_APP_PASSWORD",
+              "MSTEAMS_TENANT_ID",
+              "MSTEAMS_AUTH_TYPE",
+              "MSTEAMS_CERTIFICATE_PATH",
+              "MSTEAMS_USE_MANAGED_IDENTITY"
+            ],
+            "envVarMode": "any"
+          }
+        ]
       }
     },
     "install": {
@@ -73,10 +124,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.9.6"
+      "pluginApi": ">=2026.10.1"
     },
     "build": {
-      "openclawVersion": "2026.9.6",
+      "openclawVersion": "2026.10.1",
       "runtimeFormat": "cjs"
     },
     "release": {

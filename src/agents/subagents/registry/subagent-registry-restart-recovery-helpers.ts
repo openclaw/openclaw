@@ -1,20 +1,10 @@
+import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import type {
   SubagentRestartRecoveryReceipt,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
-
-export function getRestartRecoveryReplayError(entry: SubagentRunRecord): string | undefined {
-  return entry.terminalOwner !== "interrupted-recovery" ||
-    entry.pauseReason === "sessions_yield" ||
-    entry.execution.status !== "terminal" ||
-    typeof entry.execution.endedAt !== "number" ||
-    entry.execution.outcome?.status !== "error" ||
-    entry.endedReason !== "subagent-error"
-    ? undefined
-    : (entry.execution.outcome.error ?? "subagent run interrupted by gateway restart");
-}
 
 export function isRestartRecoveryLifecycleCurrent(
   receipt: SubagentRestartRecoveryReceipt,
@@ -38,7 +28,8 @@ export function isRetiredSubagentSessionOwner(
   session: InternalSessionEntry | undefined,
 ): session is InternalSessionEntry {
   return (
-    session?.status === "running" &&
+    session !== undefined &&
+    (session.status === undefined || session.status === "interrupted") &&
     isRetiredSubagentExecution(entry) &&
     ownsSubagentSessionExecution(entry, session)
   );
@@ -46,7 +37,7 @@ export function isRetiredSubagentSessionOwner(
 
 export function ownsSubagentSessionExecution(
   entry: SubagentRunRecord,
-  session: InternalSessionEntry,
+  session: Pick<SessionEntryCurrentFacts, "lifecycleRunId" | "subagentRecovery">,
 ): boolean {
   return (
     session.lifecycleRunId === entry.runId ||

@@ -59,6 +59,22 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       authorized: false,
       reason: "❌ You are not authorized to approve plugin requests on Discord.",
     });
+
+    expect(
+      authorizeActorAction({
+        cfg: {},
+        accountId: "work",
+        senderId: "plugin-owner",
+        action: "approve",
+        approvalKind: "plugin",
+        request: {
+          id: "exec-request",
+          request: { command: "pwd" },
+          createdAtMs: 0,
+          expiresAtMs: 10_000,
+        },
+      }),
+    ).toMatchObject({ authorized: false });
   });
 
   it("reports approval availability and DM routing from the relevant delivery surface", () => {

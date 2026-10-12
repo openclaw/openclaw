@@ -21,6 +21,7 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import {
@@ -44,7 +45,6 @@ import {
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createWebSearchTool } from "./tools/web-search.js";
@@ -127,11 +127,6 @@ describe("Tool Search flattened call arguments", () => {
       arguments: { id: "inspect_resource", args: null, input: null, command: "flattened" },
       expected: { command: "flattened" },
     },
-    ...["args", "input"].map((wrapper) => ({
-      label: `empty ${wrapper} wrapper with flattened top-level params`,
-      arguments: { id: "inspect_resource", [wrapper]: {}, command: "list", timeout_ms: 5_000 },
-      expected: { command: "list", timeout_ms: 5_000 },
-    })),
     {
       label: "empty args wrapper with dotted params",
       arguments: {
@@ -450,6 +445,29 @@ describe("Tool Search dispatcher argument preparation", () => {
   });
 });
 
+describe("Tool Search invocation identity", () => {
+  it("preserves replay ids across runtimes while separating assistant responses", async () => {
+    const target = fakeTool("read_record");
+    const { catalogRef, config, runtime: unscoped } = createRuntime([target]);
+    const ctx = { catalogRef, runId: "run-1", sessionId: "session-1" };
+    const parentToolCallId = "exec_0";
+    const code = "return await read_record({});";
+    for (const responseId of ["response-1", "response-1", "response-2"]) {
+      const replayId = codeModeReplayIdForToolCall(ctx, parentToolCallId, code, responseId);
+      const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(config), {
+        callIdScope: replayId.replace(/^cm_replay_/, ""),
+      });
+      await runtime.call("read_record", {}, { parentToolCallId });
+    }
+    await unscoped.call("read_record", {}, { parentToolCallId });
+    const [first, replay, next, legacy] = vi.mocked(target.execute).mock.calls.map(([id]) => id);
+    expect(first).toMatch(/^tool_call:exec_0:[a-f0-9]{24}:read_record:1$/);
+    expect(replay).toBe(first);
+    expect(next).not.toBe(first);
+    expect(legacy).toBe("tool_call:exec_0:read_record:1");
+  });
+});
+
 describe("Tool Search terminal results", () => {
   it("preserves a terminal target result on the direct control", async () => {
     const target = fakeTool("terminal_action");
@@ -472,7 +490,7 @@ describe("Tool Search terminal results", () => {
     { secondTerminal: true, expectedTerminal: true },
     { secondTerminal: false, expectedTerminal: undefined },
   ])(
-    "uses all-terminal semantics for code controls: $secondTerminal",
+    "uses all-terminal semantics for a runtime batch: $secondTerminal",
     async ({ secondTerminal, expectedTerminal }) => {
       const first = fakeTool("first_action");
       first.execute = vi.fn(async () => ({ ...jsonResult({ first: true }), terminate: true }));
@@ -481,17 +499,11 @@ describe("Tool Search terminal results", () => {
         ...jsonResult({ second: true }),
         ...(secondTerminal ? { terminate: true } : {}),
       }));
-      const { catalogRef, config } = createRuntime([first, second]);
-      const codeTool = createToolSearchTools({ catalogRef, config }).find(
-        (tool) => tool.name === TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-      );
-
-      const result = await codeTool!.execute("code-parent", {
-        code: `
-          await openclaw.tools.call("first_action", {});
-          return await openclaw.tools.call("second_action", {});
-        `,
-      });
+      const { runtime } = createRuntime([first, second]);
+      const parentToolCallId = "batch-parent";
+      await runtime.call("first_action", {}, { parentToolCallId });
+      const last = await runtime.call("second_action", {}, { parentToolCallId });
+      const result = formatToolSearchControlResult(last, runtime, { parentToolCallId });
 
       expect(result.terminate).toBe(expectedTerminal);
       expect(first.execute).toHaveBeenCalledOnce();
@@ -608,46 +620,12 @@ describe("Tool Search input schemas", () => {
     expect(target.execute).not.toHaveBeenCalled();
   });
 
-  it("suggests a near-miss parameter without executing the tool", async () => {
-    const target = fakeTool(
-      "strict_instruction",
-      Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
-    );
-    const { runtime } = createRuntime([target]);
-
-    await expect(runtime.call("strict_instruction", { instructions: "run" })).rejects.toThrow(
-      "Did you mean: instruction?",
-    );
-    expect(target.execute).not.toHaveBeenCalled();
-  });
-
   it("fails before side effects when a trusted input schema is invalid", async () => {
     const target = fakeTool("invalid_input", { type: "sting" } as never);
     const { runtime } = createRuntime([target]);
 
     await expect(runtime.call("invalid_input", {})).rejects.toThrow("invalid inputSchema");
     expect(target.execute).not.toHaveBeenCalled();
-  });
-
-  it("does not reuse another catalog's validator for the same tool id", async () => {
-    const first = fakeTool(
-      "shared_instruction",
-      Type.Object({ before: Type.String() }, { additionalProperties: false }),
-    );
-    const second = fakeTool(
-      "shared_instruction",
-      Type.Object({ after: Type.String() }, { additionalProperties: false }),
-    );
-    const firstRuntime = createRuntime([first]).runtime;
-    const secondRuntime = createRuntime([second]).runtime;
-
-    await expect(firstRuntime.call("shared_instruction", { before: "run" })).resolves.toBeDefined();
-    await expect(secondRuntime.call("shared_instruction", { after: "run" })).resolves.toBeDefined();
-    await expect(secondRuntime.call("shared_instruction", { before: "run" })).rejects.toThrow(
-      "after",
-    );
-    expect(first.execute).toHaveBeenCalledOnce();
-    expect(second.execute).toHaveBeenCalledOnce();
   });
 
   it("recompiles a trusted schema after its constraints change in place", async () => {
@@ -669,32 +647,23 @@ describe("Tool Search input schemas", () => {
     expect(target.execute).toHaveBeenCalledTimes(2);
   });
 
-  it("returns invalid arguments to isolated Tool Search code without executing them", async () => {
+  it("rejects invalid structured tool_call arguments without executing the target", async () => {
     const target = fakeTool(
       "strict_instruction",
       Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
     );
     const { catalogRef, config } = createRuntime([target]);
-    const codeTool = createToolSearchTools({ catalogRef, config }).find(
-      (tool) => tool.name === TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+    const callTool = createToolSearchTools({ catalogRef, config }).find(
+      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
     );
 
-    expect(codeTool).toBeDefined();
-    const result = await codeTool!.execute("invalid-code-call", {
-      code: `
-        try {
-          await openclaw.tools.call("strict_instruction", { instructions: "run" });
-          return { executed: true };
-        } catch (error) {
-          return { error: error.message };
-        }
-      `,
-    });
-
-    expect(result.details).toMatchObject({
-      ok: true,
-      value: { error: expect.stringContaining("Did you mean: instruction?") },
-    });
+    expect(callTool).toBeDefined();
+    await expect(
+      callTool!.execute("invalid-structured-call", {
+        id: "strict_instruction",
+        args: { instructions: "run" },
+      }),
+    ).rejects.toThrow("Did you mean: instruction?");
     expect(target.execute).not.toHaveBeenCalled();
   });
 
@@ -838,64 +807,6 @@ describe("Tool Search catalog indexing", () => {
     ]);
     await expect(runtime.search("orchard_alpha")).resolves.toEqual([]);
   });
-
-  it("rebuilds the search index when tools are appended to the same catalog", async () => {
-    const { catalogRef, runtime } = createRuntime([fakeTool("orchard_alpha")]);
-    const added = createRuntime([fakeTool("meteor_beta")]);
-    const addedEntry = added.catalogRef.current?.entries[0];
-
-    expect(addedEntry).toBeDefined();
-    await expect(runtime.search("meteor_beta")).resolves.toEqual([]);
-    catalogRef.current!.entries.push(addedEntry!);
-
-    await expect(runtime.search("meteor_beta")).resolves.toEqual([
-      expect.objectContaining({ name: "meteor_beta" }),
-    ]);
-  });
-
-  it("rebuilds the search index when indexed metadata changes in place", async () => {
-    const { catalogRef, runtime } = createRuntime([fakeTool("orchard_alpha")]);
-    const entry = catalogRef.current?.entries[0];
-
-    expect(entry).toBeDefined();
-    await expect(runtime.search("meteor")).resolves.toEqual([]);
-    entry!.description = "Track the current meteor forecast";
-
-    await expect(runtime.search("meteor")).resolves.toEqual([
-      expect.objectContaining({ name: "orchard_alpha" }),
-    ]);
-  });
-
-  it.each(["root", "property", "items"])(
-    "rebuilds the search index when a %s description changes in place",
-    async (location) => {
-      const described = {
-        type: "object",
-        description: "Search an orchard",
-        properties: {},
-      };
-      const parameters =
-        location === "root"
-          ? described
-          : location === "property"
-            ? { type: "object", properties: { resource: described } }
-            : {
-                type: "object",
-                properties: { resources: { type: "array", items: described } },
-              };
-      const { runtime } = createRuntime([fakeTool("indexed_resource", parameters as never)]);
-
-      await expect(runtime.search("orchard")).resolves.toEqual([
-        expect.objectContaining({ name: "indexed_resource" }),
-      ]);
-      described.description = "Search a meteor";
-
-      await expect(runtime.search("meteor")).resolves.toEqual([
-        expect.objectContaining({ name: "indexed_resource" }),
-      ]);
-      await expect(runtime.search("orchard")).resolves.toEqual([]);
-    },
-  );
 });
 
 describe("Tool Search network error boundaries", () => {

@@ -1,18 +1,14 @@
-import { html, render } from "lit";
 import type { MarkdownIt } from "markdown-it";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
-import { toolIcons } from "./icons-tools.ts";
-import { icons } from "./icons.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
+import { copyMarkdownText } from "./markdown-copy.ts";
+import { createMarkdownIcon } from "./markdown-icon.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
-const tableCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
-const tableCopyAttempts = new WeakMap<HTMLElement, number>();
 
 type TableOwnerState = {
   release: () => void;
@@ -35,13 +31,13 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
     if (!tableInteractionsEnabled(env)) {
       return defaultTableOpen?.(tokens, index, options, env, renderer) ?? "<table>\n";
     }
-    return `<div class="markdown-table" data-table-interactions><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div><div class="markdown-table__viewport"><table>`;
+    return '<div class="markdown-table" data-table-interactions><div class="markdown-table__viewport"><table>';
   };
   markdownParser.renderer.rules.table_close = (tokens, index, options, env, renderer) => {
     if (!tableInteractionsEnabled(env)) {
       return defaultTableClose?.(tokens, index, options, env, renderer) ?? "</table>\n";
     }
-    return "</table></div></div>";
+    return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeHtml(t("common.copyTable"))}"></button></div></div>`;
   };
 }
 
@@ -76,8 +72,10 @@ function enhanceTableShell(shell: HTMLElement): void {
     return;
   }
   enhancedTableShells.add(shell);
-  render(html`${toolIcons.maximize}<span>${t("common.expandTable")}</span>`, expand);
-  render(icons.copy, copy);
+  const label = shell.ownerDocument.createElement("span");
+  label.textContent = t("common.expandTable");
+  expand.replaceChildren(createMarkdownIcon("maximize", shell.ownerDocument), label);
+  copy.replaceChildren(createMarkdownIcon("copy", shell.ownerDocument));
   viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
 }
 
@@ -223,29 +221,21 @@ async function showTableDialog(
       }, 0);
     };
     dialog.addEventListener("modal-cancel", close);
-    render(
-      html`
-        <div
-          class="markdown-table-dialog chat-text"
-          dir=${getComputedStyle(table).direction}
-          @click=${dismissLink}
-          @auxclick=${dismissLink}
-          @keydown=${dismissLink}
-        >
-          <button
-            type="button"
-            class="markdown-table-dialog__close"
-            aria-label=${t("common.closeTable")}
-            autofocus
-            @click=${close}
-          >
-            ${icons.x}
-          </button>
-          ${table.cloneNode(true)}
-        </div>
-      `,
-      dialog,
-    );
+    const content = document.createElement("div");
+    content.className = "markdown-table-dialog chat-text";
+    content.dir = getComputedStyle(table).direction;
+    for (const event of ["click", "auxclick", "keydown"]) {
+      content.addEventListener(event, dismissLink);
+    }
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "markdown-table-dialog__close";
+    dismiss.setAttribute("aria-label", t("common.closeTable"));
+    dismiss.autofocus = true;
+    dismiss.addEventListener("click", close);
+    dismiss.append(createMarkdownIcon("x", document));
+    content.append(dismiss, table.cloneNode(true));
+    dialog.append(content);
     // Keep delegated file/session actions and modal teardown with their transcript.
     owner.append(dialog);
   } finally {
@@ -277,32 +267,21 @@ export function handleMarkdownTableInteraction(event: Event): void {
   const copy = target.closest<HTMLElement>(".markdown-table__copy");
   if (copy) {
     const text = markdownTableCopyText(table);
-    const attempt = (tableCopyAttempts.get(copy) ?? 0) + 1;
-    tableCopyAttempts.set(copy, attempt);
-    // A streaming table retains its controls, but only the current payload
-    // may start fallback copying or update their feedback.
-    const isCurrent = () =>
-      copy.isConnected &&
-      table.isConnected &&
-      tableCopyAttempts.get(copy) === attempt &&
-      shell.querySelector("table") === table &&
-      markdownTableCopyText(table) === text;
-    void copyToClipboard(text, isCurrent).then((copied) => {
-      if (!isCurrent()) {
-        return;
-      }
-      copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
-      render(copied ? icons.check : icons.copy, copy);
-      clearTimeout(tableCopyResetTimers.get(copy));
-      const resetTimer = setTimeout(
-        () => {
-          render(icons.copy, copy);
+    copyMarkdownText(
+      copy,
+      text,
+      () =>
+        table.isConnected &&
+        shell.querySelector("table") === table &&
+        markdownTableCopyText(table) === text,
+      (copied) => {
+        copy.replaceChildren(createMarkdownIcon(copied ? "check" : "copy", copy.ownerDocument));
+        if (copied === undefined) {
           copy.setAttribute("aria-label", t("common.copyTable"));
-          tableCopyResetTimers.delete(copy);
-        },
-        copied ? 1500 : 2000,
-      );
-      tableCopyResetTimers.set(copy, resetTimer);
-    });
+        } else {
+          copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+        }
+      },
+    );
   }
 }

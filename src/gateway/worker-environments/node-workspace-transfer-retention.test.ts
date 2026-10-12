@@ -14,7 +14,10 @@ import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspac
 import { captureGitHubPublicationWorkspaceSnapshot } from "../github-publication-git-transport.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import {
+  startNodeWorkspaceTransferTestServer,
+  transferOwner,
+} from "./node-workspace-transfer.test-support.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceReconciliationJournal } from "./workspace-manifest.js";
 import { ConcurrentWorkspacePathError } from "./workspace-reconcile.js";
@@ -72,15 +75,7 @@ it.each([
     const sessionId = "input-session";
     const ownerEpoch = 1;
     const service = createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: { ownerEpoch, sessionId, expiresAtMs: Date.now() + 60_000 },
-        environment: {
-          ownerEpoch,
-          attachedSessionIds: [sessionId],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner(sessionId, ownerEpoch, Date.now() + 60_000),
       temporaryRoot: path.join(root, "transfers"),
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
@@ -90,12 +85,21 @@ it.each([
       ownerEpoch,
       sessionId,
       ownerSignal: owner.signal,
+      supportsNativeQuiescence: async () => process.platform === "linux",
       isOwnerCurrent: () => !owner.signal.aborted,
       workspaceTransfer: service,
       runWorkspaceCommand: (command) =>
         runtime.exec(
           {
             ...command,
+            ...(process.platform === "linux" &&
+            !command.quiescence &&
+            !command.process &&
+            !command.transfer &&
+            !command.seed &&
+            !command.legacyQuiescence
+              ? { nativeProcessOwner: true as const }
+              : {}),
             argv: [...command.argv],
             gatewayNamespace: "gateway-input-test",
             environmentId,
@@ -165,15 +169,15 @@ it.each([
               kind: "local",
               path: localPath,
               journal: {
-                load: () => pending,
-                begin: (next) => {
+                load: async () => pending,
+                begin: async (next) => {
                   pending = next;
                 },
-                commit: (accepted) => {
+                commit: async (accepted) => {
                   baseManifestRef = accepted;
                   pending = undefined;
                 },
-                abort: () => {
+                abort: async () => {
                   pending = undefined;
                 },
               },
@@ -387,15 +391,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
   const ownerEpoch = 1;
   const createService = () =>
     createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: { ownerEpoch, sessionId },
-        environment: {
-          ownerEpoch,
-          attachedSessionIds: [sessionId],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner(sessionId, ownerEpoch),
       temporaryRoot: path.join(root, "transfers"),
     });
   let service = createService();
@@ -409,6 +405,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       ownerEpoch,
       sessionId,
       ownerSignal: owner.signal,
+      supportsNativeQuiescence: async () => process.platform === "linux",
       isOwnerCurrent: () => !owner.signal.aborted,
       workspaceTransfer: service,
       restoredWorkspace,
@@ -416,6 +413,14 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
         runtime.exec(
           {
             ...command,
+            ...(process.platform === "linux" &&
+            !command.quiescence &&
+            !command.process &&
+            !command.transfer &&
+            !command.seed &&
+            !command.legacyQuiescence
+              ? { nativeProcessOwner: true as const }
+              : {}),
             argv: [...command.argv],
             gatewayNamespace: "gateway-restart-test",
             environmentId,
@@ -463,18 +468,19 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
         kind: "local" as const,
         path: localPath,
         journal: {
-          load: () => pending,
-          begin: (next: WorkerWorkspaceReconciliationJournal) => {
+          load: async () => pending,
+          begin: async (next: WorkerWorkspaceReconciliationJournal) => {
             pending = next;
           },
-          commit: (ref: string) => {
+          commit: async (ref: string) => {
             accepted = ref;
             pending = undefined;
           },
-          abort: () => {
+          abort: async () => {
             pending = undefined;
           },
         },
+        stagedResult: { ref: workerWorkspaceResultRef("restored-workspace"), record: () => {} },
       },
     };
     const quiescence = await restored.quiesceWorkspace(remote);

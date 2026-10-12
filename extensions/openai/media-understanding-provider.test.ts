@@ -1,6 +1,9 @@
 // Openai tests cover media understanding provider plugin behavior.
 import { inspect } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+// Keep static: evaluates the partial auth mock and its compiled workers at collection.
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import {
   createAuthCaptureJsonFetch,
@@ -10,11 +13,11 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
-const authMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
-  resolveApiKeyForProvider: authMocks.resolve,
+  resolveApiKeyForProvider: vi.fn(),
 }));
+const authMocks = { resolve: vi.mocked(resolveApiKeyForProvider) };
 
 installPinnedHostnameTestHooks();
 
@@ -90,7 +93,7 @@ describe("provider-owned audio transcription", () => {
   );
 
   it.each([undefined, " \t "])(
-    "resolves subscription auth through the real resolver with absent key %j",
+    "skips SIWC for subscription transcription through the registered provider with absent key %j",
     async (apiKey) =>
       withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {
         const [
@@ -105,7 +108,7 @@ describe("provider-owned audio transcription", () => {
           import("./index.js"),
         ]);
         const cfg = {
-          auth: { order: { openai: ["openai:fixture-subscription"] } },
+          auth: { order: { openai: ["openai:siwc", "openai:fixture-subscription"] } },
           models: {
             providers: {
               openai: { apiKey, baseUrl: "https://api.openai.com/v1", models: [] },
@@ -130,16 +133,21 @@ describe("provider-owned audio transcription", () => {
         const realAuth = await vi.importActual<
           typeof import("openclaw/plugin-sdk/provider-auth-runtime")
         >("openclaw/plugin-sdk/provider-auth-runtime");
-        authMocks.resolve.mockImplementation((params) =>
-          realAuth.resolveApiKeyForProvider({
-            ...params,
-            store: {
-              version: 1,
-              profiles: {
-                "openai:fixture-subscription": { type: "token", provider: "openai", token },
-              },
+        const store: AuthProfileStore = {
+          version: 1,
+          profiles: {
+            "openai:siwc": {
+              type: "oauth",
+              provider: "openai",
+              authFlow: "chatgpt-token-sharing",
+              access: "siwc-token",
+              refresh: "siwc-refresh",
+              expires: Date.now() + 3_600_000,
             },
-          }),
+          },
+        };
+        authMocks.resolve.mockImplementation((params) =>
+          realAuth.resolveApiKeyForProvider({ ...params, store }),
         );
         try {
           await withPluginRuntimeRegistryScope(registry.registry, async () => {
@@ -149,6 +157,24 @@ describe("provider-owned audio transcription", () => {
             if (!provider?.transcribeAudioWithContext) {
               throw new Error("OpenAI audio transcription registration missing");
             }
+            if (apiKey === undefined) {
+              const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "unexpected" });
+              const result = await provider.transcribeAudioWithContext({
+                cfg,
+                buffer: Buffer.from("audio"),
+                fileName: "voice.wav",
+                timeoutMs: 1000,
+                fetchFn,
+              });
+              expect(result.ok).toBe(false);
+              expect(getRequest().url).toBeNull();
+              authMocks.resolve.mockClear();
+            }
+            store.profiles["openai:fixture-subscription"] = {
+              type: "token",
+              provider: "openai",
+              token,
+            };
             const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "subscription" });
             const result = await provider.transcribeAudioWithContext({
               cfg,

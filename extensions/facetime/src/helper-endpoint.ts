@@ -2,9 +2,8 @@ import endpoint from "../helper-endpoint.json" with { type: "json" };
 
 type FaceTimeHelperEndpoint = { host: "127.0.0.1"; port: number };
 
-export function resolveFaceTimeHelperEndpoint(
-  uid = typeof process.getuid === "function" ? process.getuid() : 501,
-): FaceTimeHelperEndpoint {
+export function resolveFaceTimeHelperEndpoint(): FaceTimeHelperEndpoint {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 501;
   if (
     endpoint.host !== "127.0.0.1" ||
     !Number.isSafeInteger(endpoint.basePort) ||

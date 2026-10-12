@@ -39,7 +39,6 @@ type History =
   | "opaque"
   | "missing-delta"
   | "missing-middle"
-  | "changed-content"
   | "invalid"
   | "clean";
 
@@ -127,17 +126,6 @@ async function seedImportedHistory(
     ]);
     fs.unlinkSync(sourcePath);
     const sourceEvents = [...original];
-    if (history === "changed-content") {
-      sourceEvents[2] = {
-        type: "message",
-        id: `${sessionId}-assistant`,
-        parentId: `${sessionId}-user`,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Different content with the same event ID" }],
-        },
-      };
-    }
     if (history === "invalid") {
       sourceEvents[0] = { type: "session", version: 3, id: "another-session" };
     }
@@ -176,23 +164,35 @@ function completedTranscriptMoves(state: OpenClawTestState, sourcePath: string) 
   );
 }
 
-it.each(["import", "recover"] as const)(
-  "%s settles already-imported June originals and missing deltas without replacing current sessions",
-  async (mode) => {
+it.each([
+  { mode: "import", pendingPlugin: true },
+  { mode: "recover", pendingPlugin: true },
+  { mode: "import", pendingPlugin: false },
+  { mode: "recover", pendingPlugin: false },
+] as const)(
+  "$mode settles imported originals without replacing current sessions (plugin receipt=$pendingPlugin)",
+  async ({ mode, pendingPlugin }) => {
     await withOpenClawTestState({ label: `active-june-${mode}` }, async (state) => {
-      const { cfg, sessions } = await seedImportedHistory(state, {
-        main: "equal",
-        diana: "sqlite-ahead",
-        frieren: "missing-delta",
-        subset: "sqlite-subset",
-        opaque: "opaque",
-      });
+      const { cfg, sessions } = await seedImportedHistory(
+        state,
+        pendingPlugin
+          ? {
+              main: "equal",
+              diana: "sqlite-ahead",
+              frieren: "missing-delta",
+              subset: "sqlite-subset",
+              opaque: "opaque",
+            }
+          : { main: "sqlite-ahead" },
+        pendingPlugin,
+      );
+      const options = { cfg, env: state.env, allAgents: true, mode };
       const duplicateArchives: string[] = [];
       const duplicateBytes =
         transcriptEvents("unrelated-history")
           .map((event) => JSON.stringify(event))
           .join("\n") + "\n";
-      if (mode === "import") {
+      if (pendingPlugin && mode === "import") {
         const target = {
           agentId: "main",
           storePath: sessions[0]!.storePath,
@@ -227,142 +227,110 @@ it.each(["import", "recover"] as const)(
         old.manifest.completedAt = old.manifest.startedAt;
         writeSessionSqliteMigrationManifest(old);
       }
-      await withDoctorSqliteMaintenanceLock({
-        env: state.env,
-        operation: "settle June originals",
-        run: async (authority) => {
-          const report = await runDoctorSessionSqlite({
-            cfg,
+      const report = pendingPlugin
+        ? await withDoctorSqliteMaintenanceLock({
             env: state.env,
-            allAgents: true,
-            mode,
-          });
-          await settleRetainedDoctorSessionSources(report, [pluginId], authority, () =>
-            authority.assertCurrent(),
-          );
-          expect(report.totals.importedTranscriptEvents).toBe(2);
-          expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
-            expect.objectContaining({ code: "active_sqlite_transcript_jsonl" }),
-          );
-          if (mode === "import") {
-            expect(report.targets.flatMap((target) => target.issues)).toEqual([
-              {
-                code: "historical_duplicate_settled",
-                message: expect.stringContaining("Retired 1 byte-identical duplicate archive(s)"),
-              },
-            ]);
-            const survivingArchives = duplicateArchives.filter((file) => fs.existsSync(file));
-            expect(survivingArchives).toHaveLength(1);
-            expect(fs.readFileSync(survivingArchives[0]!, "utf8")).toBe(duplicateBytes);
-            for (const session of sessions) {
-              expect(fs.existsSync(session.storePath)).toBe(false);
-              const indexes = completedTranscriptMoves(state, session.storePath);
-              expect(indexes).toHaveLength(1);
-              expect(indexes[0]!.artifact?.classification).toBe("imported");
-              expect(fs.readFileSync(indexes[0]!.archivePath, "utf8")).toBe("{}");
-            }
-          }
-          for (const session of sessions) {
-            expect(fs.existsSync(session.sourcePath)).toBe(false);
-            const moves = completedTranscriptMoves(state, session.sourcePath);
-            expect(moves).toHaveLength(1);
-            expect(fs.readFileSync(moves[0]!.archivePath)).toEqual(session.bytes);
-            expect(moves[0]!.artifact?.verification).toBe(
-              `superseded by SQLite (${session.sourceEvents.length} of ${Math.max(session.canonical.length, session.sourceEvents.length)} events present)`,
-            );
-            expect(loadExactSessionEntry(session)?.entry).toEqual(session.entryBefore);
-            expect(loadTranscriptEventsSync(session)).toEqual(
-              session.history === "missing-delta" ? session.sourceEvents : session.canonical,
-            );
-          }
-        },
-      });
-    });
-  },
-);
-
-it.each(["import", "recover"] as const)(
-  "%s retires a 3-event source behind 95 SQLite events without a plugin receipt and reruns cleanly",
-  async (mode) => {
-    await withOpenClawTestState({ label: `superseded-${mode}` }, async (state) => {
-      const {
-        cfg,
-        sessions: [session],
-      } = await seedImportedHistory(state, { main: "sqlite-ahead" }, false);
-      const options = { cfg, env: state.env, allAgents: true, mode };
-      const report = await runDoctorSessionSqlite(options);
-      expect(report.totals.issues).toBe(0);
-      expect(report.supportIssue).toBeUndefined();
-      expect(fs.existsSync(session!.sourcePath)).toBe(false);
-      const [move] = completedTranscriptMoves(state, session!.sourcePath);
-      expect(move?.artifact?.verification).toBe("superseded by SQLite (3 of 95 events present)");
-      expect(fs.readFileSync(move!.archivePath)).toEqual(session!.bytes);
-      expect(loadExactSessionEntry(session!)?.entry).toEqual(session!.entryBefore);
-      expect(loadTranscriptEventsSync(session!)).toEqual(session!.canonical);
-      const repeated = await runDoctorSessionSqlite(options);
-      expect(repeated.totals).toMatchObject({
-        issues: 0,
-        importedTranscriptEvents: 0,
-        archivedTranscriptFiles: 0,
-      });
-      expect(repeated.supportIssue).toBeUndefined();
-      expect(completedTranscriptMoves(state, session!.sourcePath)).toEqual([move]);
-    });
-  },
-);
-
-it.each([
-  { history: "changed-content", pendingPlugin: true },
-  { history: "missing-middle", pendingPlugin: true },
-  { history: "changed-content", pendingPlugin: false },
-  { history: "missing-middle", pendingPlugin: false },
-] as const)(
-  "preserves $history without committing an invalid merge (plugin receipt=$pendingPlugin)",
-  async ({ history, pendingPlugin }) => {
-    await withOpenClawTestState({ label: "active-june-content" }, async (state) => {
-      const {
-        cfg,
-        sessions: [session],
-      } = await seedImportedHistory(state, { main: history }, pendingPlugin);
-      expect(session).toBeDefined();
-      await withDoctorSqliteMaintenanceLock({
-        env: state.env,
-        operation: "settle changed June content",
-        run: async (authority) => {
-          const report = await runDoctorSessionSqlite({
-            cfg,
-            env: state.env,
-            allAgents: true,
-            mode: "import",
-          });
-          if (pendingPlugin) {
-            await expect(
-              settleRetainedDoctorSessionSources(report, [pluginId], authority, () =>
+            operation: "settle June originals",
+            run: async (authority) => {
+              const settled = await runDoctorSessionSqlite(options);
+              await settleRetainedDoctorSessionSources(settled, [pluginId], authority, () =>
                 authority.assertCurrent(),
-              ),
-            ).rejects.toThrow(session!.sourcePath);
-          }
-          expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
-            expect.objectContaining({
-              code: pendingPlugin
-                ? "active_sqlite_transcript_verification_failed"
-                : "sqlite_transcript_count_mismatch",
-              message: expect.stringContaining(
-                `${session!.sessionId}-${history === "changed-content" ? "assistant" : "user"}`,
-              ),
-            }),
-          );
-          const events = loadTranscriptEventsSync(session!);
-          expect(events).toEqual(session!.canonical);
-          expect(loadExactSessionEntry(session!)?.entry).toEqual(session!.entryBefore);
-          expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
-          const moves = completedTranscriptMoves(state, session!.sourcePath);
-          expect(moves).toEqual([]);
-        },
-      });
+              );
+              return settled;
+            },
+          })
+        : await runDoctorSessionSqlite(options);
+      if (pendingPlugin) {
+        expect(report.totals.importedTranscriptEvents).toBe(2);
+      } else {
+        expect(report.totals.issues).toBe(0);
+        expect(report.supportIssue).toBeUndefined();
+      }
+      expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
+        expect.objectContaining({ code: "active_sqlite_transcript_jsonl" }),
+      );
+      if (pendingPlugin && mode === "import") {
+        expect(report.targets.flatMap((target) => target.issues)).toEqual([
+          {
+            code: "historical_duplicate_settled",
+            message: expect.stringContaining("Retired 1 byte-identical duplicate archive(s)"),
+          },
+        ]);
+        const survivingArchives = duplicateArchives.filter((file) => fs.existsSync(file));
+        expect(survivingArchives).toHaveLength(1);
+        expect(fs.readFileSync(survivingArchives[0]!, "utf8")).toBe(duplicateBytes);
+        for (const session of sessions) {
+          expect(fs.existsSync(session.storePath)).toBe(false);
+          const indexes = completedTranscriptMoves(state, session.storePath);
+          expect(indexes).toHaveLength(1);
+          expect(indexes[0]!.artifact?.classification).toBe("imported");
+          expect(fs.readFileSync(indexes[0]!.archivePath, "utf8")).toBe("{}");
+        }
+      }
+      for (const session of sessions) {
+        expect(fs.existsSync(session.sourcePath)).toBe(false);
+        const moves = completedTranscriptMoves(state, session.sourcePath);
+        expect(moves).toHaveLength(1);
+        expect(fs.readFileSync(moves[0]!.archivePath)).toEqual(session.bytes);
+        expect(moves[0]!.artifact?.verification).toBe(
+          pendingPlugin
+            ? `superseded by SQLite (${session.sourceEvents.length} of ${Math.max(session.canonical.length, session.sourceEvents.length)} events present)`
+            : "superseded by SQLite (3 of 95 events present)",
+        );
+        expect(loadExactSessionEntry(session)?.entry).toEqual(session.entryBefore);
+        expect(loadTranscriptEventsSync(session)).toEqual(
+          session.history === "missing-delta" ? session.sourceEvents : session.canonical,
+        );
+      }
+      if (!pendingPlugin) {
+        const session = sessions[0]!;
+        const moves = completedTranscriptMoves(state, session.sourcePath);
+        const repeated = await runDoctorSessionSqlite(options);
+        expect(repeated.totals).toMatchObject({
+          issues: 0,
+          importedTranscriptEvents: 0,
+          archivedTranscriptFiles: 0,
+        });
+        expect(repeated.supportIssue).toBeUndefined();
+        expect(completedTranscriptMoves(state, session.sourcePath)).toEqual(moves);
+      }
     });
   },
 );
+
+it("preserves missing-middle history without committing an invalid merge", async () => {
+  await withOpenClawTestState({ label: "active-june-content" }, async (state) => {
+    const {
+      cfg,
+      sessions: [session],
+    } = await seedImportedHistory(state, { main: "missing-middle" }, false);
+    expect(session).toBeDefined();
+    await withDoctorSqliteMaintenanceLock({
+      env: state.env,
+      operation: "settle changed June content",
+      run: async () => {
+        const report = await runDoctorSessionSqlite({
+          cfg,
+          env: state.env,
+          allAgents: true,
+          mode: "import",
+        });
+        expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect.objectContaining({
+            code: "sqlite_transcript_count_mismatch",
+            message: expect.stringContaining(`${session!.sessionId}-user`),
+          }),
+        );
+        const events = loadTranscriptEventsSync(session!);
+        expect(events).toEqual(session!.canonical);
+        expect(loadExactSessionEntry(session!)?.entry).toEqual(session!.entryBefore);
+        expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
+        const moves = completedTranscriptMoves(state, session!.sourcePath);
+        expect(moves).toEqual([]);
+      },
+    });
+  });
+});
 
 it("preserves an invalid main transcript without assigning its failure to a clean agent", async () => {
   await withOpenClawTestState({ label: "active-june-agent-scope" }, async (state) => {

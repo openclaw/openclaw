@@ -14,20 +14,17 @@ import { retireInspectionInstances } from "../../plugins/registry-inspection.tes
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
+  drainPendingContextEngineTurnsBeforeRun,
   finalizeAcceptedContextEngineTurn,
   type ContextEngineTurnAttemptFacts,
 } from "./context-engine-turn-attempt.js";
-import { enqueueContextEngineTurnIntent } from "./context-engine-turn-outbox.js";
 
 const unchanged = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
 let fixtureSequence = 0;
@@ -41,12 +38,17 @@ async function withAcceptedTurn(
   maintenanceInfo: Pick<ContextEngine["info"], "turnMaintenanceMode"> = {
     turnMaintenanceMode: "background",
   },
+  deferAdmission = false,
 ) {
   await withStateDirEnv("openclaw-accepted-turn-maintenance-", async ({ stateDir }) => {
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    const fixture = await createAcceptedTurn(stateDir, outcome, maintenanceFails, maintenanceInfo);
+    const fixture = await createAcceptedTurn(
+      stateDir,
+      outcome,
+      maintenanceFails,
+      maintenanceInfo,
+      deferAdmission,
+    );
     try {
       await run(fixture);
     } finally {
@@ -56,8 +58,6 @@ async function withAcceptedTurn(
       await fixture.source.release();
       await fixture.sourceDisposed.promise;
       resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
@@ -69,6 +69,7 @@ async function createAcceptedTurn(
   outcome: "committed" | "duplicate" | "failed",
   maintenanceFails: boolean,
   maintenanceInfo: Pick<ContextEngine["info"], "turnMaintenanceMode">,
+  deferAdmission: boolean,
 ) {
   const engineId = `accepted-maintenance-${fixtureSequence++}`;
   const target = {
@@ -182,14 +183,16 @@ async function createAcceptedTurn(
       config,
     }),
   );
-  lease.begin();
-  enqueueContextEngineTurnIntent({
-    admission,
-    database,
-    engineId: lease.effectiveEngineId,
-    ownerPluginId: lease.effectiveEnginePluginId,
-    isHeartbeat: false,
+  const warn = vi.fn();
+  const message = { role: "user" as const, content: "Synthetic question", timestamp: 1_000 };
+  const recorder = createUserTurnTranscriptRecorder({ message, target: async () => undefined });
+  await drainPendingContextEngineTurnsBeforeRun({
+    admission: deferAdmission ? undefined : admission,
+    ...(deferAdmission ? { recorder, sessionTarget: target } : {}),
+    lease,
+    warn,
   });
+  lease.begin();
   await source.release();
   const pendingTurn = () =>
     database.db
@@ -210,10 +213,44 @@ async function createAcceptedTurn(
     events,
     resourceReads,
     pendingTurn,
+    warn,
+    async persistAdmission() {
+      recorder.markRuntimePersisted(message, admission);
+      await recorder.waitForRuntimePersistence();
+    },
   };
 }
 
 describe("durable accepted-turn maintenance handoff", () => {
+  it("settles an admitted turn without terminal facts before disposing its engine", async () => {
+    await withAcceptedTurn("committed", false, async (fixture) => {
+      expect(fixture.pendingTurn()).toEqual({ attempt_count: 0 });
+      await fixture.lease.dispose();
+      await fixture.lease.dispose();
+      expect(fixture.pendingTurn()).toBeUndefined();
+      expect(fixture.commitTurn).not.toHaveBeenCalled();
+      expect(fixture.warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("discarded unaccepted turn advancement"),
+      );
+      expect(fixture.dispose).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("allows late transcript fallback without admitting work to a disposed turn", async () => {
+    await withAcceptedTurn(
+      "committed",
+      false,
+      async (fixture) => {
+        await fixture.lease.dispose();
+        await fixture.persistAdmission();
+        expect(fixture.pendingTurn()).toBeUndefined();
+        expect(fixture.commitTurn).not.toHaveBeenCalled();
+      },
+      {},
+      true,
+    );
+  });
+
   it.each(["foreground", undefined] as const)(
     "awaits %s maintenance with durable runtime capabilities",
     async (turnMaintenanceMode) => {
@@ -319,7 +356,7 @@ describe("durable accepted-turn maintenance handoff", () => {
     },
   );
 
-  it.each(["commit-failed", "aborted"] as const)(
+  it.each(["commit-failed", "aborted", "yieldAborted", "promptError"] as const)(
     "does not schedule maintenance for %s",
     async (failure) => {
       await withAcceptedTurn(

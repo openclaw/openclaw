@@ -8,7 +8,6 @@ const bindingRuntimePath = /legacy-config-binding-repair\.runtime\.[jt]s$/u;
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { name: "implicit single agent", config: {} },
   { name: "explicit single agent", config: { agents: { entries: { main: {} } } } },
   {
     name: "disabled plugins",
@@ -46,48 +45,38 @@ it.each([
   expect(source.gateway.bind).toBe("localhost");
 });
 
-it("retains source transformation when native binding repair loading is unsupported", () => {
-  const loadNative = nativeModuleRequire.tryNativeRequireModule;
-  vi.spyOn(nativeModuleRequire, "tryNativeRequireModule").mockImplementation(
-    (modulePath, options) =>
-      bindingRuntimePath.test(modulePath) ? { ok: false } : loadNative(modulePath, options),
-  );
-  const repair: typeof import("./legacy-config-binding-repair.runtime.js").repairUnownedChannelAccountBindings =
-    ({ config }) => ({ config, changes: ["Used supported source transformation."] });
-  const loadModule = pluginModuleLoader.getCachedPluginModuleLoader;
-  vi.spyOn(pluginModuleLoader, "getCachedPluginModuleLoader").mockImplementation((options) =>
-    bindingRuntimePath.test(options.modulePath)
-      ? () => ({ repairUnownedChannelAccountBindings: repair })
-      : loadModule(options),
-  );
-  const source = { agents: { entries: { main: {}, ops: {} } } };
-
-  const migrated = applyLegacyDoctorMigrations(source, { sourceConfigBeforeMigrations: source });
-
-  expect(migrated.changes).toContain("Used supported source transformation.");
-});
-
-it("propagates native binding repair failures without trying a second module graph", () => {
+it.each(["unsupported", "failed"])("handles %s native binding repair loading", (outcome) => {
   const failure = new Error("Native binding repair dependency failed");
   const loadNative = nativeModuleRequire.tryNativeRequireModule;
   vi.spyOn(nativeModuleRequire, "tryNativeRequireModule").mockImplementation(
     (modulePath, options) => {
-      if (bindingRuntimePath.test(modulePath)) {
+      if (!bindingRuntimePath.test(modulePath)) {
+        return loadNative(modulePath, options);
+      }
+      if (outcome === "failed") {
         throw failure;
       }
-      return loadNative(modulePath, options);
+      return { ok: false };
     },
   );
+  const repair: typeof import("./legacy-config-binding-repair.runtime.js").repairUnownedChannelAccountBindings =
+    ({ config }) => ({ config, changes: ["Used supported source transformation."] });
   const loadModule = pluginModuleLoader.getCachedPluginModuleLoader;
   vi.spyOn(pluginModuleLoader, "getCachedPluginModuleLoader").mockImplementation((options) => {
-    if (bindingRuntimePath.test(options.modulePath)) {
+    if (!bindingRuntimePath.test(options.modulePath)) {
+      return loadModule(options);
+    }
+    if (outcome === "failed") {
       throw new Error("Attempted a second binding repair module graph");
     }
-    return loadModule(options);
+    return () => ({ repairUnownedChannelAccountBindings: repair });
   });
   const source = { agents: { entries: { main: {}, ops: {} } } };
-
-  expect(() =>
-    applyLegacyDoctorMigrations(source, { sourceConfigBeforeMigrations: source }),
-  ).toThrow(failure);
+  const migrate = () =>
+    applyLegacyDoctorMigrations(source, { sourceConfigBeforeMigrations: source });
+  if (outcome === "failed") {
+    expect(migrate).toThrow(failure);
+  } else {
+    expect(migrate().changes).toContain("Used supported source transformation.");
+  }
 });

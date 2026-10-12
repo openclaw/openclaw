@@ -1,26 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEventAsync } from "../proxy-capture/runtime.js";
+import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCallbacks,
 } from "./provider-types.js";
 
-// The installed receiver enforces maxPayload; Bun's built-in ws adapter ignores it.
-const require = createRequire(import.meta.url);
-let webSocketConstructor: Promise<typeof WebSocket> | undefined;
-function loadWebSocket(): Promise<typeof WebSocket> {
-  return (webSocketConstructor ??= import(
-    pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href
-  ).then((module: typeof import("ws")) => module.default));
-}
+const loadWebSocket = createLazyRuntimeNamedExport(
+  () => import("../../packages/gateway-client/src/websocket.js"),
+  "WebSocket",
+);
 const WEBSOCKET_OPEN = 1;
 
 // Generic websocket-backed realtime transcription session. Providers supply URL,
@@ -163,23 +157,15 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     if (this.ws === socket) {
       // Keep the owning socket alive for provider final transcripts, but never
       // let its shutdown deadline terminate a later connection generation.
-      this.closeTimer = setTimeout(() => this.forceClose(socket), this.closeTimeoutMs);
+      this.closeTimer = setTimeout(
+        () => this.forceClose(socket),
+        this.options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS,
+      );
     }
   }
 
   isConnected(): boolean {
     return this.ready;
-  }
-
-  private get closeTimeoutMs(): number {
-    return this.options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
-  }
-  private get connectTimeoutMs(): number {
-    return this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
-  }
-
-  private get maxQueuedBytes(): number {
-    return this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
   }
 
   private async doConnect(generation: number): Promise<void> {
@@ -263,9 +249,32 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           failConnect(error);
           return;
         }
-        if (socket) {
-          this.closeForBackpressure(socket, error);
+        if (socket && socket === this.ws) {
+          const shouldReport = !this.closed;
+          this.closed = true;
+          this.cancelConnecting?.();
+          this.reconnectSupervisor.cancel();
+          this.clearQueuedAudio();
+          this.forceClose(socket);
+          if (shouldReport) {
+            this.emitError(error);
+          }
         }
+      };
+
+      const send = (payload: Buffer | string): boolean => {
+        if (!socket || !ownsSocket() || socket.readyState !== WEBSOCKET_OPEN) {
+          return false;
+        }
+        const payloadBytes =
+          typeof payload === "string" ? Buffer.byteLength(payload) : payload.byteLength;
+        if (socket.bufferedAmount + payloadBytes > REALTIME_TRANSCRIPTION_WS_MAX_BUFFERED_BYTES) {
+          handleBackpressure();
+          return false;
+        }
+        this.capture({ direction: "outbound", kind: "ws-frame", payload });
+        socket.send(payload);
+        return true;
       };
 
       const transport: RealtimeTranscriptionWebSocketTransport = {
@@ -291,9 +300,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
             finishConnect();
           }
         },
-        sendBinary: (payload) => this.send(payload, socket, generation, handleBackpressure),
-        sendJson: (payload) =>
-          this.send(JSON.stringify(payload), socket, generation, handleBackpressure),
+        sendBinary: send,
+        sendJson: (payload) => send(JSON.stringify(payload)),
       };
 
       connectTimeout = setTimeout(() => {
@@ -303,7 +311,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
               `${this.options.providerId} realtime transcription connection timeout`,
           ),
         );
-      }, this.connectTimeoutMs);
+      }, this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
 
       void (async () => {
         let connection: { headers?: Record<string, string>; url: string };
@@ -476,7 +484,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.queuedAudio.push(queued);
     this.queuedBytes += queued.byteLength;
     while (
-      this.queuedBytes > this.maxQueuedBytes &&
+      this.queuedBytes > (this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES) &&
       this.queuedAudioHead < this.queuedAudio.length
     ) {
       // Keep the most recent audio when reconnects stall; old buffered audio is
@@ -487,7 +495,10 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       this.queuedAudioHead += 1;
       this.queuedBytes -= dropped?.byteLength ?? 0;
     }
-    this.compactQueuedAudio();
+    if (this.queuedAudioHead > 0 && this.queuedAudioHead * 2 >= this.queuedAudio.length) {
+      this.queuedAudio = this.queuedAudio.slice(this.queuedAudioHead);
+      this.queuedAudioHead = 0;
+    }
   }
 
   private flushQueuedAudio(transport: RealtimeTranscriptionWebSocketTransport): void {
@@ -503,58 +514,10 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.clearQueuedAudio();
   }
 
-  private compactQueuedAudio(): void {
-    if (this.queuedAudioHead === 0 || this.queuedAudioHead * 2 < this.queuedAudio.length) {
-      return;
-    }
-    this.queuedAudio = this.queuedAudio.slice(this.queuedAudioHead);
-    this.queuedAudioHead = 0;
-  }
-
   private clearQueuedAudio(): void {
     this.queuedAudio = [];
     this.queuedAudioHead = 0;
     this.queuedBytes = 0;
-  }
-
-  private send(
-    payload: Buffer | string,
-    socket: WebSocket | undefined,
-    generation: number,
-    handleBackpressure: () => void,
-  ): boolean {
-    if (
-      !socket ||
-      generation !== this.connectionGeneration ||
-      this.ws !== socket ||
-      socket.readyState !== WEBSOCKET_OPEN
-    ) {
-      return false;
-    }
-    const payloadBytes =
-      typeof payload === "string" ? Buffer.byteLength(payload) : payload.byteLength;
-    if (socket.bufferedAmount + payloadBytes > REALTIME_TRANSCRIPTION_WS_MAX_BUFFERED_BYTES) {
-      handleBackpressure();
-      return false;
-    }
-    this.capture({ direction: "outbound", kind: "ws-frame", payload });
-    socket.send(payload);
-    return true;
-  }
-
-  private closeForBackpressure(socket: WebSocket, error: Error): void {
-    if (socket !== this.ws) {
-      return;
-    }
-    const shouldReport = !this.closed;
-    this.closed = true;
-    this.cancelConnecting?.();
-    this.reconnectSupervisor.cancel();
-    this.clearQueuedAudio();
-    this.forceClose(socket);
-    if (shouldReport) {
-      this.emitError(error);
-    }
   }
 
   private forceClose(socket: WebSocket | null | undefined = this.ws): void {

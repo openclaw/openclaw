@@ -1,13 +1,11 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { createQueuedTaskRunCore } from "../tasks/task-executor.js";
-import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
@@ -48,8 +46,6 @@ function statusParams(overrides: Partial<StatusTextParams>): StatusTextParams {
     resolveDefaultThinkingLevel: async () => undefined,
     isGroup: false,
     defaultGroupActivation: () => "mention",
-    taskLineOverride: "",
-    skipDefaultTaskLookup: true,
     modelAuthOverride: "api-key",
     activeModelAuthOverride: "api-key",
     includeTranscriptUsage: false,
@@ -63,7 +59,6 @@ async function renderTelegramStatus(params: {
   statusAccountId?: string;
   sessionKey?: string;
   agentId?: string;
-  taskLookup?: Pick<StatusTextParams, "taskLineOverride" | "skipDefaultTaskLookup">;
 }): Promise<string> {
   return await buildStatusText(
     statusParams({
@@ -75,7 +70,6 @@ async function renderTelegramStatus(params: {
       ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
       resolvedHarness: "pi",
       pluginHealthLineOverride: "Plugins: test",
-      ...params.taskLookup,
       primaryModelLabelOverride: "openai/gpt-5.4-mini",
       modelAuthOverride: "test",
       activeModelAuthOverride: "test",
@@ -147,67 +141,13 @@ describe("buildStatusText channel features", () => {
   });
 });
 
-describe("buildStatusText task lookup overrides", () => {
-  beforeEach(() => resetTaskRegistryForTests({ persist: false }));
-  afterEach(() => resetTaskRegistryForTests({ persist: false }));
-
-  it.each([
-    { taskLineOverride: "Prepared task line", skipDefaultTaskLookup: false },
-    { taskLineOverride: "Prepared task line", skipDefaultTaskLookup: true },
-    { taskLineOverride: "", skipDefaultTaskLookup: true },
-  ])("renders an override without registry availability: %j", async (taskLookup) => {
-    configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore(),
-        loadSnapshot() {
-          throw new Error("task registry unavailable");
-        },
-        async withSnapshotAsync() {
-          throw new Error("task registry unavailable");
-        },
-      },
-    });
-    const text = await renderTelegramStatus({
-      cfg: {},
-      sessionEntry: { sessionId: "override-status", updatedAt: 0 },
-      taskLookup,
-    });
-    if (taskLookup.taskLineOverride) {
-      expect(text).toContain(taskLookup.taskLineOverride);
-    } else {
-      expect(text).not.toContain("📌 Tasks:");
-    }
-  });
-
-  it("keeps an empty task override on the agent-only fallback", async () => {
-    configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
-    createQueuedTaskRunCore({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      agentId: "main",
-      task: "private task detail",
-      runId: "override-agent-task",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    const text = await renderTelegramStatus({
-      cfg: {},
-      sessionEntry: { sessionId: "empty-override-status", updatedAt: 0 },
-      taskLookup: { taskLineOverride: "", skipDefaultTaskLookup: false },
-    });
-    expect(text).toContain("📌 Tasks: 1 active · 1 total · agent-local");
-    expect(text).not.toContain("private task detail");
-  });
-});
-
 describe("buildStatusText global subagent scope", () => {
   beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
   afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
     for (const agentId of ["research", "ops"]) {
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: `status-global-${agentId}`,
         childSessionKey: `agent:${agentId}:subagent:status-worker`,
         controllerSessionKey: "global",
@@ -224,9 +164,10 @@ describe("buildStatusText global subagent scope", () => {
     const text = await renderTelegramStatus({
       cfg: {
         agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
           entries: {
             research: {},
-            ops: { default: true },
+            ops: {},
           },
         },
         session: { scope: "global" },
@@ -299,13 +240,15 @@ describe("Codex usage after runtime fallback", () => {
 });
 
 describe("session status cost line", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let storePath: string;
   const sessionEntry = {
     sessionId: "cost-session",
     updatedAt: 0,
     sessionFile: formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId: "cost-session",
-      storePath: "/tmp/openclaw-status-cost/sessions.json",
+      storePath: "/tmp/retired-status-cost/agents/main/agent/openclaw-agent.sqlite",
     }),
   };
 
@@ -323,6 +266,13 @@ describe("session status cost line", () => {
   };
 
   beforeEach(() => {
+    storePath = path.join(
+      tempDirs.make("status-cost-"),
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
     mocks.loadSessionCostSummariesFromCache.mockReset();
   });
 
@@ -342,8 +292,15 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
+    await expect(appendSessionCostLine(null, {}, "main", sessionEntry, storePath)).resolves.toBe(
       "💵 $1.23 · 456k tok (today)",
+    );
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessions: [
+          { sessionId: "cost-session", sessionFile: `sqlite:main:cost-session:${storePath}` },
+        ],
+      }),
     );
   });
 
@@ -368,7 +325,9 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBeNull();
+    await expect(
+      appendSessionCostLine(null, {}, "main", sessionEntry, storePath),
+    ).resolves.toBeNull();
   });
 
   it("marks incomplete pricing", async () => {
@@ -391,7 +350,7 @@ describe("session status cost line", () => {
       ],
     });
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
+    await expect(appendSessionCostLine(null, {}, "main", sessionEntry, storePath)).resolves.toBe(
       "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
     );
   });

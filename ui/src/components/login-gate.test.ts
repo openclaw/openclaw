@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import { showToast } from "../lib/toast.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./login-gate.ts";
 
 type LoginGateElement = HTMLElement & {
@@ -28,7 +29,7 @@ async function mountFailure(lastError: string, lastErrorCode: string | null, sec
     onToggleGatewaySecret: vi.fn(),
     onConnect: vi.fn(),
   };
-  document.body.append(element);
+  mountSolid(() => element);
   await element.updateComplete;
   return element;
 }
@@ -186,15 +187,42 @@ describe("login gate failure recovery", () => {
 
     expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
     expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
-      "Profile verification unavailable",
+      "Couldn't verify your account",
     );
-    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(
+      "OpenClaw couldn't check your account right now. Please try again shortly.",
+    );
     expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
     expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
-      "Gateway administrator",
+      "person who manages OpenClaw",
     );
     expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
     expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
+  });
+
+  it("explains operator access denial without credential or network recovery", async () => {
+    const element = await mountFailure(
+      "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.",
+      ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+
+    expect(failure?.getAttribute("data-kind")).toBe("access-denied");
+    expect(failure?.getAttribute("data-tone")).toBe("warn");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "No access to this Gateway",
+    );
+    expect(failure?.textContent).not.toMatch(/openclaw gateway run|Gateway unreachable/u);
+    const steps = failure?.querySelector(".login-gate__failure-steps");
+    expect(steps?.textContent).toContain(
+      "Ask a Gateway administrator to assign your profile a role",
+    );
+    expect(steps?.textContent).toContain("This page reconnects on its own once access is granted.");
+    expect(steps?.textContent).not.toMatch(/Gateway is running|Gateway URL|token|password/iu);
+    expect(steps?.querySelector("code")?.textContent).toBe("openclaw users list --json");
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
+    );
   });
 
   it("renders every auth recovery command exactly once", async () => {
@@ -208,6 +236,28 @@ describe("login gate failure recovery", () => {
         entry.textContent?.trim(),
       ),
     ).toEqual(["openclaw gateway auth-token --show", "openclaw doctor --generate-gateway-token"]);
+  });
+
+  it("recovers an invalid one-time pairing link without blaming the Gateway secret", async () => {
+    const element = await mountFailure(
+      "unauthorized: bootstrap token invalid",
+      ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Pairing link is no longer valid",
+    );
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toMatch(
+      /expired|already been used/,
+    );
+    expect(failure?.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw dashboard",
+    );
+    const steps = failure?.querySelector(".login-gate__failure-steps");
+    expect(steps?.textContent).toContain("browserUrl");
+    expect(steps?.querySelector("code")?.textContent?.trim()).toBe("openclaw dashboard --json");
+    expect(failure?.textContent).not.toMatch(/Gateway secret rejected|Replace the Gateway secret/);
+    expect(element.props.onConnect).not.toHaveBeenCalled();
   });
 
   it("edits and reveals one Gateway secret without choosing a credential type", async () => {
@@ -521,6 +571,15 @@ describe("login gate failure recovery", () => {
     });
     expect(writeText.mock.calls).toEqual([["openclaw status"], ["openclaw gateway run"]]);
     expect(buttons[2]?.getAttribute("aria-label")).toBe("Copy command");
+    element.props = { ...element.props, showGatewaySecret: true };
+    await element.updateComplete;
+    const retained = element.querySelectorAll<HTMLButtonElement>(
+      ".login-gate__failure-steps .login-gate__command .chat-copy-btn",
+    );
+    expect(retained[0]).toBe(buttons[0]);
+    expect(retained[0]?.getAttribute("aria-label")).toBe("Copied!");
+    expect(retained[1]).toBe(buttons[1]);
+    expect(retained[1]?.getAttribute("aria-label")).toBe("Copied!");
   });
 
   it("keeps the latest command-copy feedback until its own reset", async () => {

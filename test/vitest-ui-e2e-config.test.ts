@@ -111,7 +111,9 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const realGatewayFiles = [
+  "activity-run-inspector.real-gateway",
   "agent-file-lifecycle.real-gateway",
+  "background-work.real-gateway",
   "chat-agent-avatar.real-gateway",
   "chat-collaborator-scroll.real-gateway",
   "chat-composer-websearch-kill-switch.real-gateway",
@@ -119,6 +121,7 @@ const realGatewayFiles = [
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
   "chat-stop-finished-run.real-gateway",
+  "chat-stop-owned-exec.real-gateway",
   "chat-thinking-metadata.real-gateway",
   "chat-tts-supplement.real-gateway",
   "chat-widget-sandbox.real-gateway",
@@ -278,8 +281,7 @@ function probeOwnership(
       root: ${JSON.stringify(repoRoot)}, config: ${JSON.stringify(configFile)},
       configLoader: "runner", watch: false, project: ${JSON.stringify(options.project ?? [])},
     });
-    const readEvents = () => fs.existsSync(${JSON.stringify(eventsFile)})
-      ? fs.readFileSync(${JSON.stringify(eventsFile)}, "utf8").trim().split("\\n").map(JSON.parse) : [];
+    const readEvents = () => fs.existsSync(${JSON.stringify(eventsFile)})      ? fs.readFileSync(${JSON.stringify(eventsFile)}, "utf8").trim().split("\\n").map(JSON.parse) : [];
     if (${JSON.stringify(options.failure)} === "provide") {
       const root = ctx.getRootProject();
       const provide = root.provide;
@@ -348,6 +350,9 @@ function probeOwnership(
       timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
       env: {
         ...process.env,
+        // Discovery runs no tests; keep scheduling stable across subprocesses
+        // instead of comparing different snapshots of the host's current load.
+        CI: "1",
         OPENCLAW_VITEST_INCLUDE_FILE: options.include ? includeFile : "",
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: options.skipRealGateway ? "1" : "",
       },
@@ -606,7 +611,21 @@ describe("Control UI E2E resource ownership", () => {
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
         {
+          file: "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
@@ -670,7 +689,7 @@ describe("Control UI E2E resource ownership", () => {
         },
       ]);
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(26);
+      expect(parallel).toHaveLength(27);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

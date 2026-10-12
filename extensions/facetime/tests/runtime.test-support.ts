@@ -1,6 +1,6 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, vi } from "vitest";
@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
     cancelOutgoingCall: vi.fn(),
   },
   startTalk: vi.fn(),
+  installDriver: vi.fn(async () => ({ changed: false })),
   systemRun: vi.fn(),
   carrierProcessAlive: false,
   warn: vi.fn(),
@@ -78,8 +79,9 @@ vi.mock("../src/plugin-paths.js", () => ({
   ensureHelperArtifacts: vi.fn(async () => ({ buildId: "build", ipcKey: "key" })),
 }));
 
-vi.mock("../src/driver-setup.js", () => ({
-  installFaceTimeDriver: vi.fn(async () => ({ changed: false })),
+vi.mock("../src/driver-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/driver-setup.js")>()),
+  installFaceTimeDriver: mocks.installDriver,
 }));
 
 vi.mock("../src/preflight.js", () => ({
@@ -146,11 +148,11 @@ export function completeAbsence() {
 }
 
 export async function pendingDialState(overrides: Record<string, unknown> = {}) {
-  const store = createPluginStateKeyedStoreForTests<unknown>("facetime", {
-    namespace: "pending-dial",
-    maxEntries: 1,
-    overflowPolicy: "reject-new",
-  });
+  const store = createPluginStateKeyedStoreV2ForTests<unknown>(
+    "facetime",
+    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
+    { assertCurrent() {} },
+  );
   await store.register("active", {
     dialID: "approved-dial",
     version: 1,
@@ -232,12 +234,16 @@ export function incomingCall(status = 4) {
 }
 
 export async function createRuntime(
-  state: PluginStateKeyedStore<unknown> = createPluginStateKeyedStoreForTests<unknown>("facetime", {
-    namespace: "pending-dial",
-    maxEntries: 1,
-    overflowPolicy: "reject-new",
-  }),
+  state: PluginStateKeyedStore<unknown, 2> = createPluginStateKeyedStoreV2ForTests<unknown>(
+    "facetime",
+    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
+    { assertCurrent() {} },
+  ),
   ownerHandles = ["owner@example.com"],
+  storeOpeners?: {
+    openKeyedStore?: () => PluginStateKeyedStore<unknown>;
+    openKeyedStoreV2?: () => PluginStateKeyedStore<unknown, 2>;
+  },
 ) {
   return await createFaceTimeRuntime({
     config: resolveFaceTimeConfig({ ownerHandles }),
@@ -246,8 +252,8 @@ export async function createRuntime(
       system: {
         runCommandWithTimeout: mocks.systemRun,
       },
-      state: {
-        openKeyedStore: () => state,
+      state: storeOpeners ?? {
+        openKeyedStoreV2: () => state,
       },
     } as never,
     logger: {
@@ -291,11 +297,11 @@ afterAll(() => resetPluginStateStoreForTests());
 
 export async function resetRuntimeTestState() {
   resetPluginStateStoreForTests({ closeDatabase: false });
-  await createPluginStateKeyedStoreForTests<unknown>("facetime", {
-    namespace: "pending-dial",
-    maxEntries: 1,
-    overflowPolicy: "reject-new",
-  }).clear();
+  await createPluginStateKeyedStoreV2ForTests<unknown>(
+    "facetime",
+    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
+    { assertCurrent() {} },
+  ).clear();
   vi.clearAllMocks();
   mocks.helperParams = undefined;
   mocks.helper.connectedSockets = 2;

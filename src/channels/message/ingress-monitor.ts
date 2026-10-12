@@ -8,6 +8,7 @@ import {
   onGatewaySuspendAdmissionChange,
   waitForGatewayRestartFenceSettlement,
 } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { sleep } from "../../utils/sleep.js";
 import { createChannelIngressDrain, type ChannelIngressDrain } from "./ingress-drain.js";
 import { createAdmissionClaimLock, waitForPending } from "./ingress-monitor-tasks.js";
@@ -65,29 +66,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
   const activeInspections = new Set<Promise<unknown>>();
-  // Deliveries that deferred: still live work awaited by stop, but no longer
-  // holding a start slot. Deferral already released the lane and handed the
-  // claim off, so counting them against startLimit would let a few waiting
-  // deliveries stall every other lane until they finish.
-  //
-  // Only for a drain that actually releases the lane on deferral - that release
-  // is the whole reason the slot is safe to lend, and a "hold" drain still
-  // serializes its lane, so widening its ceiling would buy nothing and raise
-  // concurrency for a channel that never asked.
-  //
-  // The discount is bounded: past this many, a deferral keeps its slot, so
-  // open delivery callbacks stay within startLimit + this budget. The bound's
-  // subject is open callbacks - a callback that defers and returns settles its
-  // borrow immediately, and how much handed-off deferred work may be pending at
-  // once is the drain owner's semantics, unchanged from before this discount.
+  // Released deferrals lend start slots while stop still joins their callbacks.
+  // Bound open callbacks to startLimit + this budget; held lanes cannot lend slots.
   const deferredStartCapacityLimit =
     options.drain?.deferredLaneOccupancy === "release" ? (options.drain.startLimit ?? 0) : 0;
   let deferredStartCapacity = 0;
   const deferredClaims = new Set<Promise<void>>();
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
-  const queueFactory: () => Queue =
-    typeof options.queue === "function" ? options.queue : () => options.queue as Queue;
-  let queue: Queue | undefined = typeof options.queue === "function" ? undefined : options.queue;
+  const suppliedQueue = options.queue;
+  const queueFactory = typeof suppliedQueue === "function" ? suppliedQueue : () => suppliedQueue;
+  let queue: Queue | undefined = typeof suppliedQueue === "function" ? undefined : suppliedQueue;
   let drain: ReturnType<typeof createChannelIngressDrain> | undefined;
   let running = false;
   let stopped = false;
@@ -240,12 +228,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             // A slot just freed; wake the pump so a waiting lane can use it.
             requestDrain();
           };
-          let resolveDeferredClaim = () => {};
-          const deferredClaim = options.deferredClaims
-            ? new Promise<void>((resolve) => {
-                resolveDeferredClaim = resolve;
-              })
-            : undefined;
+          const deferredClaim = options.deferredClaims ? createDeferredCore() : undefined;
           let deferredClaimSettled = false;
           const settleDeferredClaim = () => {
             if (!deferredClaim || deferredClaimSettled) {
@@ -253,8 +236,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             }
             deferredClaimSettled = true;
             lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
-            deferredClaims.delete(deferredClaim);
-            resolveDeferredClaim();
+            deferredClaims.delete(deferredClaim.promise);
+            deferredClaim.resolve();
           };
           if (options.deferredClaims === "settle-on-abort") {
             lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
@@ -264,12 +247,14 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
           const trackDeferredClaim = () => {
             if (deferredClaim && !deferredClaimSettled) {
-              deferredClaims.add(deferredClaim);
+              deferredClaims.add(deferredClaim.promise);
             }
           };
-          const settleDeferredLifecycle = async (settle: () => void | Promise<void>) => {
+          const settleLifecycle = async (settle: () => void | Promise<void>, deferred = true) => {
             handedOff = true;
-            deferredHandoff = true;
+            if (deferred) {
+              deferredHandoff = true;
+            }
             // Settlement can start before delivery returns its deferred handoff.
             trackDeferredClaim();
             try {
@@ -282,16 +267,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           const wrappedLifecycle: ChannelIngressMonitorLifecycle = {
             ...lifecycle,
             admission: "exclusive",
-            onAdopted: async () => {
-              handedOff = true;
-              trackDeferredClaim();
-              try {
-                await lifecycle.onAdopted();
-                requestDrain();
-              } finally {
-                settleDeferredClaim();
-              }
-            },
+            onAdopted: () => settleLifecycle(() => lifecycle.onAdopted(), false),
             onDeferred: () => {
               handedOff = true;
               deferredHandoff = true;
@@ -305,9 +281,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               trackDeferredClaim();
               lifecycle.onAdoptionFinalizing();
             },
-            onFailed: (error) => settleDeferredLifecycle(() => lifecycle.onFailed?.(error)),
-            onCancelled: () => settleDeferredLifecycle(() => lifecycle.onCancelled?.()),
-            onAbandoned: () => settleDeferredLifecycle(() => lifecycle.onAbandoned()),
+            onFailed: (error) => settleLifecycle(() => lifecycle.onFailed?.(error)),
+            onCancelled: () => settleLifecycle(() => lifecycle.onCancelled?.()),
+            onAbandoned: () => settleLifecycle(() => lifecycle.onAbandoned()),
           };
 
           // Adoption can complete before delivery returns; track both lifetimes so stop
@@ -351,27 +327,14 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             }
             return result;
           }
-          // Terminal and handoff outcomes must reach the drain even when stop
-          // races the return: the drain settles terminal results under abort and
-          // keeps deferred claims for their owner. Rewriting them to
-          // failed-retryable here would release claims whose side effects already
-          // ran, replaying delivered work on restart.
-          if (result?.kind === "completed") {
-            // A deferred handoff recorded during delivery stays authoritative:
-            // the drain already placed the claim in deferred and only settles a
-            // completed result from dispatching, so a conflicting terminal return
-            // would strand the claim until later recovery.
-            if (deferredHandoff) {
-              return { kind: "deferred" };
-            }
+          // Preserve terminal/handoff outcomes under abort: releasing them could replay delivery.
+          if (result?.kind === "completed" && !deferredHandoff) {
             return result;
           }
-          if (result?.kind === "deferred") {
-            if (!deferredHandoff) {
-              wrappedLifecycle.onDeferred();
-            }
-            return { kind: "deferred" };
+          if (result?.kind === "deferred" && !deferredHandoff) {
+            wrappedLifecycle.onDeferred();
           }
+          // The deferred owner must settle its claim even after a conflicting terminal return.
           if (deferredHandoff) {
             return { kind: "deferred" };
           }
@@ -490,16 +453,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     if (restartFenceWake) {
       return;
     }
-    const localWake = new Promise<void>((resolve) => {
-      releaseRestartFenceWake = resolve;
+    const localWake = createDeferredCore();
+    releaseRestartFenceWake = localWake.resolve;
+    restartFenceWake = Promise.race([
+      waitForGatewayRestartFenceSettlement(),
+      localWake.promise,
+    ]).then(() => {
+      restartFenceWake = undefined;
+      releaseRestartFenceWake = () => {};
+      requestDrain();
     });
-    restartFenceWake = Promise.race([waitForGatewayRestartFenceSettlement(), localWake]).then(
-      () => {
-        restartFenceWake = undefined;
-        releaseRestartFenceWake = () => {};
-        requestDrain();
-      },
-    );
   };
   drainAbortSignal.addEventListener(
     "abort",
@@ -600,15 +563,13 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     }
   };
 
-  const admitRaw = async (
-    raw: TRaw,
-    admitOptions: {
-      receivedAt: number;
-      facts?: ChannelIngressMonitorFacts;
-      onDurablyAdmitted: () => void;
-      pruneTask?: Promise<void>;
-    },
-  ) => {
+  type AdmissionOptions = {
+    receivedAt: number;
+    facts?: ChannelIngressMonitorFacts;
+    onDurablyAdmitted: () => void;
+    pruneTask?: Promise<void>;
+  };
+  const admitRaw = async (raw: TRaw, admitOptions: AdmissionOptions) => {
     try {
       const facts = admitOptions.facts ?? (await inspect(raw, { phase: "admission" }));
       if (!facts) {
@@ -636,74 +597,64 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     }
   };
 
-  const scheduleAdmission = <T>(work: () => Promise<T>): Promise<T> => {
+  const scheduleAdmission = async <T>(
+    work: (admitOptions: AdmissionOptions) => Promise<T>,
+    admitOptions?: { receivedAt?: number },
+  ): Promise<T> => {
+    assertAdmissionOpen();
+    const receivedAt = admitOptions?.receivedAt ?? now();
+    let durablyAdmitted = false;
     // Append retries stay serialized so backoff cannot invert one lane's arrival order.
-    const admission = admissionTail.then(() => withAdmissionClaimLock(work));
+    const admission = admissionTail.then(() =>
+      withAdmissionClaimLock(() =>
+        work({
+          receivedAt,
+          onDurablyAdmitted: () => {
+            durablyAdmitted = true;
+          },
+        }),
+      ),
+    );
     admissionTail = admission.then(
       () => undefined,
       () => undefined,
     );
-    return admission;
+    try {
+      return await admission;
+    } finally {
+      // A lost transport acknowledgement must not strand an already durable row.
+      if (durablyAdmitted) {
+        requestDrain();
+      }
+    }
   };
 
   return {
-    admit: async (
+    admit: (
       raw: TRaw,
       admitOptions?: { receivedAt?: number; facts?: ChannelIngressMonitorFacts },
-    ) => {
-      assertAdmissionOpen();
-      const receivedAt = admitOptions?.receivedAt ?? now();
-      let durablyAdmitted = false;
-      try {
-        return await scheduleAdmission(() =>
+    ) =>
+      scheduleAdmission(
+        (sharedOptions) =>
           admitRaw(raw, {
-            receivedAt,
+            ...sharedOptions,
             ...(admitOptions?.facts ? { facts: admitOptions.facts } : {}),
-            onDurablyAdmitted: () => {
-              durablyAdmitted = true;
-            },
           }),
-        );
-      } finally {
-        // A lost transport acknowledgement must not strand an already durable row.
-        if (durablyAdmitted) {
-          requestDrain();
+        admitOptions,
+      ),
+    admitBatch: (rawEvents: readonly TRaw[], admitOptions?: { receivedAt?: number }) =>
+      scheduleAdmission(async (sharedOptions) => {
+        const results = [];
+        for (const raw of rawEvents) {
+          results.push(await admitRaw(raw, sharedOptions));
         }
-      }
-    },
-    admitBatch: async (rawEvents: readonly TRaw[], admitOptions?: { receivedAt?: number }) => {
-      assertAdmissionOpen();
-      const receivedAt = admitOptions?.receivedAt ?? now();
-      let durablyAdmitted = false;
-      const sharedOptions = {
-        receivedAt,
-        onDurablyAdmitted: () => {
-          durablyAdmitted = true;
-        },
-      };
-      try {
-        return await scheduleAdmission(async () => {
-          const results = [];
-          for (const raw of rawEvents) {
-            results.push(await admitRaw(raw, sharedOptions));
-          }
-          return results;
-        });
-      } finally {
-        if (durablyAdmitted) {
-          requestDrain();
-        }
-      }
-    },
+        return results;
+      }, admitOptions),
     start: () => {
       if (running || stopped || isAborted()) {
         return;
       }
-      // Open the durable queue before arming the poll timer. A monitor without a queue can
-      // neither admit nor drain, so channel start must fail through the caller instead of
-      // running a timer that reports the same unrecoverable error on every tick. The typed
-      // rethrow is what lets the gateway record the failure as dead ingress rather than as
-      // one more anonymous channel crash.
+      // Fail startup as dead ingress before arming a timer that would repeat the same error.
       ensureQueueAvailable();
       running = true;
       unsubscribeSuspension ??= onGatewaySuspendAdmissionChange((phase) => {
@@ -745,8 +696,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         await waitForPending(() => activeInspections);
         if (options.waitForDeliveryIdleOnStop !== false) {
           await waitForActiveDeliveries();
-        }
-        if (options.waitForDeliveryIdleOnStop !== false) {
           await drain?.waitForIdle();
         }
         if (options.deferredClaims && options.deferredClaims !== "manual") {

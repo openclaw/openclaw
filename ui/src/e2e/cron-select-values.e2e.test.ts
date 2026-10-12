@@ -7,6 +7,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { pickerValue as readPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
@@ -180,7 +181,8 @@ suite.define(() => {
           if (narrow) {
             await page.setViewportSize({ width: 1416, height: 707 });
           }
-          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
           await expect
             .poll(() =>
               scroller.evaluate((element) => getComputedStyle(element).scrollPaddingBlockEnd),
@@ -190,6 +192,89 @@ suite.define(() => {
       );
     },
   );
+
+  it("requires an explicit delivery choice before saving an unrepaired job", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 1000 } },
+      async ({ page }) => {
+        const job: CronJob = {
+          id: "garden-legacy-delivery",
+          name: "Garden summary",
+          enabled: true,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          configRevision: "garden-legacy-revision",
+          schedule: { kind: "every", everyMs: 1_800_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "Summarize the fictional garden inventory." },
+          delivery: { mode: "announce", channel: "telegram", to: "garden-room" },
+          state: {},
+        };
+        Reflect.deleteProperty(job.delivery!, "mode");
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "cron.list": cronListResponseFixture({
+              jobs: [job],
+              snapshotRevision: "garden-legacy-list",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            }),
+            "cron.runs": {
+              entries: [],
+              total: 0,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            },
+            "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+            "cron.update": {
+              ...job,
+              name: "Renamed garden summary",
+              configRevision: "garden-corrected-revision",
+              delivery: { mode: "none" },
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}cron`);
+        await page.locator('[data-test-id="cron-row-garden-legacy-delivery"]').click();
+        await page.locator("#cron-name").fill("Renamed garden summary");
+        const mode = page.locator("#cron-delivery-mode");
+        await mode.scrollIntoViewIfNeeded();
+        await page.evaluate(() => document.fonts.ready);
+        expect(
+          await readPickerValue(page.locator("openclaw-select-picker:has(#cron-delivery-mode)")),
+        ).toBe("");
+        expect(await mode.getAttribute("aria-invalid")).toBe("true");
+        expect(await page.locator("#cron-error-deliveryMode").textContent()).toContain(
+          "openclaw doctor --fix",
+        );
+        expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
+        expect(await gateway.getRequests("cron.update")).toHaveLength(0);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "delivery-repair-required.png"),
+        });
+
+        await mode.click();
+        await page.getByRole("option", { name: "None (internal)", exact: true }).click();
+        await expect
+          .poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled())
+          .toBe(false);
+        await page.locator('[data-test-id="cron-submit"]').click();
+        const request = await gateway.waitForRequest("cron.update");
+        expect(request.params).toMatchObject({
+          id: job.id,
+          expectedConfigRevision: "garden-legacy-revision",
+          patch: { name: "Renamed garden summary", delivery: { mode: "none" } },
+        });
+        expect(await gateway.getRequests("cron.update")).toHaveLength(1);
+      },
+    );
+  });
 
   it("shows the authoritative defaults in the create-form selects", async () => {
     await suite.withPage(

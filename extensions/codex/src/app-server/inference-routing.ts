@@ -6,6 +6,7 @@ import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
+import { supportsInferenceEnvironment } from "./inference-environment.js";
 import {
   configuredProviders,
   hasProviderAws,
@@ -20,11 +21,10 @@ import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./protocol.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER, type CodexResponsesOAuth } from "./responses-oauth.js";
-import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 export type CodexInferenceProviderRoutes = ReadonlyMap<string, CodexInferenceProxy>;
-export type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 type ThreadRoutes = {
   route: CodexInferenceProxy;
   providers: CodexInferenceProviderRoutes;
@@ -117,61 +117,6 @@ export function ownCodexInferenceClient(
   });
 }
 
-function supportsInferenceEnvironment(native: NodeJS.ProcessEnv): boolean {
-  if (native.CODEX_CA_CERTIFICATE?.trim() || native.SSL_CERT_FILE?.trim()) {
-    return false;
-  }
-  const names = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
-  for (const upper of names) {
-    const lower = upper.toLowerCase();
-    if (
-      native[upper] !== process.env[upper] ||
-      native[lower] !== process.env[lower] ||
-      (native[upper] !== undefined &&
-        native[lower] !== undefined &&
-        native[upper] !== native[lower])
-    ) {
-      return false;
-    }
-  }
-  const value = (name: string) => (native[name] ?? native[name.toLowerCase()])?.trim() || undefined;
-  const http = value("HTTP_PROXY");
-  const https = value("HTTPS_PROXY");
-  const all = value("ALL_PROXY");
-  if (!http && !https && !all) {
-    return true;
-  }
-  const noProxy = native.NO_PROXY ?? native.no_proxy ?? "";
-  if (noProxy === "*") {
-    return true;
-  }
-  if (
-    native.REQUEST_METHOD !== undefined ||
-    names.slice(0, 3).some((name) => {
-      const raw = native[name] ?? native[name.toLowerCase()];
-      return raw !== undefined && raw !== raw.trim();
-    })
-  ) {
-    return false;
-  }
-  // Reqwest prefers uppercase and has no HTTP_PROXY fallback for HTTPS. Only
-  // equivalent proxy selection and literal loopback bypasses are qualified here.
-  if ((https ?? all) !== (https ?? http ?? all)) {
-    return false;
-  }
-  const bypasses = noProxy
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (bypasses.some((entry) => !["127.0.0.1", "localhost", "::1", "[::1]"].includes(entry))) {
-    return false;
-  }
-  if ((http || all) && !bypasses.includes("127.0.0.1")) {
-    return false;
-  }
-  return /^https?:\/\//.test(https ?? all ?? "");
-}
-
 async function prepareCodexInferenceRoute(params: {
   client: CodexAppServerClient;
   cwd: string;
@@ -182,6 +127,7 @@ async function prepareCodexInferenceRoute(params: {
   optionalProjection?: true;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  authority?: CodexBindingAuthority;
 }): Promise<CodexInferenceProxy | undefined> {
   const client = params.client;
   const owner = owners.get(client);
@@ -201,8 +147,16 @@ async function prepareCodexInferenceRoute(params: {
   assertCurrent();
   const snapshot =
     params.effectiveConfig ??
-    (await readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }));
+    (await readCodexEffectiveConfig(params.client, params.cwd, {
+      signal: params.signal,
+      assertCurrent: params.assertCurrent,
+      ...(params.authority ? { withCurrent: params.authority.withCurrent } : {}),
+    }));
   assertCurrent();
+  const feature = (name: string) =>
+    params.config?.[`features.${name}`] ??
+    (isJsonObject(params.config?.features) ? params.config.features[name] : undefined) ??
+    (isJsonObject(snapshot.config.features) ? snapshot.config.features[name] : undefined);
   const unsupported = () => {
     if (owner.oauth) {
       throw new Error(
@@ -251,14 +205,7 @@ async function prepareCodexInferenceRoute(params: {
   }
   // Native system-proxy routing owns its transport, including loopback bypass.
   // Leave that profile intact instead of proxying its private inference IPC.
-  const systemProxy =
-    params.config?.["features.respect_system_proxy"] ??
-    (isJsonObject(params.config?.features)
-      ? params.config.features.respect_system_proxy
-      : undefined) ??
-    (isJsonObject(snapshot.config.features)
-      ? snapshot.config.features.respect_system_proxy
-      : undefined);
+  const systemProxy = feature("respect_system_proxy");
   if (systemProxy === true) {
     return unsupported();
   }
@@ -318,6 +265,7 @@ async function prepareCodexInferenceRoute(params: {
         {
           signal: params.signal,
           assertCurrent,
+          withCurrent: params.authority?.withCurrent,
         },
       );
   assertCurrent();
@@ -327,12 +275,6 @@ async function prepareCodexInferenceRoute(params: {
   }
   if (!customProvider && type !== "apiKey" && type !== "chatgpt") {
     return unsupported();
-  }
-  if (!customProvider && owner.authRoute && owner.authRoute !== type) {
-    throw new Error("Codex native account route changed; reconnect before retrying");
-  }
-  if (type === "apiKey" || type === "chatgpt") {
-    owner.authRoute = type;
   }
   // Pinned native ModelProviderInfo::to_api_provider uses these defaults only without an override.
   // chatgpt_base_url owns other native services; it is not the model-provider base URL.
@@ -360,13 +302,7 @@ async function prepareCodexInferenceRoute(params: {
   const preserveCodexBackendRoutes =
     nativeProviderName === "OpenAI" &&
     (configured == null || configured.replace(/\/+$/, "").endsWith("/backend-api/codex"));
-  const memoryFeature =
-    params.config?.["features.memories"] ??
-    (isJsonObject(params.config?.features) ? params.config.features.memories : undefined) ??
-    (isJsonObject(snapshot.config.features) ? snapshot.config.features.memories : undefined);
-  // A configured native startup service may outlive the foreground that created its thread.
-  // generate_memories controls new thread recording, not processing of eligible prior history.
-  owner.memoryConfigured ||= memoryFeature === true;
+  const memoryFeature = feature("memories");
   const modelPolicyEnforced = params.modelPolicyEnforced !== false;
   const key = JSON.stringify([
     provider,
@@ -376,48 +312,73 @@ async function prepareCodexInferenceRoute(params: {
     preserveCodexBackendRoutes,
     modelPolicyEnforced,
   ]);
-  let pending = owner.routes.get(key);
-  if (!pending) {
-    if (owner.routes.size >= MAX_ROUTES) {
-      if (params.optionalProjection) {
-        return unsupported();
-      }
-      throw new Error(
-        "Codex inference route limit reached; start a fresh managed native connection before retrying.",
-      );
+  const prepareRoute = () => {
+    assertCurrent();
+    if (!customProvider && owner.authRoute && owner.authRoute !== type) {
+      throw new Error("Codex native account route changed; reconnect before retrying");
     }
-    pending = Promise.all([
-      import("./inference-proxy.js"),
-      import("./native-subagent-monitor.js"),
-      import("./inference-dispatch.js"),
-    ]).then(([{ createCodexInferenceProxy }, native, { createCodexInferenceModelBinding }]) => {
-      assertClient();
-      return createCodexInferenceProxy({
-        upstream: target,
-        assertCurrent: assertClient,
-        oauth: owner.oauth,
-        preserveAzureUrlFeatures,
-        preserveCodexBackendRoutes,
-        bindModelExecution: createCodexInferenceModelBinding({
-          client,
-          provider,
-          modelPolicyEnforced,
+    if (type === "apiKey" || type === "chatgpt") {
+      owner.authRoute = type;
+    }
+    // A configured native startup service may outlive the foreground that created its thread.
+    // generate_memories controls new thread recording, not processing of eligible prior history.
+    owner.memoryConfigured ||= memoryFeature === true;
+    let pending = owner.routes.get(key);
+    if (!pending) {
+      if (owner.routes.size >= MAX_ROUTES) {
+        if (params.optionalProjection) {
+          return unsupported();
+        }
+        throw new Error(
+          "Codex inference route limit reached; start a fresh managed native connection before retrying.",
+        );
+      }
+      pending = Promise.all([
+        import("./inference-proxy.js"),
+        import("./native-subagent-monitor.js"),
+        import("./inference-dispatch.js"),
+      ]).then(([{ createCodexInferenceProxy }, native, { createCodexInferenceModelBinding }]) => {
+        assertClient();
+        return createCodexInferenceProxy({
+          upstream: target,
           assertCurrent: assertClient,
-          memoryConfigured: () => owner.memoryConfigured,
-          captureModelSource: native.codexNativeSubagentMonitorRuntime.captureModelSource,
-          resolveModelThreadId: native.codexNativeSubagentMonitorRuntime.resolveModelThreadId,
-        }),
+          oauth: owner.oauth,
+          preserveAzureUrlFeatures,
+          preserveCodexBackendRoutes,
+          bindModelExecution: createCodexInferenceModelBinding({
+            client,
+            provider,
+            modelPolicyEnforced,
+            assertCurrent: assertClient,
+            memoryConfigured: () => owner.memoryConfigured,
+            captureModelSource: native.codexNativeSubagentMonitorRuntime.captureModelSource,
+            resolveModelThreadId: native.codexNativeSubagentMonitorRuntime.resolveModelThreadId,
+          }),
+        });
       });
-    });
-    // Keep a failed route failed for this physical client; never fall back to unmodified inference.
-    owner.routes.set(key, pending);
+      // Keep a failed route failed for this physical client; never fall back to unmodified inference.
+      owner.routes.set(key, pending);
+    }
+    // The admission publishes only the pending route, never awaits its startup.
+    return { pending };
+  };
+  const prepared = params.authority
+    ? await params.authority.withCurrent(prepareRoute)
+    : prepareRoute();
+  if (!prepared) {
+    return undefined;
   }
-  const route = await pending;
-  assertCurrent();
-  route.assertCurrent();
-  params.client.protectPrivateTransportSecret(new URL(route.baseUrl).pathname.split("/")[1] ?? "");
-  owner.handles.set(route, { provider, kind, modelPolicyEnforced });
-  return route;
+  const route = await prepared.pending;
+  const publish = () => {
+    assertCurrent();
+    route.assertCurrent();
+    params.client.protectPrivateTransportSecret(
+      new URL(route.baseUrl).pathname.split("/")[1] ?? "",
+    );
+    owner.handles.set(route, { provider, kind, modelPolicyEnforced });
+    return route;
+  };
+  return params.authority ? await params.authority.withCurrent(publish) : publish();
 }
 
 /** Prepare a managed thread without changing an attached or unsupported native profile. */
@@ -435,6 +396,7 @@ export async function prepareCodexInferenceThreadConfig(params: {
   modelPolicyEnforced?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  authority?: CodexBindingAuthority;
 }): Promise<
   | { route: CodexInferenceProxy; config: JsonObject; providers?: CodexInferenceProviderRoutes }
   | undefined
@@ -479,7 +441,11 @@ export async function prepareCodexInferenceThreadConfig(params: {
   params.assertCurrent();
   const effectiveConfig =
     params.effectiveConfig ??
-    (await readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }));
+    (await readCodexEffectiveConfig(params.client, params.cwd, {
+      signal: params.signal,
+      assertCurrent: params.assertCurrent,
+      ...(params.authority ? { withCurrent: params.authority.withCurrent } : {}),
+    }));
   params.signal?.throwIfAborted();
   params.assertCurrent();
   const route =
@@ -494,8 +460,13 @@ export async function prepareCodexInferenceThreadConfig(params: {
     const { thread } = await params.client.request(
       "thread/read",
       { threadId: binding.threadId, includeTurns: false },
-      { signal: params.signal, assertCurrent: params.assertCurrent },
+      {
+        signal: params.signal,
+        assertCurrent: params.assertCurrent,
+        withCurrent: params.authority?.withCurrent,
+      },
     );
+    params.signal?.throwIfAborted();
     params.assertCurrent();
     if (thread.id !== binding.threadId || thread.status?.type !== "notLoaded") {
       throw new Error(

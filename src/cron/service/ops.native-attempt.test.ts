@@ -17,6 +17,7 @@ import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
@@ -27,14 +28,8 @@ import {
 } from "../../gateway/methods/registry.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import {
-  clearCommandLane,
-  enqueueCommandInLane,
-  getTotalQueueSize,
-  setCommandLaneConcurrency,
-} from "../../process/command-queue.js";
+import { getTotalQueueSize } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { CommandLane } from "../../process/lanes.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -58,14 +53,14 @@ describe("native attempt queued automation admission", () => {
     "abort before completion",
     "permission change",
     "revoke",
-    "clear queue",
+    "stop",
   ] as const)(
     "retains its real tool generation until activation, not payload completion: %s",
     async (outcome) => {
       await withOpenClawTestState({ prefix: "native-cron-admission-" }, async (state) => {
         resetCommandQueueStateForTest();
         const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main" }], defaults: { workspace: state.workspaceDir } },
+          agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
           cron: { enabled: false },
         };
         await state.writeConfig(cfg);
@@ -73,7 +68,13 @@ describe("native attempt queued automation admission", () => {
         const storePath = state.statePath("cron", "jobs.json");
         const now = Date.now();
         const job = createDueIsolatedJob({ id: "native-queued-run", nowMs: now, nextRunAtMs: now });
-        await saveCronStore(storePath, { version: 1, jobs: [job] });
+        const blockerJobs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
+          createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
+        );
+        await saveCronStore(storePath, { version: 1, jobs: [...blockerJobs, job] });
+        const blockersStarted = createDeferredCore();
+        const releaseBlocker = createDeferredCore();
+        let startedBlockers = 0;
         const finished = createDeferredCore<CronEvent>();
         const payloadStarted = createDeferredCore();
         const releasePayload = createDeferredCore();
@@ -81,7 +82,14 @@ describe("native attempt queued automation admission", () => {
         const cleanup = vi.fn(async () => {
           generationReleased.resolve();
         });
-        const runIsolatedAgentJob = vi.fn(async () => {
+        const runIsolatedAgentJob = vi.fn(async ({ job: current }: { job: typeof job }) => {
+          if (current.id !== job.id) {
+            if (++startedBlockers === blockerJobs.length) {
+              blockersStarted.resolve();
+            }
+            await releaseBlocker.promise;
+            return { status: "ok" as const };
+          }
           payloadStarted.resolve();
           await releasePayload.promise;
           return { status: "ok" as const };
@@ -96,7 +104,7 @@ describe("native attempt queued automation admission", () => {
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
           onEvent: (event) => {
-            if (event.action === "finished") {
+            if (event.action === "finished" && event.jobId === job.id) {
               finished.resolve(event);
             }
           },
@@ -161,14 +169,10 @@ describe("native attempt queued automation admission", () => {
           );
           return [tool];
         });
-        setCommandLaneConcurrency(CommandLane.Cron, 1);
-        const blockerStarted = createDeferredCore();
-        const releaseBlocker = createDeferredCore();
-        const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
-          blockerStarted.resolve();
-          await releaseBlocker.promise;
-        });
-        await blockerStarted.promise;
+        const blocker = Promise.all(blockerJobs.map((entry) => cron.run(entry.id, "force")));
+        await blockersStarted.promise;
+        const targetCalls = () =>
+          runIsolatedAgentJob.mock.calls.filter(([input]) => input.job.id === job.id);
         try {
           const result = await requesterWork.run(() =>
             createContextEngineAttemptRunner({
@@ -185,10 +189,13 @@ describe("native attempt queued automation admission", () => {
                   createDefaultEmbeddedSession({
                     prompt: async () => {
                       const submittedTool = tool;
+                      // Worker capacity stays occupied until after this reply, so the
+                      // run cannot finish within the call; return its queued ack.
                       const ack = await submittedTool.execute("queued-automation", {
                         action: "run",
                         jobId: job.id,
                         runMode: "force",
+                        timeoutMs: 1,
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {
@@ -236,7 +243,7 @@ describe("native attempt queued automation admission", () => {
             expect(replacement.signal?.aborted).toBe(false);
             expect(replacement.cleanup).not.toHaveBeenCalled();
           }
-          expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+          expect(targetCalls()).toHaveLength(0);
           if (outcome === "abort") {
             controller.abort(new Error("user cancelled"));
             expect(toolSignal?.aborted).toBe(true);
@@ -248,8 +255,8 @@ describe("native attempt queued automation admission", () => {
           if (outcome === "revoke") {
             current = false;
           }
-          if (outcome === "clear queue") {
-            clearCommandLane(CommandLane.Cron);
+          if (outcome === "stop") {
+            cron.stop();
           }
           releaseBlocker.resolve();
           await blocker;
@@ -264,7 +271,7 @@ describe("native attempt queued automation admission", () => {
             ]);
             await generationReleased.promise;
             expect(cleanup).toHaveBeenCalledExactlyOnceWith("completion");
-            expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+            expect(targetCalls()).toHaveLength(1);
           }
           releasePayload.resolve();
           const terminal = await finished.promise;
@@ -273,7 +280,7 @@ describe("native attempt queued automation admission", () => {
             expect(replacement.signal?.aborted).toBe(true);
             expect(replacement.cleanup).toHaveBeenCalledExactlyOnceWith("completion");
           }
-          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "error");
+          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "skipped");
           const closedBeforeCompletion =
             outcome === "abort before completion" || outcome === "permission change";
           expect(abortedAtCompletion).toBe(closedBeforeCompletion);
@@ -285,18 +292,20 @@ describe("native attempt queued automation admission", () => {
               : "completion",
           );
           if (outcome !== "execute") {
-            expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+            expect(targetCalls()).toHaveLength(0);
           }
-          expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+          expect(
+            (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.state
+              .queuedAtMs,
+          ).toBeUndefined();
         } finally {
           releaseBlocker.resolve();
           releasePayload.resolve();
           await blocker;
-          // Join the independent Cron lane too, including assertion-failure cleanup.
-          await enqueueCommandInLane(CommandLane.Cron, async () => undefined);
+          cron.stop();
+          await cron.waitForIdle();
           await gatewayWork.runWhenIdle(() => undefined);
           await requesterWork.runWhenIdle(() => undefined);
-          cron.stop();
           await gatewayWork.drain();
           await requesterWork.drain();
           expect(getTotalQueueSize()).toBe(0);

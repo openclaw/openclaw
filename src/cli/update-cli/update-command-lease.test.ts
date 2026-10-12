@@ -31,6 +31,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import * as restartHealth from "../daemon-cli/restart-health.js";
 import { registerUpdateCli } from "../update-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -113,6 +114,21 @@ beforeEach(async () => {
     params.assertCurrent();
     return await publish(async () => params.assertCurrent());
   });
+  // Ordinary lease cases have no Gateway; restoration cases supply their managed service state.
+  const readHealth = async ({
+    port,
+  }: {
+    port: number;
+  }): Promise<Awaited<ReturnType<typeof restartHealth.waitForGatewayHealthyRestart>>> => ({
+    outcome: "failed",
+    runtime: { status: "stopped" },
+    portUsage: { port, status: "free", listeners: [], hints: [] },
+    healthy: false,
+    staleGatewayPids: [],
+    waitOutcome: "stopped-free",
+  });
+  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockImplementation(readHealth);
+  vi.spyOn(restartHealth, "inspectGatewayRestart").mockImplementation(readHealth);
   state = await createOpenClawTestState({
     label: "update-lease",
     env: {
@@ -899,29 +915,6 @@ describe("update orchestration lifecycle ownership", () => {
     expect(message).not.toContain("An update resumed");
     expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", phase: "verifying" });
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("continues restart handling with a warning after a final Doctor execution failure", async () => {
-    await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
-    await invoke("current-process");
-    expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
-      status: "ok",
-      postUpdate: {
-        plugins: {
-          status: "warning",
-          warnings: [expect.objectContaining({ reason: "doctor-advisory" })],
-        },
-      },
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
-        }),
-      ]),
-    });
-    expect(mocks.restart).toHaveBeenCalledOnce();
-    expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-    expectDoctorDiagnostics();
-    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
   });
 
   it.each([

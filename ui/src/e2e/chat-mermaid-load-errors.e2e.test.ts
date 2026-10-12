@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiE2eBuiltAssetRequest,
+  controlUiE2eBuiltModuleRequest,
+} from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mermaid asset load errors" });
@@ -18,7 +22,11 @@ suite.define(() => {
     "reports a blocked %s script as a renderer failure and recovers after reload",
     async (asset) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const blockedScript = new RegExp(`/${asset}-[^/]+\\.js(?:\\?.*)?$`, "u");
+        // frame.js is a classic-script ?url asset; it has no bundled module sourcemap.
+        const blockedScript =
+          asset === "frame"
+            ? controlUiE2eBuiltAssetRequest("packages/mermaid-renderer/src/frame.js")
+            : controlUiE2eBuiltModuleRequest("ui/src/components/markdown-mermaid.tsx");
         let blocked = 0;
         await page.route(blockedScript, (route) => {
           blocked += 1;

@@ -15,14 +15,7 @@ type DetailsToken = ReturnType<StateBlock["push"]>;
 type DetailsTokenSink = {
   push(type: string, tag: string, nesting: -1 | 0 | 1): DetailsToken;
 };
-type MarkdownRawHtmlContext =
-  | "comment"
-  | "processing_instruction"
-  | "declaration"
-  | "cdata"
-  | { element: string };
-
-type MarkdownRawHtmlState = { context: MarkdownRawHtmlContext | null };
+type MarkdownRawHtmlState = { context: string | null };
 
 type MarkdownDisclosureTag = {
   end: number;
@@ -69,19 +62,20 @@ function markdownDisclosureTagKind(raw: string): MarkdownDisclosureTagKind | nul
 /** Disclosure markup is structural only when it starts the current Markdown block line. */
 export function scanMarkdownDisclosureLine(
   line: string,
-  codeSpans: ReadonlyArray<readonly [number, number]> = findMarkdownCodeSpans(line),
+  codeSpans?: ReadonlyArray<readonly [number, number]>,
   lineOffset = 0,
 ): MarkdownDisclosureTag[] | null {
   const first = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/i.exec(line);
   if (!first) {
     return null;
   }
+  const spans = codeSpans ?? findMarkdownCodeSpans(line);
   const tags: MarkdownDisclosureTag[] = [];
   for (const match of line.matchAll(DISCLOSURE_TAG_RE)) {
     const start = match.index ?? 0;
     if (
       isEscapedMarkdownCharacter(line, start) ||
-      isInsideMarkdownCode(lineOffset + start, codeSpans)
+      isInsideMarkdownCode(lineOffset + start, spans)
     ) {
       continue;
     }
@@ -221,38 +215,22 @@ function detailsBlockRule(
   return true;
 }
 
-function openingRawHtmlContext(line: string): MarkdownRawHtmlContext | null {
+function openingRawHtmlContext(line: string): string | null {
   const trimmed = line.trimStart();
   if (trimmed.startsWith("<!--")) {
-    return "comment";
+    return "-->";
   }
   if (trimmed.startsWith("<?")) {
-    return "processing_instruction";
+    return "?>";
   }
   if (trimmed.startsWith("<![CDATA[")) {
-    return "cdata";
+    return "]]>";
   }
   if (/^<![A-Za-z]/.test(trimmed)) {
-    return "declaration";
+    return ">";
   }
   const element = /^<(pre|script|style|textarea)(?=[\s>]|$)/i.exec(trimmed)?.[1];
-  return element ? { element: element.toLowerCase() } : null;
-}
-
-function closesRawHtmlContext(context: MarkdownRawHtmlContext, line: string): boolean {
-  if (typeof context === "object") {
-    return line.toLowerCase().includes(`</${context.element}>`);
-  }
-  if (context === "comment") {
-    return line.includes("-->");
-  }
-  if (context === "processing_instruction") {
-    return line.includes("?>");
-  }
-  if (context === "declaration") {
-    return line.includes(">");
-  }
-  return line.includes("]]>");
+  return element ? `</${element.toLowerCase()}>` : null;
 }
 
 export function consumeMarkdownRawHtmlLine(
@@ -269,7 +247,8 @@ export function consumeMarkdownRawHtmlLine(
   if (!state.context && isInsideMarkdownCode(lineOffset + start, codeSpans)) {
     return false;
   }
-  state.context = closesRawHtmlContext(context, line) ? null : context;
+  const content = context.startsWith("</") ? line.toLowerCase() : line;
+  state.context = content.includes(context) ? null : context;
   return true;
 }
 
@@ -336,20 +315,11 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
         continue;
       }
 
-      let level = token.level;
-      const replacement: DetailsToken[] = [];
       const sink: DetailsTokenSink = {
         push(type, tag, nesting) {
           const next = new state.Token(type, tag, nesting);
           next.block = true;
-          if (nesting < 0) {
-            level -= 1;
-          }
-          next.level = level;
-          if (nesting > 0) {
-            level += 1;
-          }
-          replacement.push(next);
+          output.push(next);
           return next;
         },
       };
@@ -379,7 +349,6 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
         pushDisclosureLine(sink, line, lineNumber, stack, tags);
       }
       flushHtml();
-      output.push(...replacement);
     }
 
     // Streaming can end with open details; balance only our structured tokens at EOF.

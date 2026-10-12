@@ -12,6 +12,7 @@ import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs
 import { markStartupOrphanedMainSessionsForRecovery } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import {
+  cancelSubagentRequesterSettleWake,
   markRequesterTurnYielded,
   markSubagentRunTerminated,
   registerSubagentRun,
@@ -19,14 +20,16 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { clearSessionQueues, enqueueFollowupRun } from "../../auto-reply/reply/queue.js";
+import { enqueueFollowupRun, getFollowupQueueDepth } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
+import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
@@ -57,6 +60,7 @@ async function seedYieldedParent() {
     });
   }
   const startedAt = Date.now() - 100;
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   for (const data of [
     { phase: "start", startedAt },
     {
@@ -71,7 +75,7 @@ async function seedYieldedParent() {
     await persistGatewaySessionLifecycleEvent({
       sessionKey: parentKey,
       agentId: "main",
-      event: { runId: parentRunId, sessionId: parentId, ts: Date.now(), data },
+      event: { runId: parentRunId, sessionId: parentId, lifecycleGeneration, ts: Date.now(), data },
     });
   }
   await registerSubagentRun({
@@ -86,14 +90,14 @@ async function seedYieldedParent() {
     expectsCompletionMessage: true,
   });
   expect(
-    markRequesterTurnYielded({
+    await markRequesterTurnYielded({
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterTurnRunId: parentRunId,
     }),
   ).toBe(1);
   expect(
-    settleRequesterAfterSessionSpawns({
+    await settleRequesterAfterSessionSpawns({
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterTurnRunId: parentRunId,
@@ -104,12 +108,12 @@ async function seedYieldedParent() {
     }),
   ).toBe(true);
   expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
-    status: "running",
     lifecycleRunId: parentRunId,
     endedAt: startedAt + 50,
     abortedLastRun: false,
   });
-  expect(getSubagentRunByChildSessionKey(childKey)?.requesterSettleWake).toMatchObject({
+  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })?.status).toBeUndefined();
+  expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toMatchObject({
     requesterYieldBatch: true,
   });
 }
@@ -176,6 +180,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
           event: {
             runId: "new-parent-run",
             sessionId: parentId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             ts: Date.now(),
             data: { phase: "start", startedAt: Date.now() },
           },
@@ -219,7 +224,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
           }),
         ]);
       } else {
-        expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+        expect(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0])).toEqual([
           true,
           { ok: true, abortedRunId: null, status: "aborted" },
         ]);
@@ -228,10 +233,10 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       if (race === "new turn") {
         await replacementPersistence;
         expect(acknowledgment.entry).toMatchObject({
-          status: "running",
           lifecycleRunId: "new-parent-run",
           abortedLastRun: false,
         });
+        expect(acknowledgment.entry?.status).toBeUndefined();
         expect(acknowledgment.entry?.lastRunId).toBeUndefined();
         return;
       }
@@ -239,13 +244,13 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         expect(acknowledgment.entry).toEqual(replacement);
         return;
       }
-      expect(acknowledgment.entry).toMatchObject({
+      expect(acknowledgment.entry, JSON.stringify(respond.mock.calls[0])).toMatchObject({
         status: "killed",
         abortedLastRun: true,
         lastRunId: parentRunId,
       });
       await fixture.settle();
-      expect(getSubagentRunByChildSessionKey(childKey)?.killReconciliation).toMatchObject({
+      expect((await getSubagentRunByChildSessionKey(childKey))?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });
       expect(
@@ -296,15 +301,36 @@ it("leaves an ownerless session without yielded work unchanged", async () => {
   expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
 });
 
-it("does not cancel a yielded parent when Stop only clears a queued follow-up", async () => {
+it.each([
+  {
+    name: "does not cancel a yielded parent when Stop only clears a queued follow-up",
+    pendingWake: false,
+  },
+  {
+    name: "cancels a yielded parent when Stop clears a queued follow-up and retires its child's wake",
+    pendingWake: true,
+  },
+])("$name", async ({ pendingWake }) => {
   await seedYieldedParent();
-  expect(markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
+  expect(await markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
+  const completedChild = await getSubagentRunByChildSessionKey(childKey);
+  if (!completedChild) {
+    throw new Error("Missing completed child");
+  }
+  expect(completedChild.requesterSettleWake).toBeDefined();
+  const childOutcome = structuredClone(completedChild.execution.outcome);
+  if (!pendingWake) {
+    // Isolate queue clearing from a still-pending child continuation.
+    await cancelSubagentRequesterSettleWake(completedChild, () => {});
+    expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toBeUndefined();
+  }
   const before = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
   const followup = createQueueTestRun({ prompt: "Queued follow-up" });
   followup.run = { ...followup.run, agentId: "main", sessionId: parentId, sessionKey: parentKey };
   expect(
     enqueueFollowupRun(parentKey, followup, { mode: "followup" }, "none", undefined, false),
   ).toBe(true);
+  expect(getFollowupQueueDepth(parentKey)).toBe(1);
   const respond = vi.fn();
   const context = createChatAbortContext({
     getRuntimeConfig,
@@ -326,8 +352,31 @@ it("does not cancel a yielded parent when Stop only clears a queued follow-up", 
       true,
       { ok: true, abortedRunId: null, status: "aborted" },
     ]);
-    expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
+    expect(getFollowupQueueDepth(parentKey)).toBe(0);
+    if (pendingWake) {
+      expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
+        status: "killed",
+        abortedLastRun: true,
+        lastRunId: parentRunId,
+      });
+      await fixture.settle();
+      expect(
+        await markStartupOrphanedMainSessionsForRecovery({
+          cfg: getRuntimeConfig(),
+          stateDir: fixture.stateDir,
+        }),
+      ).toMatchObject({ marked: 0 });
+    } else {
+      expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
+    }
+    const retiredChild = await getSubagentRunByChildSessionKey(childKey);
+    expect(retiredChild?.requesterSettleWake).toBeUndefined();
+    expect(retiredChild?.execution.outcome).toEqual(childOutcome);
   } finally {
-    clearSessionQueues([parentKey, parentId]);
+    for (const key of [parentKey, parentId]) {
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
+      expect(getFollowupQueueDepth(key)).toBe(0);
+    }
   }
 });

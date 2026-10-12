@@ -1,3 +1,4 @@
+import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { SqliteWorkerBackend } from "openclaw/plugin-sdk/sqlite-worker-runtime";
@@ -14,6 +15,8 @@ const reads = vi.hoisted(() => ({
   frameTextBytes: 0,
 }));
 const preparations = vi.hoisted(() => new Map<string, number>());
+const batchReads = vi.hoisted(() => [] as string[][]);
+const schemaStatements = vi.hoisted(() => [] as string[]);
 vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
   return {
@@ -21,10 +24,36 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
     openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
       const db = actual.openNodeSqliteDatabase(...args);
       const prepare = db.prepare.bind(db);
+      const recordSchema = (sql: string) => {
+        if (
+          /user_version|schema_version|sqlite_schema|sqlite_master|pragma_table|CREATE\s+(?:TABLE|INDEX)/i.test(
+            sql,
+          )
+        ) {
+          schemaStatements.push(sql);
+        }
+      };
+      const exec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql) => {
+        recordSchema(sql);
+        exec(sql);
+      });
       vi.spyOn(db, "prepare").mockImplementation((sql) => {
+        recordSchema(sql);
         const statement = prepare(sql);
         if (/^\s*(?:insert into "(?:frames|standups)"|update "batches")/i.test(sql)) {
           preparations.set(sql, (preparations.get(sql) ?? 0) + 1);
+        }
+        if (/\bfrom "batches"(?:\s|$)/i.test(sql)) {
+          const get = statement.get.bind(statement);
+          vi.spyOn(statement, "get").mockImplementation((...bindings) => {
+            batchReads.push(
+              prepare(`EXPLAIN QUERY PLAN ${sql}`)
+                .all(...bindings)
+                .map((row) => String(row.detail)),
+            );
+            return get(...bindings);
+          });
         }
         const table = /\bfrom\s+"?(cards|observations|frames)\b/i.exec(sql)?.[1];
         if (!table) {
@@ -84,11 +113,41 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     } finally {
       vi.restoreAllMocks();
       preparations.clear();
+      batchReads.length = 0;
+      schemaStatements.length = 0;
       cleanup();
     }
   }),
 );
 const day = "2026-07-03";
+
+it("reuses schema admission on reopen and validates a replacement physical database", async () => {
+  const dataDir = tempDirs.make("logbook-schema-admission-");
+  const databasePath = path.join(dataDir, "logbook.sqlite");
+  for (let opened = 0; opened < 3; opened += 1) {
+    schemaStatements.length = 0;
+    const backend = createSqliteWorkerBackend({ dataDir }, { databasePath });
+    try {
+      if (opened === 1) {
+        expect(schemaStatements).toEqual([]);
+      } else {
+        expect(schemaStatements.length).toBeGreaterThan(0);
+      }
+      if (opened === 0) {
+        backend.execute({ type: "saveStandup", input: { day, text: "Persisted standup" } });
+      }
+      expect(backend.execute({ type: "getStandup", input: { day } })).toMatchObject({
+        text: "Persisted standup",
+      });
+    } finally {
+      await backend.close();
+    }
+    if (opened === 1) {
+      renameSync(databasePath, `${databasePath}.original`);
+      copyFileSync(`${databasePath}.original`, databasePath);
+    }
+  }
+});
 
 function openBackend() {
   const dataDir = tempDirs.make("logbook-read-budget-");
@@ -108,6 +167,42 @@ function captureError(operation: () => unknown): unknown {
 }
 
 describe("Logbook native statement and read budgets", () => {
+  it("polls only pending batches in timestamp/id order without sorting historical rows", () => {
+    const { backend, databasePath } = openBackend();
+    const writer = new DatabaseSync(databasePath);
+    try {
+      writer.exec(`
+        WITH RECURSIVE history(id) AS (
+          VALUES (1) UNION ALL SELECT id + 1 FROM history WHERE id < 1000
+        )
+        INSERT INTO batches (id, day, start_ms, end_ms, status, created_ms, updated_ms)
+        SELECT id, '${day}', id, id + 1, 'done', 0, 0 FROM history;
+        INSERT INTO batches (id, day, start_ms, end_ms, status, created_ms, updated_ms)
+        VALUES (1001, '${day}', 3000, 4000, 'pending', 0, 0),
+               (1002, '${day}', 2000, 3000, 'pending', 0, 0),
+               (1003, '${day}', 2000, 3000, 'pending', 0, 0);
+      `);
+    } finally {
+      writer.close();
+    }
+    for (const id of [1002, 1003, 1001]) {
+      expect(backend.execute({ type: "nextPendingBatch", input: undefined })).toMatchObject({
+        id,
+        status: "pending",
+      });
+      backend.execute({ type: "setBatchStatus", input: { batchId: id, status: "done" } });
+    }
+    expect(backend.execute({ type: "nextPendingBatch", input: undefined })).toBeNull();
+    expect(batchReads).toHaveLength(4);
+    for (const plan of batchReads) {
+      expect(plan).toEqual(
+        expect.arrayContaining([expect.stringContaining("idx_logbook_batches_pending")]),
+      );
+      expect(plan.some((detail) => detail.includes("TEMP B-TREE"))).toBe(false);
+      expect(plan).not.toContain("SCAN batches");
+    }
+  });
+
   it("reuses native write statements with fresh optional values and model coalescing", () => {
     const { backend } = openBackend();
     const firstFrame = {
@@ -361,7 +456,6 @@ describe("Logbook native statement and read budgets", () => {
       idle: false,
     };
     expect(backend.execute({ type: "frameById", input: { id: 6 } })).toEqual(fullFrame);
-    expect(backend.execute({ type: "batchFrames", input: { batchId: 1 } })).toEqual([fullFrame]);
     expect(backend.execute({ type: "sampledBatchFrames", input: { batchId: 1 } })).toEqual([
       fullFrame,
     ]);

@@ -75,7 +75,6 @@ async function withRunFixture(
   }) => Promise<void>,
   options: {
     catalog?: "hold" | "reject";
-    registrationFails?: boolean;
     pluginsDisabled?: boolean;
   } = {},
 ) {
@@ -101,7 +100,6 @@ async function withRunFixture(
       finishDisposal,
       disposalStarted,
       catalog: options.catalog,
-      registrationFails: options.registrationFails,
       providers: {},
       catalogStarted,
       finishCatalog,
@@ -170,7 +168,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   bridge.providers[api.id] = provider;
   api.registerProvider(provider);
-  if (bridge.registrationFails && api.id === ${JSON.stringify(siblingId)}) throw new Error("optional fixture registration failed");
 } };
 `,
       );
@@ -183,7 +180,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     }
     const config: OpenClawConfig = {
       agents: {
-        entries: { main: { default: true, workspace: state.workspaceDir } },
+        entries: { main: { workspace: state.workspaceDir } },
         defaults: { workspace: state.workspaceDir, model: `${providerId}/model` },
       },
       models: {
@@ -294,40 +291,6 @@ function expectReopened(record: Registration) {
   }
 }
 
-it("keeps overlapping RUN callers on one registration and closes only after the last release", async () => {
-  await withRunFixture(async ({ acquire, original, registrations }) => {
-    const first = await acquire();
-    const count = registrations.length;
-    const second = await acquire();
-    expect(first.snapshot === second.snapshot).toBe(true);
-    expect(registrations.length).toBe(count);
-    expect(original().mode).toBe("discovery");
-    const instance = original().instance;
-    const releaseReplacement = instance.reserveReplacement();
-    let drained = false;
-    const settlement = instance.waitForRetainedWork(new AbortController().signal).then(() => {
-      drained = true;
-    });
-    try {
-      expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      await first[Symbol.asyncDispose]();
-      await nextTurn();
-      expect(readAnswer(original())).toBe(42);
-      expect(original().disposals).toBe(0);
-      expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      expect(drained).toBe(false);
-      await second[Symbol.asyncDispose]();
-      await settlement;
-      expect(instance.retainedWorkCount).toBe(0);
-      expect(original().disposals).toBe(1);
-      expect(original().database.isOpen).toBe(false);
-      expectReopened(original());
-    } finally {
-      releaseReplacement();
-    }
-  });
-});
-
 it("retains a replaced RUN generation without letting its release retire the replacement", async () => {
   await withRunFixture(async ({ acquire, input, original, registrations }) => {
     const first = await acquire();
@@ -351,27 +314,10 @@ it("retains a replaced RUN generation without letting its release retire the rep
     const third = await acquire();
     expect(third.snapshot === second.snapshot).toBe(true);
     await second[Symbol.asyncDispose]();
+    expect(readAnswer(replacement)).toBe(42);
+    expect(replacement.disposals).toBe(0);
     await third[Symbol.asyncDispose]();
     await expect.poll(() => replacement.disposals).toBe(1);
-  });
-});
-
-it("preserves the direct one-entry idle retention policy across RUN eviction", async () => {
-  await withRunFixture(async ({ acquire, original, input }) => {
-    const first = await acquire({ retainIdleRunOwner: true });
-    await first[Symbol.asyncDispose]();
-    await nextTurn();
-    expect(readAnswer(original())).toBe(42);
-    // Idle publication keeps physical custody without blocking explicit replacement.
-    original().instance.reserveReplacement()();
-    expect(original().instance.retainedWorkCount).toBe(0);
-    const warm = await acquire({ retainIdleRunOwner: true });
-    expect(warm.snapshot === first.snapshot).toBe(true);
-    const next = await acquire({ retainIdleRunOwner: true }, `${input.workspaceDir}/next`);
-    expect(readAnswer(original())).toBe(42);
-    await warm[Symbol.asyncDispose]();
-    await expect.poll(() => original().disposals).toBe(1);
-    await next[Symbol.asyncDispose]();
   });
 });
 
@@ -429,7 +375,6 @@ it("process close waits for admitted registration disposal and rejects new RUN a
         ]);
         expect(readAnswer(original())).toBe(42);
         expect(closed).toBe(false);
-        original().instance.reserveReplacement()();
         expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
       } finally {
         finishDisposal.resolve();
@@ -532,7 +477,6 @@ it.each(["hold", "reject"] as const)(
             }),
           ]);
           expect(readAnswer(original())).toBe(42);
-          original().instance.reserveReplacement()();
           expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
           if (catalog === "hold") {
             abort.abort(new Error("fixture admission cancelled"));
@@ -561,84 +505,75 @@ it.each(["hold", "reject"] as const)(
   },
 );
 
-it.each(["process close", "process close after cache retirement"] as const)(
-  "joins registered plugin disposal during catalog acquisition (%s)",
-  async (retirement) => {
-    await withRunFixture(
-      async ({
-        acquire,
-        input,
-        original,
-        catalogStarted,
-        finishCatalog,
-        holdDisposal,
-        disposalStarted,
-        finishDisposal,
-      }) => {
-        holdDisposal();
-        const pending = acquire();
-        const acquisition = Promise.allSettled([pending]);
-        const metadataRetired = createDeferredCore();
-        let closed = false;
-        let closing: Promise<unknown> | undefined;
-        try {
-          await Promise.race([
-            catalogStarted.promise,
-            pending.then(() => {
-              throw new Error("Catalog acquisition bypassed the registered provider");
-            }),
-          ]);
-          if (retirement === "process close after cache retirement") {
-            const cache = getPluginCache();
-            resetPluginCache();
-            expect(getPluginCacheRetirementSignal(cache).aborted).toBe(true);
-            // Inspection resources have their own cache; final model close must still
-            // join their disposal after the metadata inventory has finished retiring.
-            closing = waitForPluginCacheRetirement(true).then(() => {
-              metadataRetired.resolve();
-              return closePreparedModelRuntimeSnapshots();
-            });
-          } else {
-            closing = closePreparedModelRuntimeSnapshots();
-          }
-          closing = closing.then(() => {
-            closed = true;
-          });
-          await nextTurn();
-          expect(closed).toBe(false);
-          expect(original().disposals).toBe(0);
-          expect(readAnswer(original())).toBe(42);
-          finishCatalog.resolve();
-          await Promise.race([
-            disposalStarted.promise,
-            closing.then(() => {
-              throw new Error("Retirement bypassed the registered plugin disposer");
-            }),
-          ]);
-          await nextTurn();
-          if (retirement === "process close after cache retirement") {
-            await metadataRetired.promise;
-          }
-          expect(closed).toBe(false);
-          expect(original().disposals).toBe(0);
-          expect(readAnswer(original())).toBe(42);
-          finishDisposal.resolve();
-          await closing;
-          expect((await acquisition)[0]?.status).toBe("rejected");
-          expect(getPreparedModelRuntimeSnapshot(input)).toBeUndefined();
-          expect(original().disposals).toBe(1);
-          expect(original().database.isOpen).toBe(false);
-          expectReopened(original());
-        } finally {
-          finishCatalog.resolve();
-          finishDisposal.resolve();
-          await Promise.allSettled([pending, closing]);
-        }
-      },
-      { catalog: "hold" },
-    );
-  },
-);
+it("joins registered plugin disposal after cache retirement during catalog acquisition", async () => {
+  await withRunFixture(
+    async ({
+      acquire,
+      input,
+      original,
+      catalogStarted,
+      finishCatalog,
+      holdDisposal,
+      disposalStarted,
+      finishDisposal,
+    }) => {
+      holdDisposal();
+      const pending = acquire();
+      const acquisition = Promise.allSettled([pending]);
+      const metadataRetired = createDeferredCore();
+      let closed = false;
+      let closing: Promise<unknown> | undefined;
+      try {
+        await Promise.race([
+          catalogStarted.promise,
+          pending.then(() => {
+            throw new Error("Catalog acquisition bypassed the registered provider");
+          }),
+        ]);
+        const cache = getPluginCache();
+        resetPluginCache();
+        expect(getPluginCacheRetirementSignal(cache).aborted).toBe(true);
+        // Inspection resources have their own cache; final model close must still
+        // join their disposal after the metadata inventory has finished retiring.
+        closing = waitForPluginCacheRetirement(true).then(() => {
+          metadataRetired.resolve();
+          return closePreparedModelRuntimeSnapshots();
+        });
+        closing = closing.then(() => {
+          closed = true;
+        });
+        await nextTurn();
+        expect(closed).toBe(false);
+        expect(original().disposals).toBe(0);
+        expect(readAnswer(original())).toBe(42);
+        finishCatalog.resolve();
+        await Promise.race([
+          disposalStarted.promise,
+          closing.then(() => {
+            throw new Error("Retirement bypassed the registered plugin disposer");
+          }),
+        ]);
+        await nextTurn();
+        await metadataRetired.promise;
+        expect(closed).toBe(false);
+        expect(original().disposals).toBe(0);
+        expect(readAnswer(original())).toBe(42);
+        finishDisposal.resolve();
+        await closing;
+        expect((await acquisition)[0]?.status).toBe("rejected");
+        expect(getPreparedModelRuntimeSnapshot(input)).toBeUndefined();
+        expect(original().disposals).toBe(1);
+        expect(original().database.isOpen).toBe(false);
+        expectReopened(original());
+      } finally {
+        finishCatalog.resolve();
+        finishDisposal.resolve();
+        await Promise.allSettled([pending, closing]);
+      }
+    },
+    { catalog: "hold" },
+  );
+});
 
 it("retains a managed RUN source borrowed after matching standalone publication reuse", async () => {
   await withRunFixture(async ({ acquire, input, original }) => {
@@ -658,22 +593,6 @@ it("retains a managed RUN source borrowed after matching standalone publication 
     await expect.poll(() => original().disposals).toBe(1);
     expectReopened(original());
   });
-});
-
-it("keeps a failed optional registration from invalidating the loaded model owner", async () => {
-  await withRunFixture(
-    async ({ acquire, original }) => {
-      const lease = await acquire();
-      expect(lease.snapshot.pluginRegistry?.plugins).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: providerId, status: "loaded" }),
-          expect.objectContaining({ id: siblingId, status: "error" }),
-        ]),
-      );
-      expect(readAnswer(original())).toBe(42);
-    },
-    { registrationFails: true },
-  );
 });
 
 it.each(["registry", "empty inventory"] as const)(

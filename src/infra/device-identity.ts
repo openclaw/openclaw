@@ -1,10 +1,6 @@
 // Gateway/device Ed25519 identity API backed by canonical shared SQLite state.
 import crypto from "node:crypto";
 import {
-  cacheProcessDeviceIdentity,
-  readProcessDeviceIdentity,
-} from "./device-identity-process-cache.js";
-import {
   assertNoPendingLegacyIdentity,
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
@@ -15,15 +11,15 @@ import {
   type DeviceIdentityStoreOptions,
   type StoredDeviceIdentity,
 } from "./device-identity-store.js";
-import {
-  normalizeEd25519PublicKeyBase64Url,
-  publicKeyRawBase64UrlFromEd25519Pem,
-  signEd25519Payload,
-  verifyEd25519Signature,
-} from "./ed25519-signature.js";
+import { normalizeEd25519PublicKeyBase64Url, verifyEd25519Signature } from "./ed25519-signature.js";
 import { pathMayExistSync } from "./path-existence.js";
 
 export type { DeviceIdentity } from "./device-identity-store.js";
+export {
+  normalizeEd25519PublicKeyBase64Url as normalizeDevicePublicKeyBase64Url,
+  publicKeyRawBase64UrlFromEd25519Pem as publicKeyRawBase64UrlFromPem,
+  signEd25519Payload as signDevicePayload,
+} from "./ed25519-signature.js";
 
 function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
   return {
@@ -59,21 +55,6 @@ export function loadOrCreateDeviceIdentity(
   return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, resolvedOptions));
 }
 
-/** Keep one authoritative identity stable for the lifetime of a state-dir process. */
-export function loadOrCreateProcessDeviceIdentity(
-  options: DeviceIdentityStoreOptions = {},
-): DeviceIdentity {
-  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
-  const cacheKey = `${databasePath}\0${identityKey}`;
-  const cached = readProcessDeviceIdentity(cacheKey);
-  // A process-stable identity needs no database admission on a warm read.
-  if (cached) {
-    return cached;
-  }
-  const identity = loadOrCreateDeviceIdentity({ ...options, path: databasePath, identityKey });
-  return cacheProcessDeviceIdentity(cacheKey, identity);
-}
-
 /** Load a valid persisted identity without creating or mutating SQLite state. */
 export function loadDeviceIdentityIfPresent(
   options: DeviceIdentityStoreOptions = {},
@@ -84,16 +65,6 @@ export function loadDeviceIdentityIfPresent(
   }
   assertNoPendingLegacyIdentity(options);
   return null;
-}
-
-/** Sign a UTF-8 payload with a PEM Ed25519 private key and return base64url bytes. */
-export function signDevicePayload(privateKeyPem: string, payload: string): string {
-  return signEd25519Payload(privateKeyPem, payload);
-}
-
-/** Normalize PEM or raw base64/base64url public keys to canonical raw base64url bytes. */
-export function normalizeDevicePublicKeyBase64Url(publicKey: string): string | null {
-  return normalizeEd25519PublicKeyBase64Url(publicKey);
 }
 
 /** Derive the stable device id from PEM or raw base64/base64url public key material. */
@@ -108,11 +79,6 @@ export function deriveDeviceIdFromPublicKey(publicKey: string): string | null {
   } catch {
     return null;
   }
-}
-
-/** Export a PEM Ed25519 public key as canonical raw base64url bytes. */
-export function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
-  return publicKeyRawBase64UrlFromEd25519Pem(publicKeyPem);
 }
 
 /** Verify a UTF-8 payload signature against PEM or raw base64/base64url public key material. */

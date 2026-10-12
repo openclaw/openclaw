@@ -9,16 +9,13 @@ type GenerateImageParams = Parameters<
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
-  postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
   createProviderOperationDeadlineMock,
   resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "xai-key" })),
   postJsonRequestMock: vi.fn(),
-  postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
     const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
@@ -36,7 +33,6 @@ const {
   resolveProviderOperationTimeoutMsMock: vi.fn(
     (params: Record<string, unknown>) => params.defaultTimeoutMs ?? 60000,
   ),
-  sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -51,11 +47,9 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
     createProviderOperationDeadline: createProviderOperationDeadlineMock,
     postJsonRequest: postJsonRequestMock,
-    postMultipartRequest: postMultipartRequestMock,
     readProviderJsonResponse: actual.readProviderJsonResponse,
     resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
     resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
   };
 });
 
@@ -109,10 +103,9 @@ describe("xai image generation provider", () => {
     resolveProviderHttpRequestConfigMock.mockClear();
     createProviderOperationDeadlineMock.mockClear();
     resolveProviderOperationTimeoutMsMock.mockClear();
-    sanitizeConfiguredModelProviderRequestMock.mockClear();
   });
 
-  it("builds provider with correct models, default, and capabilities", () => {
+  it("builds provider with correct models, default, and capabilities", async () => {
     const provider = buildXaiImageGenerationProvider();
     expect(provider.id).toBe("xai");
     expect(provider.label).toBe("xAI");
@@ -137,14 +130,14 @@ describe("xai image generation provider", () => {
     ]);
     expect(provider.capabilities.edit.enabled).toBe(true);
     expect(provider.capabilities.edit.maxInputImages).toBe(3);
-    const isConfigured = provider.isConfigured;
+    const isConfigured = provider.isConfiguredAsync;
     if (!isConfigured) {
       throw new Error("expected XAI image provider config predicate");
     }
     vi.stubEnv("XAI_API_KEY", undefined);
-    expect(isConfigured({})).toBe(false);
+    expect(await isConfigured({})).toBe(false);
     expect(
-      isConfigured({
+      await isConfigured({
         cfg: {
           models: {
             providers: {

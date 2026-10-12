@@ -1,13 +1,8 @@
-// Doctor visibility for SQLite database bloat (state DB + per-agent DBs).
-// Registered size_bytes existed for a while with no reader; production bloat
-// (multi-hundred-MB stores, blocking vacuums) surfaced only after user harm.
 import { note } from "../../packages/terminal-core/src/note.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { SqliteBloatStats } from "./doctor-db-bloat.read.js";
 import { formatBytes } from "./doctor-disk-space.js";
 
-// Bloat is only worth an operator's attention when the file is meaningfully
-// large AND a real share of it is reclaimable free pages.
 const BLOAT_MIN_FILE_BYTES = 128 * 1024 * 1024;
 const BLOAT_MIN_FREE_BYTES = 32 * 1024 * 1024;
 const BLOAT_FREE_RATIO = 0.25;
@@ -22,7 +17,7 @@ function describeBloat(label: string, stats: SqliteBloatStats): string | null {
   if (isBloated) {
     const remedy = stats.incrementalAutoVacuum
       ? "incremental vacuum will release it gradually"
-      : "run `VACUUM` offline (gateway stopped) to reclaim it";
+      : "use offline Doctor SQLite compaction to reclaim it and enable incremental vacuum (gateway stopped; see https://docs.openclaw.ai/cli/doctor/sqlite-maintenance)";
     return `${label}: ${formatBytes(stats.fileBytes)} on disk with ${formatBytes(stats.freeBytes)} reclaimable free pages; ${remedy}.`;
   }
   if (stats.fileBytes >= LARGE_DB_WARN_BYTES) {

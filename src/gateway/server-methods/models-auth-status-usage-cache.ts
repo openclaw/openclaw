@@ -1,4 +1,3 @@
-// Stale-while-revalidate cache for models.authStatus provider usage enrichment.
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
@@ -249,7 +248,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
   coldRead?: "refresh-marker";
   now?: number;
 }): Promise<UsageSummary> {
-  const snapshot = getProviderUsageRuntimeSnapshot({ config: options.config });
+  const snapshot = await getProviderUsageRuntimeSnapshot({ config: options.config });
   const params: ProviderUsageCacheParams = {
     agentId: snapshot.agentId,
     agentDir: snapshot.agentDir,

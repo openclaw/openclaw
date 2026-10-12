@@ -54,7 +54,7 @@ describe("session accessor boundary guard", () => {
     ).toEqual([]);
   });
 
-  it("allows the exact beta.5 compatibility exports without opening aliases", () => {
+  it("rejects retired beta.5 compatibility exports and aliases", () => {
     expect(
       findSessionStoreRuntimeFileBackedCompatExportViolations(
         ...parseFixture(`
@@ -64,7 +64,18 @@ describe("session accessor boundary guard", () => {
         export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
       `),
       ),
-    ).toEqual([]);
+    ).toEqual([
+      { line: 2, reason: 'exports retired file-backed SDK session helper "loadSessionStore"' },
+      { line: 3, reason: 'exports retired file-backed SDK session helper "updateSessionStore"' },
+      {
+        line: 4,
+        reason: 'exports retired file-backed SDK session helper "resolveSessionFilePath"',
+      },
+      {
+        line: 5,
+        reason: 'exports retired file-backed SDK session helper "resolveSessionStoreEntry"',
+      },
+    ]);
     expect(
       findSessionStoreRuntimeFileBackedCompatExportViolations(
         ...parseFixture(`
@@ -75,11 +86,11 @@ describe("session accessor boundary guard", () => {
     ).toEqual([
       {
         line: 2,
-        reason: 'exports unratcheted file-backed SDK session helper "resolveSessionFilePath"',
+        reason: 'exports retired file-backed SDK session helper "resolveSessionFilePath"',
       },
       {
         line: 3,
-        reason: 'exports unratcheted file-backed SDK session helper "saveSessionStore"',
+        reason: 'exports retired file-backed SDK session helper "saveSessionStore"',
       },
     ]);
   });
@@ -270,15 +281,41 @@ describe("session accessor boundary guard", () => {
     ]);
   });
 
-  it("allows migrated accessor writes", () => {
-    expect(
+  it("allows only the runtime SDK forwarding import, not legacy calls", () => {
+    const source = 'import { updateLastRoute } from "../../plugin-sdk/session-store-runtime.js";';
+    const runtimePath = "/repo/src/plugins/runtime/runtime-channel.ts";
+    const inspect = (content: string, fileName = runtimePath) =>
       findSessionAccessorWriteBoundaryViolations(
-        ...parseFixture(`
-        import { updateSessionEntry } from "../config/sessions/session-accessor.js";
-        updateSessionEntry({ storePath, sessionKey }, () => undefined);
-      `),
-      ),
+        content,
+        fileName,
+        parser.parseSourceFile(fileName, content),
+      );
+    expect(inspect(`${source}\nconst runtime = { updateLastRoute };`)).toEqual([]);
+    expect(inspect(`${source}\nupdateLastRoute(params);`)).toEqual([
+      { line: 2, reason: 'calls legacy session store writer "updateLastRoute"' },
+    ]);
+    const agentPath = "/repo/src/plugins/runtime/runtime-agent.ts";
+    const agentSource = source.replaceAll("updateLastRoute", "updateSessionStoreEntry");
+    expect(
+      inspect(`${agentSource}\nconst runtime = { updateSessionStoreEntry };`, agentPath),
     ).toEqual([]);
+    expect(inspect(`${agentSource}\nupdateSessionStoreEntry(params);`, agentPath)).toEqual([
+      { line: 2, reason: 'calls legacy session store writer "updateSessionStoreEntry"' },
+    ]);
+    const registryPath = "/repo/src/plugins/registry-runtime-channel.ts";
+    expect(inspect("channel.session.updateLastRoute(params);", registryPath)).toEqual([]);
+    expect(inspect("other.session.updateLastRoute(params);", registryPath)).toEqual([
+      { line: 1, reason: 'references legacy session store writer "updateLastRoute"' },
+    ]);
+    for (const [content, fileName] of [
+      [source, "/repo/src/agents/other.ts"],
+      [source.replace("{ updateLastRoute }", "{ updateLastRoute as update }"), runtimePath],
+      [source.replace("plugin-sdk/session-store-runtime", "config/sessions"), runtimePath],
+    ] as const) {
+      expect(inspect(content, fileName)).toEqual([
+        { line: 1, reason: 'imports legacy session store writer "updateLastRoute"' },
+      ]);
+    }
   });
 
   it("flags legacy transcript writer imports", () => {
@@ -294,7 +331,6 @@ describe("session accessor boundary guard", () => {
       { line: 3, reason: 'imports legacy transcript writer "emitSessionTranscriptUpdate"' },
     ]);
   });
-
   it("flags direct and namespace legacy transcript writer calls", () => {
     expect(
       findTranscriptWriterBoundaryViolations(
@@ -309,18 +345,6 @@ describe("session accessor boundary guard", () => {
       { line: 3, reason: 'references legacy transcript writer "emitSessionTranscriptUpdate"' },
       { line: 4, reason: 'references legacy transcript writer "appendSessionTranscriptMessage"' },
     ]);
-  });
-
-  it("allows migrated transcript writer helpers", () => {
-    expect(
-      findTranscriptWriterBoundaryViolations(
-        ...parseFixture(`
-        import { appendTranscriptMessage, publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
-        appendTranscriptMessage(scope, { message });
-        publishTranscriptUpdate(scope, { messageId });
-      `),
-      ),
-    ).toEqual([]);
   });
 
   it("flags legacy writers inside the gateway sessions.create lifecycle", () => {

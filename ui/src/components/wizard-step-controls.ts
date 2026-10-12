@@ -28,7 +28,7 @@ type WizardStepControlsProps = {
   answerLabel?: string;
   busyLabel?: string;
   confirmAffirmativeLabel?: string;
-  leadingAction?: TemplateResult;
+  leadingAction?: TemplateResult | HTMLElement;
   externalAuthInput?: boolean;
   sensitiveRevealed?: boolean;
   onToggleSensitiveVisibility?: () => void;
@@ -251,12 +251,8 @@ function renderTextStep(props: WizardStepControlsProps) {
     step.sensitive && props.onToggleSensitiveVisibility
       ? renderSensitiveInput({
           id: props.inputId,
-          name: "wizard-text",
           value,
           revealed: props.sensitiveRevealed === true,
-          revealLabel: t("configForm.revealValue"),
-          hideLabel: t("configForm.hideValue"),
-          inputClassName: "input",
           placeholder: step.placeholder,
           disabled: props.busy,
           invalid: Boolean(props.validationErrorId),
@@ -323,19 +319,15 @@ function renderTextStep(props: WizardStepControlsProps) {
 function renderOptionsStep(props: WizardStepControlsProps) {
   const options = props.step.options ?? [];
   const multiple = props.step.type === "multiselect";
-  if (!multiple && props.presentation !== "channels") {
-    return html`
-      ${renderMessage(props)} ${renderWizardSingleChoice(props, options)}
-      ${props.leadingAction ?? nothing}
-    `;
-  }
-  if (props.presentation === "channels" && !multiple) {
+  if (!multiple) {
     return html`
       ${renderMessage(props)} ${renderWizardSingleChoice(props, options)}
       ${
-        props.busy
-          ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
-          : nothing
+        props.presentation !== "channels"
+          ? (props.leadingAction ?? nothing)
+          : props.busy
+            ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
+            : nothing
       }
     `;
   }

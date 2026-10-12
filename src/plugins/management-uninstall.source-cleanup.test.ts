@@ -8,6 +8,7 @@ import { readConfigFileSnapshot } from "../config/io.js";
 import { transformConfigFileWithRetry } from "../config/mutate.js";
 import { registerManagedRuntimeConfigWriteOwner } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withConfigWriteLock } from "../config/write-lock.js";
 import { acquireFileLock, FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
@@ -71,7 +72,9 @@ async function createUninstallSourceFixture(
   fs.writeFileSync(retainedFile, "owned plugin bytes");
   const config: OpenClawConfig = {
     plugins: {
-      entries: { [fixture.pluginId]: { enabled: true } },
+      entries: {
+        [fixture.pluginId]: { enabled: true, config: { retainedUntilRemoval: true } },
+      },
       load: { paths: [pluginRoot, ...(keepParentLoadPath ? [parentLoadPath] : [])] },
     },
   };
@@ -101,14 +104,13 @@ async function createUninstallSourceFixture(
       installRecords: { [fixture.pluginId]: installRecord },
     }),
   );
-  const addLoadPath = (loadPath: string, beforeCommit?: () => void) =>
+  const addLoadPath = (loadPath: string) =>
     transformConfigFileWithRetry({
       base: "source",
       writeOptions: {
         ownedConfigPathForWrite: writerConfigPath,
         expectedConfigPath: writerConfigPath,
         afterWrite: { mode: "none", reason: "synthetic concurrent config writer" },
-        beforeCommit,
       },
       transform: (current) => ({
         nextConfig: {
@@ -217,7 +219,7 @@ it.each(["root", "shared include"] as const)(
       }),
     });
     void pending.catch(() => {});
-    let writer: ReturnType<typeof fixture.addLoadPath> | undefined;
+    let writer: Promise<void> | undefined;
     try {
       await Promise.race([
         entered.promise,
@@ -232,7 +234,18 @@ it.each(["root", "shared include"] as const)(
       for (const pathname of sources) {
         await expectConfigSourceLocked(pathname);
       }
-      writer = fixture.addLoadPath(otherPath, () => expect(removed).toBe(true));
+      expect((await readConfigFileSnapshot()).config.plugins?.entries?.[fixture.pluginId]).toEqual({
+        enabled: false,
+        config: { retainedUntilRemoval: true },
+      });
+      // Cleanup owns source exclusion through deletion, not final config publication.
+      // Probe real writer admission without racing the later optimistic reread.
+      writer = withConfigWriteLock(
+        source === "root" ? fixture.configPath : fixture.includePath,
+        async () => {
+          expect(removed).toBe(true);
+        },
+      );
     } finally {
       release.resolve();
       await Promise.allSettled([pending, ...(writer ? [writer] : [])]);
@@ -241,11 +254,11 @@ it.each(["root", "shared include"] as const)(
     }
     await pending;
     await writer;
+    await fixture.addLoadPath(otherPath);
     expect(fs.existsSync(fixture.pluginRoot)).toBe(false);
-    expect((await readConfigFileSnapshot()).config.plugins?.load?.paths).toEqual([
-      fixture.parentLoadPath,
-      otherPath,
-    ]);
+    const config = (await readConfigFileSnapshot()).config;
+    expect(config.plugins?.load?.paths).toEqual([fixture.parentLoadPath, otherPath]);
+    expect(config.plugins?.entries?.[fixture.pluginId]).toEqual({ enabled: false });
   },
 );
 

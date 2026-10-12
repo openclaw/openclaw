@@ -48,6 +48,14 @@ type BrowserActResponse = {
 
 type BrowserDownloadActionResult = BrowserActionTabResult & { download: BrowserDownloadResult };
 
+type BrowserActionOptions = {
+  targetId?: string;
+  profile?: string;
+  signal?: AbortSignal;
+};
+
+type BrowserTimedActionOptions = BrowserActionOptions & { timeoutMs?: number };
+
 function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
   const operationTimeoutMs =
     clampPositiveTimerTimeoutMs(timeoutMs) ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
@@ -55,15 +63,15 @@ function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
   return addTimerTimeoutGraceMs(operationTimeoutMs, BROWSER_ACTION_TRANSPORT_SLACK_MS) ?? 1;
 }
 
-/** Navigate a browser tab through the control server. */
+// Keep optional fields as own properties in node-proxy requests.
+function projectBrowserOptions<Options extends object>(opts: Options, fields: (keyof Options)[]) {
+  return Object.fromEntries(fields.map((key) => [key, opts[key]]));
+}
+
 export async function browserNavigate(
   baseUrl: BrowserClientTarget,
-  opts: {
+  opts: BrowserTimedActionOptions & {
     url: string;
-    targetId?: string;
-    timeoutMs?: number;
-    profile?: string;
-    signal?: AbortSignal;
   },
 ): Promise<BrowserActionTabResult> {
   const timeoutMs = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
@@ -76,123 +84,52 @@ export async function browserNavigate(
   );
 }
 
-/** Arm a one-shot browser dialog handler. */
-export async function browserArmDialog(
-  baseUrl: BrowserClientTarget,
-  opts: {
-    accept: boolean;
-    promptText?: string;
-    dialogId?: string;
-    targetId?: string;
-    timeoutMs?: number;
-    profile?: string;
-    signal?: AbortSignal;
-  },
-): Promise<BrowserActionOk> {
-  return await postBrowserJson(
-    baseUrl,
-    "/hooks/dialog",
-    {
-      accept: opts.accept,
-      promptText: opts.promptText,
-      dialogId: opts.dialogId,
-      targetId: opts.targetId,
-      timeoutMs: opts.timeoutMs,
-    },
-    browserClientTimeout(
+function createBrowserOperation<Options extends BrowserTimedActionOptions, Result>(
+  path: string,
+  fields: (keyof Options)[],
+  timeoutScope: "local" | "all",
+) {
+  return async (baseUrl: BrowserClientTarget, opts: Options): Promise<Result> =>
+    await postBrowserJson(
       baseUrl,
-      undefined,
-      resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
-    ),
-    opts,
-  );
+      path,
+      projectBrowserOptions(opts, fields),
+      timeoutScope === "local"
+        ? browserClientTimeout(
+            baseUrl,
+            undefined,
+            resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
+          )
+        : resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
+      opts,
+    );
 }
 
-/** Arm or execute a browser file chooser upload. */
-export async function browserArmFileChooser(
-  baseUrl: BrowserClientTarget,
-  opts: {
+export const browserArmDialog = createBrowserOperation<
+  BrowserTimedActionOptions & { accept: boolean; promptText?: string; dialogId?: string },
+  BrowserActionOk
+>("/hooks/dialog", ["accept", "promptText", "dialogId", "targetId", "timeoutMs"], "local");
+
+export const browserArmFileChooser = createBrowserOperation<
+  BrowserTimedActionOptions & {
     paths: string[];
     ref?: string;
     inputRef?: string;
     element?: string;
-    targetId?: string;
-    timeoutMs?: number;
-    profile?: string;
-    signal?: AbortSignal;
   },
-): Promise<BrowserActionOk> {
-  return await postBrowserJson(
-    baseUrl,
-    "/hooks/file-chooser",
-    {
-      paths: opts.paths,
-      ref: opts.ref,
-      inputRef: opts.inputRef,
-      element: opts.element,
-      targetId: opts.targetId,
-      timeoutMs: opts.timeoutMs,
-    },
-    browserClientTimeout(
-      baseUrl,
-      undefined,
-      resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
-    ),
-    opts,
-  );
-}
+  BrowserActionOk
+>("/hooks/file-chooser", ["paths", "ref", "inputRef", "element", "targetId", "timeoutMs"], "local");
 
-/** Wait for the next managed browser download and save it under the guarded download root. */
-export async function browserWaitForDownload(
-  baseUrl: BrowserClientTarget,
-  opts: {
-    path?: string;
-    targetId?: string;
-    timeoutMs?: number;
-    profile?: string;
-    signal?: AbortSignal;
-  },
-): Promise<BrowserDownloadActionResult> {
-  return await postBrowserJson(
-    baseUrl,
-    "/wait/download",
-    {
-      targetId: opts.targetId,
-      path: opts.path,
-      timeoutMs: opts.timeoutMs,
-    },
-    resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
-    opts,
-  );
-}
+export const browserWaitForDownload = createBrowserOperation<
+  BrowserTimedActionOptions & { path?: string },
+  BrowserDownloadActionResult
+>("/wait/download", ["targetId", "path", "timeoutMs"], "all");
 
-/** Click a snapshot ref and save its download under the guarded download root. */
-export async function browserDownload(
-  baseUrl: BrowserClientTarget,
-  opts: {
-    ref: string;
-    path: string;
-    targetId?: string;
-    timeoutMs?: number;
-    profile?: string;
-    signal?: AbortSignal;
-  },
-): Promise<BrowserDownloadActionResult> {
-  return await postBrowserJson(
-    baseUrl,
-    "/download",
-    {
-      targetId: opts.targetId,
-      ref: opts.ref,
-      path: opts.path,
-      timeoutMs: opts.timeoutMs,
-    },
-    resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
-    opts,
-  );
-}
+export const browserDownload = createBrowserOperation<
+  BrowserTimedActionOptions & { ref: string; path: string },
+  BrowserDownloadActionResult
+>("/download", ["targetId", "ref", "path", "timeoutMs"], "all");
 
-/** Execute one normalized browser action request. */
 export async function browserAct(
   baseUrl: BrowserClientTarget,
   req: BrowserActRequest,
@@ -207,19 +144,14 @@ export async function browserAct(
   );
 }
 
-/** Capture a screenshot through the browser control server. */
 export async function browserScreenshotAction(
   baseUrl: BrowserClientTarget,
-  opts: {
-    targetId?: string;
+  opts: BrowserTimedActionOptions & {
     fullPage?: boolean;
     ref?: string;
     element?: string;
     type?: "png" | "jpeg";
     labels?: boolean;
-    timeoutMs?: number;
-    profile?: string;
-    signal?: AbortSignal;
   },
 ): Promise<BrowserActionPathResult> {
   const timeoutMs = clampPositiveTimerTimeoutMs(opts.timeoutMs);
@@ -228,12 +160,7 @@ export async function browserScreenshotAction(
     baseUrl,
     "/screenshot",
     {
-      targetId: opts.targetId,
-      fullPage: opts.fullPage,
-      ref: opts.ref,
-      element: opts.element,
-      type: opts.type,
-      labels: opts.labels,
+      ...projectBrowserOptions(opts, ["targetId", "fullPage", "ref", "element", "type", "labels"]),
       timeoutMs: effectiveTimeoutMs,
     },
     effectiveTimeoutMs,
@@ -241,110 +168,81 @@ export async function browserScreenshotAction(
   );
 }
 
-function buildQuery(params: Array<[string, string | boolean | undefined]>) {
-  const query: Record<string, string | boolean | undefined> = {};
-  for (const [key, value] of params) {
-    if (typeof value === "boolean") {
-      query[key] = value;
-      continue;
-    }
-    if (typeof value === "string" && value.length > 0) {
-      query[key] = value;
-    }
-  }
-  return query;
+function buildQuery(params: Record<string, string | boolean | undefined>) {
+  return Object.fromEntries(
+    Object.entries(params).filter(
+      ([, value]) => typeof value === "boolean" || (typeof value === "string" && value.length > 0),
+    ),
+  );
 }
 
-/** Read browser console messages for a tab. */
+function readBrowserPageJson<T>(
+  baseUrl: BrowserClientTarget,
+  path: string,
+  opts: BrowserActionOptions,
+  query: Record<string, string | number | boolean | undefined>,
+): Promise<T> {
+  return requestBrowserJson(baseUrl, path, {
+    query,
+    profile: opts.profile,
+    timeoutMs: browserClientTimeout(baseUrl, undefined, 20000),
+    signal: opts.signal,
+  });
+}
+
 export async function browserConsoleMessages(
   baseUrl: BrowserClientTarget,
-  opts: { level?: string; targetId?: string; profile?: string; signal?: AbortSignal } = {},
+  opts: BrowserActionOptions & { level?: string } = {},
 ): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string; url?: string }> {
-  const query = buildQuery([
-    ["level", opts.level],
-    ["targetId", opts.targetId],
-  ]);
-  return await requestBrowserJson(baseUrl, "/console", {
-    query,
-    profile: opts.profile,
-    timeoutMs: browserClientTimeout(baseUrl, undefined, 20000),
-    signal: opts.signal,
-  });
+  return await readBrowserPageJson(
+    baseUrl,
+    "/console",
+    opts,
+    buildQuery({ level: opts.level, targetId: opts.targetId }),
+  );
 }
 
-/** Read the collected network request log for a tab. */
 export async function browserRequests(
   baseUrl: BrowserClientTarget,
-  opts: {
+  opts: BrowserActionOptions & {
     filter?: string;
     clear?: boolean;
-    targetId?: string;
-    profile?: string;
-    signal?: AbortSignal;
   } = {},
 ): Promise<{ ok: true; requests: BrowserNetworkRequest[]; targetId: string; url?: string }> {
-  const query = buildQuery([
-    ["filter", opts.filter],
-    ["clear", opts.clear],
-    ["targetId", opts.targetId],
-  ]);
-  return await requestBrowserJson(baseUrl, "/requests", {
-    query,
-    profile: opts.profile,
-    timeoutMs: browserClientTimeout(baseUrl, undefined, 20000),
-    signal: opts.signal,
-  });
+  return await readBrowserPageJson(
+    baseUrl,
+    "/requests",
+    opts,
+    buildQuery({ filter: opts.filter, clear: opts.clear, targetId: opts.targetId }),
+  );
 }
 
-/** Read the collected page error log for a tab. */
 export async function browserErrors(
   baseUrl: BrowserClientTarget,
-  opts: {
-    clear?: boolean;
-    targetId?: string;
-    profile?: string;
-    signal?: AbortSignal;
-  } = {},
+  opts: BrowserActionOptions & { clear?: boolean } = {},
 ): Promise<{ ok: true; errors: BrowserPageError[]; targetId: string; url?: string }> {
-  const query = buildQuery([
-    ["clear", opts.clear],
-    ["targetId", opts.targetId],
-  ]);
-  return await requestBrowserJson(baseUrl, "/errors", {
-    query,
-    profile: opts.profile,
-    timeoutMs: browserClientTimeout(baseUrl, undefined, 20000),
-    signal: opts.signal,
-  });
+  return await readBrowserPageJson(
+    baseUrl,
+    "/errors",
+    opts,
+    buildQuery({ clear: opts.clear, targetId: opts.targetId }),
+  );
 }
 
 /** Read bounded visible text without executing page-supplied code. */
 export async function browserPageText(
   baseUrl: BrowserClientTarget,
-  opts: {
-    targetId?: string;
+  opts: BrowserActionOptions & {
     selector?: string;
     maxChars: number;
-    profile?: string;
-    signal?: AbortSignal;
   },
 ): Promise<{ ok: true; targetId: string; url?: string; text: string; truncated: boolean }> {
-  const query = {
-    ...buildQuery([
-      ["targetId", opts.targetId],
-      ["selector", opts.selector],
-    ]),
+  return await readBrowserPageJson(baseUrl, "/text", opts, {
+    ...buildQuery({ targetId: opts.targetId, selector: opts.selector }),
     maxChars: opts.maxChars,
-  };
-  return await requestBrowserJson(baseUrl, "/text", {
-    query,
-    profile: opts.profile,
-    timeoutMs: browserClientTimeout(baseUrl, undefined, 20000),
-    signal: opts.signal,
   });
 }
 
-/** Apply one of the browser control service's existing emulation settings. */
 export async function browserEmulateSetting(
   baseUrl: BrowserClientTarget,
   opts: {
@@ -363,10 +261,9 @@ export async function browserEmulateSetting(
   );
 }
 
-/** Save the current page as PDF through browser control. */
 export async function browserPdfSave(
   baseUrl: BrowserClientTarget,
-  opts: { targetId?: string; profile?: string; signal?: AbortSignal } = {},
+  opts: BrowserActionOptions = {},
 ): Promise<BrowserActionPathResult> {
   return await postBrowserJson(
     baseUrl,

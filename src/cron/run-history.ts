@@ -6,11 +6,13 @@ import {
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
+  compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
   cronRunRecordToRunLogEntry,
   isCronDeliveryStatus,
   isCronRunStatus,
 } from "./run-history-detail.js";
+import { cronRunEntryMatchesLink } from "./run-link.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronRunRecord } from "./store/run-history.types.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
@@ -88,19 +90,6 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
   ].join(" ");
 }
 
-function compareHistoryRows(
-  left: { entry: CronRunLogEntry; record: CronRunRecord },
-  right: { entry: CronRunLogEntry; record: CronRunRecord },
-  direction: CronRunHistorySortDir,
-): number {
-  const multiplier = direction === "asc" ? 1 : -1;
-  return (
-    multiplier * (left.entry.ts - right.entry.ts) ||
-    multiplier * (left.record.createdAt - right.record.createdAt) ||
-    multiplier * left.record.id.localeCompare(right.record.id)
-  );
-}
-
 function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string, string>): void {
   for (const entry of entries) {
     const jobName = jobNameById?.[entry.jobId];
@@ -126,19 +115,25 @@ export function projectCronRunHistoryPage(
   const runId = normalizeOptionalString(options.runId);
   const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
   const query = normalizeLowercaseStringOrEmpty(options.query);
-  const sortDir: CronRunHistorySortDir = options.sortDir === "asc" ? "asc" : "desc";
-  const rows = records
+  const sortMultiplier = options.sortDir === "asc" ? -1 : 1;
+  let rows = records
     .filter(
       (record) =>
         (!jobId || record.jobId === jobId) && cronRunRecordStoreKey(record) === options.storeKey,
     )
     .filter((record) => !agentId || record.agentId === agentId)
     .map((record) => ({ record, entry: cronRunRecordToRunLogEntry(record) }))
-    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null)
+    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null);
+  if (runId) {
+    const exact = rows.filter(({ entry }) => entry.runId === runId);
+    const aliases = exact.length
+      ? []
+      : rows.filter(({ entry }) => cronRunEntryMatchesLink(runId, entry));
+    // Public ids retain precedence; a reused session or start time cannot select another run.
+    rows = exact.length ? exact : aliases.length === 1 ? aliases : [];
+  }
+  rows = rows
     .filter(({ entry }) => {
-      if (runId && entry.runId !== runId) {
-        return false;
-      }
       if (statuses && (!entry.status || !statuses.includes(entry.status))) {
         return false;
       }
@@ -151,7 +146,9 @@ export function projectCronRunHistoryPage(
         (!options.entryFilter || options.entryFilter(entry))
       );
     })
-    .toSorted((left, right) => compareHistoryRows(left, right, sortDir));
+    .toSorted(
+      (left, right) => sortMultiplier * compareCronRunRecordsNewestFirst(left.record, right.record),
+    );
   const total = rows.length;
   const boundedOffset = Math.min(total, offset);
   const entries = rows.slice(boundedOffset, boundedOffset + limit).map(({ entry }) => entry);

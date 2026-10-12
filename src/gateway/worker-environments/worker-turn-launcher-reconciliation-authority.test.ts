@@ -1,6 +1,6 @@
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
@@ -12,6 +12,7 @@ import {
 } from "../../agents/session-placement-admission.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { placementTurnOwner } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -32,9 +33,11 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("reconciliation continuation authority", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     { mode: "remote-exec", authority: "source", revokeAt: "wait" },
@@ -68,7 +71,7 @@ describe("reconciliation continuation authority", () => {
         runId: "prior-run",
         owner: placementTurnOwner(active),
       });
-      placements.markWorkspaceResultPending(prior);
+      await placements.markWorkspaceResultPending(prior);
       const waiting = vi.spyOn(placements, "waitForTurnClaimRelease");
       const bytes = Buffer.from("authorized attachment original");
       const saved = await saveMediaBuffer(bytes, "text/plain", "inbound", bytes.length, "note.txt");
@@ -132,12 +135,14 @@ describe("reconciliation continuation authority", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected local source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
         syncWorkspace: vi.fn(),
@@ -197,9 +202,9 @@ describe("reconciliation continuation authority", () => {
         if (revokeAt === "wait") {
           revoke();
         }
-        placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
-        placements.acceptWorkspaceResult(prior);
-        placements.completeWorkspaceResultAndReleaseTurn(prior);
+        await placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
+        await placements.acceptWorkspaceResult(prior);
+        await placements.completeWorkspaceResultAndReleaseTurn(prior);
         if (revokeAt === "never") {
           await expect(run).resolves.toMatchObject({ meta: { durationMs: 1 } });
           expect(runLocal).toHaveBeenCalledOnce();

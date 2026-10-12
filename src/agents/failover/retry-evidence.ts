@@ -34,32 +34,25 @@ const SHORT_WINDOW_RATE_LIMIT_RE =
 const RETRY_AFTER_VALUE_RE =
   /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?try again in\s+)([^\r\n;]+)/i;
 const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
-const RETRY_AFTER_UNIT_MS = new Map<string, number>([
-  ["milliseconds", durationUnitMs.millisecond],
-  ["millisecond", durationUnitMs.millisecond],
-  ["msecs", durationUnitMs.millisecond],
-  ["msec", durationUnitMs.millisecond],
-  ["ms", durationUnitMs.millisecond],
-  ["seconds", durationUnitMs.second],
-  ["second", durationUnitMs.second],
-  ["secs", durationUnitMs.second],
-  ["sec", durationUnitMs.second],
-  ["s", durationUnitMs.second],
-  ["minutes", durationUnitMs.minute],
-  ["minute", durationUnitMs.minute],
-  ["mins", durationUnitMs.minute],
-  ["min", durationUnitMs.minute],
-  ["m", durationUnitMs.minute],
-  ["hours", durationUnitMs.hour],
-  ["hour", durationUnitMs.hour],
-  ["hrs", durationUnitMs.hour],
-  ["hr", durationUnitMs.hour],
-  ["h", durationUnitMs.hour],
-  ["days", durationUnitMs.day],
-  ["day", durationUnitMs.day],
-  ["d", durationUnitMs.day],
-]);
+const RETRY_AFTER_UNIT_MS = new Map<string, number>(
+  (
+    [
+      ["milliseconds millisecond msecs msec ms", durationUnitMs.millisecond],
+      ["seconds second secs sec s", durationUnitMs.second],
+      ["minutes minute mins min m", durationUnitMs.minute],
+      ["hours hour hrs hr h", durationUnitMs.hour],
+      ["days day d", durationUnitMs.day],
+    ] as const
+  ).flatMap(([aliases, milliseconds]) =>
+    aliases.split(" ").map((alias) => [alias, milliseconds] as const),
+  ),
+);
 const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
+
+/** HTTP statuses the provider SDK transport permits retrying. */
+export function isRetryableProviderHttpStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
 
 /** Extract guarded HTTP status evidence for retry and diagnostic consumers. */
 export function extractFailoverHttpStatus(
@@ -204,11 +197,8 @@ export function shouldRetryFailoverSignal(params: {
     return false;
   }
   const hasLongLimitWindow = classifyRateLimitWindow(params.signal.message).kind === "long";
-  if (
+  return !(
     hasLongLimitWindow &&
     (reason === "billing" || reason === "rate_limit" || hasRateLimitRetryContext(params.signal))
-  ) {
-    return false;
-  }
-  return true;
+  );
 }

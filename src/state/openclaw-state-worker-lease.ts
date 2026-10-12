@@ -1,3 +1,5 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError, isSqliteWorkerStoreAvailable } from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
@@ -84,14 +86,7 @@ export function retainOpenClawStateWorkerLease(
       } catch (error) {
         errors.push(error);
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Shared-state worker lease retirement failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "Shared-state worker lease retirement failed");
     })();
     void retirement.catch(() => undefined);
     return retirement;
@@ -118,7 +113,7 @@ export function retainOpenClawStateWorkerLease(
       const run = async () => {
         // Prepared input transfers its credits at enqueue in this same turn.
         if (!acquisitionReady) {
-          await ready.promise;
+          await racePromiseWithAbortSignal(ready.promise, options?.signal);
         }
         assertInvocation(invocation);
         if (!scope) {
@@ -225,14 +220,7 @@ export function retainOpenClawStateWorkerLease(
       } catch (error) {
         errors.push(error);
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Shared-state worker lease cleanup failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "Shared-state worker lease cleanup failed");
     })();
     void closing.catch(() => undefined);
     return closing;

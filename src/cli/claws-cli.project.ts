@@ -32,11 +32,6 @@ import type {
   ClawsValidateOptions,
 } from "./claws-cli.js";
 
-type PreparedDev = {
-  build: Awaited<ReturnType<typeof buildClawProject>>;
-  plan: ClawAddPlan;
-};
-
 const CLAW_DEV_RESULT_SCHEMA_VERSION = "openclaw.clawDev.v1" as const;
 
 function reportProjectError(
@@ -68,7 +63,7 @@ function logDevPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
 }
 
-async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<PreparedDev> {
+async function prepareDev(projectPath: string, opts: ClawsDevOptions) {
   await using workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-claw-dev-",
@@ -229,7 +224,7 @@ export async function runClawsDevCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  let prepared: PreparedDev;
+  let prepared: Awaited<ReturnType<typeof prepareDev>>;
   try {
     prepared = await prepareDev(projectPath, opts);
   } catch (error) {

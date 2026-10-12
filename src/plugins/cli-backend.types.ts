@@ -1,6 +1,13 @@
-/** Type contracts for plugin-owned CLI backend integrations. */
+import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+
+type CliBackendNoOutputWatchdog = {
+  /** Fraction of overall timeout used when fixed timeout is not set. */
+  noOutputTimeoutRatio?: number;
+  minMs?: number;
+  maxMs?: number;
+};
 
 /** Static command adapter owned by a CLI backend plugin registration. */
 export type CliBackendConfig = {
@@ -10,21 +17,16 @@ export type CliBackendConfig = {
   args?: string[];
   /** Output parsing mode (default: json). */
   output?: "json" | "text" | "jsonl";
-  /** Output parsing mode when resuming a CLI session. */
   resumeOutput?: "json" | "text" | "jsonl";
   /** JSONL event dialect for CLIs with provider-specific stream formats. */
   jsonlDialect?: "claude-stream-json" | "gemini-stream-json";
-  /** Long-lived CLI process mode. */
   liveSession?: "claude-stdio";
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
   maxPromptArgChars?: number;
-  /** Extra env vars injected for this CLI. */
   env?: Record<string, string>;
-  /** Env vars to remove before launching this CLI. */
   clearEnv?: string[];
-  /** Flag used to pass model id (e.g. --model). */
   modelArg?: string;
   /** Model aliases mapping (OpenClaw model id → CLI model id). */
   modelAliases?: Record<string, string>;
@@ -36,29 +38,19 @@ export type CliBackendConfig = {
   forkArg?: string;
   /** Argument followed by an assistant checkpoint id to bound one resumed fork. */
   resumeAtArg?: string;
-  /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */
   sessionIdFields?: string[];
-  /** Flag used to pass system prompt. */
   systemPromptArg?: string;
-  /** Flag used to pass a system prompt file. */
   systemPromptFileArg?: string;
   /** Config override flag used to pass a system prompt file (e.g. -c). */
   systemPromptFileConfigArg?: string;
-  /** Config override key used to pass a system prompt file. */
   systemPromptFileConfigKey?: string;
-  /** System prompt behavior (append vs replace). */
   systemPromptMode?: "append" | "replace";
-  /** When to send system prompt. */
   systemPromptWhen?: "first" | "always" | "never";
-  /** Flag used to pass image paths. */
   imageArg?: string;
-  /** How to pass multiple images. */
   imageMode?: "repeat" | "list";
-  /** Where staged image files should live before handing them to the CLI. */
   imagePathScope?: "temp" | "workspace";
-  /** Serialize runs for this CLI. */
   serialize?: boolean;
   /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
   reseedFromRawTranscriptWhenUncompacted?: boolean;
@@ -69,28 +61,10 @@ export type CliBackendConfig = {
    * `invalidated-only` retries fresh only when the failure proves the binding expired.
    */
   freshSessionRecovery?: "replace-binding" | "invalidated-only";
-  /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
-    /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
-      /** Fresh/new sessions (non-resume). */
-      fresh?: {
-        /** Fraction of overall timeout used when fixed timeout is not set. */
-        noOutputTimeoutRatio?: number;
-        /** Lower bound for computed watchdog timeout. */
-        minMs?: number;
-        /** Upper bound for computed watchdog timeout. */
-        maxMs?: number;
-      };
-      /** Resume sessions. */
-      resume?: {
-        /** Fraction of overall timeout used when fixed timeout is not set. */
-        noOutputTimeoutRatio?: number;
-        /** Lower bound for computed watchdog timeout. */
-        minMs?: number;
-        /** Upper bound for computed watchdog timeout. */
-        maxMs?: number;
-      };
+      fresh?: CliBackendNoOutputWatchdog;
+      resume?: CliBackendNoOutputWatchdog;
     };
   };
 };
@@ -277,17 +251,14 @@ export type CliBackendExecute = (
   context: CliBackendExecuteContext,
 ) => AsyncIterable<Record<string, unknown>>;
 
-export type CliBackendResolveExecutionArgsContext = {
-  config?: OpenClawConfig;
-  workspaceDir: string;
-  provider: string;
-  modelId: string;
-  authProfileId?: string;
-  thinkingLevel?: CliBackendThinkingLevel;
+export type CliBackendResolveExecutionArgsContext = Omit<
+  CliBackendPrepareExecutionContext,
+  "agentDir" | "contextWindow" | "contextTokenBudget" | "env"
+> & {
   /** Effective fast mode at spawn, after queue admission and backend preparation. */
   fastMode?: boolean;
-  executionMode?: CliBackendExecutionMode;
-  toolAvailability?: CliBackendToolAvailability;
+  /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
+  hostOwnedTools?: readonly string[];
   useResume: boolean;
   baseArgs: readonly string[];
 };
@@ -301,13 +272,10 @@ type CliBackendResolveModelIdContext = {
   contextWindow?: string;
 };
 
-export type CliBackendJsonlUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
+export type CliBackendJsonlUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+>;
 
 export type CliBackendParsedJsonlEvent =
   | { kind: "text"; text: string }
@@ -458,9 +426,6 @@ type CliBackendPluginBase = {
    * - Gemini: system-level `settings.json`
    */
   bundleMcpMode?: CliBundleMcpMode;
-  /**
-   * Optional config normalizer applied to the registered adapter.
-   */
   normalizeConfig?: (
     config: CliBackendConfig,
     context?: CliBackendNormalizeConfigContext,
@@ -479,6 +444,8 @@ type CliBackendPluginBase = {
     modelDisplay: string;
     agentId?: string;
     systemPrompt: string;
+    /** Short IDs of OpenClaw MCP tools exposed to this invocation after policy filtering. */
+    openClawMcpToolNames?: readonly string[];
   }) => string | null | undefined;
   /**
    * Backend-owned bidirectional text replacements.
@@ -536,12 +503,6 @@ type CliBackendPluginBase = {
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   /**
-   * Exact-tool execution suppresses ambient instruction files, skills, hooks,
-   * and plugins so the host-prepared instruction snapshot remains authoritative.
-   * Required for rooted runs; omission keeps those runs unavailable.
-   */
-  isolatesInstructionsWithExactTools?: true;
-  /**
    * Maps the observed native list, intersected with the host selection, to equivalent
    * cron capabilities: read/write/edit/apply_patch/exec/process/web_search/web_fetch.
    * Never infer capabilities decided by unobserved model or sandbox settings.
@@ -566,6 +527,11 @@ type CliBackendPluginBase = {
    * `toolAvailabilityEnforcement`; `always-on` backends fail closed.
    */
   nativeToolMode?: CliBackendNativeToolMode;
+  /** Default local coding tools owned by OpenClaw instead of the native CLI.
+   * Applies only with bundled loopback MCP, outside exact or node runs.
+   * The execution-args adapter must disable the equivalent native tools.
+   */
+  hostOwnedTools?: readonly string[];
   /**
    * Side-question native tool behavior.
    *
@@ -589,5 +555,4 @@ type CliBackendNativeCompactionContract =
       manualCompaction?: never;
     };
 
-/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = CliBackendPluginBase & CliBackendNativeCompactionContract;

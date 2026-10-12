@@ -26,7 +26,7 @@ export type PluginInstallRuntimeCommit = {
 } & ({ operation: "install"; sourceDigests: Record<string, string> } | { operation: "uninstall" });
 
 export type PluginInstallRuntimeDeferral = {
-  record(commit: PluginInstallRuntimeCommit, assertSourceCurrent?: () => void): void;
+  record(commit: PluginInstallRuntimeCommit): void;
   deferCleanup(cleanup: PluginSourceCleanup, sourcePath: string): void;
 };
 
@@ -69,7 +69,6 @@ export class PluginInstallRuntimeBatch {
   }> = [];
   private targets: PluginInstallBatchTarget[] = [];
   private readonly retained = new Set<string>();
-  private readonly sourceChecks = new Map<string, () => void>();
   private databasePath?: string;
   private phase: "collecting" | "preparing" | "prepared" | "applying" | "closed" = "collecting";
 
@@ -90,7 +89,6 @@ export class PluginInstallRuntimeBatch {
     }
     this.targets = [];
     this.retained.clear();
-    this.sourceChecks.clear();
   }
 
   private assertOpen() {
@@ -110,17 +108,12 @@ export class PluginInstallRuntimeBatch {
     const entry: (typeof this.installs)[number] = { cleanups: [] };
     this.installs.push(entry);
     return {
-      record: (commit, assertSourceCurrent) => {
+      record: (commit) => {
         this.assertCollecting();
         if (entry.commit) {
           throw new Error("Plugin install already committed in this batch");
         }
         entry.commit = commit;
-        if (assertSourceCurrent) {
-          this.sourceChecks.set(commit.pluginId, assertSourceCurrent);
-        } else {
-          this.sourceChecks.delete(commit.pluginId);
-        }
       },
       deferCleanup: (cleanup, sourcePath) => {
         this.assertCollecting();
@@ -202,7 +195,6 @@ export class PluginInstallRuntimeBatch {
             entryFile: entry.source === entry.manifestPath ? entry.source : undefined,
           })),
       );
-      this.sourceChecks.set(pluginId, source.assertSourceCurrent);
       targets.set(pluginId, {
         pluginId,
         installHash: hashStableJson(current[pluginId]),
@@ -289,7 +281,6 @@ export class PluginInstallRuntimeBatch {
         const assertCurrent = () => {
           assertOwned();
           for (const target of targets) {
-            this.sourceChecks.get(target.pluginId)?.();
             if (
               !records[target.pluginId] ||
               hashStableJson(records[target.pluginId]) !== target.installHash

@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { InferResult } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -26,12 +27,6 @@ import type { TranscriptSummarySnapshot } from "./store-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 type TranscriptSessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
-type TranscriptSessionEntry = {
-  session: TranscriptSessionDescriptor;
-  selector: string;
-  hasSummary: boolean;
-};
-type TranscriptSessionMatchEntry = TranscriptSessionEntry & { inputRevision: string };
 
 export function readTranscriptCanonicalSessionRow(database: DatabaseSync, selector: string) {
   return executeSqliteQueryTakeFirstSync(
@@ -88,10 +83,34 @@ type SummarySnapshotRow = Pick<
   | "created_at_ms"
   | "updated_at_ms"
 >;
-const summarySnapshotQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSqliteQueryTakeFirstSync<TranscriptSessionIdentity, SummarySnapshotRow>>
->();
+const summarySnapshotQuery = createSqliteQueryCache((database) =>
+  prepareSqliteQueryTakeFirstSync<TranscriptSessionIdentity, SummarySnapshotRow>(
+    database,
+    (parameter) =>
+      meetingTranscriptDb(database)
+        .selectFrom("meeting_transcript_sessions")
+        .where(
+          "session_id",
+          "=",
+          parameter((value) => value.sessionId),
+        )
+        .where(
+          "started_at",
+          "=",
+          parameter((value) => value.startedAt),
+        )
+        // Retain native integer decoding while omitting unrelated export bookkeeping.
+        .select([
+          "next_utterance_seq",
+          "title",
+          "source_json",
+          "metadata_json",
+          "stopped_at",
+          "created_at_ms",
+          "updated_at_ms",
+        ]),
+  ),
+);
 
 /** Runs inside the read worker's transaction so input and replacement basis agree. */
 export function readTranscriptSummarySnapshot(
@@ -99,37 +118,7 @@ export function readTranscriptSummarySnapshot(
   session: TranscriptSessionIdentity,
   maxUtterances: number,
 ): TranscriptSummarySnapshot | undefined {
-  let read = summarySnapshotQueries.get(database);
-  if (!read) {
-    read = prepareSqliteQueryTakeFirstSync<TranscriptSessionIdentity, SummarySnapshotRow>(
-      database,
-      (parameter) =>
-        meetingTranscriptDb(database)
-          .selectFrom("meeting_transcript_sessions")
-          .where(
-            "session_id",
-            "=",
-            parameter((value) => value.sessionId),
-          )
-          .where(
-            "started_at",
-            "=",
-            parameter((value) => value.startedAt),
-          )
-          // Retain native integer decoding while omitting unrelated export bookkeeping.
-          .select([
-            "next_utterance_seq",
-            "title",
-            "source_json",
-            "metadata_json",
-            "stopped_at",
-            "created_at_ms",
-            "updated_at_ms",
-          ]),
-    );
-    summarySnapshotQueries.set(database, read);
-  }
-  const row = read(session);
+  const row = summarySnapshotQuery(database)(session);
   if (!row) {
     return undefined;
   }
@@ -143,7 +132,7 @@ export function readTranscriptSummarySnapshot(
   };
 }
 
-export function readTranscriptSessionEntries(database: DatabaseSync): TranscriptSessionEntry[] {
+export function readTranscriptSessionEntries(database: DatabaseSync) {
   const rows = executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -160,10 +149,7 @@ export function readTranscriptSessionEntries(database: DatabaseSync): Transcript
   }));
 }
 
-const sessionMatchQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof createTranscriptSessionMatchQueries>
->();
+const sessionMatchQueries = createSqliteQueryCache(createTranscriptSessionMatchQueries);
 
 function createTranscriptSessionMatchQueries(database: DatabaseSync) {
   const query = meetingTranscriptDb(database)
@@ -247,19 +233,9 @@ function createTranscriptSessionMatchQueries(database: DatabaseSync) {
   };
 }
 
-export function readTranscriptSessionMatches(
-  database: DatabaseSync,
-  value: string,
-): {
-  qualified: TranscriptSessionMatchEntry[];
-  unqualified: TranscriptSessionMatchEntry[];
-} {
-  let queries = sessionMatchQueries.get(database);
-  if (!queries) {
-    queries = createTranscriptSessionMatchQueries(database);
-    sessionMatchQueries.set(database, queries);
-  }
-  const entries = (result: ReturnType<typeof queries.canonical>): TranscriptSessionMatchEntry[] =>
+export function readTranscriptSessionMatches(database: DatabaseSync, value: string) {
+  const queries = sessionMatchQueries(database);
+  const entries = (result: ReturnType<typeof queries.canonical>) =>
     result.rows.map((row) => ({
       session: sessionFromRow(row),
       selector: row.selector,

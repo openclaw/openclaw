@@ -1,12 +1,8 @@
 #!/bin/bash
 
-# VibeTunnel Logging Utility
-# Simplifies access to VibeTunnel logs using macOS unified logging system
-
 set -euo pipefail
 
 SUBSYSTEM="ai.openclaw"
-DEFAULT_LEVEL="info"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -32,7 +28,7 @@ handle_sudo_error() {
 STREAM_MODE=false
 TIME_RANGE="5m"
 CATEGORY=""
-LOG_LEVEL="$DEFAULT_LEVEL"
+LOG_LEVEL="info"
 SEARCH_TEXT=""
 OUTPUT_FILE=""
 ERRORS_ONLY=false
@@ -221,7 +217,6 @@ if [[ -n "$SEARCH_TEXT" ]]; then
     PREDICATE="$PREDICATE AND eventMessage CONTAINS[c] \"$ESCAPED_SEARCH_TEXT\""
 fi
 
-# Build the command as argv array to avoid shell eval injection
 LOG_CMD=(sudo log)
 if [[ "$STREAM_MODE" == true ]]; then
     LOG_CMD+=(stream --predicate "$PREDICATE" --level "$LOG_LEVEL" --info)

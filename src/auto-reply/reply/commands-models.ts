@@ -1,12 +1,10 @@
-// Implements model listing and provider catalog commands.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import {
+  resolveModelAuthLabel,
+  resolveModelAuthLabelAsync,
+} from "../../agents/model-auth-label.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import {
@@ -15,8 +13,9 @@ import {
 } from "../../agents/prepared-model-runtime.errors.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { ReplyPayload } from "../types.js";
-import { defineAuthorizedTextCommand } from "./command-gates.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import {
   loadModelsProviderData,
   type ModelsCommandSessionEntry,
@@ -44,37 +43,25 @@ type ParsedModelsCommand =
   | { action: "add" };
 
 function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action: "list" }> {
-  const provider = normalizeOptionalString(tokens[0]);
-
+  const provider = tokens[0];
   let page = 1;
+  let pageSize = PAGE_SIZE_DEFAULT;
   let all = false;
-  for (const token of tokens.slice(1)) {
-    const lower = normalizeLowercaseStringOrEmpty(token);
-    if (lower === "all" || lower === "--all") {
+  for (const [index, token] of tokens.entries()) {
+    const lower = token.toLowerCase();
+    if (index > 0 && (lower === "all" || lower === "--all")) {
       all = true;
       continue;
     }
-    if (lower.startsWith("page=")) {
-      const value = parseStrictPositiveInteger(lower.slice("page=".length));
-      if (value !== undefined) {
-        page = value;
-      }
-      continue;
-    }
-    const pageToken = parseStrictPositiveInteger(lower);
-    if (pageToken !== undefined) {
-      page = pageToken;
-    }
-  }
-
-  let pageSize = PAGE_SIZE_DEFAULT;
-  for (const token of tokens) {
-    const lower = normalizeLowercaseStringOrEmpty(token);
-    if (lower.startsWith("limit=") || lower.startsWith("size=")) {
-      const rawValue = lower.slice(lower.indexOf("=") + 1);
-      const value = parseStrictPositiveInteger(rawValue);
-      if (value !== undefined) {
+    const isPageSize = lower.startsWith("limit=") || lower.startsWith("size=");
+    const value = parseStrictPositiveInteger(
+      isPageSize || lower.startsWith("page=") ? lower.slice(lower.indexOf("=") + 1) : lower,
+    );
+    if (value !== undefined) {
+      if (isPageSize) {
         pageSize = Math.min(PAGE_SIZE_MAX, value);
+      } else if (index > 0) {
+        page = value;
       }
     }
   }
@@ -94,8 +81,8 @@ function parseModelsArgs(raw: string): ParsedModelsCommand {
     return { action: "providers" };
   }
 
-  const tokens = trimmed.split(/\s+/g).filter(Boolean);
-  const first = normalizeLowercaseStringOrEmpty(tokens[0]);
+  const tokens = trimmed.split(/\s+/g);
+  const first = tokens[0]?.toLowerCase();
   switch (first) {
     case "providers":
       return { action: "providers" };
@@ -108,14 +95,16 @@ function parseModelsArgs(raw: string): ParsedModelsCommand {
   }
 }
 
-function resolveProviderLabel(params: {
+type ProviderLabelParams = {
   provider: string;
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
-}): string {
+};
+
+function resolveProviderLabelParams(params: ProviderLabelParams) {
   const harnessPolicy = resolveAgentHarnessPolicy({
     config: params.cfg,
     provider: params.provider,
@@ -126,20 +115,31 @@ function resolveProviderLabel(params: {
     harnessRuntime: harnessPolicy.runtime,
     config: params.cfg,
   });
-  const authLabel = resolveModelAuthLabel({
+  return {
     provider: params.provider,
     acceptedProviderIds,
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
-  });
-  if (!authLabel || authLabel === "unknown") {
-    return params.provider;
-  }
-  return `${params.provider} · 🔑 ${authLabel}`;
+  };
 }
 
+function formatProviderLabel(provider: string, authLabel: string | undefined): string {
+  if (!authLabel || authLabel === "unknown") {
+    return provider;
+  }
+  return `${provider} · 🔑 ${authLabel}`;
+}
+
+async function resolveProviderLabelAsync(params: ProviderLabelParams): Promise<string> {
+  return formatProviderLabel(
+    params.provider,
+    await resolveModelAuthLabelAsync(resolveProviderLabelParams(params)),
+  );
+}
+
+/** @deprecated Use formatModelsAvailableHeaderAsync. Removed at the next Plugin SDK major. */
 export function formatModelsAvailableHeader(params: {
   provider: string;
   total: number;
@@ -150,14 +150,28 @@ export function formatModelsAvailableHeader(params: {
   sessionEntry?: ModelsCommandSessionEntry;
   availability?: ModelsProviderMenu;
 }): string {
-  const providerLabel = resolveProviderLabel({
-    provider: params.provider,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    sessionEntry: params.sessionEntry,
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "formatModelsAvailableHeader",
+    replacement: "formatModelsAvailableHeaderAsync",
   });
+  const providerLabel = formatProviderLabel(
+    params.provider,
+    resolveModelAuthLabel(resolveProviderLabelParams(params)),
+  );
+  return formatModelsHeader(params, providerLabel);
+}
+
+export async function formatModelsAvailableHeaderAsync(
+  params: Parameters<typeof formatModelsAvailableHeader>[0],
+): Promise<string> {
+  return formatModelsHeader(params, await resolveProviderLabelAsync(params));
+}
+
+function formatModelsHeader(
+  params: Parameters<typeof formatModelsAvailableHeader>[0],
+  providerLabel: string,
+): string {
   const count =
     params.availability && params.availability.available !== params.total
       ? `${params.availability.available} of ${params.total}`
@@ -165,31 +179,6 @@ export function formatModelsAvailableHeader(params: {
   return [`Models (${providerLabel}) — ${count} available`, params.availability?.notice]
     .filter(Boolean)
     .join("\n\n");
-}
-
-function buildModelsMenuText(params: {
-  providers: string[];
-  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
-}): string {
-  return [
-    "Providers:",
-    ...params.providers.map(
-      (provider) => `- ${provider} (${params.byProvider.get(provider)?.size ?? 0})`,
-    ),
-    "",
-    "Use: /models <provider>",
-    "Switch: /model <provider/model>",
-  ].join("\n");
-}
-
-function buildProviderInfos(params: {
-  providers: string[];
-  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
-}): Array<{ id: string; count: number }> {
-  return params.providers.map((provider) => ({
-    id: provider,
-    count: params.byProvider.get(provider)?.size ?? 0,
-  }));
 }
 
 type ModelsCommandReplyParams = {
@@ -237,15 +226,15 @@ export async function resolveModelsCommandReply(
     }
     throw error;
   }
-  const reply = buildModelsCommandReply(params, parsed, data);
+  const reply = await buildModelsCommandReply(params, parsed, data);
   return { ...reply, text: [data.refreshWarning, reply.text].filter(Boolean).join("\n\n") };
 }
 
-function buildModelsCommandReply(
+async function buildModelsCommandReply(
   params: ModelsCommandReplyParams,
   parsed: ParsedModelsCommand,
   data: PreparedModelsProviderData,
-): ReplyPayload & { text: string } {
+): Promise<ReplyPayload & { text: string }> {
   const { byProvider, providers } = data;
   const availability =
     parsed.action === "list" && parsed.provider
@@ -267,7 +256,10 @@ function buildModelsCommandReply(
     .join("\n");
   const withAvailability = (text: string) => [text, notice, checking].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
-  const providerInfos = buildProviderInfos({ providers, byProvider });
+  const providerInfos = providers.map((provider) => ({
+    id: provider,
+    count: byProvider.get(provider)?.size ?? 0,
+  }));
 
   const providerMenuReply = (preferMenu: boolean): ReplyPayload & { text: string } => {
     const channelData =
@@ -284,7 +276,15 @@ function buildModelsCommandReply(
       };
     }
     return {
-      text: withAvailability(buildModelsMenuText({ providers, byProvider })),
+      text: withAvailability(
+        [
+          "Providers:",
+          ...providers.map((provider) => `- ${provider} (${byProvider.get(provider)?.size ?? 0})`),
+          "",
+          "Use: /models <provider>",
+          "Switch: /model <provider/model>",
+        ].join("\n"),
+      ),
     };
   };
 
@@ -301,7 +301,8 @@ function buildModelsCommandReply(
     return providerMenuReply(false);
   }
 
-  if (!byProvider.has(provider)) {
+  const providerModels = byProvider.get(provider);
+  if (!providerModels) {
     return {
       text: [
         `Unknown provider: ${provider}`,
@@ -314,21 +315,14 @@ function buildModelsCommandReply(
     };
   }
 
-  const models = [...(byProvider.get(provider) ?? new Set<string>())];
+  const models = [...providerModels];
   const total = models.length;
 
   if (total === 0) {
     if (checking) {
       return { text: checking };
     }
-    const emptyProviderLabel = resolveProviderLabel({
-      provider,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      sessionEntry: params.sessionEntry,
-    });
+    const emptyProviderLabel = await resolveProviderLabelAsync({ ...params, provider });
     return {
       text: [
         `Models (${emptyProviderLabel}) — none`,
@@ -354,14 +348,10 @@ function buildModelsCommandReply(
   });
   if (interactiveChannelData) {
     return {
-      text: formatModelsAvailableHeader({
+      text: await formatModelsAvailableHeaderAsync({
+        ...params,
         provider,
         total,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        sessionEntry: params.sessionEntry,
         availability,
       }),
       channelData: interactiveChannelData,
@@ -373,7 +363,7 @@ function buildModelsCommandReply(
   }
 
   const effectivePageSize = all ? total : pageSize;
-  const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
+  const pageCount = Math.ceil(total / effectivePageSize);
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
 
   if (!all && page !== safePage) {
@@ -390,14 +380,7 @@ function buildModelsCommandReply(
   const startIndex = (safePage - 1) * effectivePageSize;
   const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
   const pageModels = models.slice(startIndex, endIndexExclusive);
-  const providerLabel = resolveProviderLabel({
-    provider,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    sessionEntry: params.sessionEntry,
-  });
+  const providerLabel = await resolveProviderLabelAsync({ ...params, provider });
   const lines = [
     `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`,
   ];
@@ -424,7 +407,7 @@ export const handleModelsCommand: CommandHandler = defineAuthorizedTextCommand(
   async (params, commandBodyNormalized) => {
     const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
     if (parsed.action === "add") {
-      return { shouldContinue: false, reply: { text: MODELS_ADD_DEPRECATED_TEXT } };
+      return commandReply(MODELS_ADD_DEPRECATED_TEXT);
     }
 
     const modelsAgentId = params.sessionKey
@@ -452,9 +435,6 @@ export const handleModelsCommand: CommandHandler = defineAuthorizedTextCommand(
         (modelsAgentId === currentAgentId ? params.workspaceDir : undefined),
       sessionEntry: targetSessionEntry,
     });
-    if (!reply) {
-      return null;
-    }
-    return { reply, shouldContinue: false };
+    return reply ? commandReply(reply) : null;
   },
 );

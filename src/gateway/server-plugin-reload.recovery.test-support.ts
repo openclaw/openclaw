@@ -26,11 +26,15 @@ import {
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChannelManager } from "./server-channels.js";
@@ -134,7 +138,7 @@ export async function createPluginReloadRecoveryFixture(
   const rollbackConfigEffects = vi.fn(async () => {});
   const candidates: ReturnType<typeof createBuilder>[] = [];
   const recoveries: ReturnType<typeof createBuilder>[] = [];
-  const preparePlugins = ({
+  const preparePlugins = async ({
     cfg,
     replacePluginIds = new Set<string>(),
     loadModules = true,
@@ -208,24 +212,22 @@ export async function createPluginReloadRecoveryFixture(
     };
   };
   const lifetime = createGatewaySidecarStopOwner();
-  const metadataOwners: unknown = options.expectedMetadataCloseError
-    ? Reflect.get(globalThis, Symbol.for("openclaw.gatewayPluginMetadataOwners"))
-    : undefined;
-  assert(metadataOwners === undefined || metadataOwners instanceof Set);
-  const metadataOwnerSet: Set<unknown> | undefined = metadataOwners;
-  const precedingMetadataOwners = new Set(metadataOwnerSet);
-  const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
-  const fixtureMetadataOwners = metadataOwnerSet
-    ? [...metadataOwnerSet].filter((entry) => !precedingMetadataOwners.has(entry))
-    : [];
+  const scheduler = createTestGatewayScheduler();
+  const metadata = retainGatewayPluginMetadata(scheduler);
+  const metadataState = resolveGlobalSingleton<{ owner?: unknown }>(
+    Symbol.for("openclaw.gatewayPluginMetadataOwner"),
+    () => ({}),
+  );
+  const fixtureMetadataOwner = metadataState.owner;
   if (options.expectedMetadataCloseError) {
-    expect(fixtureMetadataOwners).toHaveLength(1);
+    expect(fixtureMetadataOwner).toBeDefined();
   }
   const snapshot =
     options.pluginMetadataSnapshot ??
     createPluginMetadataSnapshotFixture({ plugins: [{ id: "first" }, { id: "sibling" }] });
   metadata.publish(snapshot);
   const runtime = {
+    scheduler,
     requestEntryLifetime: new GatewayRequestEntryLifetime(),
     pluginMetadataSnapshot: snapshot,
     pluginRuntime: registryOwner,
@@ -252,22 +254,21 @@ export async function createPluginReloadRecoveryFixture(
     broadcast: vi.fn(),
   } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
   cleanups.push(async () => {
+    await scheduler.stop();
     await currentServices?.stop().catch(() => {});
     await initial.stop().catch(() => {});
     const retirementFailure = await lifetime.stop().catch((error: unknown) => error);
     await registryOwner.close();
     if (options.expectedMetadataCloseError) {
-      assert(metadataOwnerSet);
-      const [fixtureMetadataOwner] = fixtureMetadataOwners;
       try {
         const failure = await metadata.close().catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(PluginRuntimeCloseRetainedError);
         expect(collectNestedErrorCandidates(failure)).toContain(options.expectedMetadataCloseError);
-        expect(metadataOwnerSet.has(fixtureMetadataOwner)).toBe(true);
+        expect(metadataState.owner).toBe(fixtureMetadataOwner);
       } finally {
         // This deliberately unrecoverable fixture has asserted the real shutdown
-        // fence. Isolate only its owned entry so later tests can create Gateways.
-        metadataOwnerSet.delete(fixtureMetadataOwner);
+        // fence. Release its owned state so later tests can create Gateways.
+        delete metadataState.owner;
       }
     } else {
       await metadata.close();
@@ -287,6 +288,7 @@ export async function createPluginReloadRecoveryFixture(
     nextConfig = config,
     pluginIds: readonly string[] = ["first"],
     changedPaths: string[] = [],
+    ownership?: Pick<Parameters<typeof reloadGatewayPlugins>[1], "checkpoint" | "isAborted">,
   ) => {
     aborted = false;
     return withPluginRuntimeRegistryScope(registryOwner.registry, () =>
@@ -298,7 +300,7 @@ export async function createPluginReloadRecoveryFixture(
           loadGatewayPluginBootstrapModule: async () => ({
             prepareGatewayPluginLoad: preparePlugins,
           }),
-          prepareAttachedPluginRuntime: async (candidate) => {
+          prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             await options.prepareAttached?.();
             return {
               publish: () => {
@@ -309,6 +311,7 @@ export async function createPluginReloadRecoveryFixture(
                   "gateway-bindable",
                   undefined,
                   registryOwner.registry,
+                  trackActivationCleanup,
                 );
                 registryOwner.publish(candidate.pluginRegistry);
               },
@@ -320,8 +323,10 @@ export async function createPluginReloadRecoveryFixture(
           nextConfig,
           sourceConfig: nextConfig,
           changedPaths,
-          checkpoint: options.checkpoint,
-          prepareConfigEffects: options.prepareConfigEffects ?? (() => rollbackConfigEffects),
+          checkpoint: ownership?.checkpoint ?? options.checkpoint,
+          prepareConfigEffects:
+            options.prepareConfigEffects ??
+            (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
           pluginLifecycle: {
             reason: "reload",
             waitForDrain: options.waitForDrain,
@@ -338,7 +343,7 @@ export async function createPluginReloadRecoveryFixture(
             await options.afterPublish?.();
           },
           env: options.env ?? {},
-          isAborted: () => aborted,
+          isAborted: () => aborted || ownership?.isAborted?.() === true,
           assertInvokerOwned: options.assertInvokerOwned,
         },
       ),
@@ -368,6 +373,7 @@ export type RecoveryFixtureFactory = (
 
 export function createRecoveryChannelManager(fixture: Awaited<ReturnType<RecoveryFixtureFactory>>) {
   return createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: fixture.getConfig,
     getPluginRegistry: () => fixture.registryOwner.registry,
     channelLogs: {},

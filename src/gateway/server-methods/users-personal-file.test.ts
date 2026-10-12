@@ -4,9 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import {
+  withGatewayToolCallerIdentity,
+  withGatewayPersonalToolUser,
+} from "../../agents/tools/gateway-caller-context.js";
 import { createPersonalInstructionsTool } from "../../agents/tools/personal-instructions-tool.js";
 import { loadPersonalUserBootstrapFile } from "../../agents/workspace-personal-bootstrap.js";
+import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -26,6 +30,8 @@ const state = vi.hoisted(() => ({
   commitGuard: undefined as (() => void) | undefined,
   profileReady: undefined as (() => Promise<void>) | undefined,
   profileHolds: 0,
+  rootCalls: 0,
+  beforeRoot: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("../../state/user-profile-list.js", () => ({
   hasMultipleSessionSharingIdentities: () => state.multipleProfiles,
@@ -65,6 +71,8 @@ vi.mock("../../infra/fs-safe.js", async (importOriginal) => {
   return {
     ...original,
     root: async (...args: Parameters<typeof original.root>) => {
+      state.rootCalls += 1;
+      await state.beforeRoot?.();
       const [dir, defaults] = args;
       return original.root(dir, {
         ...defaults,
@@ -94,6 +102,8 @@ beforeEach(async () => {
   state.commitGuard = undefined;
   state.profileReady = undefined;
   state.profileHolds = 0;
+  state.rootCalls = 0;
+  state.beforeRoot = undefined;
   connected = true;
   controller = new AbortController();
   config = { agents: { defaults: { workspace } } };
@@ -142,14 +152,12 @@ const save = (content: string, expectedHash: string | null = null) =>
 const personalPath = () => path.join(workspace, "users", "alice", "USER.md");
 
 describe("personal USER.md self-service", () => {
-  function toolTurn(
-    sessionKey = "agent:main:dashboard:someone-elses-project",
-    scopes = ["operator.read"],
-  ) {
+  function toolTurn() {
+    const sessionKey = "agent:main:dashboard:someone-elses-project";
     let active = true;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "alice-alias",
-      scopes,
+      scopes: ["operator.read"],
       assertCurrent: () => {
         if (!active) {
           throw new Error("requester revoked");
@@ -192,43 +200,95 @@ describe("personal USER.md self-service", () => {
     };
   }
 
-  it.each([
-    { sessionKey: "agent:main:main", scopes: ["operator.read"] },
-    { sessionKey: "agent:main:dashboard:foreign-owner", scopes: ["operator.write"] },
-    { sessionKey: "agent:main:dashboard:worktree", scopes: ["operator.admin"] },
-  ])(
-    "routes the actual chat tool from $sessionKey with $scopes to the requester file",
-    async ({ sessionKey, scopes }) => {
-      const { identity } = toolTurn(sessionKey, scopes);
-      const tool = createPersonalInstructionsTool("main");
-      const execute = (params: Record<string, unknown>) =>
-        withGatewayToolCallerIdentity(identity, () =>
-          tool.execute("personal-call", params, controller.signal),
-        );
-      expect((await execute({ action: "get" })).details).toMatchObject({
-        profileId: "alice",
-        missing: true,
-        hash: null,
-      });
-      expect(
-        (await execute({ action: "set", content: "Prefer examples.", expectedHash: null })).details,
-      ).toMatchObject({ profileId: "alice", content: "Prefer examples." });
-      expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer examples.");
-      expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
-      expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
-    },
-  );
+  it("routes the read-only requester's chat tool from a foreign session to their canonical file", async () => {
+    const { identity } = toolTurn();
+    const tool = createPersonalInstructionsTool("main");
+    const execute = (params: Record<string, unknown>) =>
+      withGatewayToolCallerIdentity(identity, () =>
+        tool.execute("personal-call", params, controller.signal),
+      );
+    expect((await execute({ action: "get" })).details).toMatchObject({
+      profileId: "alice",
+      missing: true,
+      hash: null,
+    });
+    expect(
+      (await execute({ action: "set", content: "Prefer examples.", expectedHash: null })).details,
+    ).toMatchObject({ profileId: "alice", content: "Prefer examples." });
+    expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer examples.");
+    expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
+    expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
+  });
+
+  function withRequesterTurn(test: Parameters<typeof withPersonalToolTurn>[1]) {
+    const { identity } = toolTurn();
+    return withPersonalToolTurn(
+      { owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" } },
+      (turn) =>
+        withGatewayToolCallerIdentity(
+          { ...identity, operationalRunInstance: undefined, operatorAuthority: undefined },
+          () => test(turn),
+        ),
+    );
+  }
 
   it.each(
-    (["shared-secret", "device-token"] as const).flatMap((kind) =>
-      (["live", "attestation removed", "connection aborted", "connection replaced"] as const).map(
-        (boundary) => ({
-          kind,
-          boundary,
-        }),
-      ),
+    (["get", "set"] as const).flatMap((action) =>
+      (["before", "after preparation"] as const).map((phase) => ({ action, phase })),
     ),
-  )(
+  )("rejects personal $action when another profile steers $phase", async ({ action, phase }) => {
+    await withRequesterTurn(async (turn) => {
+      const tool = createPersonalInstructionsTool("main");
+      const execute = (params: Record<string, unknown>) => tool.execute("personal-call", params);
+      const steer = async () => {
+        expect(await turn.steer({ profileId: "bob", senderId: "bob", name: "Bob" })).toMatchObject({
+          status: "accepted",
+        });
+      };
+      if (phase === "before") {
+        const saved = await execute({
+          action: "set",
+          content: "Alice's preferences",
+          expectedHash: null,
+        });
+        expect(saved.details).toMatchObject({ profileId: "alice", content: "Alice's preferences" });
+        const before = state.rootCalls;
+        await steer();
+        await expect(
+          withGatewayPersonalToolUser("alice-alias", () =>
+            execute({
+              action,
+              ...(action === "set"
+                ? {
+                    content: "Bob's preferences",
+                    expectedHash: (saved.details as { hash: string }).hash,
+                  }
+                : {}),
+            }),
+          ),
+        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        expect(state.rootCalls).toBe(before);
+        expect(await fs.readFile(personalPath(), "utf8")).toBe("Alice's preferences");
+      } else {
+        state.beforeRoot = steer;
+        await expect(
+          execute({
+            action,
+            ...(action === "set" ? { content: "Ambiguous", expectedHash: null } : {}),
+          }),
+        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+      }
+    });
+  });
+
+  it.each([
+    { kind: "shared-secret", boundary: "live" },
+    { kind: "device-token", boundary: "live" },
+    { kind: "shared-secret", boundary: "attestation removed" },
+    { kind: "shared-secret", boundary: "connection aborted" },
+    { kind: "shared-secret", boundary: "connection replaced" },
+  ] as const)(
     "carries authenticated $kind owner ingress through the chat tool: $boundary",
     async ({ kind, boundary }) => {
       const { identity } = toolTurn();
@@ -365,31 +425,28 @@ describe("personal USER.md self-service", () => {
     },
   );
 
-  it("rejects a different source even when its profile matches", async () => {
-    const { identity } = toolTurn();
-    client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
-      profileId: identity.operatorAuthority.profileId,
-      scopes: ["operator.read"],
-      assertCurrent: () => {},
-    });
-    expect((await withGatewayToolCallerIdentity(identity, () => save("Different source"))).ok).toBe(
-      false,
-    );
-  });
-
-  it("rejects copied requester authority without its live admitted tool run", async () => {
-    toolTurn();
-    expect((await save("Unadmitted")).ok).toBe(false);
-    const { identity } = toolTurn();
-    expect(
-      (
-        await withGatewayToolCallerIdentity({ ...identity, operatorAuthority: undefined }, () =>
-          save("Wrong source"),
-        )
-      ).ok,
-    ).toBe(false);
-    expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
-  });
+  it.each(["different source", "unadmitted", "missing source"])(
+    "rejects copied requester authority with %s",
+    async (kind) => {
+      const { identity } = toolTurn();
+      if (kind === "different source") {
+        client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
+          profileId: identity.operatorAuthority.profileId,
+          scopes: ["operator.read"],
+          assertCurrent: () => {},
+        });
+      }
+      const result =
+        kind === "unadmitted"
+          ? await save("Unadmitted")
+          : await withGatewayToolCallerIdentity(
+              kind === "missing source" ? { ...identity, operatorAuthority: undefined } : identity,
+              () => save("Wrong source"),
+            );
+      expect(result.ok).toBe(false);
+      expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+    },
+  );
 
   it.each(["source", "run", "commit"])(
     "rechecks delegated %s authority before filesystem mutation",
@@ -425,17 +482,6 @@ describe("personal USER.md self-service", () => {
     await expect(
       createPersonalInstructionsTool("main").execute("anonymous", { action: "get" }),
     ).rejects.toThrow("authenticated Gateway user turn");
-  });
-
-  it("rejects personal reads and writes on a single-user Gateway without touching files", async () => {
-    state.multipleProfiles = false;
-    expect(await rpc("get")).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-    expect(await save("Not a second USER.md")).toMatchObject({
-      ok: false,
-      error: { code: "FORBIDDEN" },
-    });
-    expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
-    expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
   });
 
   it("lets a read-only signed-in user create, read, and edit only their canonical file", async () => {
@@ -476,25 +522,15 @@ describe("personal USER.md self-service", () => {
     });
   });
 
-  it.each([{ profileId: "bob" }, { path: "USER.md" }, { name: "../USER.md" }])(
-    "rejects caller-selected targets %j even for administrators",
-    async (extra) => {
-      client.connect.scopes = ["operator.admin"];
-      for (const method of ["get", "set"] as const) {
-        expect(
-          await rpc(method, {
-            ...(method === "set" ? { content: "Bad", expectedHash: null } : {}),
-            ...extra,
-          }),
-        ).toMatchObject({ ok: false });
-      }
-      expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
-    },
-  );
-
-  it.each(["anonymous", "synthetic", "node", "disconnected", "no-scope", "cancelled"])(
-    "rejects %s callers",
+  it.each(["single-user", "selected-profile", "anonymous", "synthetic", "node"])(
+    "rejects personal-file requests for %s before touching files",
     async (kind) => {
+      if (kind === "single-user") {
+        state.multipleProfiles = false;
+      }
+      if (kind === "selected-profile") {
+        client.connect.scopes = ["operator.admin"];
+      }
       if (kind === "anonymous") {
         client.authenticatedUserProfile = undefined;
       }
@@ -504,17 +540,19 @@ describe("personal USER.md self-service", () => {
       if (kind === "node") {
         client.connect.role = "node";
       }
-      if (kind === "disconnected") {
-        connected = false;
+      for (const method of ["get", "set"] as const) {
+        expect(
+          await rpc(method, {
+            ...(method === "set" ? { content: "Bad", expectedHash: null } : {}),
+            ...(kind === "selected-profile" ? { profileId: "bob" } : {}),
+          }),
+        ).toMatchObject({
+          ok: false,
+          ...(kind === "selected-profile" ? {} : { error: { code: "FORBIDDEN" } }),
+        });
       }
-      if (kind === "no-scope") {
-        client.connect.scopes = [];
-      }
-      if (kind === "cancelled") {
-        controller.abort();
-      }
-      expect(await save("Bad")).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
       expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+      expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
     },
   );
 

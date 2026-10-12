@@ -17,6 +17,7 @@ import {
   resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
+import { resolveExplicitAuthOrderSelection } from "./explicit-order.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { dedupeProfileIds } from "./profile-list.js";
 import { isSetupCredentialAccessible } from "./setup-access.js";
@@ -26,6 +27,8 @@ import {
   isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
+
+export { resolveExplicitAuthOrderSelection };
 
 /** Reason a profile is or is not eligible for provider auth. */
 export type AuthProfileEligibilityReasonCode =
@@ -40,32 +43,21 @@ type AuthProfileEligibility = {
   reasonCode: AuthProfileEligibilityReasonCode;
 };
 
-function isAuthProfileRuntimeSettlementCandidate(params: {
-  credential: AuthProfileCredential | undefined;
-  eligibility: AuthProfileEligibility;
-  includePendingOAuthRefresh?: boolean;
-}): boolean {
-  return (
-    params.eligibility.eligible ||
-    (params.includePendingOAuthRefresh === true &&
-      params.eligibility.reasonCode === "expired" &&
-      params.credential?.type === "oauth" &&
-      isPendingOAuthRefreshFence(params.credential))
-  );
-}
-
-function isProfileProviderCompatibleWithAuthProvider(params: {
+function prepareProviderCompatibility(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
-  providerAuthKey: string;
   provider: string;
-}): boolean {
-  const providerKey = resolveProviderIdForAuth(params.provider, {
+}) {
+  const lookup = {
     config: params.cfg,
     ...params.authAliasLookupParams,
-    storedCredential: true,
-  });
-  return providerKey === params.providerAuthKey;
+  };
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, lookup);
+  return {
+    providerAuthKey,
+    matchesStoredProvider: (provider: string) =>
+      resolveProviderIdForAuth(provider, { ...lookup, storedCredential: true }) === providerAuthKey,
+  };
 }
 
 /** Returns true when a stored credential can authenticate the requested provider. */
@@ -75,51 +67,7 @@ export function isStoredCredentialCompatibleWithAuthProvider(params: {
   provider: string;
   credential: AuthProfileCredential;
 }): boolean {
-  return isProfileProviderCompatibleWithAuthProvider({
-    cfg: params.cfg,
-    authAliasLookupParams: params.authAliasLookupParams,
-    providerAuthKey: resolveProviderIdForAuth(params.provider, {
-      config: params.cfg,
-      ...params.authAliasLookupParams,
-    }),
-    provider: params.credential.provider,
-  });
-}
-
-function listProfilesCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  authAliasLookupParams?: ProviderAuthAliasLookupParams;
-  store: AuthProfileStore;
-  providerAuthKey: string;
-}): string[] {
-  return Object.entries(params.store.profiles)
-    .filter(([, credential]) =>
-      isProfileProviderCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        authAliasLookupParams: params.authAliasLookupParams,
-        providerAuthKey: params.providerAuthKey,
-        provider: credential.provider,
-      }),
-    )
-    .map(([profileId]) => profileId);
-}
-
-function resolveProviderAuthMode(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-): string | undefined {
-  const providers = cfg?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  const entry = findNormalizedProviderValue(providers, provider);
-  const auth = entry?.auth;
-  return typeof auth === "string" ? auth : undefined;
-}
-
-function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: string): boolean {
-  const authMode = resolveProviderAuthMode(cfg, provider);
-  return authMode === "aws-sdk";
+  return prepareProviderCompatibility(params).matchesStoredProvider(params.credential.provider);
 }
 
 /** Returns true when config declares an aws-sdk auth profile for a provider. */
@@ -133,20 +81,13 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   if (!profileConfig || profileConfig.mode !== "aws-sdk") {
     return false;
   }
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
-    config: params.cfg,
-    ...params.authAliasLookupParams,
-  });
-  if (
-    resolveProviderIdForAuth(profileConfig.provider, {
-      config: params.cfg,
-      ...params.authAliasLookupParams,
-      storedCredential: true,
-    }) !== providerAuthKey
-  ) {
+  const { providerAuthKey, matchesStoredProvider } = prepareProviderCompatibility(params);
+  if (!matchesStoredProvider(profileConfig.provider)) {
     return false;
   }
-  return providerAllowsAwsSdkAuth(params.cfg, providerAuthKey);
+  return (
+    findNormalizedProviderValue(params.cfg?.models?.providers, providerAuthKey)?.auth === "aws-sdk"
+  );
 }
 
 /** Resolves whether a profile can be used for a provider right now. */
@@ -160,10 +101,7 @@ export function resolveAuthProfileEligibility(params: {
   /** Runtime resolvers may observe a durable pending refresh through settlement. */
   includePendingOAuthRefresh?: boolean;
 }): AuthProfileEligibility {
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
-    config: params.cfg,
-    ...params.authAliasLookupParams,
-  });
+  const { matchesStoredProvider } = prepareProviderCompatibility(params);
   const cred = params.store.profiles[params.profileId];
   if (!cred) {
     if (
@@ -181,26 +119,12 @@ export function resolveAuthProfileEligibility(params: {
   if (!isSetupCredentialAccessible({ profileId: params.profileId, credential: cred })) {
     return { eligible: false, reasonCode: "setup_inactive" };
   }
-  if (
-    !isProfileProviderCompatibleWithAuthProvider({
-      cfg: params.cfg,
-      authAliasLookupParams: params.authAliasLookupParams,
-      providerAuthKey,
-      provider: cred.provider,
-    })
-  ) {
+  if (!matchesStoredProvider(cred.provider)) {
     return { eligible: false, reasonCode: "provider_mismatch" };
   }
   const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
   if (profileConfig) {
-    if (
-      !isProfileProviderCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        authAliasLookupParams: params.authAliasLookupParams,
-        providerAuthKey,
-        provider: profileConfig.provider,
-      })
-    ) {
+    if (!matchesStoredProvider(profileConfig.provider)) {
       return { eligible: false, reasonCode: "provider_mismatch" };
     }
     if (profileConfig.mode !== cred.type) {
@@ -215,18 +139,14 @@ export function resolveAuthProfileEligibility(params: {
     now: params.now,
   });
   if (
-    isAuthProfileRuntimeSettlementCandidate({
-      credential: cred,
-      eligibility: credentialEligibility,
-      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
-    })
+    params.includePendingOAuthRefresh === true &&
+    credentialEligibility.reasonCode === "expired" &&
+    cred.type === "oauth" &&
+    isPendingOAuthRefreshFence(cred)
   ) {
     return { eligible: true, reasonCode: "ok" };
   }
-  return {
-    eligible: false,
-    reasonCode: credentialEligibility.reasonCode,
-  };
+  return credentialEligibility;
 }
 
 type ResolveAuthProfileOrderParams = {
@@ -265,39 +185,13 @@ export function prependAuthProfilePin(
     : resolution;
 }
 
-/** Shares stored-over-config order precedence with CLI runtime selection. */
-export function resolveExplicitAuthOrderSelection(params: {
-  storeOrder: AuthProfileStore["order"] | undefined;
-  configuredOrder: Record<string, string[]> | undefined;
-  providerKey: string;
-  providerAuthKey: string;
-}): {
-  order: string[] | undefined;
-  fromStore: boolean;
-} {
-  const { storeOrder, configuredOrder, providerKey, providerAuthKey } = params;
-  const stored =
-    findNormalizedProviderValue(storeOrder, providerAuthKey) ??
-    findNormalizedProviderValue(storeOrder, providerKey);
-  return {
-    order:
-      stored ??
-      findNormalizedProviderValue(configuredOrder, providerAuthKey) ??
-      findNormalizedProviderValue(configuredOrder, providerKey),
-    fromStore: stored !== undefined,
-  };
-}
-
 /** Resolves ordered usable auth profiles plus whether an explicit order owns selection. */
 export function resolveAuthProfileOrderWithMetadata(
   params: ResolveAuthProfileOrderParams,
 ): AuthProfileOrderResolution {
   const { cfg, store, provider, preferredProfile, forModel } = params;
   const providerKey = normalizeProviderId(provider);
-  const providerAuthKey = resolveProviderIdForAuth(provider, {
-    config: cfg,
-    ...params.authAliasLookupParams,
-  });
+  const { providerAuthKey, matchesStoredProvider } = prepareProviderCompatibility(params);
   const now = Date.now();
 
   // Clear expired windows so profiles become eligible for a half-open probe.
@@ -311,24 +205,12 @@ export function resolveAuthProfileOrderWithMetadata(
       providerKey,
       providerAuthKey,
     });
-  const explicitProfiles = cfg?.auth?.profiles
-    ? Object.entries(cfg.auth.profiles)
-        .filter(([, profile]) =>
-          isProfileProviderCompatibleWithAuthProvider({
-            cfg,
-            authAliasLookupParams: params.authAliasLookupParams,
-            providerAuthKey,
-            provider: profile.provider,
-          }),
-        )
-        .map(([profileId]) => profileId)
-    : [];
-  const storeProfiles = listProfilesCompatibleWithAuthProvider({
-    cfg,
-    authAliasLookupParams: params.authAliasLookupParams,
-    store,
-    providerAuthKey,
-  });
+  const compatibleProfileIds = (profiles: Record<string, { provider: string }>) =>
+    Object.entries(profiles)
+      .filter(([, profile]) => matchesStoredProvider(profile.provider))
+      .map(([profileId]) => profileId);
+  const explicitProfiles = compatibleProfileIds(cfg?.auth?.profiles ?? {});
+  const storeProfiles = compatibleProfileIds(store.profiles);
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {
@@ -420,18 +302,10 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore, now: numb
     return { profileId, typeScore, expiryScore, lastUsed };
   });
 
-  // Primary sort: type preference (oauth > token > api_key).
   return scored
-    .toSorted((a, b) => {
-      // First by type (oauth > token > api_key)
-      if (a.typeScore !== b.typeScore) {
-        return a.typeScore - b.typeScore;
-      }
-      if (a.expiryScore !== b.expiryScore) {
-        return a.expiryScore - b.expiryScore;
-      }
-      // Then by lastUsed (oldest first)
-      return a.lastUsed - b.lastUsed;
-    })
+    .toSorted(
+      (a, b) =>
+        a.typeScore - b.typeScore || a.expiryScore - b.expiryScore || a.lastUsed - b.lastUsed,
+    )
     .map((entry) => entry.profileId);
 }

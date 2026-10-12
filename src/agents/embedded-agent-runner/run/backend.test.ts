@@ -129,30 +129,10 @@ describe("embedded attempt backend", () => {
     ).toEqual(["/tmp/reply.opus"]);
   });
 
-  it.each([
-    {
-      name: "replaces stale harness provenance",
-      credentialSource: {
-        kind: "direct" as const,
-        evidence: "environment" as const,
-        authorization: "ambient" as const,
-      },
-      expected: {
-        provider: "groq",
-        model: "openai/gpt-oss-120b",
-        credentialSource: {
-          kind: "direct",
-          evidence: "environment",
-          authorization: "ambient",
-        },
-      },
-    },
-    {
-      name: "clears provenance when the runtime does not own auth selection",
-      credentialSource: undefined,
-      expected: undefined,
-    },
-  ])("$name", async ({ credentialSource, expected }) => {
+  it.each([true, false])("projects runtime-owned auth provenance (%s)", async (owned) => {
+    const credentialSource = owned
+      ? ({ kind: "direct", evidence: "environment", authorization: "ambient" } as const)
+      : undefined;
     harnessMocks.runAttempt.mockResolvedValueOnce({
       agentHarnessId: "openclaw",
       modelAttempt: {
@@ -170,12 +150,16 @@ describe("embedded attempt backend", () => {
       },
     } as never);
 
-    expect(result.modelAttempt).toEqual(expected);
+    expect(result.modelAttempt).toEqual(
+      credentialSource
+        ? { provider: "groq", model: "openai/gpt-oss-120b", credentialSource }
+        : undefined,
+    );
   });
 });
 
 describe("workspace inputs at harness dispatch", () => {
-  async function fixture(prepare?: AgentWorkspaceAccess["prepareTurnAttachments"]) {
+  async function fixture(prepare: NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>) {
     const runId = randomUUID();
     const workspaceDir = `/tmp/remote-workspace-${runId}`;
     const admission = prepareAgentRunAdmission({
@@ -217,37 +201,13 @@ describe("workspace inputs at harness dispatch", () => {
     harnessMocks.runAttempt.mockReset();
   });
 
-  it.each(["codex", "openclaw"])(
-    "prepares attachments before the %s harness and preserves original input",
-    async (harness) => {
-      const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
-        async (_turn, assertCurrent) => {
-          assertCurrent();
-          expect(harnessMocks.runAttempt).not.toHaveBeenCalled();
-          return "Use the execution workspace input directory.";
-        },
-      );
-      const f = await fixture(prepare);
-      harnessMocks.runAttempt.mockResolvedValueOnce({ agentHarnessId: harness });
-      try {
-        await runEmbeddedAttemptWithBackend(f.params as never);
-        const dispatched = harnessMocks.runAttempt.mock.calls[0]?.[0];
-        expect(dispatched).toMatchObject({
-          prompt: `${f.params.prompt}\n\nUse the execution workspace input directory.`,
-          transcriptPrompt: f.params.prompt,
-        });
-        expect(dispatched.media).toBe(f.params.media);
-        expect(f.params.prompt).toBe("Inspect attachment");
-        expect(prepare.mock.calls[0]?.[0].media).toBe(f.params.media);
-      } finally {
-        f.cleanup();
-      }
-    },
-  );
-
   it("transfers canonical documents preserved by native image projection without a transcript recorder", async () => {
     const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
-      async () => "Read /remote/.inputs/report.pdf",
+      async (_turn, assertCurrent) => {
+        assertCurrent();
+        expect(harnessMocks.runAttempt).not.toHaveBeenCalled();
+        return "Read /remote/.inputs/report.pdf";
+      },
     );
     const f = await fixture(prepare);
     const media = [{ path: "media://inbound/report.pdf", kind: "document" as const }];
@@ -263,25 +223,17 @@ describe("workspace inputs at harness dispatch", () => {
         pluginHarness: true,
       });
       expect(projected.media).toEqual(media);
-      await runEmbeddedAttemptWithBackend({ ...f.params, ...projected } as never, undefined, media);
+      const params = { ...f.params, ...projected };
+      await runEmbeddedAttemptWithBackend(params as never, undefined, media);
       expect(prepare.mock.calls[0]?.[0].media).toBe(media);
-      expect(harnessMocks.runAttempt.mock.calls[0]?.[0]).toMatchObject({
+      const dispatched = harnessMocks.runAttempt.mock.calls[0]?.[0];
+      expect(dispatched).toMatchObject({
         prompt: "Inspect attachment\n\nRead /remote/.inputs/report.pdf",
         transcriptPrompt: "Inspect attachment",
         media,
       });
-    } finally {
-      f.cleanup();
-    }
-  });
-
-  it("dispatches a plain remote turn without an attachment provider", async () => {
-    const f = await fixture();
-    harnessMocks.runAttempt.mockResolvedValueOnce({ agentHarnessId: "codex" });
-    const params = { ...f.params, media: [] };
-    try {
-      await runEmbeddedAttemptWithBackend(params as never);
-      expect(harnessMocks.runAttempt).toHaveBeenCalledWith(params, undefined);
+      expect(dispatched.media).toBe(params.media);
+      expect(params.prompt).toBe("Inspect attachment");
     } finally {
       f.cleanup();
     }

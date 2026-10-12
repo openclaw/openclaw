@@ -1,7 +1,6 @@
 import { svg } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
-import { renderPanelTabStrip, type PanelTabStripTab } from "../panel-tab-strip.ts";
 
 export type TerminalPanelTab = {
   id: string;
@@ -18,16 +17,6 @@ export type TerminalPanelTab = {
 };
 
 const TERMINAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3-3 3M8 11h5" /></svg>`;
-
-function terminalTabLabel(tab: TerminalPanelTab): string {
-  return tab.shellName ?? t("terminal.tabLabel", { n: String(tab.sequence) });
-}
-
-function terminalTabHint(tab: TerminalPanelTab): string | null {
-  return tab.agentId === null || tab.cwd === null
-    ? null
-    : t("terminal.tabHint", { agent: tab.agentId, cwd: tab.cwd });
-}
 
 function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
   if (tab.status === "connecting") {
@@ -50,37 +39,14 @@ function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
 export function terminalPanelHostedTabs(tabs: TerminalPanelTab[]): PanelHostedTab[] {
   return tabs.map((tab) => ({
     id: tab.id,
-    label: terminalTabLabel(tab),
-    title: terminalTabHint(tab),
+    label: tab.shellName ?? t("terminal.tabLabel", { n: String(tab.sequence) }),
+    title:
+      tab.agentId === null || tab.cwd === null
+        ? null
+        : t("terminal.tabHint", { agent: tab.agentId, cwd: tab.cwd }),
     icon: TERMINAL_GLYPH,
     statusLabel: terminalTabStatusLabel(tab),
     badge: tab.agentOwned ? t("terminal.agentOwnedBadge") : null,
     className: `is-${tab.status}`,
   }));
-}
-
-export function renderTerminalPanelTabs(params: {
-  tabs: TerminalPanelTab[];
-  activeId: string | null;
-  booting: boolean;
-  onSelect: (id: string) => void;
-  onClose: (id: string) => void | Promise<void>;
-  onNew: () => void;
-}) {
-  const tabs: PanelTabStripTab[] = terminalPanelHostedTabs(params.tabs).map((tab) =>
-    Object.assign(tab, {
-      domId: `terminal-tab-${tab.id}`,
-      closeLabel: `${t("terminal.closeSession")}: ${tab.label}`,
-    }),
-  );
-  return renderPanelTabStrip({
-    tabs,
-    activeId: params.activeId,
-    ariaControls: "terminal-tab-panel",
-    onSelect: params.onSelect,
-    onClose: params.onClose,
-    onNew: params.onNew,
-    newLabel: t("terminal.newSession"),
-    newDisabled: params.booting,
-  });
 }

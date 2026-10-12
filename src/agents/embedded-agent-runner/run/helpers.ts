@@ -71,20 +71,14 @@ export function resolveReportedModelRef(params: {
 } {
   const assistantProvider = params.assistant?.provider?.trim();
   const assistantModel = params.assistant?.model?.trim();
-  if (!assistantProvider) {
-    return {
-      provider: params.provider,
-      model: assistantModel || params.model,
-    };
-  }
-  if (assistantProvider.toLowerCase() === "openclaw") {
+  if (assistantProvider?.toLowerCase() === "openclaw") {
     return {
       provider: params.provider,
       model: params.model,
     };
   }
   return {
-    provider: assistantProvider,
+    provider: assistantProvider || params.provider,
     model: assistantModel || params.model,
   };
 }
@@ -98,13 +92,9 @@ export function resolveLatestCallUsage(params: {
   latest: NormalizedUsage | undefined;
 } {
   const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
-  const carriedUsage = hasNonzeroUsage(params.carriedUsage) ? params.carriedUsage : undefined;
-  const transcriptFallback = hasNonzeroUsage(params.transcriptFallback)
-    ? params.transcriptFallback
-    : undefined;
   return {
     currentAttempt,
-    latest: currentAttempt ?? carriedUsage ?? transcriptFallback,
+    latest: [currentAttempt, params.carriedUsage, params.transcriptFallback].find(hasNonzeroUsage),
   };
 }
 
@@ -130,11 +120,7 @@ export function buildUsageAgentMetaFields(params: {
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens" | "costUsd"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
   const latestUsage = normalizeUsage(params.latestUsage);
-  const lastCallUsage = hasNonzeroUsage(latestUsage)
-    ? latestUsage
-    : hasNonzeroUsage(params.lastRunPromptUsage)
-      ? params.lastRunPromptUsage
-      : undefined;
+  const lastCallUsage = [latestUsage, params.lastRunPromptUsage].find(hasNonzeroUsage);
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage,
   });
@@ -146,12 +132,7 @@ export function buildUsageAgentMetaFields(params: {
   };
 }
 
-/**
- * Build agentMeta for error return paths, preserving accumulated usage so that
- * session totalTokens reflects the actual context size rather than going stale.
- * Without this, error returns omit usage and the session keeps whatever
- * totalTokens was set by the previous successful run.
- */
+/** Error returns retain usage so the session does not keep an older context total. */
 export function buildErrorAgentMeta(params: {
   sessionId: string;
   sessionFile?: string;
@@ -159,6 +140,7 @@ export function buildErrorAgentMeta(params: {
   model: string;
   credentialSource?: EmbeddedAgentMeta["credentialSource"];
   contextTokens?: number;
+  contextTokensSource?: "resolved-v1";
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: NormalizedUsage | undefined;
   currentAttemptAssistant?: { api?: string; usage?: unknown } | null;
@@ -175,7 +157,9 @@ export function buildErrorAgentMeta(params: {
     model: params.model,
     ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
-    ...(params.contextTokens ? { contextTokensSource: "resolved" as const } : {}),
+    ...(params.contextTokens
+      ? { contextTokensSource: params.contextTokensSource ?? ("resolved" as const) }
+      : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),

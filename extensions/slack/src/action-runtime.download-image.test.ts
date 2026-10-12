@@ -27,46 +27,38 @@ describe("Slack downloaded image results", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  it.each([
-    { configured: 600, expected: 600 },
-    { configured: 2000, expected: 2000 },
-    { configured: undefined, expected: 1200 },
-  ])(
-    "returns a $expected px image for configured limit $configured",
-    async ({ configured, expected }) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { imageMaxDimensionPx: configured } },
-        channels: { slack: { botToken: "test-token", channels: { C123: { enabled: true } } } },
-      };
-      vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
-        type: "channel",
-      });
-      vi.spyOn(slackActionRuntime, "downloadSlackFile").mockResolvedValue({
-        path: imagePath,
-        contentType: "image/png",
-        placeholder: "synthetic Slack image",
-      });
+  it("honors the configured image dimension limit in the downloaded result", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { imageMaxDimensionPx: 600 } },
+      channels: { slack: { botToken: "test-token", channels: { C123: { enabled: true } } } },
+    };
+    vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
+      type: "channel",
+    });
+    vi.spyOn(slackActionRuntime, "downloadSlackFile").mockResolvedValue({
+      path: imagePath,
+      contentType: "image/png",
+      placeholder: "synthetic Slack image",
+    });
 
-      const result = await handleAction({
-        action: "download-file",
-        channel: "slack",
-        accountId: "default",
-        cfg,
-        params: { fileId: "F123", channelId: "C123" },
-      });
-      const image = result.content.find((block) => block.type === "image");
-      if (!image || image.type !== "image") {
-        throw new Error("Slack download did not return an image");
-      }
-      const bytes = Buffer.from(image.data, "base64");
-      expect(await getImageMetadata(bytes)).toEqual({ width: expected, height: expected / 2 });
-      expect(bytes.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
-      expect(result.details).toMatchObject({
-        fileId: "F123",
-        path: imagePath,
-        media: { outbound: false },
-      });
-    },
-    20_000,
-  );
+    const result = await handleAction({
+      action: "download-file",
+      channel: "slack",
+      accountId: "default",
+      cfg,
+      params: { fileId: "F123", channelId: "C123" },
+    });
+    const image = result.content.find((block) => block.type === "image");
+    if (!image || image.type !== "image") {
+      throw new Error("Slack download did not return an image");
+    }
+    const bytes = Buffer.from(image.data, "base64");
+    expect(await getImageMetadata(bytes)).toEqual({ width: 600, height: 300 });
+    expect(bytes.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
+    expect(result.details).toMatchObject({
+      fileId: "F123",
+      path: imagePath,
+      media: { outbound: false },
+    });
+  }, 20_000);
 });

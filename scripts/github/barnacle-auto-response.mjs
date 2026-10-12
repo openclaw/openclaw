@@ -18,25 +18,21 @@ const thirdPartyExtensionMessage =
 const rules = [
   {
     label: skillCloseLabel,
-    close: true,
     message:
       "Thanks for the contribution! New skills should be published on [ClawHub](https://clawhub.ai) for everyone to use. We’re keeping the core lean on skills, so I’m closing this out.",
   },
   {
     label: "r: support",
-    close: true,
     message:
       "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.",
   },
   {
     label: "r: false-positive",
-    close: true,
     message:
       "Closing this because it looks like a false positive or reclassification-only report rather than an actionable OpenClaw bug. If this is still a real issue, please open a fresh report with concrete reproduction steps and current-version details.",
   },
   {
     label: "r: no-ci-pr",
-    close: true,
     message:
       "Please don't make PRs for test failures on main.\n\n" +
       "The team is aware of those and will handle them directly on the codebase, not only fixing the tests but also investigating what the root cause is. Having to sift through test-fix-PRs (including some that have been out of date for weeks...) on top of that doesn't help. There are already way too many PRs for humans to manage; please don't make the flood worse.\n\n" +
@@ -44,32 +40,27 @@ const rules = [
   },
   {
     label: "r: too-many-prs",
-    close: true,
     message:
       `Closing this PR because the author has more than ${activePrLimit} active PRs in this repo. ` +
       "Please reduce the active PR queue and reopen or resubmit once it is back under the limit. You can close your own PRs to get back under the limit.",
   },
   {
     label: "r: testflight",
-    close: true,
     commentTriggers: ["testflight"],
     message: "Not available, build from source.",
   },
   {
     label: "r: third-party-extension",
-    close: true,
     message: thirdPartyExtensionMessage,
   },
   {
     label: "r: bluebubbles",
-    close: true,
     commentTriggers: ["bluebubbles", "blue bubbles"],
     message:
       "BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Use iMessage via `imsg` instead: https://docs.openclaw.ai/channels/imessage. If this needs to stay BlueBubbles-backed, publish it as a third-party plugin on ClawHub instead of adding it back to core.",
   },
   {
     label: "r: moltbook",
-    close: true,
     lock: true,
     lockReason: "off-topic",
     commentTriggers: ["moltbook"],
@@ -227,60 +218,24 @@ const structuralContextLabelValues = [NEEDS_PR_CONTEXT_LABEL, skillCloseLabel];
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
 
-const candidateActionRules = [
-  {
-    label: candidateLabels.needsPrContext,
-    close: true,
-    message:
-      "Closing this PR because its body lacks a clear problem statement or evidence. Please reopen or resubmit with the user, product, or operational problem and the most useful validation evidence, such as a focused test, CI result, screenshot, recording, terminal output, log, or artifact.",
-  },
-  {
-    label: candidateLabels.dirtyCandidate,
-    close: true,
-    message: noisyPrMessage,
-  },
-  {
-    label: candidateLabels.externalPluginCandidate,
-    close: true,
-    message: thirdPartyExtensionMessage,
-  },
-  {
-    label: candidateLabels.riskyInfra,
-    close: true,
-    message:
-      "Closing this PR because it changes infra/CI/release/ops plumbing without maintainer context and validation. That surface is high-blast-radius; open an issue/RFC or get owner approval before sending a patch.",
-  },
-  {
-    label: candidateLabels.docsDiscoverability,
-    close: true,
-    message:
-      "Closing this PR because docs discoverability and community-plugin listing changes should go through ClawHub or a maintainer-owned docs plan, not drive-by core churn.",
-  },
-  {
-    label: candidateLabels.lowSignalDocs,
-    close: true,
-    message:
-      "Closing this PR because the docs-only change is too low-signal for the core repo. Please reopen or resubmit with a concrete OpenClaw docs gap and linked context.",
-  },
-  {
-    label: candidateLabels.testOnlyNoBug,
-    close: true,
-    message:
-      "Closing this PR because it only changes tests without a linked bug, owner request, or behavior change. Test-only PRs need a concrete regression or maintainer-requested gap.",
-  },
-  {
-    label: candidateLabels.refactorOnly,
-    close: true,
-    message:
-      "Closing this PR because it is refactor/cleanup-only without maintainer context. We avoid churn in core unless it unlocks a concrete fix, architecture change, or owned cleanup.",
-  },
-  {
-    label: candidateLabels.blankTemplate,
-    close: true,
-    message:
-      "Closing this PR because the template is mostly blank and does not describe a concrete OpenClaw problem, fix, or test plan. Please reopen or resubmit with the missing context filled in.",
-  },
-];
+const candidateActionRules = Object.entries({
+  [candidateLabels.needsPrContext]:
+    "Closing this PR because its body lacks a clear problem statement or evidence. Please reopen or resubmit with the user, product, or operational problem and the most useful validation evidence, such as a focused test, CI result, screenshot, recording, terminal output, log, or artifact.",
+  [candidateLabels.dirtyCandidate]: noisyPrMessage,
+  [candidateLabels.externalPluginCandidate]: thirdPartyExtensionMessage,
+  [candidateLabels.riskyInfra]:
+    "Closing this PR because it changes infra/CI/release/ops plumbing without maintainer context and validation. These changes can affect many development and release workflows; open an issue/RFC or get owner approval before sending a patch.",
+  [candidateLabels.docsDiscoverability]:
+    "Closing this PR because docs discoverability and community-plugin listing changes should go through ClawHub or a maintainer-owned docs plan, not drive-by core churn.",
+  [candidateLabels.lowSignalDocs]:
+    "Closing this PR because the docs-only change is too low-signal for the core repo. Please reopen or resubmit with a concrete OpenClaw docs gap and linked context.",
+  [candidateLabels.testOnlyNoBug]:
+    "Closing this PR because it only changes tests without a linked bug, owner request, or behavior change. Test-only PRs need a concrete regression or maintainer-requested gap.",
+  [candidateLabels.refactorOnly]:
+    "Closing this PR because it is refactor/cleanup-only without maintainer context. We avoid churn in core unless it unlocks a concrete fix, architecture change, or owned cleanup.",
+  [candidateLabels.blankTemplate]:
+    "Closing this PR because the template is mostly blank and does not describe a concrete OpenClaw problem, fix, or test plan. Please reopen or resubmit with the missing context filled in.",
+}).map(([label, message]) => ({ label, message }));
 
 const normalizeLogin = (login) => login.toLowerCase();
 const automationPrHeadPrefixes = ["clawsweeper/", "clownfish/"];
@@ -462,30 +417,17 @@ function isStandaloneSkillSubmission(files) {
 }
 
 function surfacesForFile(filename) {
-  const surfaces = new Set();
-  if (/\.generated\/|generated|\.snap$/i.test(filename)) {
-    surfaces.add("generated");
-  }
-  if (filename.startsWith("ui/")) {
-    surfaces.add("ui");
-  } else if (filename.startsWith("src/gateway/")) {
-    surfaces.add("src/gateway");
-  } else if (filename.startsWith("src/plugins/")) {
-    surfaces.add("src/plugins");
-  } else if (filename.startsWith("extensions/")) {
-    surfaces.add("extensions");
-  } else if (filename.startsWith("apps/")) {
-    surfaces.add("apps");
-  } else if (filename.startsWith(".github/")) {
-    surfaces.add(".github");
-  } else if (filename.startsWith("docs/") || /\.mdx?$/i.test(filename)) {
-    surfaces.add("docs");
-  } else if (filename.startsWith("scripts/")) {
-    surfaces.add("scripts");
-  } else {
-    surfaces.add("other");
-  }
-  return [...surfaces];
+  const prefix = ["ui", "src/gateway", "src/plugins", "extensions", "apps", ".github"].find(
+    (surface) => filename.startsWith(`${surface}/`),
+  );
+  const surface =
+    prefix ??
+    (filename.startsWith("docs/") || /\.mdx?$/i.test(filename)
+      ? "docs"
+      : filename.startsWith("scripts/")
+        ? "scripts"
+        : "other");
+  return /\.generated\/|generated|\.snap$/i.test(filename) ? ["generated", surface] : [surface];
 }
 
 export function classifyPullRequestCandidateLabels(pullRequest, files) {
@@ -892,15 +834,13 @@ async function applyResponseRule(github, context, issueNumber, rule) {
   if (rule.message) {
     await github.rest.issues.createComment({ ...target, body: rule.message });
   }
-  if (rule.close) {
-    await github.rest.issues.update({
-      ...target,
-      state: "closed",
-      ...(rule.stateReason ? { state_reason: rule.stateReason } : {}),
-    });
-  }
+  await github.rest.issues.update({
+    ...target,
+    state: "closed",
+    ...(rule.stateReason ? { state_reason: rule.stateReason } : {}),
+  });
   if (rule.lock) {
-    await github.rest.issues.lock({ ...target, lock_reason: rule.lockReason ?? "resolved" });
+    await github.rest.issues.lock({ ...target, lock_reason: rule.lockReason });
   }
 }
 
@@ -1113,20 +1053,18 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     if (labelSet.has(dirtyLabel)) {
       await applyResponseRule(github, context, pullRequest.number, {
         message: noisyPrMessage,
-        close: true,
       });
       return;
     }
     if (labelSet.has(spamLabel)) {
       await applyResponseRule(github, context, pullRequest.number, {
-        close: true,
         lock: true,
         lockReason: "spam",
       });
       return;
     }
     if (labelSet.has(invalidLabel)) {
-      await applyResponseRule(github, context, pullRequest.number, { close: true });
+      await applyResponseRule(github, context, pullRequest.number, {});
       return;
     }
 
@@ -1145,7 +1083,6 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
 
   if (issue && labelSet.has(spamLabel)) {
     await applyResponseRule(github, context, issue.number, {
-      close: true,
       stateReason: "not_planned",
       lock: true,
       lockReason: "spam",
@@ -1155,7 +1092,6 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
 
   if (issue && labelSet.has(invalidLabel)) {
     await applyResponseRule(github, context, issue.number, {
-      close: true,
       stateReason: "not_planned",
     });
     return;

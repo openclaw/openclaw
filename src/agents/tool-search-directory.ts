@@ -18,9 +18,9 @@ import {
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
-export const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
+const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 // Catalog entry arrays are immutable snapshots. Keying their rendered directory by
 // array identity preserves prompt-prefix bytes without retaining retired catalogs.
@@ -29,10 +29,6 @@ const toolSchemaDirectoryPromptCache = new WeakMap<ToolSearchCatalogEntry[], Map
 export function applyToolSchemaDirectoryCatalog(params: {
   tools: AnyAgentTool[];
   config?: Parameters<typeof resolveToolSearchConfig>[0];
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: Parameters<typeof applyToolCatalogCompaction>[0]["toolHookContext"];
   directToolNames?: Iterable<string>;
@@ -103,24 +99,13 @@ export function resolveToolSearchCatalogTool(
   name: unknown,
   options?: CatalogVisibilityOptions,
 ): AnyAgentTool | undefined {
-  if (typeof name !== "string") {
+  const catalog = ctx.catalogRef?.current;
+  const needle = typeof name === "string" ? name.trim() : "";
+  if (!needle || !catalog) {
     return undefined;
   }
-  const needle = name.trim();
-  if (!needle) {
-    return undefined;
-  }
-  try {
-    const matches = visibleCatalogEntries(resolveCatalog(ctx), options).filter(
-      (entry) => entry.name === needle,
-    );
-    return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
-  } catch (error) {
-    if (error instanceof ToolInputError) {
-      return undefined;
-    }
-    throw error;
-  }
+  const matches = visibleCatalogEntries(catalog, options).filter((entry) => entry.name === needle);
+  return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
 }
 
 function compactDirectoryDescription(description: string, maxChars: number): string {
@@ -192,11 +177,9 @@ function formatToolSearchCatalogDirectory(
   let guidance: string;
   for (;;) {
     guidance =
-      mode === "code"
-        ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
-        : omitted > 0
-          ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
-          : "Use tool_search for a compact input signature or tool_describe for a full schema.";
+      omitted > 0
+        ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
+        : "Use tool_search for a compact input signature or tool_describe for a full schema.";
     if (mode === "tools") {
       guidance +=
         " Deferred names are not directly callable. Call tool_call with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";

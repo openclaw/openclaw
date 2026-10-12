@@ -1,11 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { ModelCompatConfig } from "../../config/types.models.js";
 import type { Model } from "../../llm/types.js";
+import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
-
-let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtraParamsCase;
 
 function runDeepSeekV4Case(params: {
   modelId: string;
@@ -36,119 +35,68 @@ function runDeepSeekV4Case(params: {
   }).payload as Record<string, unknown>;
 }
 
-describe.each(["DeepSeek-V4-Flash", "deepseek-flash", "deepseek/DeepSeek-Flash:free"])(
-  "extra-params: %s OpenAI-compatible thinking fallback",
-  (modelId) => {
-    beforeEach(async () => {
-      ({ runExtraParamsCase } = await import("./extra-params.test-support.js"));
-    });
-
-    it("injects deepseek-native thinking for unowned proxy providers", () => {
+describe("extra-params: DeepSeek OpenAI-compatible thinking fallback", () => {
+  it.each(["DeepSeek-V4-Flash", "deepseek-flash"])(
+    "injects native thinking for the unowned proxy model %s",
+    (modelId) => {
       const payload = runDeepSeekV4Case({ modelId, thinkingLevel: "high" });
       expect(payload.thinking).toEqual({ type: "enabled" });
       expect(payload.reasoning_effort).toBe("high");
-    });
+    },
+  );
 
-    it("does not inject thinking on canonical Microsoft Foundry", () => {
+  it.each(["microsoft-foundry", "microsoft-foundry-9433"])(
+    "suppresses native thinking and replay fields on %s",
+    (provider) => {
       const payload = runDeepSeekV4Case({
-        modelId,
-        provider: "microsoft-foundry",
-        thinkingLevel: "high",
-      });
-      expect(payload).not.toHaveProperty("thinking");
-      expect(payload).not.toHaveProperty("reasoning_effort");
-    });
-
-    it("does not inject thinking on Microsoft Foundry alias providers", () => {
-      const payload = runDeepSeekV4Case({
-        modelId,
+        modelId: "DeepSeek-V4-Flash",
+        provider,
         messages: [
           { role: "user", content: "continue" },
           { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
         ],
-        provider: "microsoft-foundry-9433",
-        thinkingLevel: "high",
       });
       expect(payload).not.toHaveProperty("thinking");
       expect(payload).not.toHaveProperty("reasoning_effort");
       expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
         "reasoning_content",
       );
-    });
+    },
+  );
 
-    it("does not inject thinking when thinkingFormat is openai (Azure Foundry)", () => {
-      const payload = runDeepSeekV4Case({
-        modelId,
-        thinkingFormat: "openai",
-        thinkingLevel: "high",
-      });
-      expect(payload).not.toHaveProperty("thinking");
-      expect(payload).not.toHaveProperty("reasoning_effort");
+  it("strips native thinking and replay fields when thinkingFormat is openai", () => {
+    const payload = runDeepSeekV4Case({
+      modelId: "DeepSeek-V4-Flash",
+      messages: [
+        { role: "user", content: "continue" },
+        { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
+      ],
+      thinkingFormat: "openai",
     });
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
+      "reasoning_content",
+    );
+  });
 
-    it("strips DeepSeek replay fields when thinkingFormat is openai", () => {
-      const payload = runDeepSeekV4Case({
-        modelId,
-        messages: [
-          { role: "user", content: "continue" },
-          { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
-        ],
-        thinkingFormat: "openai",
-        thinkingLevel: "high",
-      });
-      expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
-        "reasoning_content",
-      );
+  it("preserves OpenRouter auto-detected reasoning for a namespaced model", () => {
+    const payload = runDeepSeekV4Case({
+      modelId: "deepseek/DeepSeek-Flash:free",
+      payloadExtras: { reasoning: { effort: "xhigh" } },
+      provider: "openrouter",
     });
+    expect(payload.reasoning).toEqual({ effort: "xhigh" });
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
 
-    it("preserves non-DeepSeek reasoning controls while stripping replay fields", () => {
-      const payload = runDeepSeekV4Case({
-        modelId,
-        messages: [
-          { role: "user", content: "continue" },
-          { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
-        ],
-        payloadExtras: { reasoning: { effort: "high" } },
-        thinkingFormat: "openrouter",
-        thinkingLevel: "high",
-      });
-      expect(payload.reasoning).toEqual({ effort: "high" });
-      expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
-        "reasoning_content",
-      );
+  it("does not inject thinking:disabled when thinkingFormat is openai and thinking is off", () => {
+    const payload = runDeepSeekV4Case({
+      modelId: "DeepSeek-V4-Flash",
+      thinkingFormat: "openai",
+      thinkingLevel: "off",
     });
-
-    it("does not inject DeepSeek-native thinking on OpenRouter auto-detected compat", () => {
-      const payload = runDeepSeekV4Case({
-        modelId,
-        payloadExtras: { reasoning: { effort: "xhigh" } },
-        provider: "openrouter",
-        thinkingLevel: "high",
-      });
-      expect(payload.reasoning).toEqual({ effort: "xhigh" });
-      expect(payload).not.toHaveProperty("thinking");
-      expect(payload).not.toHaveProperty("reasoning_effort");
-    });
-
-    it("does not inject thinking:disabled when thinkingFormat is openai and thinking is off", () => {
-      // Even `thinking: { type: "disabled" }` is rejected by Azure Foundry, so the
-      // override must suppress the parameter entirely, not just disable it.
-      const payload = runDeepSeekV4Case({
-        modelId,
-        thinkingFormat: "openai",
-        thinkingLevel: "off",
-      });
-      expect(payload).not.toHaveProperty("thinking");
-    });
-
-    it("keeps deepseek-native thinking when thinkingFormat is explicitly deepseek", () => {
-      const payload = runDeepSeekV4Case({
-        modelId,
-        thinkingFormat: "deepseek",
-        thinkingLevel: "high",
-      });
-      expect(payload.thinking).toEqual({ type: "enabled" });
-      expect(payload.reasoning_effort).toBe("high");
-    });
-  },
-);
+    expect(payload).not.toHaveProperty("thinking");
+  });
+});

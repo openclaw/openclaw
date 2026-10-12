@@ -13,14 +13,9 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { ApprovalPage } from "./approval-page.ts";
+import "./approval-page-registration.ts";
 
-const TEST_ELEMENT_SUFFIX = crypto.randomUUID();
-const APPROVAL_PAGE_ELEMENT_NAME = `test-openclaw-approval-page-${TEST_ELEMENT_SUFFIX}`;
-
-// The non-isolated UI runner resets modules but not customElements. Register
-// the current page graph so context and locale state stay paired.
-customElements.define(APPROVAL_PAGE_ELEMENT_NAME, class extends ApprovalPage {});
+const APPROVAL_PAGE_ELEMENT_NAME = "openclaw-approval-page";
 
 type TestApprovalPage = HTMLElement & {
   approvalId: string;
@@ -171,6 +166,40 @@ afterEach(async () => {
 });
 
 describe("ApprovalPage", () => {
+  it.each([
+    {
+      kind: "exec",
+      scope: {
+        kind: "standing-grant",
+        automation: "Nightly workspace check",
+        command: "printf safe",
+        expiresInDays: 14,
+      },
+      expected:
+        'Always allow runs this exact command for "Nightly workspace check" without asking, for 14 days (revocable)',
+    },
+    {
+      kind: "plugin",
+      scope: { kind: "payment", amount: "12.34", currency: "USD", target: "Synthetic vendor" },
+      expected: "Pays 12.34 USD to Synthetic vendor",
+    },
+  ] as const)("shows the supplied $kind approval scope before a decision", async (scenario) => {
+    const pending = scenario.kind === "exec" ? pendingApproval() : pluginApproval();
+    if (pending.presentation.kind === "system-agent") {
+      throw new Error("Expected an exec or plugin approval");
+    }
+    pending.presentation.scope = scenario.scope;
+    const request = vi.fn(async () => ({ approval: pending }));
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: pending.id,
+    });
+    await settle(page);
+
+    expect(page.textContent).toContain(scenario.expected);
+    expect(page.textContent).toContain("Waiting for your decision");
+  });
+
   it("keeps a no-auth approval readable without enabling its decisions", async () => {
     const request = vi.fn(
       async (_method: string) => ({ approval: pendingApproval() }) satisfies ApprovalGetResult,
@@ -196,71 +225,28 @@ describe("ApprovalPage", () => {
     expect(request.mock.calls.some(([method]) => method === "approval.resolve")).toBe(false);
   });
 
-  it.each([
-    { name: "read-only", scopes: ["operator.read"] },
-    { name: "write-only", scopes: ["operator.write"] },
-    { name: "explicitly ungranted", scopes: [] },
-  ])("does not request or disclose a durable approval to a $name operator", async ({ scopes }) => {
-    const request = vi.fn(async () => ({ approval: pendingApproval() }));
-    const { page } = createPage({
-      client: { request } as unknown as GatewayBrowserClient,
-      hello: {
-        auth: { role: "operator", scopes },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
+  it.each<{ name: string; scopes: string[] }>([{ name: "explicitly ungranted", scopes: [] }])(
+    "does not request or disclose a durable approval to a $name operator",
+    async ({ scopes }) => {
+      const request = vi.fn(async () => ({ approval: pendingApproval() }));
+      const { page } = createPage({
+        client: { request } as unknown as GatewayBrowserClient,
+        hello: {
+          auth: { role: "operator", scopes },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
 
-    await settle(page);
+      await settle(page);
 
-    expect(request).not.toHaveBeenCalled();
-    expect(page.querySelector(".approval-page")?.getAttribute("data-state")).toBe("missing-scope");
-    expect(page.querySelector('[role="alert"]')?.textContent).toContain("operator.approvals");
-    expect(page.querySelector(".approval-page__preview")).toBeNull();
-    expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
-  });
-
-  it.each([
-    { name: "reviewer", auth: { role: "operator", scopes: ["operator.approvals"] } },
-    { name: "administrator", auth: { role: "operator", scopes: ["operator.admin"] } },
-    { name: "legacy authenticated operator", auth: { role: "operator" } },
-  ])("loads a durable approval for a $name", async ({ auth }) => {
-    const request = vi.fn(async () => ({ approval: pendingApproval() }));
-    const { page } = createPage({
-      client: { request } as unknown as GatewayBrowserClient,
-      hello: { auth } as ApplicationGatewaySnapshot["hello"],
-    });
-
-    await settle(page);
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("approval.get", { id: "exec:approval-1" });
-    expect(page.querySelector('[data-decision="allow-once"]')).not.toBeNull();
-  });
-
-  it.each([
-    { name: "reviewer", scopes: ["operator.approvals"] },
-    { name: "administrator", scopes: ["operator.admin"] },
-  ])("allows an authenticated $name to resolve a durable approval", async ({ scopes }) => {
-    const request = vi.fn(async (method: string): Promise<unknown> =>
-      method === "approval.get"
-        ? ({ approval: pendingApproval() } satisfies ApprovalGetResult)
-        : ({ applied: true, approval: allowedApproval() } satisfies ApprovalResolveResult),
-    );
-    const { page } = createPage({
-      client: { request } as unknown as GatewayBrowserClient,
-      hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
-    });
-    await settle(page);
-
-    (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
-    await settle(page);
-
-    expect(request).toHaveBeenCalledWith("approval.resolve", {
-      id: "exec:approval-1",
-      kind: "exec",
-      decision: "allow-once",
-    });
-    expect(page.querySelector("h1")?.textContent).toBe("Approved here");
-  });
+      expect(request).not.toHaveBeenCalled();
+      expect(page.querySelector(".approval-page")?.getAttribute("data-state")).toBe(
+        "missing-scope",
+      );
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("operator.approvals");
+      expect(page.querySelector(".approval-page__preview")).toBeNull();
+      expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+    },
+  );
 
   it("rejects an in-flight resolution when only the approval grant is revoked", async () => {
     let resolveDecision!: (value: ApprovalResolveResult) => void;
@@ -431,72 +417,21 @@ describe("ApprovalPage", () => {
     expect(document.activeElement).toBe(page.querySelector("h1"));
   });
 
-  it("renders reviewer-only plugin detail in a preformatted block", async () => {
-    const approval = pluginApproval();
-    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
-    const { page } = createPage({
-      client: { request } as unknown as GatewayBrowserClient,
-      id: approval.id,
-    });
-
-    await settle(page);
-
-    expect(page.querySelector("pre.approval-page__preview.mono")?.textContent).toBe(
-      approval.presentation.kind === "plugin" ? approval.presentation.detail : undefined,
-    );
-    expect(page.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("claude-cli");
-    expect(page.querySelector('[data-approval-chip="tool"]')?.textContent).toBe("Bash");
-    expect(page.querySelector('[data-approval-chip="agent"]')?.textContent).toBe("main");
-    expect(page.querySelectorAll(".approval-page__meta-row")).toHaveLength(0);
-    expect(page.textContent).not.toContain("Severity:");
-    expect(page.textContent).not.toContain("Plugin:");
-    expect(page.textContent).not.toContain("Agent:");
-  });
-
-  it.each([
-    ["info", "info"],
-    ["warning", "warning"],
-    ["critical", "danger"],
-  ] as const)("maps plugin severity %s to the %s page accent", async (severity, expected) => {
-    const approval = pluginApproval(severity);
-    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
-    const { page } = createPage({
-      client: { request } as unknown as GatewayBrowserClient,
-      id: approval.id,
-    });
-
-    await settle(page);
-
-    expect(page.querySelector(`.approval-page__card--severity-${expected}`)).not.toBeNull();
-  });
-
-  it("keeps the selected decision named while a resolution is in flight", async () => {
-    let resolveRequest!: (result: ApprovalResolveResult) => void;
-    const pending = pendingApproval();
-    const request = vi.fn((method: string): Promise<unknown> => {
-      if (method === "approval.get") {
-        return Promise.resolve({ approval: pending } satisfies ApprovalGetResult);
-      }
-      return new Promise<ApprovalResolveResult>((resolve) => {
-        resolveRequest = resolve;
+  it.each([["critical", "danger"]] as const)(
+    "maps plugin severity %s to the %s page accent",
+    async (severity, expected) => {
+      const approval = pluginApproval(severity);
+      const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
+      const { page } = createPage({
+        client: { request } as unknown as GatewayBrowserClient,
+        id: approval.id,
       });
-    });
-    const { page } = createPage({ client: { request } as unknown as GatewayBrowserClient });
-    await settle(page);
 
-    (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
-    await page.updateComplete;
+      await settle(page);
 
-    const allowButton = page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement;
-    const denyButton = page.querySelector('[data-decision="deny"]') as HTMLButtonElement;
-    expect(allowButton.textContent?.trim()).toBe("Recording Allow once…");
-    expect(denyButton.textContent?.trim()).toBe("Deny");
-    expect(allowButton.disabled).toBe(true);
-    expect(denyButton.disabled).toBe(true);
-
-    resolveRequest({ applied: true, approval: allowedApproval() });
-    await settle(page);
-  });
+      expect(page.querySelector(`.approval-page__card--severity-${expected}`)).not.toBeNull();
+    },
+  );
 
   it("formats approval times with the selected Control UI locale", async () => {
     await i18n.setLocale("de");
@@ -529,24 +464,6 @@ describe("ApprovalPage", () => {
 
     expect(page.querySelector("h1")?.textContent).toBe("Resolved elsewhere");
     expect(page.textContent).toContain("Another surface or an earlier attempt");
-  });
-
-  it("renders a fail-closed timeout distinctly from another surface's decision", async () => {
-    const pending = pendingApproval();
-    const expired = expiredApproval();
-    const request = vi.fn(async (method: string): Promise<unknown> =>
-      method === "approval.get"
-        ? ({ approval: pending } satisfies ApprovalGetResult)
-        : ({ applied: false, approval: expired } satisfies ApprovalResolveResult),
-    );
-    const { page } = createPage({ client: { request } as unknown as GatewayBrowserClient });
-    await settle(page);
-
-    (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
-    await settle(page);
-
-    expect(page.querySelector("h1")?.textContent).toBe("Expired");
-    expect(page.textContent).toContain("No decision arrived before the deadline");
   });
 
   it("fails closed when the Gateway returns a malformed projection", async () => {

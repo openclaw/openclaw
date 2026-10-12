@@ -47,18 +47,6 @@ describe("tool mutation helpers", () => {
     },
   );
 
-  it("treats owner-declared side effects as mutating and replay-unsafe", () => {
-    expect(
-      buildToolMutationState(
-        "memory_store",
-        { text: "preference" },
-        {
-          ownerKey: '["memory-lancedb","memory_store"]',
-        },
-      ),
-    ).toEqual({ mutatingAction: true, replaySafe: false });
-  });
-
   it.each([
     ["exec", "sed -n '1,220p' src/agents/tool-mutation.ts"],
     ["bash", "cat package.json"],
@@ -66,9 +54,6 @@ describe("tool mutation helpers", () => {
       "bash",
       "find . -maxdepth 1 -type f | wc -l && find . -maxdepth 1 -type f ! -name '.*' | wc -l",
     ],
-    ["bash", "rg --files src | wc -l"],
-    ["bash", "find . -name '*.md' -type f"],
-    ["exec", "rg -n tool-mutation src/agents"],
     ["exec", "rg -n 'token|8123|http|secret' notes.md"],
     ["exec", 'rg -n "foo|bar" notes.md'],
     ["exec", "rg -n '[$*?{}]' notes.md"],
@@ -116,33 +101,13 @@ describe("tool mutation helpers", () => {
     ["bash", "find . -type f &&"],
     ["bash", "find . -type f | | wc -l"],
     ["exec", "zsh -lc 'rg TODO src'"],
-    ["exec", "./zsh -lc 'rg TODO src'"],
-    ["exec", "/tmp/zsh -lc 'rg TODO src'"],
-    ["exec", "/bin/zsh -lc 'rg TODO src'"],
     ["bash", "git status --short"],
-    ["exec", "git diff -- src/agents/tool-mutation.ts"],
-    ["exec", "git checkout feature-branch"],
-    ["exec", "git branch -D old-branch"],
-    ["exec", "git diff --output=/tmp/patch.diff"],
-    ["exec", "git diff --ext-diff"],
-    ["exec", "git show --textconv HEAD:file.txt"],
-    ["exec", "git log --exec=/tmp/helper"],
-    ["exec", "git grep -O pattern"],
-    ["exec", "git grep -Ovim pattern"],
-    ["exec", "git grep --ext-grep pattern"],
-    ["exec", "git grep --open-files-in-pager=vim pattern"],
     ["exec", "gh pr create --title fix --body body"],
     ["exec", "gh pr view 123 --web"],
-    ["exec", "gh pr view 123 --web=true"],
     ["exec", "gh pr view 123 --web=false"],
     ["exec", "gh pr view 123 -w"],
-    ["exec", "gh pr view 123 -w=true"],
     ["exec", "gh pr view 123 -w=false"],
     ["exec", "gh issue comment 123 --body fixed"],
-    ["exec", "gh search prs bug --web"],
-    ["exec", "gh search prs bug --web=true"],
-    ["exec", "gh search prs bug -w"],
-    ["exec", "gh search prs bug -w=true"],
     ["exec", "gh api --method POST repos/openclaw/openclaw/issues"],
   ])("keeps ambiguous or mutating shell command mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(true);
@@ -347,7 +312,6 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("subagents", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("subagents", { action: "kill" })).toBe(false);
     expect(isReplaySafeToolCall("tool_call", { id: "sessions_list" })).toBe(false);
-    expect(isReplaySafeToolCall("tool_search_code", { code: "return 1" })).toBe(false);
     expect(isReplaySafeToolCall("unknown_plugin_tool", { action: "list" })).toBe(false);
     expect(isReplaySafeToolCall("survey_actions", { action: "list" })).toBe(false);
     expect(isReplaySafeToolCall("survey_actions", { action: "poll" })).toBe(false);

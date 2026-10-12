@@ -85,10 +85,8 @@ export function buildPendingInputQueueItems(
 ): ChatQueueDisplayItem[] {
   return inputs
     .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
-    .flatMap<ChatQueueDisplayItem>((input) => {
-      if (!input.queued || input.state !== "queued" || !input.runId) {
-        return [];
-      }
+    .filter((input) => input.queued && input.state === "queued" && input.runId)
+    .map<ChatQueueDisplayItem>((input) => {
       const message = normalizeMessage(input.message);
       const attachmentLabels = message.content.flatMap((part) =>
         part.type === "attachment" || part.type === "attachment_error"
@@ -98,19 +96,17 @@ export function buildPendingInputQueueItems(
             : [],
       );
       const imageCount = message.content.filter((part) => part.type === "image").length;
-      return [
-        {
-          id: `pending-input:${input.id}`,
-          text:
-            extractText(input.message) ||
-            attachmentLabels.join(", ") ||
-            (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : ""),
-          createdAt: input.acceptedAt,
-          pendingRunId: input.runId,
-          serverQueued: true,
-          sender: message.sender ?? undefined,
-        },
-      ];
+      return {
+        id: `pending-input:${input.id}`,
+        text:
+          extractText(input.message) ||
+          attachmentLabels.join(", ") ||
+          (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : ""),
+        createdAt: input.acceptedAt,
+        pendingRunId: input.runId,
+        serverQueued: true,
+        sender: message.sender ?? undefined,
+      };
     });
 }
 
@@ -236,7 +232,10 @@ function reconcilePendingInputPage(
   const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(state, page, receipts);
   const settled = new Set([
     ...(receipts ?? [])
-      .filter((receipt) => receipt.state === "consumed")
+      .filter(
+        (receipt) =>
+          receipt.state === "consumed" || (receipt.state === "pending" && receipt.cancelled),
+      )
       .map((receipt) => receipt.runId),
     ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
   ]);
@@ -367,6 +366,7 @@ async function requestPendingInputPage(
         inputReceipts?: ChatInputReceipts;
       }>("chat.history", {
         sessionKey: view.sessionKey,
+        toolResultMaxChars: 2_000,
         agentId: view.agentId,
         limit: 20,
         ...(inputRunIds.length ? { inputRunIds } : {}),

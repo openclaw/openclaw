@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveControlCommandGate,
-  resolveDualTextControlCommandGate,
 } from "./command-gating.js";
 
 describe("resolveCommandAuthorizedFromAuthorizers", () => {
@@ -14,18 +13,6 @@ describe("resolveCommandAuthorizedFromAuthorizers", () => {
         authorizers: [{ configured: false, allowed: true }],
       }),
     ).toBe(false);
-  });
-
-  it("allows when useAccessGroups is enabled and any configured authorizer allows", () => {
-    expect(
-      resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups: true,
-        authorizers: [
-          { configured: true, allowed: false },
-          { configured: true, allowed: true },
-        ],
-      }),
-    ).toBe(true);
   });
 
   it("allows when useAccessGroups is disabled (default)", () => {
@@ -87,23 +74,14 @@ describe("resolveControlCommandGate", () => {
     expect(result.shouldBlock).toBe(true);
   });
 
-  it("does not block when control commands are disabled", () => {
+  it("accepts a secondary authorizer when the primary denies", () => {
     const result = resolveControlCommandGate({
       useAccessGroups: true,
-      authorizers: [{ configured: true, allowed: false }],
-      allowTextCommands: false,
-      hasControlCommand: true,
-    });
-    expect(result.shouldBlock).toBe(false);
-  });
-
-  it("supports the dual-authorizer text gate helper", () => {
-    const result = resolveDualTextControlCommandGate({
-      useAccessGroups: true,
-      primaryConfigured: true,
-      primaryAllowed: false,
-      secondaryConfigured: true,
-      secondaryAllowed: true,
+      authorizers: [
+        { configured: true, allowed: false },
+        { configured: true, allowed: true },
+      ],
+      allowTextCommands: true,
       hasControlCommand: true,
     });
     expect(result.commandAuthorized).toBe(true);

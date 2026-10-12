@@ -58,9 +58,27 @@ describe("Discord Activity interaction", () => {
     expect(button?.customIdParser("other:key=value").key).toBe("other");
   });
 
-  it("registers from the configured Activity application ID without a learned ID", () => {
-    setDiscordActivitiesRuntime(createActivityTestRuntime());
-    expect(createDiscordActivityButton(componentContext())).not.toBeNull();
+  it("learns the startup application ID before resolving Activity availability", () => {
+    const cfg = createActivityTestConfig({ applicationId: "" });
+    const runtime = createActivityTestRuntime(cfg);
+    setDiscordActivitiesRuntime(runtime);
+    const context = { ...componentContext(), cfg, discordConfig: cfg.channels?.discord };
+
+    expect(createDiscordActivityButton(context)).toBeNull();
+    expect(createDiscordActivityButton(context, "123456789012345678")).not.toBeNull();
+    expect(runtime.resolveHttpAccount()?.applicationId).toBe("123456789012345678");
+
+    const disabledDiscordConfig = { ...context.discordConfig, enabled: false };
+    expect(
+      createDiscordActivityButton(
+        {
+          ...context,
+          cfg: { ...cfg, channels: { ...cfg.channels, discord: disabledDiscordConfig } },
+          discordConfig: disabledDiscordConfig,
+        },
+        "123456789012345678",
+      ),
+    ).toBeNull();
   });
 
   it("posts a raw LAUNCH_ACTIVITY callback", async () => {

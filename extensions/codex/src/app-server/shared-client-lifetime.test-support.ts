@@ -1,11 +1,5 @@
 import { once } from "node:events";
 import { setImmediate } from "node:timers/promises";
-import {
-  matchesAgentHarnessTaskAssignment,
-  type AgentHarnessScopedFinalizeTaskRunParams,
-  type AgentHarnessTaskRecord,
-  type AgentHarnessTaskRuntime,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import {
@@ -19,7 +13,6 @@ import { registerSharedClientAuthRefreshTests } from "./shared-client-auth-refre
 import { waitForCodexAppServerClientExit } from "./shared-client-lifecycle.js";
 import {
   captureCodexAppServerClientLifetime,
-  captureSharedCodexAppServerCatalogLifetime,
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
   getSharedCodexAppServerClient,
@@ -30,6 +23,8 @@ import {
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
+import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import { releaseCodexBoundLiveThread } from "./thread-lifecycle-warm.js";
 import {
   releaseCodexAppServerBindingSubscription,
   retainCodexAppServerBindingSubscription,
@@ -204,86 +199,20 @@ export function registerSharedClientLifetimeTests(
     await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
     const client = await clientPromise;
     const deliverCompletion = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-    const task: AgentHarnessTaskRecord = {
-      taskId: "child-thread",
-      runId: "codex-thread:child-thread",
-      runtime: "subagent",
-      taskKind: "codex-native",
-      ownerKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      scopeKind: "session",
-      task: "inspect the repo",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      createdAt: Date.now(),
-    };
-    let created = false;
-    const createTask = vi.fn(() => {
-      created = true;
-      return task;
-    });
-    const matchesTask = (
-      params: Pick<AgentHarnessScopedFinalizeTaskRunParams, "runId" | "expectedTask">,
-    ) =>
-      created &&
-      task.runId === params.runId &&
-      (!params.expectedTask || matchesAgentHarnessTaskAssignment(task, params.expectedTask));
-    const taskRuntime: AgentHarnessTaskRuntime = {
-      assertTaskAssignmentSupported: vi.fn(),
-      createRunningTaskRun: createTask,
-      tryCreateRunningTaskRun: createTask,
-      recordTaskRunProgressByRunId: vi.fn((params) => {
-        if (!matchesTask(params)) {
-          return [];
-        }
-        const { expectedTask: _expectedTask, completionCustody: _custody, ...progress } = params;
-        Object.assign(task, progress);
-        return [task];
-      }),
-      finalizeTaskRunByRunId: vi.fn((params) => {
-        if (!matchesTask(params)) {
-          return [];
-        }
-        task.status = params.status;
-        task.endedAt = params.endedAt;
-        task.terminalSummary = params.terminalSummary ?? undefined;
-        return [task];
-      }),
-      listTaskRecords: vi.fn(() => (created ? [task] : [])),
-      setDetachedTaskDeliveryStatusByRunId: vi.fn((params) => {
-        if (!matchesTask(params)) {
-          return [];
-        }
-        task.deliveryStatus = params.deliveryStatus;
-        return [task];
-      }),
-      createRunningTaskRunAsync: async (params) => taskRuntime.createRunningTaskRun(params),
-      tryCreateRunningTaskRunAsync: async (params) => taskRuntime.tryCreateRunningTaskRun(params),
-      recordTaskRunProgressByRunIdAsync: async (params) =>
-        taskRuntime.recordTaskRunProgressByRunId(params),
-      finalizeTaskRunByRunIdAsync: async (params) => taskRuntime.finalizeTaskRunByRunId(params),
-      setDetachedTaskDeliveryStatusByRunIdAsync: async (params) =>
-        taskRuntime.setDetachedTaskDeliveryStatusByRunId(params),
-      prepareTaskRecordsRead: async () => () => taskRuntime.listTaskRecords(),
-      prepareTaskRunRead: async (runId) => () =>
-        taskRuntime.listTaskRecords().filter((record) => record.runId === runId),
-    };
     const retainClient = vi.fn(() => retainSharedCodexAppServerClientIfCurrent(client));
     const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
       client,
       {
         captureAgentHarnessCompletionCustody: async () => undefined,
-        createAgentHarnessTaskEventSink: () => () => {},
-        createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
-        deliverAgentHarnessTaskCompletion: deliverCompletion,
+        createAgentHarnessCompletionEventSink: () => () => {},
+        deliverAgentHarnessCompletion: deliverCompletion,
       },
       { retainClient },
     );
     await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
-      taskRuntimeScope: { requesterSessionKey: "agent:main:main" },
+      completionScope: { requesterSessionKey: "agent:main:main", requesterAgentId: "main" },
       agentId: "main",
     });
 
@@ -348,13 +277,9 @@ export function registerSharedClientLifetimeTests(
     expect(deliverCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ childSessionId: "child-thread", result: "child final result" }),
     );
-    expect(task).toMatchObject({
-      status: "succeeded",
-      deliveryStatus: "delivered",
-      terminalSummary: "child final result",
-    });
     expect(harness.process.stdin.destroyed).toBe(true);
   });
+
   it.each(["current", "retired", "closed"])(
     "acquires the recorded %s owner through physical lifetime",
     async (state) => {
@@ -398,6 +323,45 @@ export function registerSharedClientLifetimeTests(
       await expect(waitForCodexAppServerClientExit(client)).resolves.toBeUndefined();
     },
   );
+
+  it("lets cancellation end a writer handoff to a retired owner that other leases keep alive", async () => {
+    const harness = createClientHarness({ autoEmitExit: false });
+    const successor = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+    await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
+    const retired = await acquire;
+    retireSharedCodexAppServerClientIfCurrent(retired);
+    const abort = new AbortController();
+    let outcome: unknown = "pending";
+    void releaseCodexBoundLiveThread({
+      client: successor.client,
+      clientId: successor.client.getInstanceId(),
+      ownerClientId: retired.getInstanceId(),
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      threadId: "thread",
+      signal: abort.signal,
+    }).then(
+      () => {
+        outcome = "resolved";
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+    try {
+      // The acquisition lease still pins the retired owner, so its exit never arrives.
+      await setImmediate();
+      expect(outcome).toBe("pending");
+      abort.abort(new Error("fixture startup timed out"));
+      await setImmediate();
+      expect(outcome).toMatchObject({ message: "fixture startup timed out" });
+    } finally {
+      releaseLeasedSharedCodexAppServerClient(retired);
+      harness.emitExit();
+      successor.client.close();
+    }
+  });
 
   it("connects catalog events at physical startup without retaining a client lease", async () => {
     const harness = createClientHarness();
@@ -513,12 +477,10 @@ export function registerSharedClientLifetimeTests(
     await retained?.release();
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
     expect(assertCurrent).not.toThrow();
-    const catalogCurrent = captureSharedCodexAppServerCatalogLifetime(client);
     const configWrite = client.request("config/batchWrite", { edits: [], reloadUserConfig: false });
     const written = JSON.parse(harness.writes.at(-1)!);
     harness.send({ id: written.id, result: {} });
     await configWrite;
-    expect(catalogCurrent()).toBe(false);
     expect(assertCurrent).not.toThrow();
     client.close();
     expect(assertCurrent).toThrow(CodexAdoptedThreadActiveError);

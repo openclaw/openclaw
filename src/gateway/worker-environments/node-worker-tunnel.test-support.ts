@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -10,8 +11,16 @@ import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner
 import type { SpawnResult } from "../../process/exec.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+// Keep this static: the tunnel graph reaches compiled-subprocess declarations, whose one-time
+// invocation-wide preparation must happen at collection, not inside a test deadline.
+import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import type { NodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
+import {
+  serializeWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
 
 export const BUILD = {
   bundleHash: "a".repeat(64),
@@ -63,7 +72,12 @@ export function transport(): NodeWorkerSupervisorTransport {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 }, environmentSession: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 2, available: 2 },
+          environmentSession: 1,
+          workspaceQuiescence: 1,
+        },
         commands: ["system.run"],
       },
     ],
@@ -101,14 +115,79 @@ export function startRequest() {
   };
 }
 
-export function workspaceTransfer(): NodeWorkspaceTransferService {
-  return {
-    close: vi.fn(async () => {}),
-    revoke: vi.fn(),
-  } as unknown as NodeWorkspaceTransferService;
+export function createManager(
+  record: ReturnType<typeof environment>,
+  overrides: Partial<Parameters<typeof createNodeWorkerTunnelManager>[0]> = {},
+) {
+  return createNodeWorkerTunnelManager({
+    gatewayDeviceId: "gateway-device-1",
+    getEnvironment: () => record,
+    listEnvironments: () => [record],
+    getTransport: transport,
+    launchNodeWorker: vi.fn(),
+    validateWorkerTurn: () => true,
+    workspaceTransfer: workspaceTransfer(),
+    ...overrides,
+  });
 }
 
-export function workspaceCommandPayload(workspaceDir: string, result: Partial<SpawnResult>) {
+export function workspaceTransfer(
+  operations: Partial<NodeWorkspaceTransferService> = {},
+): NodeWorkspaceTransferService {
+  const unconfigured = (): never => {
+    throw new Error("Unconfigured workspace transfer operation");
+  };
+  return {
+    initialize: unconfigured,
+    prepareAttachments: unconfigured,
+    prepareRepository: unconfigured,
+    prepareSync: unconfigured,
+    prepareUpload: unconfigured,
+    takeUpload: unconfigured,
+    discardUpload: unconfigured,
+    getSnapshot: unconfigured,
+    publishSnapshot: unconfigured,
+    authorize: unconfigured,
+    isAuthorizationCurrent: unconfigured,
+    authorizationSignal: unconfigured,
+    snapshot: unconfigured,
+    pack: unconfigured,
+    blob: unconfigured,
+    receiveUpload: unconfigured,
+    verifyBlob: unconfigured,
+    fenceEnvironment: unconfigured,
+    closeAll: unconfigured,
+    close: vi.fn(async () => {}),
+    revoke: vi.fn(async () => {}),
+    ...operations,
+  };
+}
+
+export function workspaceSnapshot(
+  root: string,
+  manifest: WorkerWorkspaceManifest = { version: 1, baseCommit: null, entries: [] },
+): NodeWorkspaceTransferSnapshot {
+  const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+  const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+  return { manifest, manifestRef, rawManifest, root };
+}
+
+export function unchangedWorkspaceUpload(
+  snapshot: NodeWorkspaceTransferSnapshot,
+  stagingRoot: string,
+): ReturnType<NodeWorkspaceTransferService["takeUpload"]> {
+  return {
+    base: snapshot.manifest,
+    baseManifestRef: snapshot.manifestRef,
+    baseRaw: snapshot.rawManifest,
+    current: snapshot.manifest,
+    currentManifestRef: snapshot.manifestRef,
+    currentRaw: snapshot.rawManifest,
+    stagingRoot,
+  };
+}
+
+export function workspaceCommandPayload(workspaceDir: string, result: Partial<SpawnResult> = {}) {
   return JSON.stringify({
     workspaceDir,
     stdout: "",

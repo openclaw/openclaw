@@ -1,7 +1,7 @@
 /** Tests durable ownership after an OAuth refresh failure. */
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv } from "../../test-utils/env.js";
@@ -93,7 +93,7 @@ describe("OAuth refresh failure ownership", () => {
       } as never;
     });
 
-    const [first, second] = await Promise.all([
+    const results = await Promise.all([
       resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
         store: ensureAuthProfileStore(agentDir),
         profileId,
@@ -106,9 +106,9 @@ describe("OAuth refresh failure ownership", () => {
       }).catch((e: unknown) => e),
     ]);
 
-    expect(first).toBeInstanceOf(Error);
+    expect(results.filter((result) => result instanceof Error)).toHaveLength(1);
     expect(callCount).toBe(1);
-    expect(second).toBeNull();
+    expect(results.filter((result) => result === null)).toHaveLength(1);
   });
 
   it("cancels auth waiters while the canonical refresh owner durably settles for another caller", async () => {

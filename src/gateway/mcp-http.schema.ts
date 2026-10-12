@@ -1,15 +1,15 @@
-// MCP loopback tool schema projection.
-// Converts gateway-scoped tools into MCP tools/list-compatible schemas.
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logWarn } from "../logger.js";
+import { mergeLiteralSchemas } from "../shared/json-schema-literals.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MCP_LOOPBACK_LOG_PREFIX = "mcp-loopback";
 
-export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
+export type McpLoopbackTool = Awaited<
+  ReturnType<typeof resolveGatewayScopedTools>
+>["tools"][number];
 
-/** MCP tools/list schema entry derived from a gateway loopback tool. */
 export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
@@ -24,14 +24,8 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
   }
 }
 
-/** Safely reads and normalizes a loopback tool name from plugin-provided tool objects. */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
-  const value = readLoopbackToolField(tool, "name");
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const name = value.trim();
-  return name || undefined;
+  return normalizeOptionalString(readLoopbackToolField(tool, "name"));
 }
 
 function readLoopbackToolDescription(tool: McpLoopbackTool): string | undefined {
@@ -56,80 +50,17 @@ function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unkno
   }
 }
 
-function readLiteralSchemaValues(schema: Record<string, unknown>): unknown[] | undefined {
-  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
-  if (Object.hasOwn(schema, "const")) {
-    if (!enumValues) {
-      return [schema.const];
-    }
-    return enumValues.some((value) => isDeepStrictEqual(value, schema.const)) ? [schema.const] : [];
-  }
-  return enumValues;
-}
-
-function uniqueLiteralValues(values: unknown[]): unknown[] {
-  return values.filter(
-    (value, index) =>
-      values.findIndex((candidate) => isDeepStrictEqual(candidate, value)) === index,
-  );
-}
-
-const SCHEMA_ANNOTATION_KEYS = new Set([
-  "$comment",
-  "default",
-  "deprecated",
-  "description",
-  "example",
-  "examples",
-  "readOnly",
-  "title",
-  "writeOnly",
-]);
-
-function readLiteralValidationConstraints(
-  schema: Record<string, unknown>,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(schema).filter(
-      ([key]) => key !== "const" && key !== "enum" && !SCHEMA_ANNOTATION_KEYS.has(key),
-    ),
-  );
-}
-
-function mergeLiteralSchemas(
-  existing: Record<string, unknown>,
-  incoming: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const existingValues = readLiteralSchemaValues(existing);
-  const incomingValues = readLiteralSchemaValues(incoming);
-  if (existingValues === undefined || incomingValues === undefined) {
-    return undefined;
-  }
-  const existingConstraints = readLiteralValidationConstraints(existing);
-  const incomingConstraints = readLiteralValidationConstraints(incoming);
-  if (!isDeepStrictEqual(existingConstraints, incomingConstraints)) {
-    return undefined;
-  }
-  const values = uniqueLiteralValues([...existingValues, ...incomingValues]);
-  if (values.length === 0) {
-    return undefined;
-  }
-  const merged: Record<string, unknown> = { ...existing, enum: values };
-  delete merged.const;
-  return merged;
-}
-
 function flattenUnionSchema(
   raw: Record<string, unknown>,
   toolName: string,
 ): Record<string, unknown> {
   // MCP clients vary in union-schema support. Merge only safe object variants
   // and keep common required fields so generated forms remain usable.
-  const variants = (raw.anyOf ?? raw.oneOf) as unknown[] | undefined;
+  const variants = raw.anyOf ?? raw.oneOf;
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;
   }
-  const mergedProps = Object.create(null) as Record<string, unknown>;
+  const mergedProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
     if (variant === true) {
@@ -152,36 +83,24 @@ function flattenUnionSchema(
           mergedProps[key] = schema;
           continue;
         }
-        const existing = mergedProps[key];
-        const incoming = schema;
-        if (existing === true || incoming === true) {
+        const existing = mergedProps[key]!;
+        if (existing === true || schema === true) {
           mergedProps[key] = true;
           continue;
         }
         if (existing === false) {
-          mergedProps[key] = incoming;
+          mergedProps[key] = schema;
           continue;
         }
-        if (incoming === false) {
+        if (schema === false) {
           continue;
         }
-        if (areSchemaValuesEquivalent(existing, incoming)) {
-          continue;
-        }
-        if (!isRecord(existing) || !isRecord(incoming)) {
-          if (existing !== incoming) {
-            warnSchemaOnce(
-              `${MCP_LOOPBACK_LOG_PREFIX}: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
-            );
-          }
-          continue;
-        }
-        if (isDeepStrictEqual(existing, incoming)) {
+        if (areSchemaValuesEquivalent(existing, schema)) {
           continue;
         }
         // A prior const merge becomes an enum. Treat both as one literal family
         // so later union variants cannot silently disappear based on ordering.
-        const mergedLiterals = mergeLiteralSchemas(existing, incoming);
+        const mergedLiterals = mergeLiteralSchemas(existing, schema);
         if (mergedLiterals) {
           mergedProps[key] = mergedLiterals;
           continue;
@@ -272,7 +191,6 @@ function warnSchemaOnce(message: string) {
   logWarn(message);
 }
 
-/** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {
     const name = readMcpLoopbackToolName(tool);

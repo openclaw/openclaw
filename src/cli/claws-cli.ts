@@ -21,6 +21,12 @@ export type ClawsAddOptions = ClawsDevOptions & {
   yes?: boolean;
   planIntegrity?: string;
 };
+export type ClawsMigrateOptions = {
+  dryRun?: boolean;
+  yes?: boolean;
+  planIntegrity?: string;
+  json?: boolean;
+};
 
 export type ClawsStatusOptions = { json?: boolean };
 export type ClawsUpdateOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
@@ -75,7 +81,7 @@ export function registerClawsCli(program: Command) {
 
   claws
     .command("build")
-    .description("Build a deterministic Claw package artifact")
+    .description("Build a reproducible Claw package artifact")
     .argument("[path]", "Project directory", ".")
     .requiredOption("--out <artifact>", "New .tgz artifact to create")
     .option("--json", "Print JSON", false)
@@ -120,6 +126,19 @@ export function registerClawsCli(program: Command) {
     });
 
   claws
+    .command("migrate")
+    .description("Enroll one existing local agent as a Claw without replacing its workspace")
+    .argument("<agent-id>", "Existing configured agent id")
+    .option("--dry-run", "Preview migration without creating a package or ownership record", false)
+    .option("--yes", "Apply after confirming the exact migration plan", false)
+    .option("--plan-integrity <digest>", "Bind automation consent to an exact dry-run plan")
+    .option("--json", "Print JSON", false)
+    .action(async (agentId: string, opts: ClawsMigrateOptions) => {
+      const { runClawsMigrateCommand } = await import("./claws-migrate-cli.runtime.js");
+      await runClawsMigrateCommand(agentId, opts);
+    });
+
+  claws
     .command("update")
     .description("Plan changes to one installed Claw agent")
     .argument("<claw-or-agent>", "Installed package name or final agent id")
@@ -129,7 +148,7 @@ export function registerClawsCli(program: Command) {
     .option("--plan-integrity <digest>", "Bind consent to an exact update plan")
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
-      const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");
+      const { runClawsUpdateCommand } = await import("./claws-update-cli.runtime.js");
       await runClawsUpdateCommand(target, opts);
     });
 

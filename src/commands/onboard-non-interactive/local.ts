@@ -5,7 +5,7 @@ import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
-import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
+import { resolveCanonicalConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
@@ -24,6 +24,7 @@ import {
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
+  probeGatewayReachable,
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
@@ -86,13 +87,16 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
 }
 
 /** Resolves the auth material used by the post-setup gateway health probe. */
-async function resolveGatewayHealthProbeToken(
+async function resolveGatewayHealthProbeAuth(
   nextConfig: OpenClawConfig,
 ): Promise<{ token?: string; password?: string; unresolvedRefReason?: string }> {
-  if (nextConfig.gateway?.auth?.mode === "password") {
-    // Password mode uses the configured password directly; token fallback must
-    // stay disabled or the probe can validate the wrong auth mode.
-    const resolved = await resolveConfiguredSecretInputWithFallback({
+  if (
+    nextConfig.gateway?.auth?.mode === "password" ||
+    nextConfig.gateway?.auth?.mode === "trusted-proxy"
+  ) {
+    // Proxy mode's local password uses the same resolver as password mode;
+    // unresolved configured refs must not fall back to ambient credentials.
+    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
       config: nextConfig,
       env: process.env,
       value: nextConfig.gateway.auth.password,
@@ -208,7 +212,7 @@ export async function runNonInteractiveLocalSetup(params: {
 
   // Validate the complete Gateway proposal before provider methods or first-
   // agent creation can write credentials, config, or workspace state.
-  const gatewayResult = applyNonInteractiveGatewayConfig({
+  const gatewayResult = await applyNonInteractiveGatewayConfig({
     nextConfig,
     opts,
     runtime,
@@ -218,7 +222,7 @@ export async function runNonInteractiveLocalSetup(params: {
     return;
   }
   nextConfig = gatewayResult.nextConfig;
-  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts });
 
   if (authChoice !== "skip") {
     // Auth-choice handling is loaded only when needed so skip-only onboarding
@@ -342,13 +346,16 @@ export async function runNonInteractiveLocalSetup(params: {
     const startupTiming = opts.installDaemon
       ? resolveGatewayStartupTiming()
       : { deadlineMs: 15_000 };
-    const probeAuth = await resolveGatewayHealthProbeToken(nextConfig);
-    const probe = await waitForGatewayReachable({
+    const probeAuth = await resolveGatewayHealthProbeAuth(nextConfig);
+    const probeParams = {
       url: links.wsUrl,
       token: probeAuth.token,
       password: probeAuth.password,
-      ...startupTiming,
-    });
+    };
+    const probe =
+      opts.installDaemon === false
+        ? await probeGatewayReachable(probeParams)
+        : await waitForGatewayReachable({ ...probeParams, ...startupTiming });
     if (!probe.ok) {
       // Non-daemon setup attaches to an existing gateway, so collect expensive
       // daemon diagnostics only when this run was responsible for installing it.
@@ -406,6 +413,8 @@ export async function runNonInteractiveLocalSetup(params: {
             json: false,
             timeoutMs: opts.installDaemon && process.platform === "win32" ? 90_000 : 10_000,
             config: nextConfig,
+            // Keep derived credentials on the Gateway configured by this setup run.
+            localPortOverride: gatewayResult.port,
             token: probeAuth.token,
             password: probeAuth.password,
           },

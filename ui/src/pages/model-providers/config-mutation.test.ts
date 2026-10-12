@@ -1,8 +1,24 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDefaultsPatch, modelProviderErrorMessage } from "./config-mutation.ts";
+import {
+  buildDefaultsPatch,
+  modelProviderErrorMessage,
+  readModelBehaviorConfig,
+} from "./config-mutation.ts";
 
 describe("model provider config patches", () => {
+  it("preserves a configured Ultrafast preference when another default is saved", () => {
+    const behavior = readModelBehaviorConfig({ fastModeDefault: "ultrafast" });
+    expect(behavior.fastMode).toBe("ultrafast");
+    expect(
+      buildDefaultsPatch({
+        primary: "openai/model",
+        fallbacks: [],
+        utilityModel: null,
+        ...behavior,
+      }),
+    ).toMatchObject({ agents: { defaults: { fastModeDefault: "ultrafast" } } });
+  });
   it("redacts secrets in displayed mutation failures", () => {
     expect(modelProviderErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
       "OPENAI_API_KEY=sk-123...cdef",

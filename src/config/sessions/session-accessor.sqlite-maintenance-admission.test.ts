@@ -3,8 +3,8 @@ import { expect, test, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationResult } from "./session-accessor.sqlite-lifecycle-types.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import type * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker-request.js";
 
@@ -14,6 +14,7 @@ type WorkerOwner = Parameters<
 const storage = vi.hoisted(() => ({
   run: vi.fn<WorkerOwner["run"]>(),
   committed: false,
+  database: { db: { isTransaction: false } },
   release: vi.fn(),
 }));
 const options = {
@@ -33,7 +34,7 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-readonly.js")>()),
   retainOpenClawAgentDatabaseReadOnly: () => ({
     found: true,
-    database: { db: {} },
+    database: storage.database,
     claim: {
       identity: "synthetic-file",
       assertCurrent: () => {},
@@ -42,6 +43,18 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => (
     },
   }),
 }));
+vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db.js")>();
+  return {
+    ...actual,
+    getOpenClawAgentDatabaseIfOpen: (
+      request: Parameters<typeof actual.getOpenClawAgentDatabaseIfOpen>[0],
+    ) =>
+      request?.path === options.path
+        ? storage.database
+        : actual.getOpenClawAgentDatabaseIfOpen(request),
+  };
+});
 vi.mock("../../state/openclaw-agent-db-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-identity.js")>()),
   readOpenClawAgentDatabaseIdentity: () => ({ filename: options.path }),
@@ -64,19 +77,6 @@ vi.mock("./session-accessor.sqlite-worker-request.js", async (importOriginal) =>
       assertCurrent: () => {},
       commitGate: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
       signal: new AbortController().signal,
-    }),
-}));
-vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-accessor.sqlite-reclamation-commit.js")>()),
-  withSqliteReclamationAuthorization: async <T>(
-    _gate: SharedArrayBuffer,
-    _database: unknown,
-    assertCurrent: () => void,
-    run: (authorize: () => void) => Promise<T>,
-  ) =>
-    await run(() => {
-      assertCurrent();
-      storage.committed = true;
     }),
 }));
 vi.mock("./session-accessor.sqlite-reclamation-worker.js", async () => {
@@ -107,25 +107,34 @@ test("maintenance preparation yields to foreground writes and retains commit adm
   const releaseArchive = createDeferredCore();
   const admissions: number[] = [];
   const order: string[] = [];
+  const write = (name: string, onEntered?: () => void) =>
+    runExclusiveSqliteSessionWrite(
+      options,
+      async () => {
+        onEntered?.();
+        order.push(name);
+      },
+      "session-entry.patch",
+    );
   const worker = new Worker(
     `const { parentPort } = require("node:worker_threads");
+     let admissions = 0;
      parentPort.on("message", (message) => {
        if (message.type === "start") {
          parentPort.postMessage({ type: "preparation" });
        } else if (message.type === "prepare") {
-         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
+         parentPort.postMessage({ type: "admission-request", operationId: 1 });
        } else if (message.type === "continue") {
-         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
-       } else if (message.type === "admission" && message.admissionId === 1) {
-         parentPort.postMessage({ type: "admission-release", operationId: 1, admissionId: 1 });
+         parentPort.postMessage({ type: "admission-request", operationId: 1 });
+       } else if (message.type === "admission" && ++admissions === 1) {
+         parentPort.postMessage({ type: "admission-release", operationId: 1 });
          parentPort.postMessage({ type: "validation-gap" });
-       } else if (message.type === "admission" && message.admissionId === 2) {
-         parentPort.postMessage({ type: "commit-request", operationId: 1 });
+       } else if (message.type === "admission") {
          parentPort.postMessage({ type: "commit-gap" });
        } else if (message.type === "settle") {
          parentPort.postMessage({ type: "reclaimed", operationId: 1, settled: true,
            result: { kind: "maintenance-finalize", value: {
-             archivedTranscripts: [], changedEntries: [], committedEntries: [] } } });
+             archivedTranscripts: [], committedEntryIndices: [] } } });
          parentPort.close();
        }
      });`,
@@ -145,7 +154,6 @@ test("maintenance preparation yields to foreground writes and retains commit adm
       transport: { kind: "dedicated", channel: worker },
       operationId: 1,
       completion: "exit",
-      onCommitRequest: params.onCommitRequest,
       withWriteAdmission: async (run, admission) => {
         admissions.push(admission.admissionId);
         await params.withWriteAdmission(run, admission);
@@ -160,7 +168,10 @@ test("maintenance preparation yields to foreground writes and retains commit adm
   await archiveEntered.promise;
   const finalization = runSqliteSessionReclamation({
     forceInProcess: false,
-    onWorkerResult: () => order.push("published"),
+    onWorkerResult: () => {
+      storage.committed = true;
+      order.push("published");
+    },
     plan: {
       kind: "maintenance-finalize",
       agentId: "main",
@@ -169,6 +180,16 @@ test("maintenance preparation yields to foreground writes and retains commit adm
       materializedPlans: [],
     },
   });
+  const settledFinalization = finalization.then(
+    () => {
+      throw new Error("Finalization settled before its protocol checkpoint");
+    },
+    (error: unknown) => {
+      throw error;
+    },
+  );
+  // Observe early failure while any protocol checkpoint is pending.
+  void settledFinalization.catch(() => {});
   let precedingWriter: Promise<void> | undefined;
   let preparationWriter: Promise<void> | undefined;
   let validationWriter: Promise<void> | undefined;
@@ -176,45 +197,22 @@ test("maintenance preparation yields to foreground writes and retains commit adm
   let laterObservedCommit = false;
   try {
     // A preceding archive request can still acquire this store's writer.
-    precedingWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        order.push("preceding-writer");
-      },
-      "session-entry.patch",
-    );
+    precedingWriter = write("preceding-writer");
     await precedingWriter;
     releaseArchive.resolve();
     await earlierArchive;
-    await preparation.promise;
-    preparationWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        order.push("preparation-writer");
-      },
-      "session-entry.patch",
-    );
+    await Promise.race([preparation.promise, settledFinalization]);
+    preparationWriter = write("preparation-writer");
     worker.postMessage({ type: "prepare" }, []);
-    await validationGap.promise;
+    await Promise.race([validationGap.promise, settledFinalization]);
     expect(order).toEqual(["preceding-writer", "preparation-writer"]);
-    validationWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        order.push("validation-writer");
-      },
-      "session-entry.patch",
-    );
+    validationWriter = write("validation-writer");
     worker.postMessage({ type: "continue" }, []);
-    await commitGap.promise;
+    await Promise.race([commitGap.promise, settledFinalization]);
     expect(order).toEqual(["preceding-writer", "preparation-writer", "validation-writer"]);
-    laterWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        laterObservedCommit = storage.committed;
-        order.push("later-writer");
-      },
-      "session-entry.patch",
-    );
+    laterWriter = write("later-writer", () => {
+      laterObservedCommit = storage.committed;
+    });
     worker.postMessage({ type: "settle" }, []);
     await expect(finalization).resolves.toMatchObject({ kind: "maintenance-finalize" });
     await Promise.all([preparationWriter, validationWriter, laterWriter]);

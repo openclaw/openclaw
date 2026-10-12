@@ -6,6 +6,7 @@ import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureRepoNodeModulesLink } from "./local-check-runtime.mts";
+import { hasManagedCleanupParent } from "./managed-cleanup-handoff.mts";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
@@ -54,11 +55,26 @@ export function resolveTsxImport(checkoutRoot) {
   );
 }
 
-export async function registerToolingTsx() {
+function configureToolingTsx() {
   // tsx indexes the entire shared disk cache before expiration, coupling startup
   // to other checkouts' cache size. This flag retains its in-process Map and
   // reaches descendant tooling before their loaders initialize.
   process.env.TSX_DISABLE_CACHE = "1";
+  // Fixtures run this checkout's tooling from a cwd without a tsconfig, which
+  // disables tsx paths mapping for workspace imports. Pin this checkout's
+  // tsconfig only for that foreign cwd; explicit env and cwd tsconfigs win.
+  const checkoutTsconfig = path.join(SHIM_CHECKOUT_ROOT, "tsconfig.json");
+  if (
+    process.env.TSX_TSCONFIG_PATH === undefined &&
+    !existsSync(path.join(process.cwd(), "tsconfig.json")) &&
+    existsSync(checkoutTsconfig)
+  ) {
+    process.env.TSX_TSCONFIG_PATH = checkoutTsconfig;
+  }
+}
+
+export async function registerToolingTsx() {
+  configureToolingTsx();
   await import(resolveTsxImport(SHIM_CHECKOUT_ROOT));
 }
 
@@ -91,6 +107,58 @@ function signalChild(child, signal, detached) {
 }
 
 async function runCliShimInner(moduleUrl, options, nodeArgs) {
+  // Native entrypoints need the explicit dependency link without loading TSX.
+  if (nodeArgs.length === 0) {
+    const modulesDir = resolveConfiguredModulesDir(SHIM_CHECKOUT_ROOT);
+    if (modulesDir) {
+      ensureRepoNodeModulesLink(modulesDir, { cwd: SHIM_CHECKOUT_ROOT });
+    }
+  }
+  const nodeExecutable = options.executable ?? (process.versions.bun ? "node" : process.execPath);
+  const commandArgs = [
+    ...nodeArgs,
+    ...resolveForwardedNodeCompilerArgs(),
+    ...(options.execArgv ?? []),
+    fileURLToPath(new URL(options.implementation, moduleUrl)),
+    ...process.argv.slice(2),
+  ];
+  if (
+    options.terminationOwner === "implementation" &&
+    options.detached !== false &&
+    hasManagedCleanupParent()
+  ) {
+    // A managed parent hands cleanup to this responsive shim. Synchronous
+    // preparation stays in our child's group until its own owner is ready.
+    const { runManagedCommand } = await import("./managed-child-process.mts");
+    let childSignal;
+    let interrupted = false;
+    const exitCode = await runManagedCommand({
+      bin: nodeExecutable,
+      args: commandArgs,
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: options.stdio ?? "inherit",
+      signalKillGraceMs: options.forceKillDelayMs,
+      requireProcessTreeExit: true,
+      waitForCleanupRelease: true,
+      shell: false,
+      onSignal() {
+        interrupted = true;
+      },
+      onReady(child) {
+        child.once("exit", (_code, signal) => {
+          childSignal = signal;
+        });
+      },
+    });
+    writeFailureTrailer(options.failureTool, exitCode);
+    if (childSignal && !interrupted) {
+      process.kill(process.pid, childSignal);
+      return;
+    }
+    process.exitCode = exitCode;
+    return;
+  }
   const detached = options.detached ?? (process.platform !== "win32" && !process.stdin.isTTY);
   const forceKillDelayMs = options.forceKillDelayMs ?? DEFAULT_FORCE_KILL_DELAY_MS;
   let child = null;
@@ -127,34 +195,12 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
   process.on("exit", exitHandler);
 
   try {
-    // Native entrypoints need the explicit dependency link without loading TSX.
-    if (nodeArgs.length === 0) {
-      const modulesDir = resolveConfiguredModulesDir(SHIM_CHECKOUT_ROOT);
-      if (modulesDir) {
-        ensureRepoNodeModulesLink(modulesDir, { cwd: SHIM_CHECKOUT_ROOT });
-      }
-    }
-    const implementationUrl = new URL(options.implementation, moduleUrl);
-    const implementationPath = fileURLToPath(implementationUrl);
-    const nodeExecutable = options.executable ?? (process.versions.bun ? "node" : process.execPath);
-    // Preserve explicit compiler policy without copying parent loaders, evals, or debuggers.
-    const compilerArgs = resolveForwardedNodeCompilerArgs();
-    child = spawn(
-      nodeExecutable,
-      [
-        ...nodeArgs,
-        ...compilerArgs,
-        ...(options.execArgv ?? []),
-        implementationPath,
-        ...process.argv.slice(2),
-      ],
-      {
-        cwd: process.cwd(),
-        detached,
-        env: process.env,
-        stdio: options.stdio ?? "inherit",
-      },
-    );
+    child = spawn(nodeExecutable, commandArgs, {
+      cwd: process.cwd(),
+      detached,
+      env: process.env,
+      stdio: options.stdio ?? "inherit",
+    });
     const result = await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, signal) => resolve({ code, signal }));
@@ -191,6 +237,25 @@ export function runNodeCliShim(moduleUrl, options = {}) {
   return runCliShim(moduleUrl, options, []);
 }
 
-export function runTsxCliShim(moduleUrl, options = {}) {
+export async function runTsxCliShim(moduleUrl, options = {}) {
+  if (options.toolingDependencies) {
+    try {
+      const { toolingDependencyOptions } = await import("./tooling-dependencies.mjs");
+      const tooling = toolingDependencyOptions(SHIM_CHECKOUT_ROOT, options.toolingDependencies, {
+        tsx: true,
+      });
+      if (tooling.tsxImport) {
+        configureToolingTsx();
+        // Install qualified resolution before TSX loads source imports. Keeping
+        // its absolute preload also preserves fork() without a workspace link.
+        return runCliShim(moduleUrl, options, [...tooling.execArgv, "--import", tooling.tsxImport]);
+      }
+    } catch (error) {
+      console.error(error);
+      writeFailureTrailer(options.failureTool, 1);
+      process.exitCode = 1;
+      return;
+    }
+  }
   return runCliShim(moduleUrl, options, ["--import", new URL("../tsx.mjs", import.meta.url).href]);
 }

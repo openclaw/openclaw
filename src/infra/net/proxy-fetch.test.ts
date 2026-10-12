@@ -94,7 +94,6 @@ vi.mock("./undici-runtime.js", () => ({
 
 let getProxyUrlFromFetch: typeof import("./proxy-fetch.js").getProxyUrlFromFetch;
 let makeProxyFetch: typeof import("./proxy-fetch.js").makeProxyFetch;
-let PROXY_FETCH_PROXY_URL: typeof import("./proxy-fetch.js").PROXY_FETCH_PROXY_URL;
 let resolveProxyFetchFromEnv: typeof import("./proxy-fetch.js").resolveProxyFetchFromEnv;
 
 function requireProxyFetch(
@@ -150,7 +149,7 @@ function restoreProxyEnv(): void {
 
 describe("makeProxyFetch", () => {
   beforeAll(async () => {
-    ({ getProxyUrlFromFetch, makeProxyFetch, PROXY_FETCH_PROXY_URL, resolveProxyFetchFromEnv } =
+    ({ getProxyUrlFromFetch, makeProxyFetch, resolveProxyFetchFromEnv } =
       await import("./proxy-fetch.js"));
   });
 
@@ -262,13 +261,7 @@ describe("getProxyUrlFromFetch", () => {
 
   it("returns undefined for plain fetch functions or blank metadata", () => {
     const plainFetch = vi.fn() as unknown as typeof fetch;
-    const blankMetadataFetch = vi.fn() as unknown as typeof fetch;
-    Object.defineProperty(blankMetadataFetch, PROXY_FETCH_PROXY_URL, {
-      value: "   ",
-      enumerable: false,
-      configurable: true,
-      writable: true,
-    });
+    const blankMetadataFetch = makeProxyFetch("   ");
 
     expect(getProxyUrlFromFetch(plainFetch)).toBeUndefined();
     expect(getProxyUrlFromFetch(blankMetadataFetch)).toBeUndefined();

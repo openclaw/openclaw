@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { publishSqliteCommittedState } from "../../infra/sqlite-post-commit.js";
 import {
   createSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -18,21 +20,21 @@ import {
   selectPreparedEnvironmentReservations,
 } from "./prepared-environment-store.js";
 import type { WorkerEnvironmentSessionIdentity } from "./session-attachment.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
+import { readWorkerEnvironmentReceipt } from "./store-receipt.js";
 import { normalizeCredentialHash, requireWorkerEnvironmentString } from "./store-validation.js";
+import type { WorkerEnvironmentWorkerOperations } from "./store-worker-contract.js";
+import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 import type {
-  WorkerEnvironmentWorkerOperations,
-  WorkerEnvironmentFacts,
   WorkerEnvironmentCommitAdmission,
   WorkerEnvironmentMutationMethods,
   WorkerEnvironmentPruneCursor,
   WorkerEnvironmentPrunePage,
-} from "./store-worker-contract.js";
-import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
+} from "./store.types.js";
 
 export type {
   PreparedEnvironmentPlacementBinding,
-  PreparedEnvironmentSelection,
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
 export type { WorkerEnvironmentTransitionPatch } from "./store-write-types.js";
@@ -42,18 +44,6 @@ type Input<Method extends keyof WorkerEnvironmentMutationMethods> = Parameters<
 >[0];
 type Operations = WorkerEnvironmentWorkerOperations;
 
-// Native receipts originate in this store's worker; a failed result delivery still owns its facts.
-function isInventoryFacts(value: unknown): value is WorkerEnvironmentFacts {
-  return (
-    isRecord(value) &&
-    Array.isArray(value.ids) &&
-    value.ids.every((id) => typeof id === "string") &&
-    Array.isArray(value.environments) &&
-    Array.isArray(value.credentials) &&
-    Array.isArray(value.attachments)
-  );
-}
-
 function isCommitAdmission(value: unknown): value is WorkerEnvironmentCommitAdmission {
   return (
     Array.isArray(value) &&
@@ -61,7 +51,8 @@ function isCommitAdmission(value: unknown): value is WorkerEnvironmentCommitAdmi
       (fact) =>
         isRecord(fact) &&
         typeof fact.environmentId === "string" &&
-        typeof fact.recordAuthority === "string" &&
+        typeof fact.environmentAuthority === "string" &&
+        typeof fact.credentialAuthority === "string" &&
         typeof fact.transferAuthority === "string" &&
         typeof fact.attachmentAuthority === "string",
     )
@@ -92,7 +83,7 @@ export async function createWorkerEnvironmentStore(
   let closing: Promise<void> | undefined;
   const assertActive = () => {
     if (closed || !owner.active) {
-      throw new Error("Worker environment inventory has closed");
+      throw new WorkerEnvironmentInventoryClosedError();
     }
     context.admission.assertCurrent();
   };
@@ -119,36 +110,9 @@ export async function createWorkerEnvironmentStore(
     );
     return operation;
   }
-  async function reconcilePending() {
-    for (const recovery of owner.pendingReconciliations()) {
-      try {
-        assertActive();
-        const revision = owner.nextSequence();
-        const facts = await snapshot(recovery.ids);
-        owner.install(facts, revision, false);
-        owner.release(recovery.token);
-        if (
-          recovery.revocationId &&
-          !facts.credentials.some(
-            (credential) => credential.environmentId === recovery.revocationId,
-          )
-        ) {
-          owner.publishCredentialRevoked(recovery.revocationId);
-        }
-        sessionChanges.emit({ all: true, scope: "worker-environments" });
-      } catch (error) {
-        throw new AggregateError(
-          [recovery.error, error],
-          "Worker environment mutation failed and inventory reconciliation failed",
-          { cause: error },
-        );
-      }
-    }
-  }
   function mutate<Key extends keyof Operations>(
     type: Key,
-    input: Operations[Key]["input"],
-    ids: readonly string[],
+    input: Omit<Operations[Key]["input"], "publicationIncarnation">,
     assertCurrent: () => void = () => {},
     revocationId?: string,
   ): Promise<Operations[Key]["output"]["result"]> {
@@ -156,14 +120,18 @@ export async function createWorkerEnvironmentStore(
     if (closing) {
       throw new Error("Worker environment inventory is closing");
     }
-    const captured = structuredClone(input);
+    const captured = structuredClone({
+      ...input,
+      nowMs: options.now?.(),
+      publicationIncarnation: owner.incarnation,
+    });
     const operation = owner.enqueue(async () => {
-      await reconcilePending();
       const token = {};
       let admission: SqliteWorkerOperationAdmission | undefined;
       let commitSequence: number | undefined;
-      let committedIds = ids;
+      let committedIds: readonly string[] = [];
       let revocationPublished = false;
+      let installed = false;
       const publishRevocation = () => {
         if (revocationId === undefined || revocationPublished) {
           return;
@@ -176,31 +144,51 @@ export async function createWorkerEnvironmentStore(
           assertActive();
           assertCurrent();
         });
+      const install = (receipt: unknown) => {
+        if (installed) {
+          return;
+        }
+        if (!isRecord(receipt) || commitSequence === undefined) {
+          throw new Error("Worker environment mutation has no commit admission");
+        }
+        context.admission.assertCurrent();
+        const facts = readWorkerEnvironmentReceipt(
+          receipt.publication,
+          { identity: context.admission.identity.key, incarnation: owner.incarnation },
+          committedIds,
+        );
+        const revision = commitSequence;
+        publishSqliteCommittedState({
+          installFacts() {
+            owner.install(facts, revision, false);
+            owner.release(token);
+            installed = true;
+          },
+          invalidate() {
+            owner.close();
+            installed = true;
+          },
+          installProjection: publishRevocation,
+          notify() {
+            if (receipt.changed === true) {
+              sessionChanges.emit({ all: true, scope: "worker-environments" });
+            }
+          },
+        });
+      };
       check();
       try {
         return await runOpenClawStateWorkerOperation(
           context,
           async (scope) => {
             const receipt = await scope.execute({ type, input: captured });
-            if (commitSequence === undefined) {
-              throw new Error("Worker environment mutation has no commit admission");
-            }
-            owner.install(receipt.facts, commitSequence, false);
-            owner.release(token);
-            publishRevocation();
-            if (receipt.changed) {
-              sessionChanges.emit({ all: true, scope: "worker-environments" });
-            }
+            install(receipt);
             return receipt.result;
           },
           {
             assertCurrent: check,
             createAdmission: () => {
-              let stage: "transaction" | "commit" = "transaction";
               admission = createSqliteWorkerOperationAdmission((request, grant) => {
-                if (request.stage !== stage) {
-                  throw new Error("Worker environment write admission is out of order");
-                }
                 check();
                 if (request.stage === "commit") {
                   if (!isCommitAdmission(request.facts)) {
@@ -215,8 +203,8 @@ export async function createWorkerEnvironmentStore(
                 if (request.stage === "commit") {
                   commitSequence = owner.nextSequence();
                 }
-                stage = "commit";
               });
+              observeSqliteWorkerCommittedFacts(admission, ({ facts }) => install(facts));
               return { nativeLocations: [pathname], admission };
             },
           },
@@ -226,29 +214,41 @@ export async function createWorkerEnvironmentStore(
         const settlement = admission?.settlement;
         const committedReceipt = nativeCommit ?? settlement?.committed;
         const committed = committedReceipt?.facts;
-        if (
-          isRecord(committed) &&
-          isInventoryFacts(committed.facts) &&
-          commitSequence !== undefined
-        ) {
-          owner.install(committed.facts, commitSequence, false);
-          owner.release(token);
-          publishRevocation();
-          if (committed.changed === true) {
-            sessionChanges.emit({ all: true, scope: "worker-environments" });
+        if (!installed && committed) {
+          try {
+            install(committed);
+          } catch {
+            // Malformed coverage cannot turn omitted keys into deletion facts.
           }
-        } else if (
+        }
+        if (
+          !installed &&
           commitSequence !== undefined &&
           !(settlement?.kind === "completed" && !committedReceipt)
         ) {
-          // Retain only facts about settled writes, so another live facade can retry the read.
-          owner.retainReconciliation(
-            token,
-            committedIds,
-            error,
-            revocationPublished ? undefined : revocationId,
-          );
-          await reconcilePending();
+          try {
+            const revision = owner.nextSequence();
+            const facts = await snapshot(committedIds);
+            publishSqliteCommittedState({
+              installFacts() {
+                owner.install(facts, revision, false);
+                owner.release(token);
+              },
+              installProjection() {
+                if (
+                  revocationId &&
+                  !facts.credentials.some((credential) => credential.environmentId === revocationId)
+                ) {
+                  publishRevocation();
+                }
+              },
+              invalidate: () => owner.close(),
+              notify: () => sessionChanges.emit({ all: true, scope: "worker-environments" }),
+            });
+          } catch {
+            // SQLite retains the write; a new inventory reloads after this readback fails.
+            owner.close();
+          }
         }
         owner.release(token);
         throw error;
@@ -281,20 +281,13 @@ export async function createWorkerEnvironmentStore(
     },
   });
   try {
-    await mutate("workerEnvironments.initialize", { nowMs: options.now?.() }, []);
+    await mutate("workerEnvironments.initialize", {});
     // First creation publishes its physical identity through the captured admission.
     workerEnvironmentProjections.get(context.admission.identity);
-    // Hydration joins writer publication; native commits invalidate an in-flight snapshot.
+    // Hydration joins the inventory writer queue.
     await owner.enqueue(async () => {
-      for (;;) {
-        const version = owner.version();
-        const facts = await snapshot();
-        if (owner.version() !== version) {
-          continue;
-        }
-        owner.install(facts, owner.nextSequence(), false);
-        break;
-      }
+      const facts = await snapshot();
+      owner.install(facts, owner.nextSequence(), false);
     });
   } catch (error) {
     await close();
@@ -311,14 +304,8 @@ export async function createWorkerEnvironmentStore(
   };
   const ready = async () => {
     assertActive();
-    for (;;) {
-      await owner.ready();
-      assertActive();
-      if (!owner.hasPendingReconciliation()) {
-        return;
-      }
-      await track(owner.enqueue(reconcilePending));
-    }
+    await owner.ready();
+    assertActive();
   };
   const store = {
     close,
@@ -379,14 +366,9 @@ export async function createWorkerEnvironmentStore(
       };
     },
     createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
-      mutate(
-        "workerEnvironments.createIntent",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      ),
+      mutate("workerEnvironments.createIntent", { input }, assertCurrent),
     ensureNodeEnrollment: (input: string) =>
-      mutate("workerEnvironments.ensureNodeEnrollment", { input, nowMs: options.now?.() }, [input]),
+      mutate("workerEnvironments.ensureNodeEnrollment", { input }),
     async revokeEnvironmentCredential(
       input: string,
       opts: {
@@ -400,36 +382,20 @@ export async function createWorkerEnvironmentStore(
         "workerEnvironments.revokeEnvironmentCredential",
         {
           input: { environmentId, expectedOwnerEpoch: opts.expectedOwnerEpoch },
-          nowMs: options.now?.(),
         },
-        [environmentId],
         opts.assertCurrent,
         opts.fenceWorkspaceTransfers ? environmentId : undefined,
       );
     },
     reconcileSharedHost: (input: Input<"reconcileSharedHost">) =>
-      mutate("workerEnvironments.reconcileSharedHost", { input, nowMs: options.now?.() }, [
-        input.environmentId,
-      ]),
+      mutate("workerEnvironments.reconcileSharedHost", { input }),
     adoptProvisionCleanupFailure: (input: Input<"adoptProvisionCleanupFailure">) =>
-      mutate("workerEnvironments.adoptProvisionCleanupFailure", { input, nowMs: options.now?.() }, [
-        input.environmentId,
-      ]),
+      mutate("workerEnvironments.adoptProvisionCleanupFailure", { input }),
     requestDestroy({ assertCurrent, ...input }: Input<"requestDestroy">) {
-      return mutate(
-        "workerEnvironments.requestDestroy",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.requestDestroy", { input }, assertCurrent);
     },
     refreshBootstrapReceipt({ assertCurrent, ...input }: Input<"refreshBootstrapReceipt">) {
-      return mutate(
-        "workerEnvironments.refreshBootstrapReceipt",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.refreshBootstrapReceipt", { input }, assertCurrent);
     },
     transition({ assertCurrent, placementBinding, ...input }: Input<"transition">) {
       const binding = placementBinding
@@ -437,8 +403,7 @@ export async function createWorkerEnvironmentStore(
         : undefined;
       return mutate(
         "workerEnvironments.transition",
-        { input: { ...input, placementBinding: binding }, nowMs: options.now?.() },
-        [input.environmentId],
+        { input: { ...input, placementBinding: binding } },
         () => {
           assertCurrent?.();
           placementBinding?.assertCurrent();
@@ -446,82 +411,34 @@ export async function createWorkerEnvironmentStore(
       );
     },
     renewCredential({ assertCurrent, ...input }: Input<"renewCredential">) {
-      return mutate(
-        "workerEnvironments.renewCredential",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.renewCredential", { input }, assertCurrent);
     },
     markCredentialDelivered({ assertCurrent, ...input }: Input<"markCredentialDelivered">) {
-      return mutate(
-        "workerEnvironments.markCredentialDelivered",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.markCredentialDelivered", { input }, assertCurrent);
     },
     recordError({ assertCurrent, ...input }: Input<"recordError">) {
-      return mutate(
-        "workerEnvironments.recordError",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.recordError", { input }, assertCurrent);
     },
     ensurePreparedIntent({ assertCurrent, ...input }: Input<"ensurePreparedIntent">) {
-      return mutate(
-        "workerEnvironments.ensurePreparedIntent",
-        { input, nowMs: options.now?.() },
-        owner
-          .list()
-          .filter((row) => row.preparation !== null)
-          .map((row) => row.environmentId)
-          .concat(input.intent.environmentId),
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.ensurePreparedIntent", { input }, assertCurrent);
     },
     requestPreparedDestroy({ assertCurrent, ...input }: Input<"requestPreparedDestroy">) {
-      return mutate(
-        "workerEnvironments.requestPreparedDestroy",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.requestPreparedDestroy", { input }, assertCurrent);
     },
     createSessionAttachmentIntent(
       input: Input<"createSessionAttachmentIntent">,
       assertCurrent: () => void,
     ) {
-      return mutate(
-        "workerEnvironments.createSessionAttachmentIntent",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.createSessionAttachmentIntent", { input }, assertCurrent);
     },
     closeSessionAttachment(input: string, assertCurrent: () => void = () => {}) {
-      return mutate(
-        "workerEnvironments.closeSessionAttachment",
-        { input, nowMs: options.now?.() },
-        [],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.closeSessionAttachment", { input }, assertCurrent);
     },
     cancelSessionAttachmentReservation(input: Input<"cancelSessionAttachmentReservation">) {
-      return mutate(
-        "workerEnvironments.cancelSessionAttachmentReservation",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-      );
+      return mutate("workerEnvironments.cancelSessionAttachmentReservation", { input });
     },
     touchSessionAttachment(input: Input<"touchSessionAttachment">, assertCurrent: () => void) {
-      return mutate(
-        "workerEnvironments.touchSessionAttachment",
-        { input, nowMs: options.now?.() },
-        [input.environmentId],
-        assertCurrent,
-      );
+      return mutate("workerEnvironments.touchSessionAttachment", { input }, assertCurrent);
     },
     async pruneTerminalEnvironments(input: WorkerEnvironmentPruneInput = {}) {
       assertActive();
@@ -564,9 +481,7 @@ export async function createWorkerEnvironmentStore(
           "workerEnvironments.pruneTerminalEnvironments",
           {
             input: { approved: approved.map((candidate) => candidate.observed) },
-            nowMs: options.now?.(),
           },
-          approved.map((candidate) => candidate.observed.environment_id),
           () => {
             for (const candidate of approved) {
               if (!(canPruneDemand?.(candidate.record, nowMs) ?? true)) {

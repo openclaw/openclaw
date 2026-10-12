@@ -100,7 +100,7 @@ openclaw models status --agent mail_reader --check --probe --probe-provider open
 openclaw agent --agent mail_reader --message "Reply exactly MAIL_READER_OK" --json
 ```
 
-Use the matching provider id when you choose a different model. The live probe checks the provider credential; the agent turn proves the selected model, runtime, sandbox, and effective tool policy can complete a real reader run. Do not continue until both succeed.
+Use the matching provider id when you choose a different model. The live check verifies the provider credential; the agent turn proves the selected model, runtime, sandbox, and effective tool policy can complete a real reader run. Do not continue until both succeed.
 
 ### Connect Gmail transport
 
@@ -137,6 +137,12 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
 
 After sleep, an overdue renewal runs once instead of replaying missed intervals.
 Shutdown cancels and waits for any in-flight renewal before stopping the watcher.
+
+If the listener port is still occupied during a restart, the watcher retries after
+5, 10, and 20 seconds. If all three retries fail to bind, it logs an error and
+stops restarting; watch renewal continues. Stop the conflicting process and
+restart the Gateway, or disable the Gateway-managed watcher if another service
+owns the listener.
 
 With `forEach: "messages"`, the Gateway prepares one action per email, up to the 200-item fan-out cap. Gmail-path mappings receive a larger request-body allowance derived from `hooks.gmail.maxBytes`, capped at 32 MiB. The upstream history page size is not a strict email count, so oversized batches can still hit limits. See the [Gmail reference](/gateway/config-hooks#gmail-integration) for the exact allowance and [fan-out retry behavior](/gateway/config-hooks#hook-retries-and-fan-out).
 

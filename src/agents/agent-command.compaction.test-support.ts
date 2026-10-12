@@ -91,6 +91,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
     rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
+    resolvePluginMetadataSnapshotAsync: async () =>
+      createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
   };
 });
 
@@ -165,6 +167,7 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: () => ({ profiles: {} }),
+    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async () => ({ profiles: {} })),
   };

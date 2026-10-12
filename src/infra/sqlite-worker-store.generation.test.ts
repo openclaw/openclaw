@@ -1,7 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,
@@ -14,24 +15,22 @@ import {
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import { getTrackedWorkerCpuSources } from "./worker-cpu.js";
-
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 32,
-}));
+import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 
 const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
   "openclaw-sqlite-worker-generation-",
 );
 
-const nodeIt = process.versions.bun ? it.skip : it;
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 
-nodeIt("borrows only one carrier at capacity and never crosses retained generations", async () => {
-  const ordinary = await Promise.all(Array.from({ length: 4 }, () => open(databasePath())));
+poolIt("borrows only one carrier at capacity and never crosses retained generations", async () => {
+  const capacity = resolveSqliteBrokerWorkerCount();
+  const ordinary = await Promise.all(Array.from({ length: capacity }, () => open(databasePath())));
   const ordinaryThreads = new Set(
     await Promise.all(ordinary.map(async (store) => (await append(store, "ordinary")).threadId)),
   );
-  expect(ordinaryThreads.size).toBe(4);
+  expect(ordinaryThreads.size).toBe(capacity);
   const moduleUrl = new URL("./sqlite-worker-store.test-support.ts", import.meta.url);
   const directory = tempDirs.make("openclaw-retained-sqlite-generation-");
   const generation = async (name: string, run: () => Promise<void>) => {

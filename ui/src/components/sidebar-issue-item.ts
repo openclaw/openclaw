@@ -21,6 +21,7 @@ import {
   renderSidebarDismissButton,
   renderSidebarNotificationCard,
 } from "./sidebar-notification-card.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 import "./sidebar-update-card.ts";
 import "./viewer-facepile.ts";
 
@@ -182,7 +183,9 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
     case "requesting":
       return t("connection.scopeUpgrade.requesting");
     case "pending":
-      return t("connection.scopeUpgrade.pending");
+      return t("connection.scopeUpgrade.pending", {
+        command: `openclaw devices approve ${state.requestId}`,
+      });
     case "rejected":
       return t(
         state.expired ? "connection.scopeUpgrade.expired" : "connection.scopeUpgrade.rejected",
@@ -194,15 +197,12 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
 }
 
 export function renderSidebarScopeUpgradeItem(params: {
-  state: ScopeUpgradeState;
+  state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
   onCancel: () => void;
   onDismiss?: () => void;
   onRequest: () => void;
   onRetry: () => void;
 }) {
-  if (params.state.phase === "hidden") {
-    return nothing;
-  }
   const text = scopeUpgradeText(params.state);
   const summary = t("connection.scopeUpgrade.inboxState");
   const retryable =
@@ -284,46 +284,51 @@ function renderItemMeta(item: SidebarAttentionItem) {
   </span>`;
 }
 
-function renderNavigationItem(item: SidebarAttentionItem, handlers: SidebarIssueItemHandlers) {
-  if (item.action.kind !== "navigate") {
-    return nothing;
-  }
-  const routeId = item.action.routeId;
-  return html`<div
-    class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
-    data-attention-kind=${item.kind}
-  >
-    <div class="sidebar-issues-panel__summary sidebar-issues-panel__summary--navigation">
-      <a
-        class="sidebar-issues-panel__navigation-link"
-        href=${pathForRoute(routeId, handlers.basePath)}
-        data-issue-row-focus
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          handlers.onNavigate(routeId);
-        }}
-      >
-        <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
-        <span class="sidebar-issues-panel__content">
-          <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
-          ${renderItemMeta(item)}
-        </span>
-      </a>
-      ${renderSidebarDismissButton(item.label, handlers.onDismiss)}
-      <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
-    </div>
-  </div>`;
-}
-
 export function renderSidebarIssueItem(
   item: SidebarAttentionItem,
   handlers: SidebarIssueItemHandlers,
 ) {
+  const navigation = item.action.kind === "navigate";
+  const content = html`
+    <span
+      class=${
+        navigation
+          ? "sidebar-issues-panel__icon"
+          : `sidebar-issues-panel__icon ${item.kind === "modelAuthExpired" ? "sidebar-issues-panel__icon--critical" : ""}`
+      }
+      aria-hidden="true"
+      >${icons[item.icon]}</span
+    >
+    <span class="sidebar-issues-panel__content">
+      <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
+      ${renderItemMeta(item)}
+    </span>
+  `;
   if (item.action.kind === "navigate") {
-    return renderNavigationItem(item, handlers);
+    const routeId = item.action.routeId;
+    return html`<div
+      class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
+      data-attention-kind=${item.kind}
+    >
+      <div class="sidebar-issues-panel__summary sidebar-issues-panel__summary--navigation">
+        <a
+          class="sidebar-issues-panel__navigation-link"
+          href=${pathForRoute(routeId, handlers.basePath)}
+          data-issue-row-focus
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            handlers.onNavigate(routeId);
+          }}
+        >
+          ${content}
+        </a>
+        ${renderSidebarDismissButton(item.label, handlers.onDismiss)}
+        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </div>
+    </div>`;
   }
   const visibleFacts = item.action.alert.facts.filter((fact) => fact !== item.label);
   const inlineAction = item.inlineAction;
@@ -332,18 +337,7 @@ export function renderSidebarIssueItem(
     data-attention-kind=${item.kind}
   >
     <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
-      <span
-        class="sidebar-issues-panel__icon ${
-          item.kind === "modelAuthExpired" ? "sidebar-issues-panel__icon--critical" : ""
-        }"
-        aria-hidden="true"
-        >${icons[item.icon]}</span
-      >
-      <span class="sidebar-issues-panel__content">
-        <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
-        ${renderItemMeta(item)}
-      </span>
-      ${renderSidebarDismissButton(item.label, handlers.onDismiss)}
+      ${content} ${renderSidebarDismissButton(item.label, handlers.onDismiss)}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </summary>
     <div class="sidebar-issues-panel__body">
@@ -373,7 +367,7 @@ export function renderSidebarIssueItem(
           }"
           @click=${() => handlers.onOpen(item)}
         >
-          ${t("nav.askOpenClaw")}
+          ${askBrandLabel()}
         </button>
       </div>
     </div>

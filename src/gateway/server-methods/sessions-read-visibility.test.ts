@@ -12,7 +12,8 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.na
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import {
@@ -106,7 +107,7 @@ test.each([
       session: { scope: "global" },
       agents: {
         entries: {
-          main: { default: true, model: { primary: "openai/gpt-5.4" } },
+          main: { model: { primary: "openai/gpt-5.4" } },
           research: { model: { primary: "openai/gpt-5.5" } },
         },
       },

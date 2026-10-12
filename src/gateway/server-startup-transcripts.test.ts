@@ -4,9 +4,9 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { scheduleTranscriptsSidecar } from "./server-startup-transcripts.js";
 import { transcriptSidecarMocks as mocks } from "./server-startup-transcripts.test-support.js";
 
+const { scheduleTranscriptsSidecar } = await import("./server-startup-transcripts.js");
 const stateDir = path.resolve("synthetic-transcript-sidecar");
 
 beforeEach(() => {
@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 it.each([false, true])(
-  "joins transcript shutdown failures and keeps the exact Gateway fenced (configured: %s)",
+  "joins shutdown and keeps the Gateway fenced after capture chunks disappear (configured: %s)",
   async (configured) => {
     const started = createDeferred();
     const manualStopped = createDeferred();

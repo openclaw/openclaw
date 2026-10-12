@@ -1,6 +1,6 @@
 // Session transcript and query helpers shared by memory engines.
 
-export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
+export { extractKeywords } from "./host/query-expansion.js";
 export {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
@@ -10,18 +10,14 @@ export {
   sessionPathForFile,
   sessionPathForSessionIdentity,
   statSessionEntrySync,
-  type BuildSessionEntryOptions,
   type SessionFileEntry,
   type SessionFileState,
   type SessionTranscriptCorpusEntry,
   type SessionTranscriptCorpusOptions,
 } from "./host/session-files.js";
+export { isCronRunSessionKey } from "./host/openclaw-runtime-paths.js";
 export {
-  isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
-  parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
 } from "./host/openclaw-runtime-session.js";
 

@@ -25,7 +25,7 @@ type NodeWorkerContainerExpectedOwner = {
   launchId: string;
 };
 
-const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.19.0-slim";
+const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.21.0-slim";
 // Burst launches can delay a healthy daemon's identity response; keep revalidation
 // fail-closed without treating temporary daemon contention as an unavailable engine.
 const CONTAINER_REVALIDATION_TIMEOUT_MS = 30_000;
@@ -81,16 +81,27 @@ function missingContainer(error: unknown): boolean {
 }
 
 async function runContainerCommand(
-  engine: Pick<NodeWorkerContainerEngine, "command" | "env">,
+  engine: Pick<NodeWorkerContainerEngine, "id" | "command" | "env">,
   args: string[],
   timeoutMs = 15_000,
 ): Promise<string> {
-  const result = await runExec(engine.command, args, {
-    ...(engine.env ? { baseEnv: engine.env } : {}),
-    timeoutMs,
-    logOutput: false,
-  });
-  return result.stdout.trim();
+  try {
+    const result = await runExec(engine.command, args, {
+      ...(engine.env ? { baseEnv: engine.env } : {}),
+      timeoutMs,
+      logOutput: false,
+    });
+    return result.stdout.trim();
+  } catch (error) {
+    if (!isRecord(error) || error.timedOut !== true) {
+      throw error;
+    }
+    // Only the engine and fixed operation are safe to display; arguments can contain secrets.
+    throw new Error(
+      `Container command timed out after ${timeoutMs} milliseconds: ${engine.id} ${args[0]}`,
+      { cause: error },
+    );
+  }
 }
 
 async function resolveContainerEngineTarget(
@@ -343,13 +354,6 @@ export async function createNodeWorkerContainer(
     throw new Error("node worker container engine returned an invalid container identity");
   }
   return { engine: engine.id, containerId, engineTarget: engine.target };
-}
-
-export function buildNodeWorkerContainerStartArgv(
-  engine: NodeWorkerContainerEngine,
-  containerId: string,
-): string[] {
-  return [engine.command, "start", "--attach", "--interactive", containerId];
 }
 
 /** Inspect the container rather than its disposable Docker client process. */

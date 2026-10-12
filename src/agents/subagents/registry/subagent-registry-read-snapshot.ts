@@ -1,28 +1,42 @@
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshot,
+} from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
-import { getSubagentRunIdLookup } from "./subagent-registry-memory.js";
+import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
 import {
   acceptedFullSnapshot,
   assertSubagentReadContext,
   consumeSubagentRuns,
   getPersistedSubagentRunsSnapshot,
-  getPersistedRunIdLookup,
+  getSessionListLookup,
   mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   readFullSubagentRuns,
   shouldReadPersistedSubagentRuns,
+  selectSubagentCacheStateForRead,
   type SubagentRunsCache,
 } from "./subagent-registry-read-cache.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentRunReadRecord,
+  SubagentRunsDurableBasis,
+} from "./subagent-registry-read.types.js";
+import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 export type SubagentRunReadSelection = {
   runIds: readonly string[];
   sessionKeys: readonly string[];
 };
+
+export type SubagentRunReadScope =
+  | { runIds: ReadonlySet<string> }
+  | { childSessionKeys: readonly string[] }
+  | { sessionKeys: readonly string[]; descendants: boolean }
+  | "all";
 
 type PreparedSubagentReadResult<T> = { ready: true; value: T } | { ready: false };
 
@@ -57,9 +71,9 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   fullCache: SubagentRunsCache<SubagentRunRecord>;
   compactCache: SubagentRunsCache<SubagentRunReadRecord>;
   select: (snapshot: Map<string, SubagentRunReadRecord>) => S;
-  requestedRunIds?: ReadonlySet<string>;
+  readScope: SubagentRunReadScope;
 }): Promise<PreparedSubagentRunRead<S>> {
-  const { inMemoryRuns, fullCache, compactCache, select, requestedRunIds } = params;
+  const { inMemoryRuns, fullCache, compactCache, select, readScope } = params;
   const requestSignal = getAsyncWorkSignal();
   const privateSnapshot = getActiveOpenClawStateDatabaseReadSnapshot();
   const context = shouldReadPersistedSubagentRuns()
@@ -75,24 +89,32 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       assertSubagentReadContext(context);
     }
   };
-  const readCompact = async () => {
-    const compact = context
-      ? await prepareSubagentRunsCache(compactCache, readCompactSubagentRuns)
-      : new Map<string, SubagentRunReadRecord>();
-    assertCurrent();
-    return compact;
-  };
   const withLiveFacts = (compact: Map<string, SubagentRunReadRecord>) => {
-    if (requestedRunIds) {
-      const liveKeys = getSubagentRunIdLookup(inMemoryRuns).select(requestedRunIds);
-      const persistedKeys = getPersistedRunIdLookup(compactCache, compact).select(
-        requestedRunIds,
-        liveKeys,
-      );
+    if (readScope !== "all") {
+      const live = getSubagentSessionReadLookup(inMemoryRuns);
+      const durable = getSessionListLookup(compactCache, compact);
+      let liveKeys: string[];
+      let persistedKeys: string[];
+      if ("runIds" in readScope) {
+        liveKeys = live.selectRunIds(readScope.runIds);
+        persistedKeys = durable.selectRunIds(readScope.runIds, liveKeys);
+      } else if ("childSessionKeys" in readScope) {
+        const keys = new Set(readScope.childSessionKeys.map((key) => key.trim()).filter(Boolean));
+        liveKeys = live.selectChildren(keys);
+        persistedKeys = durable.selectChildren(keys);
+      } else {
+        liveKeys = live.selectReadScope(readScope.sessionKeys, durable, readScope.descendants);
+        persistedKeys = durable.selectReadScope(
+          readScope.sessionKeys,
+          live,
+          readScope.descendants,
+          liveKeys,
+        );
+      }
       const snapshot = new Map<string, SubagentRunReadRecord>();
       for (const key of new Set([...persistedKeys, ...liveKeys])) {
-        const live = inMemoryRuns.get(key);
-        const entry = live ? projectSubagentRunForSessionList(live) : compact.get(key);
+        const liveEntry = inMemoryRuns.get(key);
+        const entry = liveEntry ? projectSubagentRunForSessionList(liveEntry) : compact.get(key);
         if (entry) {
           snapshot.set(key, entry);
         }
@@ -105,51 +127,53 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
     }
     return snapshot;
   };
-  let compact = await readCompact();
-  let selected = select(withLiveFacts(compact));
-  let refreshedMissingRows = false;
-  for (;;) {
-    assertCurrent();
-    const preparedCompact = compact;
-    const scope = selectionScope(selected);
-    // Keep durable payloads separate: a live-only row may disappear before consumption.
-    let persisted = context ? acceptedFullSnapshot(fullCache, context) : undefined;
-    if (!persisted) {
-      persisted = new Map<string, SubagentRunRecord>();
-      if (context) {
-        const scopes = [
-          { kind: "ids" as const, runIds: [...scope.runIds] },
-          ...[...scope.sessionKeys].map((sessionKey) => ({ kind: "session" as const, sessionKey })),
-        ];
-        for (const readScope of scopes) {
-          for (const [runId, entry] of await readFullSubagentRuns(context, readScope)) {
-            persisted.set(runId, entry);
-          }
+  const compact = context
+    ? await prepareSubagentRunsCache(compactCache, readCompactSubagentRuns)
+    : new Map<string, SubagentRunReadRecord>();
+  const selected = select(withLiveFacts(compact));
+  const scope = selectionScope(selected);
+  // Keep durable payloads separate: a live-only row may disappear before consumption.
+  let persisted = context ? acceptedFullSnapshot(fullCache, context) : undefined;
+  if (!persisted) {
+    persisted = new Map<string, SubagentRunRecord>();
+    if (context) {
+      const scopes = [
+        { kind: "ids" as const, runIds: [...scope.runIds] },
+        ...[...scope.sessionKeys].map((sessionKey) => ({ kind: "session" as const, sessionKey })),
+      ];
+      for (const payloadScope of scopes) {
+        for (const [runId, entry] of await readFullSubagentRuns(context, payloadScope)) {
+          persisted.set(runId, entry);
         }
       }
     }
-    const preparedPayloads = persisted;
-    const captureFrame = (reselect: boolean) => {
+  }
+  const preparedPayloads = persisted;
+  const missingAtPreparation = new Set(
+    selected.runIds.filter((runId) => !preparedPayloads.has(runId) && !inMemoryRuns.has(runId)),
+  );
+  return {
+    consume(consume) {
       assertCurrent();
       const currentFull = context ? acceptedFullSnapshot(fullCache, context) : undefined;
       const currentCompact =
-        context && !privateSnapshot
-          ? getPersistedSubagentRunsSnapshot(compactCache)
-          : preparedCompact;
-      if (!currentCompact || (currentCompact !== preparedCompact && !currentFull)) {
-        return undefined;
+        context && !privateSnapshot ? getPersistedSubagentRunsSnapshot(compactCache) : compact;
+      if (!currentCompact || (currentCompact !== compact && !currentFull)) {
+        return { ready: false };
       }
       const snapshot = withLiveFacts(currentCompact);
-      const currentScope = reselect ? selectionScope(select(snapshot)) : scope;
+      const currentScope = selectionScope(select(snapshot));
       // Full metadata can reveal a yielded-child scope absent from compact facts.
       const matches = (entry: SubagentRunReadRecord) =>
         scope.matches(entry) || currentScope.matches(entry);
       const full = mergeSelectedFullRuns(fullCache, inMemoryRuns, preparedPayloads, matches, {
         context,
-        ...(requestedRunIds ? { runIds: new Set([...scope.runIds, ...currentScope.runIds]) } : {}),
+        runIds: new Set(snapshot.keys()),
       });
       for (const entry of full.values()) {
-        snapshot.set(entry.runId, projectSubagentRunForSessionList(entry));
+        if (inMemoryRuns.get(entry.runId) !== entry) {
+          snapshot.set(entry.runId, projectSubagentRunForSessionList(entry));
+        }
       }
       const current = select(snapshot);
       const needsHydration =
@@ -158,6 +182,12 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
           const entry = snapshot.get(runId);
           return entry && !matches(entry);
         });
+      if (
+        needsHydration ||
+        current.runIds.some((runId) => !full.has(runId) && !missingAtPreparation.has(runId))
+      ) {
+        return { ready: false };
+      }
       const finalScope = selectionScope(current);
       for (const [runId, entry] of full) {
         if (!finalScope.matches(entry)) {
@@ -165,50 +195,160 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
         }
       }
       return {
-        compact: currentCompact,
-        selection: current,
-        runs: full,
-        needsHydration,
-        missingRunIds: current.runIds.filter((runId) => !full.has(runId)),
+        ready: true,
+        value: consumeSubagentRuns(full, (runs) => consume(current, runs)),
       };
-    };
-    const prepared = captureFrame(false);
-    if (!prepared) {
-      compact = await readCompact();
-      selected = select(withLiveFacts(compact));
-      continue;
-    }
-    if (prepared.needsHydration) {
-      compact = prepared.compact;
-      selected = prepared.selection;
-      continue;
-    }
-    if (!refreshedMissingRows && prepared.missingRunIds.length > 0) {
-      // One settled external replacement may precede its bridge publication.
-      if (!privateSnapshot) {
-        compactCache.state = {};
+    },
+  };
+}
+
+export type PreparedSubagentSessionsRead = PreparedSubagentRunsRead & {
+  readonly basis: SubagentRunsDurableBasis;
+  // The protected cron deletion adapter still calls this resource-shaped API.
+  dispose(): void;
+};
+
+/** The durable basis is fresh worker evidence; live liveness remains parent-owned. */
+export async function prepareSubagentSessionRunReadSnapshot(params: {
+  inMemoryRuns: Map<string, SubagentRunRecord>;
+  fullCache: SubagentRunsCache<SubagentRunRecord>;
+  sessionKeys: readonly string[];
+}): Promise<PreparedSubagentSessionsRead> {
+  const { inMemoryRuns, fullCache } = params;
+  const context = captureOpenClawStateWorkerContext();
+  const signal = getAsyncWorkSignal();
+  const roots = Object.freeze(
+    [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),
+  );
+  const links = getSubagentSessionReadLookup(inMemoryRuns).captureTopology();
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    {
+      type: "subagents.runs",
+      scope: { kind: "descendants", sessionKeys: roots, liveTopology: links },
+    },
+    { context, current: true },
+  );
+  if (
+    reply &&
+    (!reply.ok ||
+      reply.type !== "subagents.runs" ||
+      reply.projection === "maintenance" ||
+      !reply.descendantBasis)
+  ) {
+    throw new Error("Subagent descendant read omitted its durable basis");
+  }
+  const persisted = reply?.runs ?? new Map<string, SubagentRunRecord>();
+  const selected =
+    reply?.descendantBasis?.sessionKeys ?? collectSubagentSessionReadKeys(roots, links);
+  const basis: SubagentRunsDurableBasis = Object.freeze({
+    databasePath: context.admission.databasePath,
+    databaseIdentity: context.admission.identity.key,
+    ...(context.admission.identity.birthtime
+      ? { databaseBirthtime: context.admission.identity.birthtime }
+      : {}),
+    sessionKeys: roots,
+    liveTopology: links,
+    digest: reply?.descendantBasis?.digest ?? null,
+  });
+  return {
+    basis,
+    dispose() {},
+    consume(consume) {
+      signal?.throwIfAborted();
+      assertSubagentReadContext(context);
+      // A changed live tree needs a new selection; durable changes are checked at deletion.
+      const current = getSubagentSessionReadLookup(inMemoryRuns).captureTopology();
+      const relevant = (values: typeof links) =>
+        values.filter(
+          (entry) =>
+            selected.has(entry.childSessionKey.trim()) || selected.has(entry.requesterSessionKey),
+        );
+      if (
+        current !== links &&
+        JSON.stringify(relevant(current)) !== JSON.stringify(relevant(links))
+      ) {
+        return { ready: false };
       }
-      compact = await readCompact();
-      selected = select(withLiveFacts(compact));
-      refreshedMissingRows = true;
-      continue;
+      const runs = mergeSelectedFullRuns(
+        fullCache,
+        inMemoryRuns,
+        persisted,
+        (entry) => selected.has(entry.childSessionKey.trim()),
+        {
+          context,
+          freshPersisted: true,
+          runIds: new Set([
+            ...persisted.keys(),
+            ...getSubagentSessionReadLookup(inMemoryRuns).selectChildren(selected),
+          ]),
+        },
+      );
+      return { ready: true, value: consumeSubagentRuns(runs, consume) };
+    },
+  };
+}
+
+export type PreparedSubagentMaintenanceRead = {
+  capture(): ReadonlyMap<string, SubagentRunMaintenanceRecord>;
+};
+
+/** Fresh physical maintenance facts combine with current published resident rows. */
+export async function prepareSubagentMaintenanceReadSnapshot(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  cache: SubagentRunsCache<SubagentRunRecord>,
+  options?: { live?: true },
+): Promise<PreparedSubagentMaintenanceRead> {
+  const context = shouldReadPersistedSubagentRuns()
+    ? captureOpenClawStateWorkerContext()
+    : undefined;
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    getAsyncWorkSignal()?.throwIfAborted();
+    if (context) {
+      assertSubagentReadContext(context);
     }
-    const missingRunIds = new Set(prepared.missingRunIds);
+  };
+  const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
+    assertCurrent();
+    const state: SubagentRunsCache<SubagentRunRecord>["state"] = context
+      ? selectSubagentCacheStateForRead(cache.state, context)
+      : {};
+    const runs = new Map<string, SubagentRunMaintenanceRecord>(state.snapshot ?? persisted);
+    for (const [runId, { entry }] of state.changes ?? []) {
+      if (entry) {
+        runs.set(runId, entry);
+      } else {
+        runs.delete(runId);
+      }
+    }
+    for (const [runId, entry] of inMemoryRuns) {
+      runs.set(runId, entry);
+    }
+    return runs;
+  };
+  if (!context) {
     return {
-      consume(consume) {
-        const frame = captureFrame(true);
-        if (
-          !frame ||
-          frame.needsHydration ||
-          frame.missingRunIds.some((runId) => !missingRunIds.has(runId))
-        ) {
-          return { ready: false };
-        }
-        return {
-          ready: true,
-          value: consumeSubagentRuns(frame.runs, (runs) => consume(frame.selection, runs)),
-        };
-      },
+      capture: () => capture(new Map()),
     };
   }
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "subagents.runs", scope: { kind: "maintenance" } },
+    { context, current: true, live: options?.live },
+  );
+  if (
+    reply &&
+    (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== "maintenance")
+  ) {
+    throw new Error("Unexpected subagent maintenance read result");
+  }
+  const persisted = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+  return {
+    capture() {
+      // The owner publishes committed changes before the final maintenance grant.
+      return capture(persisted);
+    },
+  };
 }

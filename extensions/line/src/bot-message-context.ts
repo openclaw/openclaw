@@ -5,7 +5,7 @@ import {
   formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatLocationText,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
   toInboundMediaFactsWithMetadata,
   toLocationContext,
   type BuildChannelInboundEventContextParams,
@@ -98,13 +98,9 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
     return { userId: undefined, groupId: undefined, roomId: undefined, isGroup: false };
   }
   const userId =
-    source.type === "user"
+    source.type === "user" || source.type === "group" || source.type === "room"
       ? source.userId
-      : source.type === "group"
-        ? source.userId
-        : source.type === "room"
-          ? source.userId
-          : undefined;
+      : undefined;
   const groupId = source.type === "group" ? source.groupId : undefined;
   const roomId = source.type === "room" ? source.roomId : undefined;
   const isGroup = source.type === "group" || source.type === "room";
@@ -211,17 +207,7 @@ async function resolveLineInboundRoute(params: {
     direction: "inbound",
   });
   const prepared = params.preparedRoute ?? (await prepareLineInboundRoute(params));
-  const {
-    userId,
-    groupId,
-    roomId,
-    isGroup,
-    peerId,
-    route,
-    runtimeRoute,
-    configuredBinding,
-    configuredBindingSessionKey,
-  } = prepared;
+  const { peerId, runtimeRoute, configuredBinding, configuredBindingSessionKey } = prepared;
   if (runtimeRoute.bindingRecord) {
     await getSessionBindingService().touchAsync(
       runtimeRoute.bindingRecord.bindingId,
@@ -251,7 +237,7 @@ async function resolveLineInboundRoute(params: {
     );
   }
 
-  return { userId, groupId, roomId, isGroup, peerId, route };
+  return prepared;
 }
 
 /**
@@ -309,11 +295,9 @@ function extractNativeMediaKind(
 ): ChannelInboundMediaInput["kind"] | undefined {
   switch (message.type) {
     case "image":
-      return "image";
     case "video":
-      return "video";
     case "audio":
-      return "audio";
+      return message.type;
     case "file":
       return "document";
     default:
@@ -321,14 +305,13 @@ function extractNativeMediaKind(
   }
 }
 
-type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
 type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
 
 async function finalizeLineInboundContext<Event extends MessageEvent | PostbackEvent>(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   event: Event;
-  route: LineRouteInfo;
+  route: ResolvedAgentRoute;
   source: LineSourceInfoWithPeerId;
   rawBody: string;
   agentBody?: string;
@@ -385,11 +368,12 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
       })
     : undefined;
 
-  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    sessionKey: params.route.sessionKey,
-  });
+  const { storePath, envelopeOptions, previousTimestamp } =
+    await resolveInboundSessionEnvelopeContextAsync({
+      cfg: params.cfg,
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+    });
 
   const agentBody = params.agentBody ?? params.rawBody;
   const media =
@@ -522,26 +506,31 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const { event, allMedia, mediaUnavailable, cfg, account, commandAuthorized, inboundHistory } =
     params;
 
-  const source = event.source;
-  const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
-    source,
+  const source = await resolveLineInboundRoute({
+    source: event.source,
     cfg,
     account,
     preparedRoute: params.preparedRoute,
   });
+  const { peerId, route } = source;
 
   const message = event.message;
   const messageId = message.id;
 
-  const textContent = extractMessageText(message);
+  const rawBody = extractMessageText(message);
   const nativeMediaKind = extractNativeMediaKind(message);
   const mediaFacts: ChannelInboundMediaInput[] =
     allMedia.length > 0
-      ? allMedia.map((media) => ({ ...media, kind: nativeMediaKind }))
+      ? allMedia.map((media) => ({
+          ...media,
+          kind:
+            nativeMediaKind === "document" && media.contentType?.startsWith("image/")
+              ? "image"
+              : nativeMediaKind,
+        }))
       : nativeMediaKind
         ? [{ kind: nativeMediaKind }]
         : [];
-  const rawBody = textContent;
   // The turn answers what arrived. Saying so keeps the agent from describing a
   // short set as the whole send.
   const shortfallNotice = params.missingParts
@@ -572,12 +561,11 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
 
   let locationContext: ReturnType<typeof toLocationContext> | undefined;
   if (message.type === "location") {
-    const loc = message;
     locationContext = toLocationContext({
-      latitude: loc.latitude,
-      longitude: loc.longitude,
-      name: loc.title,
-      address: loc.address,
+      latitude: message.latitude,
+      longitude: message.longitude,
+      name: message.title,
+      address: message.address,
     });
   }
 
@@ -586,7 +574,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     account,
     event,
     route,
-    source: { userId, groupId, roomId, isGroup, peerId },
+    source,
     rawBody,
     agentBody,
     // The agent still reads the message as sent; only command parsing drops the
@@ -622,14 +610,13 @@ export async function buildLinePostbackContext(params: {
 }) {
   const { event, cfg, account, commandAuthorized } = params;
 
-  const source = event.source;
-  const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
-    source,
+  const source = await resolveLineInboundRoute({
+    source: event.source,
     cfg,
     account,
   });
+  const { route } = source;
 
-  const timestamp = event.timestamp;
   const rawBody = event.postback?.data?.trim() ?? "";
   if (!rawBody) {
     return null;
@@ -652,13 +639,13 @@ export async function buildLinePostbackContext(params: {
     }
   }
 
-  const messageSid = event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`;
+  const messageSid = `postback:${event.replyToken || event.timestamp}`;
   return finalizeLineInboundContext({
     cfg,
     account,
     event,
     route,
-    source: { userId, groupId, roomId, isGroup, peerId },
+    source,
     rawBody,
     agentBody,
     messageSid,

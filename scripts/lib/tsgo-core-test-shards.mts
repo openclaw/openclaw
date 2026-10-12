@@ -109,7 +109,38 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.services-cron.json",
   },
+  {
+    name: "ui-app",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-app.json",
+  },
+  {
+    name: "ui-components",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-components.json",
+  },
+  {
+    name: "ui-e2e-chat",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
+  },
 ] as const;
+
+// Root tests remain one CI inventory graph; execution partitions its checker heap.
+export const TSGO_ROOT_TEST_SHARDS = [
+  { name: "test-root-tooling", config: "test/tsconfig/tsconfig.test.root.tooling.json" },
+  { name: "test-root-scripts", config: "test/tsconfig/tsconfig.test.root.scripts.json" },
+  { name: "test-root-e2e", config: "test/tsconfig/tsconfig.test.root.e2e.json" },
+  { name: "test-root-other", config: "test/tsconfig/tsconfig.test.root.other.json" },
+] as const;
+
+export function expandTsgoExecutionGraphs(
+  graphs: readonly { name: string; config: string }[],
+): readonly { name: string; config: string }[] {
+  return graphs.flatMap((graph) =>
+    graph.config === "test/tsconfig/tsconfig.test.root.json" ? [...TSGO_ROOT_TEST_SHARDS] : [graph],
+  );
+}
 
 export const TSGO_CORE_GRAPHS = [
   { name: "core", config: "tsconfig.core.json" },
@@ -153,11 +184,11 @@ function isChangedCiTsgoInput(file: string): boolean {
   );
 }
 
-/** Compiler inventories include erased type imports and cross-family consumers. */
-export function selectChangedCiTsgoGraphs(
+/** Admit narrowing before compiler discovery; undefined retains every canonical graph. */
+export function resolveChangedCiTsgoInputs(
   paths: readonly string[],
-  graphs: readonly { config: string; files: readonly string[] }[],
-): readonly { name: string; config: string }[] | undefined {
+  exists?: (file: string) => boolean,
+): readonly string[] | undefined {
   // Documentation and UI styles cannot change compiler inputs. Keep data and
   // configuration paths for the conservative admission below.
   const compilerPaths = paths.filter(
@@ -166,15 +197,34 @@ export function selectChangedCiTsgoGraphs(
   if (
     compilerPaths.length === 0 ||
     !compilerPaths.every(isChangedCiTsgoInput) ||
-    graphs.length !== TSGO_CI_GRAPHS.length ||
-    TSGO_CI_GRAPHS.some(
+    (exists && !paths.every(exists))
+  ) {
+    return undefined;
+  }
+  return compilerPaths;
+}
+
+/** Compiler inventories include erased type imports and cross-family consumers. */
+export function selectChangedCiTsgoGraphs(
+  paths: readonly string[],
+  graphs: readonly { config: string; files: readonly string[] }[],
+  options: { scope?: "all" | "noncore" } = {},
+): readonly { name: string; config: string }[] | undefined {
+  const compilerPaths = resolveChangedCiTsgoInputs(paths);
+  const candidates = options.scope === "noncore" ? TSGO_CI_ADDITIONAL_GRAPHS : TSGO_CI_GRAPHS;
+  if (
+    !compilerPaths ||
+    (options.scope === "noncore" &&
+      !compilerPaths.every((file) => file.startsWith("extensions/"))) ||
+    graphs.length !== candidates.length ||
+    candidates.some(
       (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
     ) ||
     compilerPaths.some((file) => !graphs.some((graph) => graph.files.includes(file)))
   ) {
     return undefined;
   }
-  return TSGO_CI_GRAPHS.filter((expected) =>
+  return candidates.filter((expected) =>
     graphs.some(
       (graph) =>
         graph.config === expected.config &&
@@ -196,6 +246,9 @@ export const TSGO_TARGETED_TEST_SHARED_SHARDS = [
 export function selectTsgoCoreTestShards(
   requestedGroup?: string,
 ): readonly { name: string; config: string }[] | undefined {
+  if (requestedGroup === "root") {
+    return TSGO_ROOT_TEST_SHARDS;
+  }
   if (!requestedGroup) {
     return TSGO_CORE_TEST_SHARDS;
   }

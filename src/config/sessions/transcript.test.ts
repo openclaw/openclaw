@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import { recordDeliveredCommandExchange } from "../../plugin-sdk/session-transcript-runtime.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -13,10 +13,10 @@ import {
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+  isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -25,13 +25,19 @@ import {
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   updateSessionEntry,
 } from "./session-accessor.js";
+import * as activeTranscriptEvents from "./session-accessor.sqlite-active-events.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
+import {
+  createExactAssistantMessage,
+  transcriptMessage,
+  type ExactAssistantMessage,
+} from "./transcript-message.test-support.js";
 import {
   bindOwnedSessionTranscriptWrites,
   runWithOwnedSessionTranscriptWrite,
@@ -47,27 +53,24 @@ import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "transcript-test-");
+
 describe("appendAssistantMessageToSessionTranscript", () => {
   beforeAll(async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-warm-"));
-    try {
-      const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-      fs.mkdirSync(sessionsDir, { recursive: true });
-      const storePath = path.join(sessionsDir, "sessions.json");
-      await replaceSessionEntry(
-        { sessionKey: "agent:main:warm", storePath },
-        { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
-      );
-      await appendAssistantMessageToSessionTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:warm",
-        text: "warm",
-        storePath,
-      });
-    } finally {
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    const tempDir = sessionDirs.make();
+    const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:warm", storePath },
+      { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
+    );
+    await appendAssistantMessageToSessionTranscript({
+      agentId: "main",
+      sessionKey: "agent:main:warm",
+      text: "warm",
+      storePath,
+    });
   });
 
   const fixture = useTempSessionsFixture("transcript-test-");
@@ -76,9 +79,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   function createFixtureTranscriptScope() {
     return { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
   }
-  type ExactAssistantMessage = Parameters<
-    typeof appendExactAssistantMessageToSessionTranscript
-  >[0]["message"];
   type BeforeMessageWriteParams = Parameters<
     NonNullable<
       Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0]["beforeMessageWrite"]
@@ -140,31 +140,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
   }
 
-  function createExactAssistantMessage(params: {
-    text?: string;
-    content?: ExactAssistantMessage["content"];
-    provider?: string;
-    model?: string;
-  }): ExactAssistantMessage {
-    return {
-      role: "assistant",
-      content: params.content ?? [{ type: "text", text: params.text ?? "" }],
-      api: "openai-responses",
-      provider: params.provider ?? "codex",
-      model: params.model ?? "gpt-5.4",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
-  }
-
   function requireTranscriptUpdateCall(
     spy: TranscriptUpdateEmitterSpy,
   ): InternalSessionTranscriptUpdate {
@@ -195,8 +170,178 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     })) as Array<{ message?: unknown }>;
   }
 
+  it("appends replayable, redacted command exchanges exactly once without changing prior rows", async () => {
+    await writeTranscriptStore();
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      text: "Earlier reply",
+    });
+    const before = await loadFixtureMessages();
+    const params = {
+      sessionKey,
+      storePath: fixture.storePath(),
+      commandText: "/login openai",
+      commandId: "login-message",
+      replyText: "Sign in at https://example.test/device?state=secret-state\nCode: EXAMPLE-CODE",
+      replyId: "device-code",
+    };
+    expect((await recordDeliveredCommandExchange(params)).ok).toBe(true);
+    expect((await recordDeliveredCommandExchange(params)).ok).toBe(true);
+    expect(
+      (
+        await recordDeliveredCommandExchange({
+          ...params,
+          replyId: "complete",
+          replyText: "Login complete.",
+        })
+      ).ok,
+    ).toBe(true);
+    const after = await loadFixtureMessages();
+    expect(after.slice(0, before.length)).toEqual(before);
+    const messages = after.slice(before.length).map((event) => event.message);
+    expect(messages).toEqual([
+      expect.objectContaining({ role: "user", content: [{ type: "text", text: "/login openai" }] }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [
+          { type: "text", text: "Sign in at [login URL redacted]\nCode: [login code redacted]" },
+        ],
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "Login complete." }],
+      }),
+    ]);
+    expect(messages.some(isTranscriptOnlyOpenClawAssistantMessage)).toBe(false);
+    expect(JSON.stringify(after)).not.toContain("EXAMPLE-CODE");
+    expect(JSON.stringify(after)).not.toContain("secret-state");
+  });
+
+  it("returns the command assistant identity and reports a blocked reply", async () => {
+    await writeTranscriptStore();
+    const params = {
+      sessionKey,
+      storePath: fixture.storePath(),
+      commandText: "/status",
+      commandId: "status-message",
+      replyText: "Ready",
+      replyId: "status-reply",
+    };
+    const result = await recordDeliveredCommandExchange(params);
+    expect(result.ok).toBe(true);
+    const events = await loadFixtureMessages();
+    expect(events.at(-1)).toMatchObject({
+      id: result.ok ? result.messageId : undefined,
+      message: { role: "assistant" },
+    });
+    const blocked = await recordDeliveredCommandExchange({
+      ...params,
+      commandId: "blocked-message",
+      replyId: "blocked-reply",
+      beforeMessageWrite: () => null,
+    });
+    expect(blocked).toMatchObject({ ok: false, code: "blocked" });
+  });
+
+  it.each([
+    {
+      commandText: "/pair",
+      replyText: Buffer.from(
+        JSON.stringify({ url: "wss://example.test", bootstrapToken: "secret-pairing-token" }),
+      ).toString("base64url"),
+      expected: "[pairing code redacted]",
+    },
+    {
+      commandText: "/status",
+      replyText:
+        "Verify: https://example.test/auth?state=secret-state\nHelp: https://example.test/help",
+      expected: "Verify: [login URL redacted]\nHelp: https://example.test/help",
+    },
+  ])("redacts credential-bearing $commandText replies before storage", async (testCase) => {
+    await writeTranscriptStore();
+    expect(
+      (
+        await recordDeliveredCommandExchange({
+          ...testCase,
+          sessionKey,
+          storePath: fixture.storePath(),
+          commandId: "secret-command",
+          replyId: "reply",
+        })
+      ).ok,
+    ).toBe(true);
+    const events = await loadFixtureMessages();
+    expect(events.at(-1)?.message).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: testCase.expected }],
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain(testCase.replyText);
+  });
+
+  it.each([
+    [
+      '/debug set gateway.auth.token="synthetic-private-token"',
+      '/debug set gateway.auth.token="__OPEN…ED__"',
+    ],
+    [
+      '/config set gateway.auth={"mode":"token","token":"synthetic-private-token"}',
+      '/config set gateway.auth={"mode":"token","token":"__OPEN…ED__"}',
+    ],
+    [
+      "/debug set channels.telegram.botToken=synthetic-private-token",
+      '/debug set channels.telegram.botToken="__OPENCLAW_REDACTED__"',
+    ],
+    [
+      '/debug: set models.providers.local.headers.X-Service-Access="q7m2n9v4p6r8x5"',
+      '/debug set models.providers.local.headers.X-Service-Access="__OPENCLAW_REDACTED__"',
+    ],
+    [
+      '/config@OpenClawBot: set models.providers.local.headers.X-Service-Access="q7m2n9v4p6r8x5"',
+      '/config set models.providers.local.headers.X-Service-Access="__OPENCLAW_REDACTED__"',
+    ],
+    ['/debug set logging.level="debug"', '/debug set logging.level="debug"'],
+  ])("redacts configuration input %s before recording", async (commandText, expected) => {
+    await writeTranscriptStore();
+    const result = await recordDeliveredCommandExchange({
+      sessionKey,
+      storePath: fixture.storePath(),
+      commandText,
+      replyText: "Configuration updated.",
+      commandId: "config-command",
+      replyId: "reply",
+    });
+    expect(result.ok).toBe(true);
+    const events = await loadFixtureMessages();
+    expect(events.at(-2)?.message).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: expected }],
+    });
+    expect(JSON.stringify(events)).not.toContain("synthetic-private-token");
+    expect(JSON.stringify(events)).not.toContain("q7m2n9v4p6r8x5");
+  });
+
+  it.each(["/btw hello", "/side hello", "/btw: hello", "/side@OpenClawBot: hello"])(
+    "keeps %s ephemeral",
+    async (commandText) => {
+      await writeTranscriptStore();
+      const before = await loadFixtureMessages();
+      await recordDeliveredCommandExchange({
+        sessionKey,
+        storePath: fixture.storePath(),
+        commandText,
+        replyText: "Side answer",
+        commandId: "side-command",
+        replyId: "reply",
+      });
+      expect(await loadFixtureMessages()).toEqual(before);
+    },
+  );
+
   it("uses configured session.store when storePath is omitted", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
+    const tempDir = sessionDirs.make();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
@@ -246,19 +391,16 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         }),
       );
     } finally {
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
         setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("uses the session key agent for configured session.store templates", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-agent-store-"));
+    const tempDir = sessionDirs.make();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
@@ -321,14 +463,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(event.sessionKey).toBe(configuredSessionKey);
     } finally {
       emitSpy.mockRestore();
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
         setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -706,11 +845,22 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       },
     );
 
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Active branch reply",
-      storePath: fixture.storePath(),
-    });
+    const hostRead = vi
+      .spyOn(activeTranscriptEvents, "readLatestSessionTranscriptMessageEvent")
+      .mockImplementation(() => {
+        throw new Error("Delivery mirror must read the active tail in its worker");
+      });
+    let mirrorResult;
+    try {
+      mirrorResult = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Active branch reply",
+        storePath: fixture.storePath(),
+      });
+      expect(hostRead).not.toHaveBeenCalled();
+    } finally {
+      hostRead.mockRestore();
+    }
 
     expect(mirrorResult.ok).toBe(true);
     if (mirrorResult.ok) {
@@ -1863,9 +2013,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("rejects revision materialization between the initial check and SQLite append", async () => {
     await writeTranscriptStore({ lifecycleRevision: undefined });
-    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
-      agentId: "main",
-    }).path;
+    const scope = createFixtureTranscriptScope();
+    const entry = loadSessionEntry(scope);
+    if (!entry) {
+      throw new Error("expected session entry");
+    }
     let revisionMaterialized = false;
 
     const result = await appendExactAssistantMessageToSessionTranscript({
@@ -1874,25 +2026,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expectedSessionId: sessionId,
       storePath: fixture.storePath(),
       beforeMessageWrite: ({ message }) => {
-        const external = new DatabaseSync(databasePath);
-        try {
-          const row = external
-            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey) as { entry_json: string };
-          const replacement = {
-            ...(JSON.parse(row.entry_json) as SessionEntry),
-            lifecycleRevision: "replacement-revision",
-            updatedAt: 2,
-          };
-          external
-            .prepare(
-              "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
-            )
-            .run(JSON.stringify(replacement), replacement.updatedAt, sessionKey);
-          revisionMaterialized = true;
-        } finally {
-          external.close();
-        }
+        replaceSessionEntrySync(scope, {
+          ...entry,
+          lifecycleRevision: "replacement-revision",
+          updatedAt: 2,
+        });
+        revisionMaterialized = true;
         return message;
       },
       message: createExactAssistantMessage({ text: "late output" }),

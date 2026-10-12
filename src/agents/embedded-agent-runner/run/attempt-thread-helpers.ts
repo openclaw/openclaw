@@ -1,43 +1,24 @@
-import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
-/**
- * Handles per-attempt thread prompt composition and cache TTL markers.
- */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import type { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import {
-  hashToolResultProjectionSnapshot,
-  serializeCacheTtlToolResultProjections,
+  persistToolResultProjections,
   type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
 
-/** Custom transcript marker used to preserve cache-TTL pruning state across attempts. */
-const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
-
-/**
- * Combines hook-provided system context with the base prompt while preserving
- * stable structured-section bytes. Returning undefined when hooks add nothing
- * lets callers avoid rewriting the original prompt.
- */
+/** Combines already-normalized hook sections without rewriting an unchanged prompt. */
 export function composeSystemPromptWithHookContext(params: {
   baseSystemPrompt?: string;
   prependSystemContext?: string;
   appendSystemContext?: string;
 }): string | undefined {
-  const prependSystem =
-    typeof params.prependSystemContext === "string"
-      ? normalizeStructuredPromptSection(params.prependSystemContext)
-      : "";
-  const appendSystem =
-    typeof params.appendSystemContext === "string"
-      ? normalizeStructuredPromptSection(params.appendSystemContext)
-      : "";
-  if (!prependSystem && !appendSystem) {
+  if (!params.prependSystemContext && !params.appendSystemContext) {
     return undefined;
   }
-  return joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
-    trim: true,
-  });
+  return joinPresentTextSegments(
+    [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
+    { trim: true },
+  );
 }
 
 /**
@@ -62,9 +43,9 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
  * eligibility both allow it. The boolean result tells callers whether the
  * session transcript changed.
  */
-export function appendAttemptCacheTtlIfNeeded(params: {
+export async function appendAttemptCacheTtlIfNeeded(params: {
   sessionManager: {
-    appendCustomEntry?: (customType: string, data: unknown) => void;
+    appendCustomEntryAsync: (customType: string, data: unknown) => Promise<unknown>;
   };
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
@@ -76,7 +57,7 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   isCacheTtlEligibleProvider: typeof isCacheTtlEligibleProvider;
   now?: number;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
-}): boolean {
+}): Promise<boolean> {
   // Compaction and timeout attempts already rewrite the transcript boundary.
   if (
     params.timedOutDuringCompaction ||
@@ -91,36 +72,10 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   ) {
     return false;
   }
-  if (params.sessionManager.appendCustomEntry) {
-    const snapshot = serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState);
-    const hash = hashToolResultProjectionSnapshot(snapshot);
-    params.sessionManager.appendCustomEntry(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
-      timestamp: params.now ?? Date.now(),
-      provider: params.provider,
-      modelId: params.modelId,
-      ...(hash !== params.toolResultPromptProjectionState.lastWrittenSnapshotHash ? snapshot : {}),
-    });
-    params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
-  }
-  return true;
-}
-
-/**
- * Records completed bootstrap turns only after a clean, non-compaction attempt.
- * Failed, aborted, or compaction-mutated turns are not stable bootstrap history.
- */
-export function shouldPersistCompletedBootstrapTurn(params: {
-  shouldRecordCompletedBootstrapTurn: boolean;
-  promptError: unknown;
-  aborted: boolean;
-  timedOutDuringCompaction: boolean;
-  compactionOccurredThisAttempt: boolean;
-}): boolean {
-  if (!params.shouldRecordCompletedBootstrapTurn || params.promptError || params.aborted) {
-    return false;
-  }
-  if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
-    return false;
-  }
+  await persistToolResultProjections(
+    params.toolResultPromptProjectionState,
+    (customType, data) => params.sessionManager.appendCustomEntryAsync(customType, data),
+    { timestamp: params.now ?? Date.now(), provider: params.provider, modelId: params.modelId },
+  );
   return true;
 }

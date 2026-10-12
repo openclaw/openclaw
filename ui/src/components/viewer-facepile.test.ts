@@ -1,8 +1,11 @@
+import { ContextProvider, createContext } from "@lit/context";
 import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   hasMultiplePresenceIdentities,
@@ -10,7 +13,11 @@ import {
   projectPresencePayload,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
+import { profileDirectory } from "../lib/profile-directory.ts";
 import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
+import { createApplicationGateway } from "../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import "./viewer-facepile.ts";
 
 afterEach(() => {
@@ -55,13 +62,13 @@ it("uses the same user initials and identity hue in the roster and attributed ch
   });
   await vi.waitFor(async () => {
     await viewerAvatar.updateComplete;
-    const rosterInitials = viewerAvatar.querySelector(".viewer-avatar > span");
+    const rosterInitials = viewerAvatar.querySelector<HTMLElement>(".viewer-avatar > span");
     const chatInitials = chat.querySelector(".chat-author-avatar__initials");
     expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
     expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
-    expect(rosterInitials?.getAttribute("style")).toContain(
-      `hsl(${expected.colorSeed % 360} 48% 42%)`,
-    );
+    const expectedStyle = document.createElement("span").style;
+    expectedStyle.background = `hsl(${expected.colorSeed % 360} 48% 42%)`;
+    expect(rosterInitials?.style.background).toBe(expectedStyle.background);
     expect(chatInitials?.getAttribute("style")).toContain(
       `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
     );
@@ -102,7 +109,7 @@ it("renders trusted presence avatar routes directly", async () => {
 });
 
 it.each([true, false])(
-  "derives a missing presence avatar only with profile provenance: %s",
+  "keeps a missing presence avatar on initials regardless of profile provenance: %s",
   async (qualified) => {
     const profileId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
     const avatar = document.createElement("openclaw-viewer-avatar");
@@ -117,9 +124,7 @@ it.each([true, false])(
 
     await vi.waitFor(async () => {
       await avatar.updateComplete;
-      expect(avatar.querySelector("img")?.getAttribute("src")).toBe(
-        qualified ? `/api/users/${profileId}/avatar` : undefined,
-      );
+      expect(avatar.querySelector("img")?.getAttribute("src")).toBe(undefined);
       expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
         "Ada Lovelace",
       );
@@ -154,7 +159,7 @@ it.each(["live", "prepared"])(
       await facepile.updateComplete;
       expect(
         [...facepile.querySelectorAll("img")].map((image) => image.getAttribute("src")),
-      ).toEqual([`/api/users/${id}/avatar`]);
+      ).toEqual([]);
       expect([...facepile.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
         "/activity/ada-lovelace-c3e324520467",
       ]);
@@ -169,45 +174,87 @@ it.each(["live", "prepared"])(
   },
 );
 
-it("shares an authenticated avatar blob between the same user in the roster and profile", async () => {
+it("shares the current self avatar with typed owner faces missing a revision", async () => {
   setAvatarGatewayOrigin("https://gateway.example.test", ["viewer-token"]);
-  const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-    new Response(new Uint8Array([1, 2, 3]), {
-      headers: { "content-type": "image/png" },
-    }),
+  const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(
+    async () =>
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "image/png" },
+      }),
   );
-  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-viewer-avatar");
-  const user: PresenceViewer = {
+  vi.spyOn(URL, "createObjectURL")
+    .mockReturnValueOnce("blob:shared-viewer-avatar")
+    .mockReturnValueOnce("blob:updated-viewer-avatar");
+  const user = {
     id: "profile-ada",
+    identity: { type: "profile", id: "profile-ada" },
     email: "ada@example.test",
     name: "Ada Lovelace",
     avatarUrl: "/api/users/profile-ada/avatar?v=7",
     watchedSessions: [],
-  };
-  const avatars = Array.from({ length: 2 }, () => {
+  } satisfies PresenceViewer;
+  const fixture = createApplicationGateway();
+  const { gateway } = fixture;
+  fixture.publish({ ...gateway.snapshot, phase: "connected", selfUser: user });
+  const provider = document.createElement("div");
+  void new ContextProvider(provider, {
+    context: createContext<Pick<ApplicationContext, "gateway">>(applicationContext),
+    initialValue: { gateway },
+  });
+  const avatars = [user, { ...user, avatarUrl: undefined }].map((avatarUser) => {
     const avatar = document.createElement("openclaw-viewer-avatar");
-    avatar.user = user;
-    document.body.append(avatar);
+    avatar.user = avatarUser;
+    provider.append(avatar);
     return avatar;
   });
+  document.body.append(provider);
 
-  await vi.waitFor(async () => {
-    await Promise.all(avatars.map((avatar) => avatar.updateComplete));
-    expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
-      "blob:shared-viewer-avatar",
-      "blob:shared-viewer-avatar",
-    ]);
-  });
-
+  await Promise.all(avatars.map((avatar) => avatar.updateComplete));
   expect(fetchAvatar).toHaveBeenCalledOnce();
   expect(fetchAvatar).toHaveBeenCalledWith(
     "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
     expect.objectContaining({ headers: { Authorization: "Bearer viewer-token" } }),
   );
+  await resolveAvatarImageUrl(user.avatarUrl);
+  await Promise.all(avatars.map((avatar) => avatar.updateComplete));
+  expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
+    "blob:shared-viewer-avatar",
+    "blob:shared-viewer-avatar",
+  ]);
   for (const avatar of avatars) {
     avatar.querySelector("img")?.dispatchEvent(new Event("load"));
     expect(avatar.querySelector(".viewer-avatar")?.classList.contains("is-fallback")).toBe(false);
   }
+
+  fixture.publish({
+    ...gateway.snapshot,
+    selfUser: { ...user, avatarUrl: "/api/users/profile-ada/avatar?v=8" },
+  });
+  await Promise.all(avatars.map((avatar) => avatar.updateComplete));
+  expect(fetchAvatar.mock.calls.map(([url]) => url)).toEqual([
+    "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+    "https://gateway.example.test/api/users/profile-ada/avatar?v=8",
+  ]);
+  await resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=8");
+  await Promise.all(avatars.map((avatar) => avatar.updateComplete));
+  expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
+    "blob:shared-viewer-avatar",
+    "blob:updated-viewer-avatar",
+  ]);
+
+  for (const identity of [
+    undefined,
+    { type: "agent", id: user.id },
+    { type: "legacy", actorType: "human", source: null, id: user.id },
+  ] as const) {
+    const avatar = document.createElement("openclaw-viewer-avatar");
+    avatar.user = { ...user, identity: undefined, avatarUrl: undefined };
+    avatar.identity = identity;
+    provider.append(avatar);
+    await avatar.updateComplete;
+    expect(avatar.querySelector("img")).toBeNull();
+  }
+  expect(fetchAvatar).toHaveBeenCalledTimes(2);
 });
 
 it.each(["staticParticipants", "staticUsers"] as const)(
@@ -410,3 +457,58 @@ it("links faces only when the host opts in, so nested facepiles stay plain", asy
   expect(plain.querySelector("a")).toBeNull();
   expect(plain.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
 });
+
+it.each([false, true])(
+  "keeps a newly advertised teammate avatar ahead of cached directory availability (%s)",
+  async (hasAvatar) => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["viewer-token"]);
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(new Blob(["avatar"], { type: "image/png" })));
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:teammate");
+    const fixture = createApplicationGateway();
+    const { gateway } = fixture;
+    fixture.publish({
+      ...gateway.snapshot,
+      phase: "connected",
+      hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
+      client: createTestGatewayClient(async () => ({
+        profiles: [
+          {
+            id: "teammate",
+            displayName: "Teammate",
+            hasAvatar,
+            updatedAt: 7,
+            createdAt: 1,
+            avatarMime: null,
+            mergedInto: null,
+            emails: [],
+            githubIdentity: null,
+          },
+        ],
+      })),
+    });
+    const provider = document.createElement("div");
+    void new ContextProvider(provider, {
+      context: createContext<Pick<ApplicationContext, "gateway">>(applicationContext),
+      initialValue: { gateway },
+    });
+    const avatar = document.createElement("openclaw-viewer-avatar");
+    const user = {
+      id: "teammate",
+      identity: { type: "profile" as const, id: "teammate" },
+      name: "Teammate",
+      watchedSessions: [],
+    };
+    avatar.user = user;
+    provider.append(avatar);
+    document.body.append(provider);
+    await avatar.updateComplete;
+    await profileDirectory(gateway).load();
+    avatar.user = { ...user, avatarUrl: "/api/users/teammate/avatar?v=8" };
+    await avatar.updateComplete;
+    expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
+      "https://gateway.example.test/api/users/teammate/avatar?v=8",
+    );
+  },
+);

@@ -6,7 +6,7 @@ import {
   normalizeMimeType,
 } from "openclaw/plugin-sdk/media-mime";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -45,7 +45,7 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 
 // /v1/openai/videos is async: POST returns a job, GET /{id} polls until the
-// job leaves the queue. Mirrors the OpenAI Sora surface (extensions/openai).
+// job succeeds or fails, then the result contains downloadable video URLs.
 type DeepInfraVideoStatus = "queued" | "processing" | "succeeded" | "failed";
 
 type DeepInfraVideoJob = {
@@ -212,7 +212,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
     defaultModel,
     models: ids,
     resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "deepinfra", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "deepinfra", ...ctx }),
     capabilities: {
       ...capabilities,
       generate: {

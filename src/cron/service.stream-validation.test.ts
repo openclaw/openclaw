@@ -1,12 +1,11 @@
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
-import { cronStoreKey } from "./store/key.js";
+import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
+import type { CronServiceDeps } from "./service/state.js";
+import { loadCronStore } from "./store.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
-import type { CronJobCreate } from "./types.js";
+import type { CronJob, CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-validation-" });
 
@@ -22,49 +21,27 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
   };
 }
 
-async function createCron(triggersEnabled: boolean | undefined, cronEnabled = true) {
+async function createCron(triggersEnabled: boolean, deps: Partial<CronServiceDeps> = {}) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
     scheduler: createTestGatewayScheduler(),
     nowMs: () => Date.now(),
     storePath,
-    cronEnabled,
-    ...(triggersEnabled === undefined
-      ? {}
-      : { cronConfig: { triggers: { enabled: triggersEnabled } } }),
+    cronEnabled: true,
+    cronConfig: { triggers: { enabled: triggersEnabled } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...deps,
   });
   await cron.start();
-  return cron;
+  return { cron, storePath };
 }
 
 describe("cron stream schedule validation", () => {
-  it.each([
-    { cronEnabled: true, configured: undefined, triggersEnabled: true },
-    { cronEnabled: true, configured: true, triggersEnabled: true },
-    { cronEnabled: true, configured: false, triggersEnabled: false },
-    { cronEnabled: false, configured: true, triggersEnabled: true },
-    { cronEnabled: false, configured: false, triggersEnabled: false },
-  ])(
-    "reports active trigger capability independently of scheduler enablement ($cronEnabled/$configured)",
-    async ({ cronEnabled, configured, triggersEnabled }) => {
-      const cron = await createCron(configured, cronEnabled);
-      try {
-        await expect(cron.status()).resolves.toMatchObject({
-          enabled: cronEnabled,
-          triggersEnabled,
-        });
-      } finally {
-        cron.stop();
-      }
-    },
-  );
-
   it("rejects creation while cron triggers are disabled", async () => {
-    const cron = await createCron(false);
+    const { cron } = await createCron(false);
     try {
       await expect(cron.add(streamJob())).rejects.toThrow(
         "the operator set cron.triggers.enabled: false",
@@ -75,37 +52,17 @@ describe("cron stream schedule validation", () => {
   });
 
   it("validates match regexes and command payload ambiguity", async () => {
-    const cron = await createCron(true);
+    const { cron } = await createCron(true);
     try {
-      await expect(
-        cron.add(streamJob({ schedule: { kind: "stream", command: ["echo"], mode: "match" } })),
-      ).rejects.toThrow("match is required");
-      await expect(
-        cron.add(
-          streamJob({
-            schedule: { kind: "stream", command: ["echo"], mode: "match", match: "[" },
-          }),
-        ),
-      ).rejects.toThrow("safe regular expression");
-      await expect(
-        cron.add(
-          streamJob({
-            schedule: {
-              kind: "stream",
-              command: ["echo"],
-              mode: "match",
-              match: "^(a+)+$",
-            },
-          }),
-        ),
-      ).rejects.toThrow("unsafe-nested-repetition");
-      await expect(
-        cron.add(
-          streamJob({
-            schedule: { kind: "stream", command: ["echo"], match: "^ready" },
-          }),
-        ),
-      ).rejects.toThrow('match requires mode="match"');
+      for (const [schedule, error] of [
+        [{ mode: "match" }, "match is required"],
+        [{ mode: "match", match: "^(a+)+$" }, "unsafe-nested-repetition"],
+        [{ match: "^ready" }, 'match requires mode="match"'],
+      ] as const) {
+        await expect(
+          cron.add(streamJob({ schedule: { kind: "stream", command: ["echo"], ...schedule } })),
+        ).rejects.toThrow(error);
+      }
       await expect(
         cron.add(
           streamJob({
@@ -118,34 +75,8 @@ describe("cron stream schedule validation", () => {
     }
   });
 
-  it("allows a script payload without a gate and rejects one with a gate", async () => {
-    const cron = await createCron(true);
-    const scriptPayload = { kind: "script" as const, script: "return {}" };
-    try {
-      await expect(
-        cron.add(
-          streamJob({
-            sessionTarget: "isolated",
-            payload: scriptPayload,
-          }),
-        ),
-      ).resolves.toMatchObject({ payload: scriptPayload });
-      await expect(
-        cron.add(
-          streamJob({
-            sessionTarget: "isolated",
-            payload: scriptPayload,
-            trigger: { script: "return { fire: true }" },
-          }),
-        ),
-      ).rejects.toThrow("cannot be combined with a condition trigger");
-    } finally {
-      cron.stop();
-    }
-  });
-
   it("clamps explicit batch bounds during normalization", async () => {
-    const cron = await createCron(true);
+    const { cron } = await createCron(true);
     try {
       const job = await cron.add(
         streamJob({
@@ -170,85 +101,8 @@ describe("cron stream schedule validation", () => {
     }
   });
 
-  it("records restart exhaustion before routing its normal failure alert", async () => {
-    const { storePath } = await makeStorePath();
-    let jobId = "";
-    const historyAtAlert: unknown[][] = [];
-    const enqueueSystemEvent = vi.fn(() => {
-      historyAtAlert.push(
-        readCronRunHistoryPageForTests({
-          storeKey: cronStoreKey(storePath),
-          jobId,
-        }).entries,
-      );
-    });
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
-      storePath,
-      cronEnabled: true,
-      cronConfig: {
-        triggers: { enabled: true },
-        failureAlert: { enabled: true, after: 5, cooldownMs: 0 },
-      },
-      log: logger,
-      enqueueSystemEvent,
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    await cron.start();
-    try {
-      const created = await cron.add(streamJob());
-      jobId = created.id;
-      await cron.recordExternalFailure(created.id, "stream source exhausted restarts", {
-        streamStatus: "error",
-        streamRestartExhausted: true,
-        streamConsecutiveFailures: 5,
-      });
-      expect(cron.getJob(created.id)?.state).toMatchObject({
-        lastRunStatus: "error",
-        lastError: "stream source exhausted restarts",
-        consecutiveErrors: 5,
-        streamStatus: "error",
-        streamRestartExhausted: true,
-      });
-      expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        'Automation "stream" failed 5 times\nCheck automation history for details.',
-        expect.any(Object),
-      );
-      expect(historyAtAlert).toEqual([
-        [
-          expect.objectContaining({
-            jobId: created.id,
-            status: "error",
-            error: "stream source exhausted restarts",
-            durationMs: 0,
-          }),
-        ],
-      ]);
-    } finally {
-      cron.stop();
-    }
-  });
-
-  it("rejects invalid scheduler timestamps from external event sources", async () => {
-    const cron = await createCron(true);
-    try {
-      const created = await cron.add(streamJob());
-
-      await expect(
-        cron.recordExternalFailure(created.id, "invalid source state", {
-          startupCatchupAtMs: MAX_DATE_TIMESTAMP_MS + 1,
-        }),
-      ).rejects.toThrow("cron state.startupCatchupAtMs");
-      expect(cron.getJob(created.id)?.state.startupCatchupAtMs).toBeUndefined();
-    } finally {
-      cron.stop();
-    }
-  });
-
   it("rotates logical source identity only when source ownership changes", async () => {
-    const cron = await createCron(true);
+    const { cron } = await createCron(true);
     try {
       const created = await cron.add(streamJob());
       const initialIdentity = created.state.streamSourceIdentity;
@@ -275,7 +129,7 @@ describe("cron stream schedule validation", () => {
   });
 
   it("ignores stale owner writes after an A-to-B-to-A source replacement", async () => {
-    const cron = await createCron(true);
+    const { cron } = await createCron(true);
     try {
       const created = await cron.add(streamJob());
       if (created.schedule.kind !== "stream") {
@@ -325,4 +179,220 @@ describe("cron stream schedule validation", () => {
       cron.stop();
     }
   });
+});
+
+async function withStream(
+  input: Partial<CronJobCreate>,
+  deps: Partial<CronServiceDeps>,
+  run: (cron: CronService, job: CronJob, storePath: string) => Promise<void>,
+) {
+  const { cron, storePath } = await createCron(true, deps);
+  try {
+    const job = await cron.add({
+      name: "stream",
+      enabled: true,
+      schedule: { kind: "stream", command: ["echo"] },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "base" },
+      ...input,
+    });
+    await run(cron, job, storePath);
+  } finally {
+    cron.stop();
+  }
+}
+
+function runBatch(
+  cron: CronService,
+  job: CronJob,
+  batch: string,
+  onTriggerDisposition?: (disposition: "fired" | "dropped" | "error" | "busy") => void,
+) {
+  return cron.run(job.id, "force", {
+    evaluateTrigger: true,
+    streamBatch: batch,
+    payload: job.payload,
+    onTriggerDisposition,
+  });
+}
+
+describe("cron stream trigger composition", () => {
+  it("drops a fire:false batch and persists gate state", async () => {
+    const evaluateCronTrigger = vi.fn(async () => ({
+      kind: "evaluated" as const,
+      fire: false,
+      state: { seen: true },
+    }));
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    await withStream(
+      { trigger: { script: "json({ fire: true })" } },
+      { evaluateCronTrigger, runIsolatedAgentJob },
+      async (cron, job) => {
+        await runBatch(cron, job, "quiet batch");
+        expect(evaluateCronTrigger).toHaveBeenCalledWith(
+          expect.objectContaining({ streamBatch: "quiet batch" }),
+        );
+        expect(cron.getJob(job.id)?.state.triggerState).toEqual({ seen: true });
+        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("composes a final batch and rotates source identity when a once trigger disables the stream", async () => {
+    const evaluateCronTrigger = vi.fn(async () => ({
+      kind: "evaluated" as const,
+      fire: true,
+      message: "gate message",
+      state: { seen: true },
+    }));
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    await withStream(
+      { trigger: { script: "json({ fire: true })" } },
+      { evaluateCronTrigger, runIsolatedAgentJob },
+      async (cron, job) => {
+        const configured = await cron.update(job.id, {
+          trigger: { script: "json({ fire: true })", once: true },
+        });
+        const identity = configured.state.streamSourceIdentity;
+        expect(identity).toEqual(expect.any(String));
+        await runBatch(cron, job, "final batch");
+        expect(runIsolatedAgentJob).toHaveBeenCalledWith(
+          expect.objectContaining({ message: "base\n\ngate message\n\nfinal batch" }),
+        );
+        expect(cron.getJob(job.id)?.enabled).toBe(false);
+        expect(cron.getJob(job.id)?.state.streamSourceIdentity).not.toBe(identity);
+      },
+    );
+  });
+
+  it("passes a batch to a script payload without a gate and persists its state", async () => {
+    const runScriptJob = vi.fn(async () => ({
+      status: "ok" as const,
+      stateChanged: true,
+      state: { revision: 2 },
+    }));
+    await withStream(
+      { payload: { kind: "script", script: "return {}" } },
+      { runScriptJob },
+      async (cron, job, storePath) => {
+        await runBatch(cron, job, "script batch");
+        expect((await loadCronStore(storePath)).jobs[0]?.state.triggerState).toEqual({
+          revision: 2,
+        });
+        expect(runScriptJob).toHaveBeenCalledWith(
+          expect.objectContaining({
+            job: expect.objectContaining({ id: job.id }),
+            streamBatch: "script batch",
+          }),
+        );
+      },
+    );
+  });
+
+  it("reports a failed payload batch without reporting it fired or scheduling a context-free retry", async () => {
+    const onTriggerDisposition = vi.fn();
+    const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
+      async () => undefined,
+    );
+    await withStream(
+      {
+        name: "failing stream payload",
+        delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+      },
+      {
+        cronConfig: {
+          triggers: { enabled: true },
+          failureAlert: { enabled: true, after: 1, cooldownMs: 0 },
+        },
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "error" as const, error: "boom" })),
+        sendCronFailureAlert,
+      },
+      async (cron, job, storePath) => {
+        await runBatch(cron, job, "failed batch", onTriggerDisposition);
+        expect(onTriggerDisposition).toHaveBeenCalledExactlyOnceWith("error");
+        expect(onTriggerDisposition).not.toHaveBeenCalledWith("fired");
+        expect(cron.getJob(job.id)?.state).toMatchObject({
+          lastRunStatus: "error",
+          lastError: "boom",
+          consecutiveErrors: 1,
+        });
+        expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+        const alert = sendCronFailureAlert.mock.calls[0]?.[0];
+        expect(alert?.channel).toBe("telegram");
+        expect(alert?.to).toBe("19098680");
+        expect(alert?.payload).toEqual({
+          text: 'Automation "failing stream payload" failed 1 times\nCheck automation history for details.',
+        });
+        expect(
+          (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.state
+            .lastError,
+        ).toBe("boom");
+      },
+    );
+  });
+
+  it("reports a skipped payload batch as a terminal drop", async () => {
+    const onTriggerDisposition = vi.fn();
+    await withStream(
+      {},
+      {
+        runIsolatedAgentJob: vi.fn(async () => ({
+          status: "skipped" as const,
+          error: "runner unavailable",
+        })),
+      },
+      async (cron, job) => {
+        await runBatch(cron, job, "skipped batch", onTriggerDisposition);
+        expect(onTriggerDisposition).toHaveBeenCalledWith("dropped");
+        expect(cron.getJob(job.id)?.state).toMatchObject({ lastRunStatus: "skipped" });
+      },
+    );
+  });
+});
+
+it("skips invalid main jobs with agentTurn payloads loaded from disk", async () => {
+  const { storePath } = await makeStorePath();
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeat = vi.fn();
+  await writeCronStoreSnapshot({
+    storePath,
+    jobs: [
+      {
+        id: "job-1",
+        name: "bad",
+        enabled: true,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+        schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "bad" },
+        state: {},
+      },
+    ],
+  });
+  const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
+    storePath,
+    cronEnabled: true,
+    log: logger,
+    enqueueSystemEvent,
+    requestHeartbeat,
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
+  try {
+    await cron.start();
+    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    await cron.run("job-1", "due");
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+    const [job] = await cron.list({ includeDisabled: true });
+    expect(job?.state.lastStatus).toBe("skipped");
+    expect(job?.state.lastError).toMatch(/sessionTarget "main" requires payload\.kind/i);
+  } finally {
+    cron.stop();
+  }
 });

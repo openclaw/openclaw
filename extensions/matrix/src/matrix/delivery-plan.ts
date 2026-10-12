@@ -40,6 +40,14 @@ type MatrixDeliveryIdentity = {
   partCount: number;
 };
 
+type MatrixDeliveryTarget = {
+  identity: MatrixDeliveryIdentity;
+  accountId?: string | null;
+  roomId: string;
+  transactionScopeId: string;
+  wireEventType: "m.room.message" | "m.room.encrypted";
+};
+
 type MatrixDeliveryPlan = {
   version: typeof DELIVERY_PLAN_VERSION;
   queueId: string;
@@ -151,7 +159,7 @@ function isPlan(value: unknown): value is MatrixDeliveryPlan {
 function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   let value: unknown;
   try {
-    value = JSON.parse(new TextDecoder().decode(bytes));
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan is invalid JSON");
   }
@@ -161,16 +169,7 @@ function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   return value;
 }
 
-function assertPlanIdentity(
-  plan: MatrixDeliveryPlan,
-  params: {
-    identity: MatrixDeliveryIdentity;
-    accountId?: string | null;
-    roomId: string;
-    transactionScopeId: string;
-    wireEventType: "m.room.message" | "m.room.encrypted";
-  },
-): void {
+function assertPlanIdentity(plan: MatrixDeliveryPlan, params: MatrixDeliveryTarget): void {
   if (
     plan.queueId !== params.identity.queueId ||
     plan.partIndex !== params.identity.partIndex ||
@@ -229,13 +228,9 @@ export function resolveMatrixDurableDeliveryIdentity(params: {
   };
 }
 
-export async function loadMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-}): Promise<MatrixDeliveryPlan | null> {
+export async function loadMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget,
+): Promise<MatrixDeliveryPlan | null> {
   const entry = await createDeliveryPlanStore().lookup(planKey(params.identity));
   if (!entry) {
     return null;
@@ -248,15 +243,12 @@ export async function loadMatrixDeliveryPlan(params: {
   return structuredClone(plan);
 }
 
-export async function persistMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-  events: readonly MatrixPreparedEvent[];
-  dispatch: MatrixMessageWireDispatch;
-}): Promise<MatrixDeliveryPlan> {
+export async function persistMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget & {
+    events: readonly MatrixPreparedEvent[];
+    dispatch: MatrixMessageWireDispatch;
+  },
+): Promise<MatrixDeliveryPlan> {
   if (params.events.length === 0) {
     throw new Error("Matrix durable delivery plan must contain at least one event");
   }
@@ -340,12 +332,8 @@ function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void 
     );
   }
   const storedParts = new Set(plans.map((plan) => plan.partIndex));
-  if (
-    storedParts.size !== partCount ||
-    Array.from({ length: partCount }, (_, partIndex) => partIndex).some(
-      (partIndex) => !storedParts.has(partIndex),
-    )
-  ) {
+  // Decoding bounds every integer index to [0, partCount), so cardinality proves coverage.
+  if (storedParts.size !== partCount) {
     throw new MatrixDeliveryPlanInvariantError(
       "Matrix ambiguous delivery has an incomplete event plan",
     );

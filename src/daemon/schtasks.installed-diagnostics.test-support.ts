@@ -4,17 +4,27 @@ import os from "node:os";
 import path from "node:path";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
-import { hashFile } from "../../scripts/lib/gateway-bench-installed-package.ts";
+import { hashFile, hashInstall } from "../../scripts/lib/gateway-bench-installed-package.ts";
 import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { sleep } from "../utils/sleep.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import {
+  packageRoot,
   type parseInstalledPreview,
   type readInput,
   recordCapacityBoundary,
   requiredCellSpace,
 } from "./schtasks.installed-package.test-support.js";
+import {
+  assertInteractiveLeastPrivilegeTask,
+  assertUnattendedLeastPrivilegeTask,
+  disableScheduledTaskXmlForFixture,
+  readRelatedProcessDiagnostics,
+  readTaskPrincipal,
+  readTaskXml,
+} from "./schtasks.integration-observation.test-support.js";
 
 export const doctorReportSchema = z.object({
   checksRun: z.number().int().positive(),
@@ -40,6 +50,20 @@ export type InstalledTask = {
   env: NodeJS.ProcessEnv;
 };
 
+export async function assertInstalledTaskDefinition(
+  task: Pick<InstalledTask, "taskName" | "scriptPath">,
+  definition: "published" | "candidate",
+) {
+  const taskXml = await readTaskXml(task.taskName);
+  assert.ok(taskXml);
+  const principal = readTaskPrincipal(task.taskName);
+  if (definition === "published") {
+    assertInteractiveLeastPrivilegeTask({ taskXml, principal });
+  } else {
+    assertUnattendedLeastPrivilegeTask({ taskXml, principal, scriptPath: task.scriptPath });
+  }
+}
+
 export async function readInstalledUpdateProgress({
   env,
   stateDir,
@@ -55,6 +79,7 @@ export async function readInstalledUpdateProgress({
         : value;
     // Retain only the facts needed to distinguish update progress from failed native verification.
     return {
+      runId: record.runId,
       phase: record.phase,
       status: record.status,
       createdAtMs: record.createdAtMs,
@@ -169,6 +194,42 @@ export async function runInstalledPublishedUpdate(params: {
   const startedAt = Date.now();
   const stopObservation = new AbortController();
   const completed = new Set<string>();
+  let observedRunId: string | undefined;
+  const settlementProcesses: ReturnType<typeof captureSettlementProcesses>[] = [];
+  function captureSettlementProcesses(
+    progress: Pick<UpdateRunRecord, "runId" | "phase" | "status">,
+    reason: "terminal" | "elapsed-300s" | "follow-up",
+  ) {
+    const sample = {
+      runId: progress.runId,
+      phase: progress.phase,
+      status: progress.status,
+      reason,
+      capturedAtMs: Date.now(),
+    };
+    const safeText = (value: string) => redactSupportString(value, task, { maxLength: 2_000 });
+    try {
+      const capture = readRelatedProcessDiagnostics([task.profile, packageRoot(task.installRoot)]);
+      return {
+        ...sample,
+        ok: capture.ok,
+        truncated: capture.truncated,
+        ...(capture.error ? { unavailable: safeText(capture.error) } : {}),
+        processes: capture.processes.map((process) => ({
+          pid: process.ProcessId,
+          parentPid: process.ParentProcessId,
+          createdAt: process.CreationDate,
+          userModeTime100ns: process.UserModeTime,
+          kernelModeTime100ns: process.KernelModeTime,
+          readOperationCount: process.ReadOperationCount,
+          writeOperationCount: process.WriteOperationCount,
+          commandLine: process.CommandLine ? safeText(process.CommandLine) : null,
+        })),
+      };
+    } catch {
+      return { ...sample, unavailable: "Process observation could not be read" };
+    }
+  }
   let observationFailure: Error | undefined;
   const observation = (async () => {
     while (!stopObservation.signal.aborted) {
@@ -186,6 +247,23 @@ export async function runInstalledPublishedUpdate(params: {
       }
       if ("unavailable" in progress || progress.createdAtMs < startedAt) {
         continue;
+      }
+      observedRunId ??= progress.runId;
+      if (progress.runId !== observedRunId) {
+        continue;
+      }
+      const snapshotReason =
+        settlementProcesses.length > 0
+          ? "follow-up"
+          : progress.phase === "finished" && progress.status !== "running"
+            ? "terminal"
+            : Date.now() - startedAt >= 300_000
+              ? "elapsed-300s"
+              : undefined;
+      if (snapshotReason && settlementProcesses.length < 2) {
+        settlementProcesses.push(captureSettlementProcesses(progress, snapshotReason));
+        // Diagnostics wait for an ordinary proof write; they are not durable update progress.
+        observations.updateSettlementProcesses = settlementProcesses;
       }
       const newSteps = progress.steps.filter((step) => {
         if (step.status !== "completed" || step.endedAtMs === undefined) {
@@ -294,8 +372,6 @@ export async function inspectDisabledDiscoveryTasks(params: {
   const { buildTaskScript } = await import("./schtasks-layout.js");
   const { encodeWindowsLauncherScript } = await import("../infra/windows-launcher-encoding.js");
   const { probeScheduledTaskExists } = await import("./schtasks-state-probe.js");
-  const { disableScheduledTaskXmlForFixture, readTaskXml, readTaskPrincipal } =
-    await import("./schtasks.integration-observation.test-support.js");
   const { readGatewayServiceState, resolveGatewayService } = await import("./service.js");
   const selectedXml = await readTaskXml(selected.taskName);
   assert.ok(selectedXml);
@@ -559,5 +635,61 @@ export async function inspectDisabledDiscoveryTasks(params: {
     launcherExecutionRequested: false,
     missingDefinitionScope:
       "ENOENT for an owned registered CMD path; no access-denied or ACL claim",
+  };
+}
+
+/** Native installed-peer build admission; no source-checkout compile or successful build claim. */
+export async function assertInstalledSiblingBuildRefusal(params: {
+  toolingEntry: string;
+  startupEntry?: string;
+  selected: InstalledTask;
+  peer: InstalledTask;
+  commands: CommandRecord[];
+  signal: AbortSignal;
+  verifyContinuity: () => Promise<void>;
+  recordProgress: (phase: string, error?: Error) => Promise<void>;
+}) {
+  const { toolingEntry, selected, peer, commands, signal, verifyContinuity, recordProgress } =
+    params;
+  const phase = params.startupEntry ? "startup-alias-refusal" : "task-sibling-refusal";
+  const buildRoot = await fs.realpath(packageRoot(peer.installRoot));
+  const dist = path.join(buildRoot, "dist");
+  assert.equal((await fs.lstat(dist)).isDirectory(), true);
+  assert.notEqual(await fs.realpath(packageRoot(selected.installRoot)), buildRoot);
+  const before = await hashInstall(peer.installRoot);
+  await recordProgress(`${phase}:initial-hash`);
+  const toolingEntrySha256 = await hashFile(toolingEntry);
+  await run(
+    [toolingEntry, "models", "status"],
+    { ...selected.env, OPENCLAW_FORCE_BUILD: "1" },
+    buildRoot,
+    commands,
+    1,
+    signal,
+    {
+      expectedStderr: [
+        `Refusing to rebuild dist while a managed Gateway (profile ${peer.profile})`,
+        params.startupEntry
+          ? `stop the process launched by Startup entry ${JSON.stringify(params.startupEntry)}`
+          : `openclaw gateway stop --profile ${peer.profile}`,
+      ],
+    },
+  );
+  await recordProgress(`${phase}:command-result`);
+  await verifyContinuity();
+  await recordProgress(`${phase}:continuity-verified`);
+  assert.deepEqual(await hashInstall(peer.installRoot), before);
+  await recordProgress(`${phase}:final-hash`);
+  return {
+    kind: "native-installed-peer-build-admission",
+    toolingEntry,
+    toolingEntrySha256,
+    buildRoot,
+    dist,
+    peerProfile: peer.profile,
+    exactSiblingRefusal: true,
+    installedFilesUnchanged: true,
+    liveRpcAndPidContinuity: true,
+    successfulBuildObserved: false,
   };
 }

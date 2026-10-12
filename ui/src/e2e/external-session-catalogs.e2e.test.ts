@@ -293,7 +293,7 @@ suite.define(() => {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
             .locator("wa-dropdown.sidebar-agent-menu")
-            .getByRole("menuitemradio", { name: "Other", exact: true })
+            .getByRole("menuitem", { name: "Other", exact: true })
             .click();
           await waitForControlUiRoute(page, {
             routeId: "chat",

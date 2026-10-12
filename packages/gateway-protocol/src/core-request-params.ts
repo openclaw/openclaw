@@ -1,7 +1,9 @@
 import type { Static } from "typebox";
 import type * as AgentSchema from "./schema/agent.js";
+import type { BackupRecordOutcomeParams, BackupStatusParams } from "./schema/backup.js";
 import type * as BoardSchema from "./schema/board.js";
 import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
+import type { CatalogBrowseParams, CatalogSearchKeywordsParams } from "./schema/catalog.js";
 import type { CommandsListParams } from "./schema/commands.js";
 import type { CronHistoryParams } from "./schema/cron.js";
 import type {
@@ -15,6 +17,7 @@ import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
 import type { PresenceActivityParams, PresenceQueryParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
+import type { StorageLocationsListParams, StorageLocationsProbeParams } from "./schema/storage.js";
 import type {
   ThemesListParams,
   ThemesGetParams,
@@ -27,6 +30,12 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "catalog.browse": CatalogBrowseParams;
+  "catalog.searchKeywords": CatalogSearchKeywordsParams;
+  "backup.status": BackupStatusParams;
+  "backup.recordOutcome": BackupRecordOutcomeParams;
+  "storage.locations.list": StorageLocationsListParams;
+  "storage.locations.probe": StorageLocationsProbeParams;
   "presence.activity": PresenceActivityParams;
   "cron.history": CronHistoryParams;
   "users.personalFile.get": UsersSchema.UsersPersonalFileGetParams;
@@ -77,6 +86,7 @@ export type GatewayCoreRequestParams = {
   "users.selectModelAccount": UsersSchema.UsersSelectModelAccountParams;
   "users.linkAuthProfile": UsersSchema.UsersLinkAuthProfileParams;
   "users.linkChannelIdentity": UsersSchema.UsersLinkChannelIdentityParams;
+  "users.merge": UsersSchema.UsersMergeParams;
   "users.unlinkChannelIdentity": UsersSchema.UsersUnlinkChannelIdentityParams;
   "users.listChannelIdentities": UsersSchema.UsersListChannelIdentitiesParams;
   "users.unlinkAuthProfile": UsersSchema.UsersUnlinkAuthProfileParams;

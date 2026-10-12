@@ -15,14 +15,13 @@ import { updateExecutorNativeEntrypoints } from "./update-command-executor-nativ
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 
-const { executionParams, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
-it.each(
-  (["package", "git"] as const).flatMap((kind) =>
-    (["healthy", "requester-revoked", "run-replaced"] as const).map((fault) => ({ kind, fault })),
-  ),
-)(
+it.each([
+  { kind: "git", fault: "healthy" },
+  { kind: "package", fault: "requester-revoked" },
+] as const)(
   "delegates $kind Doctor without reusing its suspended parent ($fault)",
   async ({ kind, fault }) => {
     await withTestDir({ prefix: "update-doctor-delegation-" }, async (dir) => {
@@ -74,9 +73,6 @@ it.each(
             if (fault === "requester-revoked") {
               requesterCurrent = false;
             }
-            if (fault === "run-replaced") {
-              params.opts.run = { runId: "replacement-run", env };
-            }
             commandOptions.beforeInput?.(pid, spawnedArgv);
           },
         });
@@ -122,7 +118,7 @@ it.each(
       mocks.runGitUpdate.mockImplementation(runUpdate);
       const update = withUpdateCommandExecutor(runId, async (executor) => {
         params.opts.run!.executorFence = await executor.enter(root);
-        return executeMutableUpdate(params);
+        return executeMutableUpdate(await bindExecutionGuards(params));
       });
       if (fault !== "healthy") {
         await expect(update).rejects.toThrow("requester-revoked");

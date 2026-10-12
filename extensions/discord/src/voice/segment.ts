@@ -171,22 +171,18 @@ export async function respondToDiscordVoiceTranscript(
     replyText = control.speakText ?? "";
   } else {
     const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
-    const turn = await runDiscordVoiceAgentTurn({
-      entry,
-      accountId: params.accountId,
-      userId,
+    const text = await runDiscordVoiceAgentTurn({
+      ...params,
       message: prompt,
-      discordConfig: params.discordConfig,
-      runtime: params.runtime,
       context: ingress,
     });
-    if (!turn) {
+    if (text === null) {
       logVoiceVerbose(
         `segment unauthorized before agent turn: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       return;
     }
-    replyText = turn.text;
+    replyText = text;
   }
 
   if (!conversationCurrent()) {
@@ -215,7 +211,7 @@ export async function respondToDiscordVoiceTranscript(
     return;
   }
   if (voiceReplyAudio.status === "failed") {
-    logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error ?? "unknown error"}`);
+    logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error}`);
     return;
   }
   const streamFailure = voiceReplyAudio.mode === "file" ? voiceReplyAudio.streamFailure : undefined;

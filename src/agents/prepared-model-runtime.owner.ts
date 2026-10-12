@@ -2,6 +2,7 @@ import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
@@ -12,6 +13,7 @@ import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
+  groupBuildCandidates,
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
@@ -117,18 +119,6 @@ function findConfiguredOwnerCandidates(
     : canRebindByDirectory && directoryCandidates.length > 0
       ? directoryCandidates
       : identityCandidates;
-}
-
-export function resolveConfiguredOwnerPublication(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  rawInput: PreparedModelRuntimeInput,
-): { matches: boolean; pending?: Promise<PreparedModelRuntimeSnapshot> } {
-  const input = normalizePreparedModelRuntimeInput(rawInput);
-  const candidates = findConfiguredOwnerCandidates(owners, input);
-  return {
-    matches: candidates.length > 0,
-    pending: candidates.length === 1 ? candidates[0]?.pending : undefined,
-  };
 }
 
 export function resolveConfiguredOwner(
@@ -280,6 +270,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     inheritedAuthDir: input.inheritedAuthDir,
     readOnly: input.readOnly === true,
     loadRuntimePlugins: input.loadRuntimePlugins === true,
+    runtimePluginPurpose: input.runtimePluginPurpose,
     skipCredentials: input.skipCredentials === true,
     workspaceDir: input.workspaceDir,
     env: environmentFingerprint(input.env),
@@ -356,6 +347,7 @@ export function resolvePublishedOwner(
       owner.input.inheritedAuthDir === input.inheritedAuthDir &&
       owner.input.readOnly === input.readOnly &&
       owner.input.loadRuntimePlugins === input.loadRuntimePlugins &&
+      owner.input.runtimePluginPurpose === input.runtimePluginPurpose &&
       owner.input.skipCredentials === input.skipCredentials &&
       // Binding is a publication-time build capability readers cannot know;
       // absent (= undefined after normalization) is a wildcard like the
@@ -405,6 +397,7 @@ export function hasSameLifecycleInput(
     left.inheritedAuthDir === right.inheritedAuthDir &&
     left.readOnly === right.readOnly &&
     left.loadRuntimePlugins === right.loadRuntimePlugins &&
+    left.runtimePluginPurpose === right.runtimePluginPurpose &&
     left.skipCredentials === right.skipCredentials &&
     left.workspaceDir === right.workspaceDir &&
     environmentFingerprint(left.env) === environmentFingerprint(right.env) &&
@@ -421,7 +414,10 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     agentBuildCompletions: Map<string, Promise<void>>;
     buildTimeoutMs: number | undefined;
     includeCredentialProviders?: boolean;
+    providerDiscoveryTimeoutMs?: number;
     isPublicationCurrent?: () => boolean;
+    isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
+    isOwnerPublished?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
     isBuildCurrent?: () => boolean;
     onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
     registerEntriesAfterBuildStart?: boolean;
@@ -438,6 +434,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     failed: (error: Error, isCurrent: () => boolean) => void;
   },
 ): Promise<void> {
+  const catalogGeneration = captureRemoteModelCatalogStartupSnapshot();
   const candidates = params.ownersToPublish.map((owner) => {
     const input = owner.input;
     owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
@@ -453,8 +450,10 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     // Scoped reloads retain unaffected generations beyond their creating publication epoch.
     // Persistent catalog/auth callbacks must retire only with this exact registered generation.
     const isGenerationCurrent = () =>
-      owner.generation === generation && params.owners.get(key) === owner;
+      owner.generation === generation &&
+      (params.isOwnerRegistered?.(key, owner) ?? params.owners.get(key) === owner);
     const isCurrent = () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent();
+    const isPublished = params.isOwnerPublished;
     return {
       catalogMode: owner.catalogMode,
       input,
@@ -464,6 +463,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       prepareInboundPluginRegistry: owner.provenance === "configured",
       inspectRegistry:
         owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
+      isPublished: isPublished ? () => isPublished(key, owner) : undefined,
       isGenerationCurrent,
       retirementSignal: capturePreparedModelRuntimeGeneration(owner),
       isBuildCurrent: params.isBuildCurrent ?? isCurrent,
@@ -487,15 +487,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner,
     };
   });
-  const groups = new Map<PreparedModelRuntimeOwner["catalogMode"], typeof candidates>();
-  for (const candidate of candidates) {
-    const group = groups.get(candidate.catalogMode);
-    if (group) {
-      group.push(candidate);
-    } else {
-      groups.set(candidate.catalogMode, [candidate]);
-    }
-  }
+  const groups = groupBuildCandidates(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
   const publishCandidate = (candidate: (typeof candidates)[number]) => {
     if (!candidate.isCurrent()) {
@@ -504,6 +496,11 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     const result = results.get(candidate.owner);
     if (!result || candidate.owner.snapshot === result.snapshot) {
       return;
+    }
+    if (captureRemoteModelCatalogStartupSnapshot() !== catalogGeneration) {
+      throw new PreparedModelRuntimePublicationSupersededError(
+        "Accepted model catalog changed during runtime preparation",
+      );
     }
     publishPreparedPluginGeneration(candidate.owner, result.pluginGeneration);
     const snapshot = publishPreparedModelRuntimeOwnerSnapshot(candidate.owner, result.snapshot);
@@ -530,85 +527,62 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     },
   };
   try {
-    while (true) {
-      const attempt = candidates.filter(
+    // Auth events can touch live and static owners together. Build mode groups in sequence
+    // so one mutation cannot reintroduce broad plugin/catalog fanout on constrained hosts.
+    for (const [catalogMode, group] of groups) {
+      const currentGroup = group.filter(
         (candidate) => candidate.isEligible() && !results.has(candidate.owner),
       );
-      if (attempt.length === 0) {
-        break;
+      if (currentGroup.length === 0) {
+        continue;
       }
-      try {
-        // Auth events can touch live and static owners together. Build mode groups in sequence
-        // so one mutation cannot reintroduce broad plugin/catalog fanout on constrained hosts.
-        for (const [catalogMode, group] of groups) {
-          const currentGroup = group.filter(
-            (candidate) => candidate.isEligible() && !results.has(candidate.owner),
-          );
-          if (currentGroup.length === 0) {
-            continue;
-          }
-          const build = startSerializedSnapshotBuildBatch(
-            currentGroup,
-            params.agentBuildCompletions,
-            params.buildTimeoutMs,
-            catalogMode,
-            params.onBuildStats,
-            params.pluginMetadataSnapshot,
-            params.includeCredentialProviders,
-            params.progress
-              ? {
-                  onStage: params.progress.onStage,
-                  onPrepared: (input, result) => {
-                    const candidate = currentGroup.find((entry) => entry.input === input)!;
-                    results.set(candidate.owner, result);
-                    publishCandidate(candidate);
-                    params.progress!.onPublished();
-                  },
-                }
-              : undefined,
-            params.acquisitionSignal,
-          );
-          for (const candidate of currentGroup) {
-            if (params.registerEntriesAfterBuildStart === true) {
-              // Pending owners become visible before awaited preparation; auth replay follows
-              // the explicit credential-capture boundary rather than promise scheduling.
-              const previous = params.owners.get(candidate.key);
-              params.owners.set(candidate.key, candidate.owner);
-              if (previous && previous !== candidate.owner) {
-                retirePreparedModelRuntimeGeneration(previous);
-                releasePreparedPluginPublication(previous);
-              }
-              candidate.markRegistered();
+      const build = startSerializedSnapshotBuildBatch(
+        currentGroup,
+        params.agentBuildCompletions,
+        params.buildTimeoutMs,
+        catalogMode,
+        params.onBuildStats,
+        params.pluginMetadataSnapshot,
+        params.includeCredentialProviders,
+        params.progress
+          ? {
+              onStage: params.progress.onStage,
+              onPrepared: (input, result) => {
+                const candidate = currentGroup.find((entry) => entry.input === input)!;
+                results.set(candidate.owner, result);
+                publishCandidate(candidate);
+                params.progress!.onPublished();
+              },
             }
-            const completion = params.agentBuildCompletions.get(candidate.input.agentDir)!;
-            candidate.owner.buildCompletion = completion;
-            void completion.then(() => {
-              if (candidate.owner.buildCompletion === completion) {
-                candidate.owner.buildCompletion = undefined;
-              }
-            });
+          : undefined,
+        params.acquisitionSignal,
+        params.providerDiscoveryTimeoutMs,
+      );
+      for (const candidate of currentGroup) {
+        if (params.registerEntriesAfterBuildStart === true) {
+          // Pending owners become visible before awaited preparation; auth replay follows
+          // the explicit credential-capture boundary rather than promise scheduling.
+          const previous = params.owners.get(candidate.key);
+          params.owners.set(candidate.key, candidate.owner);
+          if (previous && previous !== candidate.owner) {
+            retirePreparedModelRuntimeGeneration(previous);
+            releasePreparedPluginPublication(previous);
           }
-          const built = await build.pending;
-          for (const [index, candidate] of currentGroup.entries()) {
-            if (!results.has(candidate.owner)) {
-              results.set(candidate.owner, built[index]!);
-            }
+          candidate.markRegistered();
+        }
+        const completion = params.agentBuildCompletions.get(candidate.input.agentDir)!;
+        candidate.owner.buildCompletion = completion;
+        void completion.then(() => {
+          if (candidate.owner.buildCompletion === completion) {
+            candidate.owner.buildCompletion = undefined;
           }
+        });
+      }
+      const built = await build.pending;
+      for (const [index, candidate] of currentGroup.entries()) {
+        if (!results.has(candidate.owner)) {
+          results.set(candidate.owner, built[index]!);
         }
-        break;
-      } catch (error) {
-        const refreshError = toStringifiedError(error);
-        const lostCandidate = attempt.some((candidate) => !candidate.isCurrent());
-        if (
-          settleSingleOwner ||
-          !(refreshError instanceof PreparedModelRuntimePublicationSupersededError) ||
-          !(params.isPublicationCurrent?.() ?? true) ||
-          !lostCandidate
-        ) {
-          throw refreshError;
-        }
-        // Supersession belongs to one owner generation. Retry only still-current siblings so
-        // an agent-local mutation cannot discard an inherited-auth refresh built for others.
       }
     }
     for (const candidate of candidates) {
@@ -657,6 +631,7 @@ export async function publishModelRuntimeSnapshot(
   catalogMode: PreparedModelRuntimeCatalogMode = existing?.catalogMode ?? "live",
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+  providerDiscoveryTimeoutMs?: number,
 ): Promise<PreparedModelRuntimeSnapshot> {
   const key = ownerKey(input);
   const owner = prepareModelRuntimeOwner(input, provenance, catalogMode, existing);
@@ -675,6 +650,7 @@ export async function publishModelRuntimeSnapshot(
       registerEntriesAfterBuildStart: true,
       selectPluginGeneration: () => reusablePluginGeneration,
       pluginMetadataSnapshot,
+      providerDiscoveryTimeoutMs,
     },
     {
       published: (isGenerationCurrent) => {

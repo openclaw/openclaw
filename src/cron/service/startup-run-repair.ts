@@ -4,11 +4,10 @@ import { resolveCronCompletionStatus } from "../completion-status.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -37,7 +36,6 @@ export function markInterruptedStartupRun(params: {
   taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
-  recoverInterruptedOneShot?: boolean;
   deferredNotifications: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
@@ -87,6 +85,10 @@ export function markInterruptedStartupRun(params: {
       "cron: auto-disabled interrupted job after consecutive run failures",
     );
   }
+  // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
+  if (job.schedule.kind === "at" && replacementAtMs === undefined) {
+    job.enabled = false;
+  }
   finalizeCronFailureNotifications(params.state, {
     job,
     alertConfig,
@@ -99,16 +101,6 @@ export function markInterruptedStartupRun(params: {
     autoDisableNotificationOwnsFailure,
     deferredNotifications: params.deferredNotifications,
   });
-
-  // Live owner reclamation consumes an already-started one-shot. Only startup
-  // recovery may replay it; an operator's distinct replacement stays scheduled.
-  if (
-    job.schedule.kind === "at" &&
-    replacementAtMs === undefined &&
-    !params.recoverInterruptedOneShot
-  ) {
-    job.enabled = false;
-  }
 
   return {
     jobId: job.id,
@@ -248,7 +240,7 @@ export function restoreFinalizedStartupRun(params: {
   }
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },
-    "cron: restored finalized task-ledger run on startup",
+    "cron: restored finalized run history on startup",
   );
   return {
     shouldDelete,

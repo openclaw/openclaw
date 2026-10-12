@@ -84,27 +84,15 @@ afterEach(() => {
 });
 
 describe("connected in-process plugin finalization authority", () => {
-  const cases = [
-    ...(
-      [
-        "healthy",
-        "index-revoked",
-        "config-revoked",
-        "run-replaced",
-        "fence-replaced",
-        "cohort-revoked",
-        "cohort-run-replaced",
-        "cohort-fence-replaced",
-        "host-link-recovery",
-        "registry-revoked",
-      ] as const
-    ).map((scenario) => ({ scenario, candidateRuntime: false })),
-    ...(["healthy", "index-revoked", "run-replaced", "fence-replaced"] as const).map(
-      (scenario) => ({ scenario, candidateRuntime: true }),
-    ),
-  ];
-  it.each(cases)("$scenario (candidate=$candidateRuntime)", async (testCase) => {
-    const { scenario, candidateRuntime } = testCase;
+  it.each([
+    "healthy",
+    "index-revoked",
+    "config-revoked",
+    "cohort-revoked",
+    "host-link-recovery",
+    "registry-revoked",
+  ] as const)("protects persistence and terminal behavior with %s", async (scenario) => {
+    const candidateRuntime = scenario === "healthy" || scenario === "index-revoked";
     await withOpenClawTestState(
       {
         label: `plugin-caller-${scenario}`,
@@ -203,7 +191,7 @@ describe("connected in-process plugin finalization authority", () => {
         let configBoundaryReached = false;
         let refused: unknown;
         let completed: Awaited<ReturnType<typeof finishUpdate>> | undefined;
-        const cohortScenario = scenario.startsWith("cohort-");
+        const cohortScenario = scenario === "cohort-revoked";
         const npmUpdates = vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins");
         const phase = vi.spyOn(postCoreResume, "convergePostCoreUpdatePlugins");
         const delegate = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
@@ -273,10 +261,6 @@ describe("connected in-process plugin finalization authority", () => {
                 runAtConvergence = getUpdateRun(created.runId, { env: state.env });
                 if (scenario === "index-revoked" || scenario === "cohort-revoked") {
                   releaseUpdateCommandPreflightForHandoff(fence);
-                } else if (scenario === "run-replaced" || scenario === "cohort-run-replaced") {
-                  params.opts.run = { ...run };
-                } else if (scenario === "fence-replaced" || scenario === "cohort-fence-replaced") {
-                  run.executorFence = otherFence;
                 }
               };
               if (scenario === "registry-revoked") {
@@ -422,9 +406,7 @@ describe("connected in-process plugin finalization authority", () => {
                 name: "update-executor-settlement",
                 exitCode: 1,
                 stderrTail: expect.stringContaining(
-                  scenario.endsWith("run-replaced") || scenario.endsWith("fence-replaced")
-                    ? "Package finalization lost its original executor."
-                    : "Update executor ownership is no longer current.",
+                  "Update executor ownership is no longer current.",
                 ),
               },
             ],

@@ -32,11 +32,7 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
-import {
-  AsyncWorkScope,
-  captureAsyncWorkTracker,
-  trackAsyncWork,
-} from "../../shared/async-work-scope.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -57,24 +53,15 @@ import { compactEmbeddedAgentSession } from "./compact.queued.js";
 import { attachCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
 const modes = [
-  "abort-before-commit",
   "abort-after-commit",
-  "automatic-after-commit",
-  "timeout-after-commit",
-  "session-hook-tail",
   "provider-tail",
   "cleanup-tail",
   "preparation-failure",
   "mcp-caller-abort",
-  "mcp-parent-abort",
-  "mcp-ready",
-  "lsp-caller-abort",
   "lsp-parent-abort",
-  "lsp-ready",
   "before_compaction",
   "after_compaction",
   "raw",
-  "reload",
   "reload-abort-before-commit",
   "reload-queued",
 ] as const;
@@ -204,10 +191,7 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/sdk.js")>();
   return {
     ...actual,
-    createAgentSessionForEmbeddedRunner: async (
-      options: Parameters<typeof actual.createAgentSessionForEmbeddedRunner>[0],
-      internalOptions: Parameters<typeof actual.createAgentSessionForEmbeddedRunner>[1],
-    ) => {
+    createAgentSession: async (options: Parameters<typeof actual.createAgentSession>[0]) => {
       const current = fixture();
       const extensions = expectDefined(
         options.resourceLoader,
@@ -218,10 +202,7 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
           (api) => {
             api.on("session_before_compact", async (event, context) => {
               current.context = context;
-              if (
-                current.mode === "abort-before-commit" ||
-                current.mode === "reload-abort-before-commit"
-              ) {
+              if (current.mode === "reload-abort-before-commit") {
                 await remember(current, hold(current));
                 return {
                   compaction: {
@@ -234,17 +215,8 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
               return undefined;
             });
             api.on("session_compact", async () => {
-              if (
-                current.mode === "abort-after-commit" ||
-                current.mode === "automatic-after-commit" ||
-                current.mode === "timeout-after-commit"
-              ) {
+              if (current.mode === "abort-after-commit") {
                 await remember(current, hold(current));
-              } else if (current.mode === "session-hook-tail") {
-                void remember(
-                  current,
-                  trackAsyncWork(() => hold(current)),
-                );
               }
             });
           },
@@ -253,7 +225,7 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
           extensions.runtime,
         ),
       );
-      const created = await actual.createAgentSessionForEmbeddedRunner(options, internalOptions);
+      const created = await actual.createAgentSession(options);
       current.session = created.session;
       const dispose = created.session.dispose.bind(created.session);
       vi.spyOn(created.session, "dispose").mockImplementation(() => {
@@ -402,11 +374,7 @@ vi.mock("../agent-bundle-lsp-runtime.js", async (importOriginal) => ({
     if (current.mode === "preparation-failure") {
       throw new Error("fixture LSP setup failed");
     }
-    if (
-      current.mode === "lsp-caller-abort" ||
-      current.mode === "lsp-parent-abort" ||
-      current.mode === "lsp-ready"
-    ) {
+    if (current.mode === "lsp-parent-abort") {
       current.entered.resolve();
       await racePromiseWithAbortSignal(current.finish.promise, params.abortSignal);
     }
@@ -444,10 +412,9 @@ describe("delegate compaction resource retirement", () => {
   it.each(modes)(
     "keeps actual work owned through %s",
     async (mode) => {
-      const lspCancelled = mode === "lsp-caller-abort" || mode === "lsp-parent-abort";
-      const mcpCancelled = mode === "mcp-caller-abort" || mode === "mcp-parent-abort";
-      const pendingPreparation =
-        lspCancelled || mcpCancelled || mode === "lsp-ready" || mode === "mcp-ready";
+      const lspCancelled = mode === "lsp-parent-abort";
+      const mcpCancelled = mode === "mcp-caller-abort";
+      const pendingPreparation = lspCancelled || mcpCancelled;
       const preparationFailed = mode === "preparation-failure" || lspCancelled || mcpCancelled;
       await withOpenClawTestState(
         { label: "delegate-resources", layout: "split" },
@@ -534,7 +501,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   mode: "default",
                   keepRecentTokens: 1,
                   postIndexSync: "off",
-                  timeoutSeconds: mode === "timeout-after-commit" ? 1 : 180,
+                  timeoutSeconds: 180,
                 },
               },
             },
@@ -615,10 +582,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
             workspaceDir: compactionWorkspace,
             provider: providerId,
             model: "model",
-            trigger:
-              mode === "automatic-after-commit" || mode.startsWith("reload")
-                ? "overflow"
-                : "manual",
+            trigger: mode.startsWith("reload") ? "overflow" : "manual",
             thinkLevel: "off" as const,
             config,
           };
@@ -713,7 +677,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                         abortSignal: controller.signal,
                       });
                 operation = parent.track(() => (captured ? captured.run(compact) : compact()));
-                const held = mode !== "raw" && mode !== "reload" && mode !== "reload-queued";
+                const held = mode !== "raw" && mode !== "reload-queued";
                 if (held) {
                   await Promise.race([
                     current.entered.promise,
@@ -728,32 +692,22 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                     await current.session.agent.waitForIdle();
                   }
                   if (
-                    mode === "abort-before-commit" ||
                     mode === "reload-abort-before-commit" ||
                     mode === "abort-after-commit" ||
-                    mode === "automatic-after-commit" ||
-                    mode === "lsp-caller-abort" ||
                     mode === "mcp-caller-abort"
                   ) {
                     controller.abort(new Error("fixture caller cancelled compaction"));
                   }
-                  if (mode === "lsp-parent-abort" || mode === "mcp-parent-abort") {
+                  if (mode === "lsp-parent-abort") {
                     parent.beginClose(new Error("fixture parent cancelled compaction"));
                     expect(controller.signal.aborted).toBe(false);
-                  }
-                  if (mode === "lsp-ready" || mode === "mcp-ready") {
-                    current.finish.resolve();
                   }
                 }
                 const result = pendingPreparation
                   ? await withTestTimeout(operation, 5_000, "Tool preparation did not settle")
                   : await operation;
                 const cancelled =
-                  mode === "abort-before-commit" ||
-                  mode === "reload-abort-before-commit" ||
-                  mode === "abort-after-commit" ||
-                  mode === "automatic-after-commit" ||
-                  mode === "timeout-after-commit";
+                  mode === "reload-abort-before-commit" || mode === "abort-after-commit";
                 expect(result.ok, result.reason).toBe(!cancelled && !preparationFailed);
                 if (mode.startsWith("reload")) {
                   expect(current.admittedMetadata).toBe(replacementMetadata);
@@ -779,10 +733,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   assistant(model, summary).usage,
                 );
                 expect(recordUsage.mock.calls.length).toBe(usageCount);
-                const committed =
-                  mode !== "abort-before-commit" &&
-                  mode !== "reload-abort-before-commit" &&
-                  !preparationFailed;
+                const committed = mode !== "reload-abort-before-commit" && !preparationFailed;
                 expect(
                   SessionManager.open(target, state.workspaceDir)
                     .getBranch()

@@ -5,10 +5,6 @@ import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml", "image/x-icon"]);
 type PluginIconAuthSource = Parameters<typeof resolveControlUiAuthCandidates>[0];
 
-function normalizeMimeType(contentType: string | null): string {
-  return contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-}
-
 type FetchProxiedIconParams = {
   auth: PluginIconAuthSource;
   authCandidates?: readonly string[];
@@ -59,7 +55,8 @@ export async function fetchProxiedIconBlobUrl(
       }
       return null;
     }
-    const contentType = normalizeMimeType(response.headers.get("content-type"));
+    const contentType =
+      response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
     if (
       !ALLOWED_PLUGIN_ICON_MIME_TYPES.has(contentType) ||
       (svgOnly && contentType !== "image/svg+xml")
@@ -80,12 +77,10 @@ export async function fetchProxiedIconBlobUrl(
 export function fetchPluginIconBlobUrl(
   params: FetchProxiedIconParams & { pluginId: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "pluginIcon",
-    params.resourceBasePath,
-    params.pluginId,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("pluginIcon", params.resourceBasePath, params.pluginId),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
 export function fetchPluginActivityIconBlobUrl(
@@ -103,23 +98,19 @@ export function fetchPluginActivityIconBlobUrl(
 export function fetchCatalogIconBlobUrl(
   params: FetchProxiedIconParams & { iconUrl: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "catalogIcon",
-    params.resourceBasePath,
-    params.iconUrl,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("catalogIcon", params.resourceBasePath, params.iconUrl),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
 export function fetchLinkFaviconBlobUrl(
   params: FetchProxiedIconParams & { hostname: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "linkFavicon",
-    params.resourceBasePath,
-    params.hostname,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("linkFavicon", params.resourceBasePath, params.hostname),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
 export type PluginThemeArtworkFetchParams = { url: string } & Partial<FetchProxiedIconParams>;

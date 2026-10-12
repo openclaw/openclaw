@@ -7,12 +7,16 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 
 export type AgentRunModel = { provider: string; model: string };
 
+export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
+
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   /** Trusted refusal fact consumed only by this run's existing terminal mutation. */
   providerReviewTerminal?: import("../sessions/provider-review-terminal.js").ProviderReviewTerminalFact;
   /** Queued reply delivery, rather than runtime execution, owns chat completion. */
   completionSource?: "reply-dispatch";
+  /** Retained background work cannot add automatic delivery to a private run. */
+  sessionEventDelivery?: false;
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
@@ -22,6 +26,8 @@ export type AgentRunContext = {
   lifecycleGeneration?: string;
   /** Producer-owned start captured from this run's accepted lifecycle event. */
   lifecycleStartedAt?: number;
+  /** Shared with captured routing so terminal publication survives execution cleanup. */
+  eventState?: AgentRunEventState;
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
@@ -41,6 +47,18 @@ export type AgentRunContext = {
   cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
+  /** Bounded presentation facts from this registration's accepted events; never authority. */
+  executionActivity?: {
+    tools: Array<{ id: string; name: string }>;
+    pendingApprovalIds: string[];
+    approvalOverflow?: true;
+    execution?: {
+      state: "running" | "waiting" | "unknown";
+      sourceId?: string;
+      id?: string;
+      wait?: "approval" | "user_input" | "agent_messages" | "children" | "external";
+    };
+  };
   /** Timestamp of last activity (updated on every emitAgentEvent). */
   lastActiveAt?: number;
   /** Exact approval authority owned by this operational execution. */

@@ -25,7 +25,7 @@ export function resolveApprovalApprovers(params: {
     return explicit;
   }
 
-  const inferred = dedupeDefined([
+  return dedupeDefined([
     ...(params.allowFrom ?? []).map((entry) => params.normalizeApprover(entry)),
     ...(params.extraAllowFrom ?? []).map((entry) => params.normalizeApprover(entry)),
     ...(params.defaultTo?.trim()
@@ -36,5 +36,4 @@ export function resolveApprovalApprovers(params: {
         ]
       : []),
   ]);
-  return inferred;
 }

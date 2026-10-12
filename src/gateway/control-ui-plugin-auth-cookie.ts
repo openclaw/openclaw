@@ -83,12 +83,7 @@ function normalizeCookiePath(path: string): string | undefined {
   ) {
     return undefined;
   }
-  try {
-    const normalized = new URL(path, "http://localhost").pathname;
-    return normalized === path ? normalized : undefined;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(path, "http://localhost")?.pathname === path ? path : undefined;
 }
 
 function createControlUiPluginAuthCookie(
@@ -274,22 +269,15 @@ export function respondControlUiPluginAuthCookieProbe(
     return false;
   }
   const targetOrigin = url.searchParams.get(CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY);
-  let validTargetOrigin = false;
-  if (targetOrigin) {
-    try {
-      const parsedOrigin = new URL(targetOrigin);
-      validTargetOrigin =
-        parsedOrigin.origin === targetOrigin &&
-        (parsedOrigin.protocol === "https:" || parsedOrigin.protocol === "http:");
-    } catch {
-      validTargetOrigin = false;
-    }
-  }
+  const parsedOrigin = targetOrigin ? URL.parse(targetOrigin) : null;
+  const validTargetOrigin =
+    parsedOrigin?.origin === targetOrigin &&
+    (parsedOrigin?.protocol === "https:" || parsedOrigin?.protocol === "http:");
   if (!/^[a-zA-Z0-9_-]{16,128}$/.test(nonce) || !validTargetOrigin) {
     res.statusCode = 400;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Invalid plugin frame auth probe");
+    res.end("Invalid plugin frame auth check");
     return true;
   }
   res.statusCode = 200;

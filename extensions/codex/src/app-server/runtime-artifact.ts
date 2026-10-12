@@ -1,10 +1,11 @@
 /** Local executable or configured-service identity for verified Codex turns. */
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside, sha256File } from "openclaw/plugin-sdk/file-access-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { resolveWindowsExecutablePath } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -84,15 +85,6 @@ export type CodexAppServerRuntimeArtifactCapture =
       contentFingerprint: string;
     }>;
 
-type StableBigIntFileStat = Readonly<{
-  dev: bigint;
-  ino: bigint;
-  mode: bigint;
-  size: bigint;
-  mtimeNs: bigint;
-  ctimeNs: bigint;
-}>;
-
 type ArtifactHashBudget = {
   fileCount: number;
   totalBytes: bigint;
@@ -102,11 +94,10 @@ function getRuntimeArtifactBindings(): WeakMap<
   CodexAppServerClient,
   AgentHarnessRuntimeArtifactBinding
 > {
-  const globalState = globalThis as typeof globalThis & {
-    [ARTIFACT_BINDINGS_SYMBOL]?: WeakMap<CodexAppServerClient, AgentHarnessRuntimeArtifactBinding>;
-  };
-  globalState[ARTIFACT_BINDINGS_SYMBOL] ??= new WeakMap();
-  return globalState[ARTIFACT_BINDINGS_SYMBOL];
+  return resolveGlobalSingleton(
+    ARTIFACT_BINDINGS_SYMBOL,
+    () => new WeakMap<CodexAppServerClient, AgentHarnessRuntimeArtifactBinding>(),
+  );
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -122,19 +113,10 @@ function compareArtifactNames(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function normalizeRelativePath(filePath: string): string {
-  return filePath.split(path.sep).join("/");
-}
+const ARTIFACT_STAT_FIELDS = ["dev", "ino", "mode", "size", "mtimeNs", "ctimeNs"] as const;
 
-function sameOpenedFile(left: StableBigIntFileStat, right: StableBigIntFileStat): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mode === right.mode &&
-    left.size === right.size &&
-    left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
-  );
+function sameOpenedFile(left: BigIntStats, right: BigIntStats): boolean {
+  return ARTIFACT_STAT_FIELDS.every((field) => left[field] === right[field]);
 }
 
 async function readRegularFileFingerprint(params: {
@@ -213,7 +195,7 @@ async function listPackageFiles(params: {
       if (!entry.isFile()) {
         throw new Error(`Codex runtime artifact contains an unsupported entry: ${entryPath}`);
       }
-      files.push(normalizeRelativePath(path.relative(params.rootPath, entryPath)));
+      files.push(path.relative(params.rootPath, entryPath).split(path.sep).join("/"));
     }
   };
   await visit(params.rootPath, 0);
@@ -305,18 +287,15 @@ function attestNodeOptions(value: string): NodeOptionsAttestationResult {
     ) {
       continue;
     }
-    if (flag === "--dns-result-order") {
-      const order = inlineValue ?? tokens[++index];
-      if (order && SAFE_NODE_OPTIONS_DNS_RESULT_ORDERS.has(order)) {
-        continue;
-      }
+    const dnsOrder = flag === "--dns-result-order";
+    if (!dnsOrder && !SAFE_NODE_OPTIONS_NUMERIC_FLAGS.has(flag)) {
       return { ok: false, option: flag };
     }
-    if (!SAFE_NODE_OPTIONS_NUMERIC_FLAGS.has(flag)) {
-      return { ok: false, option: flag };
-    }
-    const numericValue = inlineValue ?? tokens[++index];
-    if (!numericValue || !/^\d+$/u.test(numericValue)) {
+    const argument = inlineValue ?? tokens[++index];
+    if (
+      !argument ||
+      !(dnsOrder ? SAFE_NODE_OPTIONS_DNS_RESULT_ORDERS.has(argument) : /^\d+$/u.test(argument))
+    ) {
       return { ok: false, option: flag };
     }
   }
@@ -641,14 +620,13 @@ function validateFilesystemDescriptorShape(descriptor: CodexRuntimeFilesystemDes
   ) {
     throw new Error("Invalid Codex runtime artifact descriptor");
   }
-  if (descriptor.packageRoot) {
-    if (
-      !isBoundedPath(descriptor.packageRoot) ||
+  if (
+    descriptor.packageRoot &&
+    (!isBoundedPath(descriptor.packageRoot) ||
       path.dirname(path.dirname(descriptor.nativePath)) !== descriptor.packageRoot ||
-      path.basename(path.dirname(descriptor.nativePath)) !== "bin"
-    ) {
-      throw new Error("Invalid Codex runtime package descriptor");
-    }
+      path.basename(path.dirname(descriptor.nativePath)) !== "bin")
+  ) {
+    throw new Error("Invalid Codex runtime package descriptor");
   }
   if (descriptor.codeModeHostPath && !isBoundedPath(descriptor.codeModeHostPath)) {
     throw new Error("Invalid Codex code-mode host artifact descriptor");
@@ -802,11 +780,10 @@ export async function finalizeCodexAppServerRuntimeArtifact(params: {
       : {}),
   };
   validateArtifactDescriptorShape(descriptor);
-  const binding = Object.freeze({
+  return Object.freeze({
     id: encodeArtifactId(descriptor),
     fingerprint: fingerprintBinding(descriptor, afterContentFingerprint),
   });
-  return binding;
 }
 
 /** Checks current pre-spawn bytes and selection against a previously minted binding. */

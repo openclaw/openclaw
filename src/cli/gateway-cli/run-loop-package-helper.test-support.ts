@@ -5,10 +5,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import { withTimeout } from "../../infra/fs-safe.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createManagedServiceBoundaryCleanup } from "../../infra/update-managed-service-handoff-process.test-support.js";
 import { updateExecutorEntrypoints } from "../cli-entrypoint.test-support.js";
@@ -114,7 +114,6 @@ export async function startPackageLifecycleStopFixture(params: {
       });
     },
     async expectHostedPending() {
-      expect(fixtures.captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
       await expect(host.request("stop", () => {})).resolves.toMatchObject({ ok: false });
       expect(fixtures.hostedStopPrepare).toHaveBeenCalledOnce();
       expect(fixtures.captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
@@ -224,13 +223,10 @@ export async function observeFixtureHelper(
       if (!closed) {
         throw new Error("fixture helper did not launch");
       }
-      await withTimeout(closed, 15000);
+      await closed;
     },
     async close() {
-      const outcomes = await Promise.allSettled([
-        cleanup(),
-        ...(closed ? [withTimeout(closed, 15000)] : []),
-      ]);
+      const outcomes = await Promise.allSettled([cleanup(), ...(closed ? [closed] : [])]);
       const failures = outcomes.flatMap((outcome) =>
         outcome.status === "rejected" ? [outcome.reason] : [],
       );
@@ -250,7 +246,11 @@ export async function observeFixtureHelper(
   };
 }
 
-export async function writePackageLifecycleFixture(root: string, control: string) {
+export async function writePackageLifecycleFixture(
+  root: string,
+  control: string,
+  receiptEndpoint: string,
+) {
   const bootstrap = `
         import fs from "node:fs/promises";
         import path from "node:path";
@@ -308,9 +308,11 @@ export async function writePackageLifecycleFixture(root: string, control: string
                   await fs.writeFile(path.join(candidate, "scripts", "preinstall-package-manager-warning.mjs"), ${JSON.stringify(`
                     import fs from "node:fs/promises";
                     import path from "node:path";
+                    ${fixtureReceiptClientSource(receiptEndpoint)}
                     const control = ${JSON.stringify(control)};
                     await fs.appendFile(path.join(control, "script-calls"), "preinstall\\n");
                     await fs.writeFile(path.join(control, "script-entered"), String(process.pid));
+                    sendReceipt(control, "script-entered");
                     while (!(await fs.access(path.join(control, "release-script")).then(() => true, () => false)))
                       await new Promise(resolve => setTimeout(resolve, 10));
                     await fs.writeFile(path.join(control, "script-settled"), "writer finished");

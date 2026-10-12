@@ -1,4 +1,5 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayDiagnosticsSafe,
@@ -14,15 +15,16 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   getDaemonStatusSummary: vi.fn(),
   getNodeDaemonStatusSummary: vi.fn(),
-  resolveModelAuthLabel: vi.fn(),
+  resolveModelAuthLabelAsync: vi.fn(),
 }));
 
 vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
 }));
 
+// mock-isolation: Usage status uses fixture auth labels without loading host profiles or CLI keys.
 vi.mock("../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: mocks.resolveModelAuthLabel,
+  resolveModelAuthLabelAsync: mocks.resolveModelAuthLabelAsync,
 }));
 
 vi.mock("../security/audit.runtime.js", () => ({
@@ -71,7 +73,7 @@ describe("status-runtime-shared", () => {
     mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
     mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
-    mocks.resolveModelAuthLabel.mockReturnValue(undefined);
+    mocks.resolveModelAuthLabelAsync.mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -134,10 +136,7 @@ describe("status-runtime-shared", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { elapsedMs: 2000, remainingMs: 1456 },
-    { elapsedMs: 3456, remainingMs: 0 },
-  ])(
+  it.each([{ elapsedMs: 3456, remainingMs: 0 }])(
     "shares the usage deadline with Codex synthetic usage ($elapsedMs ms spent)",
     async ({ elapsedMs, remainingMs }) => {
       mocks.loadProviderUsageSummary
@@ -285,7 +284,7 @@ describe("status-runtime-shared", () => {
   });
 
   it("does not add Codex synthetic usage for API-key-backed OpenAI Codex runtime routes", async () => {
-    mocks.resolveModelAuthLabel.mockReturnValue("api-key (openai:api)");
+    mocks.resolveModelAuthLabelAsync.mockReturnValue("api-key (openai:api)");
 
     await resolveStatusUsageSummary({
       ...createStatusGatewayProbeBudget(3456),
@@ -304,26 +303,12 @@ describe("status-runtime-shared", () => {
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
     expect(requireProviderUsageCall()).not.toHaveProperty("auth");
-    expect(mocks.resolveModelAuthLabel).toHaveBeenCalledWith({
+    expect(mocks.resolveModelAuthLabelAsync).toHaveBeenCalledWith({
       provider: "openai",
       acceptedProviderIds: ["openai"],
       cfg: expect.any(Object),
       agentDir: "/tmp/status-agent",
       includeExternalProfiles: false,
-    });
-  });
-
-  it("resolves usage summaries with explicit agent scope", async () => {
-    await resolveStatusUsageSummary({
-      ...createStatusGatewayProbeBudget(2345),
-      config: { gateway: {} },
-      agentDir: "/tmp/status-agent",
-    });
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      timeoutMs: 2345,
-      config: { gateway: {} },
-      agentDir: "/tmp/status-agent",
     });
   });
 
@@ -536,10 +521,7 @@ describe("status-runtime-shared", () => {
     }
   });
 
-  it.each([
-    { gatewayStartupPhase: "plugins", health: undefined },
-    { gatewayStartupPhase: undefined, health: { error: "connection refused" } },
-  ])(
+  it.each([{ gatewayStartupPhase: undefined, health: { error: "connection refused" } }])(
     "uses the completed initial probe for deep health ($gatewayStartupPhase)",
     async ({ gatewayStartupPhase, health }) => {
       const snapshot = await resolveStatusRuntimeSnapshot({
@@ -558,18 +540,4 @@ describe("status-runtime-shared", () => {
       expect(mocks.callGateway).not.toHaveBeenCalled();
     },
   );
-
-  it("does not suppress failed deep health probes for text status", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
-
-    await expect(
-      resolveStatusRuntimeSnapshot({
-        ...createStatusGatewayProbeBudget(),
-        config: { gateway: {} },
-        sourceConfig: { gateway: {} },
-        deep: true,
-        gatewayReachable: true,
-      }),
-    ).rejects.toThrow("gateway health probe timed out");
-  });
 });

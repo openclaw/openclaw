@@ -43,16 +43,10 @@ export function observeGatewayReconnects(
   listeners.add(listener);
   reconnectObservers.set(transport, listeners);
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.delete(listener) && listeners.size === 0) {
       reconnectObservers.delete(transport);
     }
   };
-}
-
-/** Internal connection provenance; raw event objects and payloads remain unchanged. */
-export function readGatewayEventConnectionEpoch(event: GatewayEvent): object | undefined {
-  return eventReceipts.get(event)?.epoch;
 }
 
 export function readGatewayEventReceipt(event: GatewayEvent): GatewayEventReceipt | undefined {
@@ -107,18 +101,6 @@ type GatewayClientTransportOptions = Pick<
   onClose?: (code: number, reason: string) => void;
 };
 
-function toGatewayEvent(event: unknown): GatewayEvent {
-  const record =
-    typeof event === "object" && event !== null ? (event as Record<string, unknown>) : {};
-  const eventName = typeof record.event === "string" ? record.event : "unknown";
-  return {
-    event: eventName,
-    payload: record.payload,
-    ...(typeof record.seq === "number" ? { seq: record.seq } : {}),
-    ...(record.stateVersion ? { stateVersion: record.stateVersion } : {}),
-  };
-}
-
 /** Connectable SDK transport backed by @openclaw/gateway-client. */
 export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private readonly eventsHub = new EventHub<GatewayEvent>({
@@ -153,8 +135,13 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
       let lastEvent: GatewayEvent | undefined;
       const client = new GatewayClient({
         ...this.options,
-        onEvent: (event: unknown) => {
-          const normalized = toGatewayEvent(event);
+        onEvent: ({ event, payload, seq, stateVersion }: GatewayEvent) => {
+          const normalized: GatewayEvent = {
+            event,
+            payload,
+            ...(seq !== undefined ? { seq } : {}),
+            ...(stateVersion ? { stateVersion } : {}),
+          };
           eventReceipts.set(normalized, { epoch: connectionEpoch, order: ++eventOrder });
           lastEvent = normalized;
           this.eventsHub.publish(normalized);

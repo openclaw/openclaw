@@ -1,8 +1,15 @@
 // Serves channel-owned conversation images without exposing media-store paths.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { getRuntimeConfig } from "../config/io.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionEntry,
+} from "../config/sessions/session-incognito-binding.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
@@ -24,7 +31,7 @@ type ChannelAvatarCacheEntry = {
   image: HttpImageRepresentation;
 };
 
-const channelAvatarCache = new Map<string, ChannelAvatarCacheEntry>();
+const channelAvatarCache = new LruCache<ChannelAvatarCacheEntry>(CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
 const channelAvatarLoads = new Map<
   string,
   {
@@ -33,7 +40,9 @@ const channelAvatarLoads = new Map<
   }
 >();
 
-const getSessionStoreModule = createLazyRuntimeModule(() => import("./session-utils-store.js"));
+const getSessionStoreModule = createLazyRuntimeModule(
+  () => import("./session-utils-store-worker.js"),
+);
 
 async function loadChannelAvatar(
   sessionKey: string,
@@ -43,10 +52,9 @@ async function loadChannelAvatar(
   if (loads) {
     loads.reference = reference;
   }
-  const cached = channelAvatarCache.get(sessionKey);
+  const cached = channelAvatarCache.peek(sessionKey);
   if (cached?.reference === reference) {
-    channelAvatarCache.delete(sessionKey);
-    channelAvatarCache.set(sessionKey, cached);
+    channelAvatarCache.get(sessionKey);
     return cached.image;
   }
   if (!loads) {
@@ -65,9 +73,7 @@ async function loadChannelAvatar(
       const image = await resolveHttpImageRepresentation(resolved.id, stored.buffer);
       // A superseded load may reply to its callers but must not replace the current avatar.
       if (image && sessionLoads.reference === reference) {
-        channelAvatarCache.delete(sessionKey);
         channelAvatarCache.set(sessionKey, { reference, image });
-        pruneMapToMaxSize(channelAvatarCache, CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
       }
       return image;
     })().finally(() => {
@@ -98,6 +104,26 @@ export async function handleChannelAvatarHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
+  const requestedKey = parsed.value;
+  const sessionKey = requestedKey
+    ? normalizeSessionKeyPreservingOpaquePeerIds(requestedKey)
+    : undefined;
+  let selected: Result<ReturnType<typeof captureIncognitoSessionSource>, unknown>;
+  let assertSourceCurrent = () => {};
+  try {
+    const source = sessionKey ? captureIncognitoSessionSource({ sessionKey }) : undefined;
+    if (sessionKey && source && !("kind" in source)) {
+      const claim = source.actor.sessions.captureCurrent(sessionKey);
+      assertSourceCurrent = () => {
+        source.admissionSignal?.throwIfAborted();
+        source.actor.assertReadable();
+        claim.assertCurrent();
+      };
+    }
+    selected = ok(source);
+  } catch (error) {
+    selected = err(error);
+  }
   const requestAuth = await authorizeControlUiSessionOwnerReadRequestOrReply({
     ...opts,
     req,
@@ -107,41 +133,63 @@ export async function handleChannelAvatarHttpRequest(
     return true;
   }
   requestAuth.assertCurrent();
-  if (!parsed.value) {
+  if (!selected.ok) {
+    throw selected.error;
+  }
+  const source = selected.value;
+  if (!requestedKey || !sessionKey) {
     res.setHeader("cache-control", "no-store");
     respondNotFound(res);
     return true;
   }
 
+  const serve = async (reference: string | undefined, assertCurrent: () => void) => {
+    assertCurrent();
+    if (!reference) {
+      res.setHeader("cache-control", "no-store");
+      respondNotFound(res);
+      return true;
+    }
+
+    let image: HttpImageRepresentation | undefined;
+    try {
+      image = await loadChannelAvatar(sessionKey, reference);
+    } catch {
+      // The media may have expired or been pruned after the session row was written.
+    }
+    assertCurrent();
+    if (!image) {
+      res.setHeader("cache-control", "no-store");
+      respondNotFound(res);
+      return true;
+    }
+    sendHttpImageResponse({ req, res, image, filename: "channel-avatar" });
+    return true;
+  };
+  if (source) {
+    const assertCurrent = () => {
+      requestAuth.assertCurrent();
+      assertSourceCurrent();
+    };
+    return withIncognitoSessionEntry(
+      source,
+      sessionKey,
+      assertCurrent,
+      (entry, assertReadCurrent) => serve(sessionDeliveryOrigin(entry)?.avatar, assertReadCurrent),
+    );
+  }
   let reference: string | undefined;
   try {
-    const { entry } = (await getSessionStoreModule()).loadGatewaySessionEntryReadOnly(
-      parsed.value,
-      { clone: false },
-    );
+    const { entry } = await (
+      await getSessionStoreModule()
+    ).loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: requestedKey,
+      assertActive: requestAuth.assertCurrent,
+    });
     reference = sessionDeliveryOrigin(entry)?.avatar;
   } catch {
     // Invalid or missing session keys are ordinary route misses.
   }
-  requestAuth.assertCurrent();
-  if (!reference) {
-    res.setHeader("cache-control", "no-store");
-    respondNotFound(res);
-    return true;
-  }
-
-  let image: HttpImageRepresentation | undefined;
-  try {
-    image = await loadChannelAvatar(parsed.value, reference);
-  } catch {
-    // The media may have expired or been pruned after the session row was written.
-  }
-  requestAuth.assertCurrent();
-  if (!image) {
-    res.setHeader("cache-control", "no-store");
-    respondNotFound(res);
-    return true;
-  }
-  sendHttpImageResponse({ req, res, image, filename: "channel-avatar" });
-  return true;
+  return serve(reference, requestAuth.assertCurrent);
 }

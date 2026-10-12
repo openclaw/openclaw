@@ -1,5 +1,3 @@
-// Public SDK data contracts for Gateway transport, runs, sessions, tools,
-// artifacts, tasks, environments, and normalized event streams.
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import type {
   ArtifactSummary as GatewayArtifactSummaryType,
@@ -12,7 +10,6 @@ import type {
   EnvironmentsListResult as GatewayEnvironmentsListResultType,
   SessionsCreateParams as GatewaySessionsCreateParamsType,
   SessionsSendParams as GatewaySessionsSendParamsType,
-  TaskSummary as GatewayTaskSummaryType,
   ToolsInvokeParams as GatewayToolsInvokeParamsType,
   ToolsInvokeResult as GatewayToolsInvokeResultType,
 } from "@openclaw/gateway-protocol";
@@ -27,11 +24,6 @@ export type {
   ArtifactSummary as GatewayArtifactSummary,
   EnvironmentsListResult as GatewayEnvironmentsListResult,
   EnvironmentSummary as GatewayEnvironmentSummary,
-  TaskSummary,
-  TasksCancelResult,
-  TasksGetResult,
-  TasksListParams,
-  TasksListResult,
   ToolsEffectiveParams,
   WorkerEnvironmentMetadata,
   WorkerEnvironmentState,
@@ -43,7 +35,6 @@ export type JsonObject = Record<string, unknown>;
 /** SDK request projection; additional GatewayClient lifecycle hooks stay client-owned. */
 export type GatewayRequestOptions = Pick<GatewayClientRequestOptions, "expectFinal" | "timeoutMs">;
 
-/** Raw event payload emitted by the Gateway transport. */
 export type GatewayEvent = {
   event: string;
   payload?: unknown;
@@ -51,7 +42,6 @@ export type GatewayEvent = {
   stateVersion?: unknown;
 };
 
-/** Minimal transport interface consumed by the OpenClaw SDK client. */
 export type OpenClawTransport = {
   request<T = unknown>(
     method: string,
@@ -62,7 +52,6 @@ export type OpenClawTransport = {
   close?(): Promise<void> | void;
 };
 
-/** Transport variant that requires an explicit connection step. */
 export type ConnectableOpenClawTransport = OpenClawTransport & {
   connect(): Promise<void>;
 };
@@ -151,10 +140,9 @@ export type ApprovalDecisionParams = {
   decision: "allow-once" | "allow-always" | "deny";
 };
 
-/** Terminal and non-terminal status values returned by Run.wait. */
 export type RunStatus = "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
 
-export type RunTimestamp = NonNullable<GatewayTaskSummaryType["createdAt"]>;
+export type RunTimestamp = number | string;
 
 export type SDKMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -195,15 +183,12 @@ export type SDKArtifactSummary = Omit<GatewayArtifactSummaryType, "type" | "titl
 /** Compatibility name retained for the SDK artifact projection. */
 export type ArtifactSummary = SDKArtifactSummary;
 
-type ArtifactScopeKey = "sessionKey" | "runId" | "taskId";
+type ArtifactScopeKey = "sessionKey" | "runId";
 type ScopedArtifactQuery<Key extends ArtifactScopeKey> = Omit<GatewayArtifactsListParamsType, Key> &
   Required<Pick<GatewayArtifactsListParamsType, Key>>;
 
 /** SDK query projection requiring at least one artifact ownership scope. */
-export type ArtifactQuery =
-  | ScopedArtifactQuery<"sessionKey">
-  | ScopedArtifactQuery<"runId">
-  | ScopedArtifactQuery<"taskId">;
+export type ArtifactQuery = ScopedArtifactQuery<"sessionKey"> | ScopedArtifactQuery<"runId">;
 
 export type SDKArtifactsListResult = Omit<GatewayArtifactsListResultType, "artifacts"> & {
   artifacts: SDKArtifactSummary[];
@@ -226,34 +211,26 @@ export type SDKArtifactsDownloadResult = Omit<GatewayArtifactsDownloadResultType
 /** Compatibility name retained for the SDK artifact download projection. */
 export type ArtifactsDownloadResult = SDKArtifactsDownloadResult;
 
-export type TaskStatus = GatewayTaskSummaryType["status"];
-
 export type SDKError = {
   code?: string;
   message: string;
   details?: unknown;
 };
 
-/** Parameters for direct tool invocation through the SDK. */
-type SDKToolInvokeParams = Omit<GatewayToolsInvokeParamsType, "name" | "conversationReadOrigin">;
+export type ToolInvokeParams = Omit<
+  GatewayToolsInvokeParamsType,
+  "name" | "conversationReadOrigin"
+>;
 
-/** Compatibility name retained for the SDK tool invocation projection. */
-export type ToolInvokeParams = SDKToolInvokeParams;
-
-type SDKToolInvokeResult = Omit<GatewayToolsInvokeResultType, "error"> & {
+export type ToolInvokeResult = Omit<GatewayToolsInvokeResultType, "error"> & {
   error?: SDKError;
 };
 
-/** Compatibility name retained for the SDK tool result projection. */
-export type ToolInvokeResult = SDKToolInvokeResult;
-
-/** Normalized result returned by Run.wait. */
 export type RunResult = {
   runId: string;
   status: RunStatus;
   sessionId?: string;
   sessionKey?: string;
-  taskId?: string;
   startedAt?: RunTimestamp;
   endedAt?: RunTimestamp;
   output?: {
@@ -271,7 +248,6 @@ export type RunResult = {
   raw?: unknown;
 };
 
-/** Stable SDK event type taxonomy derived from raw Gateway events. */
 export type OpenClawEventType =
   | "run.created"
   | "run.queued"
@@ -296,13 +272,11 @@ export type OpenClawEventType =
   | "session.created"
   | "session.updated"
   | "session.compacted"
-  | "task.updated"
   | "git.branch"
   | "git.diff"
   | "git.pr"
   | "raw";
 
-/** Normalized SDK event with common run/session/task metadata. */
 export type OpenClawEvent<TData = unknown> = {
   version: 1;
   id: string;
@@ -311,13 +285,11 @@ export type OpenClawEvent<TData = unknown> = {
   runId?: string;
   sessionId?: string;
   sessionKey?: string;
-  taskId?: string;
   agentId?: string;
   data: TData;
   raw?: GatewayEvent;
 };
 
-/** Parameters for creating an agent run. */
 export type AgentRunParams = {
   input: string;
   agentId?: string;
@@ -350,15 +322,12 @@ type SDKSessionCreateKeys =
   | "attachments";
 
 /** SDK session-create projection with transport-neutral attachment inputs. */
-type SDKSessionCreateParams = Omit<
+export type SessionCreateParams = Omit<
   Pick<GatewaySessionsCreateParamsType, SDKSessionCreateKeys>,
   "attachments"
 > & {
   attachments?: unknown[];
 };
-
-/** Compatibility name retained for the SDK session-create projection. */
-export type SessionCreateParams = SDKSessionCreateParams;
 
 type SDKSessionSendKeys =
   | "key"
@@ -369,15 +338,12 @@ type SDKSessionSendKeys =
   | "idempotencyKey";
 
 /** SDK session-send projection with transport-neutral attachment inputs. */
-type SDKSessionSendParams = Omit<
+export type SessionSendParams = Omit<
   Pick<GatewaySessionsSendParamsType, SDKSessionSendKeys>,
   "attachments"
 > & {
   attachments?: unknown[];
 };
-
-/** Compatibility name retained for the SDK session-send projection. */
-export type SessionSendParams = SDKSessionSendParams;
 
 export type SessionTarget = {
   key: string;

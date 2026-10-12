@@ -5,6 +5,7 @@ import { listAgentEntries, withAgentRosterFactsBatch } from "../agents/agent-sco
 import { resolveConfiguredTalkSpeechProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
+import { isConfigActivationValueEnabled } from "./gateway-startup-plugin-contracts.js";
 
 const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([
   "auto",
@@ -20,17 +21,6 @@ const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([
   "summaryModel",
   "timeoutMs",
 ]);
-
-/** Treats missing activation as enabled while honoring explicit false values. */
-function isConfigActivationValueEnabled(value: unknown): boolean {
-  if (value === false) {
-    return false;
-  }
-  if (isRecord(value) && value.enabled === false) {
-    return false;
-  }
-  return true;
-}
 
 /** Normalizes configured TTS provider ids for startup plugin selection. */
 function normalizeConfiguredSpeechProviderIdForStartup(value: unknown): string | undefined {
@@ -83,9 +73,7 @@ function addProviderIfEnabled(
 function findActivePersona(
   ttsConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const personaId = normalizeOptionalLowercaseString(
-    typeof ttsConfig.persona === "string" ? ttsConfig.persona : undefined,
-  );
+  const personaId = normalizeOptionalLowercaseString(ttsConfig.persona);
   if (!personaId || !isRecord(ttsConfig.personas)) {
     return undefined;
   }

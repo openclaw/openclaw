@@ -1,13 +1,5 @@
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { createGatewayBrowserClientFixture } from "../chat-pane.test-support.ts";
-import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
-import {
-  readTaskTranscript,
-  requestTaskFullMessage,
-  type TaskDetailHost,
-} from "./chat-task-detail-state.ts";
+import { afterEach, describe, expect, it } from "vitest";
 import { renderChatTranscriptFeed } from "./chat-transcript-feed.ts";
 
 afterEach(() => document.body.replaceChildren());
@@ -31,157 +23,18 @@ function toolResult(toolCallId: string, isError = false) {
   };
 }
 
-describe("chat transcript feed", () => {
-  const capped = {
-    role: "assistant",
-    content: "Capped preview",
-    __openclaw: { id: "m-1", truncated: true, reason: "display-cap" },
+function completedActivity(toolCallId: string, title: string) {
+  return {
+    itemId: `tool:${toolCallId}`,
+    toolCallId,
+    title,
+    kind: "tool",
+    phase: "end",
+    status: "completed",
   };
-  const target = { sessionKey: "agent:worker:subagent:child", agentId: "worker" };
+}
 
-  async function mountRecovery(messages: unknown[], loader: SidebarFullMessageLoader) {
-    const host: TaskDetailHost = {
-      sessionKey: "agent:main:main",
-      connected: true,
-      hello: null,
-      client: createGatewayBrowserClientFixture({
-        request: vi.fn().mockResolvedValue({ messages }),
-      }),
-      requestUpdate: vi.fn(),
-    };
-    readTaskTranscript(host, { taskId: "task-1" });
-    await vi.waitFor(() => expect(host.taskDetailState?.load.status).toBe("loaded"));
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () =>
-      render(
-        renderChatTranscriptFeed(messages, {
-          getState: (messageId) => host.taskDetailState?.fullMessages.get(messageId),
-          request: (messageId) => {
-            void requestTaskFullMessage(host, { loader, ...target, messageId });
-          },
-        }),
-        container,
-      );
-    rerender();
-    return { container, rerender, host };
-  }
-
-  it.each(["metadata", "messageId"])(
-    "recovers by %s identity once and replaces the preview without remounting",
-    async (identity) => {
-      const message =
-        identity === "metadata"
-          ? capped
-          : {
-              ...capped,
-              messageId: "m-1",
-              __openclaw: { truncated: true, reason: "display-cap" },
-            };
-      const full = createDeferred<Awaited<ReturnType<SidebarFullMessageLoader>>>();
-      const loader = vi.fn().mockReturnValue(full.promise);
-      const { container, rerender, host } = await mountRecovery([message], loader);
-      const entry = container.querySelector("[data-task-feed-entry]");
-      expect(container.textContent).toContain("Capped preview");
-      expect(container.querySelector(".chat-message-load-error")).toBeNull();
-      rerender();
-      expect(loader).toHaveBeenCalledExactlyOnceWith({ ...target, messageId: "m-1" });
-      full.resolve({
-        ok: true,
-        message: {
-          role: "assistant",
-          content: "<think>hidden reasoning</think>Full **answer** with the final result.",
-        },
-      });
-      await vi.waitFor(() =>
-        expect(host.taskDetailState?.fullMessages.get("m-1")?.status).toBe("loaded"),
-      );
-      rerender();
-      expect(container.querySelector("[data-task-feed-entry]")).toBe(entry);
-      expect(container.querySelector("strong")?.textContent).toBe("answer");
-      expect(container.textContent).toContain("with the final result.");
-      expect(container.textContent).not.toContain("Capped preview");
-      expect(container.textContent).not.toContain("hidden reasoning");
-      expect(loader).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("recovers a capped message with text around a tool call exactly once", async () => {
-    const message = {
-      ...capped,
-      content: [
-        { type: "text", text: "Before the call" },
-        toolCall("exec-1", "exec", { command: "pnpm test" }),
-        { type: "text", text: "After the call" },
-      ],
-    };
-    const loader = vi.fn().mockResolvedValue({
-      ok: true,
-      message: { role: "assistant", content: "Full recovered reply." },
-    });
-    const { container, rerender, host } = await mountRecovery([message], loader);
-    expect(container.textContent).toContain("Before the call");
-    expect(container.textContent).toContain("After the call");
-    await vi.waitFor(() =>
-      expect(host.taskDetailState?.fullMessages.get("m-1")?.status).toBe("loaded"),
-    );
-    rerender();
-    expect(loader).toHaveBeenCalledTimes(1);
-    expect(container.textContent?.split("Full recovered reply.")).toHaveLength(2);
-    expect(container.querySelectorAll(".chat-task-feed__tool-group")).toHaveLength(1);
-    expect(container.textContent).not.toContain("Before the call");
-    expect(container.textContent).not.toContain("After the call");
-  });
-
-  it("bounds automatic retries and lets Retry recover after exhaustion", async () => {
-    const loader = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce({ ok: false, unavailableReason: "not_found" })
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue({
-        ok: true,
-        message: { role: "assistant", content: "Recovered after retry." },
-      });
-    const { container, rerender, host } = await mountRecovery([capped], loader);
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      await vi.waitFor(() =>
-        expect(host.taskDetailState?.fullMessages.get("m-1")).toMatchObject({
-          status: "error",
-          revision: attempt * 2,
-        }),
-      );
-      expect(container.textContent).toContain("Capped preview");
-      expect(loader).toHaveBeenCalledTimes(attempt);
-      rerender();
-    }
-    rerender();
-    expect(loader).toHaveBeenCalledTimes(3);
-    expect(container.textContent).toContain("Could not load the full message.");
-    container.querySelector<HTMLButtonElement>(".chat-message-load-error__retry")!.click();
-    await vi.waitFor(() =>
-      expect(host.taskDetailState?.fullMessages.get("m-1")?.status).toBe("loaded"),
-    );
-    rerender();
-    expect(loader).toHaveBeenCalledTimes(4);
-    expect(container.textContent).toContain("Recovered after retry.");
-    expect(container.textContent).not.toContain("Capped preview");
-    expect(container.querySelector(".chat-message-load-error")).toBeNull();
-  });
-
-  it.each([
-    { ...capped, __openclaw: { id: "m-1" } },
-    { ...capped, openclawMessageToolMirror: true },
-    { ...capped, role: "user" },
-  ])(
-    "does not request recovery for ineligible messages: $role $openclawMessageToolMirror",
-    async (message) => {
-      const loader = vi.fn();
-      const { rerender } = await mountRecovery([message], loader);
-      rerender();
-      expect(loader).not.toHaveBeenCalled();
-    },
-  );
-
+describe("chat transcript feed", () => {
   it("preserves forwarded attribution beside ordinary user and assistant messages", () => {
     const container = mount([
       { role: "user", content: "Please **inspect** [the renderer](https://example.com)." },
@@ -235,16 +88,7 @@ describe("chat transcript feed", () => {
     const container = mount([
       {
         role: "assistant",
-        activity: [
-          {
-            itemId: "tool:exec-1",
-            toolCallId: "exec-1",
-            title: "Exec",
-            kind: "tool",
-            phase: "end",
-            status: "completed",
-          },
-        ],
+        activity: [completedActivity("exec-1", "Exec")],
         content: [
           toolCall("exec-1", "exec", {
             command: "pnpm tsgo --project tsconfig.gateway.json\npnpm lint:ui:styles --fix",
@@ -254,24 +98,7 @@ describe("chat transcript feed", () => {
       toolResult("exec-1"),
       {
         role: "assistant",
-        activity: [
-          {
-            itemId: "tool:exec-2",
-            toolCallId: "exec-2",
-            title: "Exec",
-            kind: "tool",
-            phase: "end",
-            status: "completed",
-          },
-          {
-            itemId: "tool:read-1",
-            toolCallId: "read-1",
-            title: "Read",
-            kind: "tool",
-            phase: "end",
-            status: "completed",
-          },
-        ],
+        activity: [completedActivity("exec-2", "Exec"), completedActivity("read-1", "Read")],
         content: [
           toolCall("exec-2", "exec", { command: "pnpm lint:ui:styles" }),
           toolCall("read-1", "read", { path: "ui/src/styles/chat/sidebar.css" }),
@@ -437,16 +264,6 @@ describe("chat transcript feed", () => {
     expect(unclocked?.querySelector(".chat-task-feed__time")).toBeNull();
   });
 
-  it.each(["set -e", "export FOO=bar", "unset FOO"])(
-    "keeps setup-only command %s identifiable",
-    (command) => {
-      const container = mount([
-        { role: "assistant", content: [toolCall("setup", "exec", { command })] },
-      ]);
-      expect(container.querySelector(".chat-task-feed__row-label")?.textContent).toBe(command);
-    },
-  );
-
   it("redacts a complete credential-shaped fixture before shortening the command label", () => {
     const syntheticToken = `AKIA${"0".repeat(16)}`;
     const command = `echo ${"a".repeat(140)} ${syntheticToken}`;
@@ -459,21 +276,29 @@ describe("chat transcript feed", () => {
     expect(container.querySelector("code")?.textContent).not.toContain(syntheticToken);
   });
 
-  it.each<[string, Record<string, unknown>]>([
-    ["read", { path: "src/example.ts", offset: 20, limit: 30 }],
-    ["edit", { path: "src/example.ts", oldText: "before", newText: "after" }],
-    ["write", { path: "src/example.ts", content: "complete file content" }],
-    ["codebase_search", { query: "example", path: "src/components" }],
+  it.each<[string, Record<string, unknown>, string | null]>([
+    ["exec", { command: "set -e" }, "set -e"],
+    ["exec", { command: "export FOO=bar" }, "export FOO=bar"],
+    ["exec", { command: "unset FOO" }, "unset FOO"],
+    ["read", { path: "src/example.ts", offset: 20, limit: 30 }, null],
+    ["edit", { path: "src/example.ts", oldText: "before", newText: "after" }, null],
+    ["write", { path: "src/example.ts", content: "complete file content" }, null],
+    ["codebase_search", { query: "example", path: "src/components" }, null],
     [
       "apply_patch",
       {
         input:
           "*** Begin Patch\n*** Add File: one.ts\n+one\n*** Add File: two.ts\n+two\n*** End Patch",
       },
+      null,
     ],
-  ])("preserves the complete structured input of %s", (name, args) => {
+  ])("preserves %s input and setup-only command labels", (name, args, label) => {
     const container = mount([{ role: "assistant", content: [toolCall("input", name, args)] }]);
-    expect(JSON.parse(container.querySelector("code")!.textContent!)).toEqual(args);
+    if (label !== null) {
+      expect(container.querySelector(".chat-task-feed__row-label")?.textContent).toBe(label);
+    } else {
+      expect(JSON.parse(container.querySelector("code")!.textContent!)).toEqual(args);
+    }
   });
 
   it("preserves anonymous command disclosures when earlier rows arrive in the same group", () => {

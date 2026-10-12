@@ -232,11 +232,15 @@
       "@openclaw/normalization-core/utf16-slice": [
         "./packages/normalization-core/src/utf16-slice.ts"
       ],
+      "@openclaw/normalization-core/uuid": ["./packages/normalization-core/src/uuid.ts"],
       "@openclaw/normalization-core/home-dir": [
         "./packages/normalization-core/src/home-dir.ts"
       ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
       "@openclaw/retry": ["./packages/retry/src/index.ts"],
+      "@openclaw/worker-runtime": ["./packages/worker-runtime/src/index.ts"],
+      "@openclaw/worker-runtime/worker": ["./packages/worker-runtime/src/worker.ts"],
+      "@openclaw/worker-runtime/lifecycle": ["./packages/worker-runtime/src/lifecycle.ts"],
       "@openclaw/mermaid-renderer": ["./packages/mermaid-renderer/src/renderer.ts"],
       "@openclaw/session-url-contract": ["./packages/session-url-contract/src/index.ts"],
       "@openclaw/session-url-contract/parse": ["./packages/session-url-contract/src/parse.ts"],

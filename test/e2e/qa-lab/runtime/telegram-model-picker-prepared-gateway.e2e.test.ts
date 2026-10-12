@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createWindowsCmdShimFixture, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 import { createChannelIngressQueue } from "../../../../src/channels/message/ingress-queue.js";
@@ -14,8 +14,9 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../../src/infra/kysely-sync.js";
 import type { DB } from "../../../../src/state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db.js";
-import { withTestTimeout } from "../../../helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createNativeModelPickerCliFixture } from "./telegram-model-picker-native-cli-fixture.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { method: string; body: JsonObject };
@@ -238,6 +239,8 @@ async function startControlledSourceGateway(params: {
   replacementConfigPath: string;
   fixtureRoot: string;
   repoRoot: string;
+  signal: AbortSignal;
+  onTestFinished: (cleanup: () => Promise<void>) => void;
 }) {
   const bootstrapPath = path.join(params.fixtureRoot, "source-gateway-control.mjs");
   const port = await reservePort();
@@ -326,6 +329,9 @@ process.on("message", async (message) => {
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
+  // Retain exit before any control request or stop signal can settle the child.
+  const exited = once(child, "exit");
+  void exited.catch(() => {});
   let output = "";
   child.stdout?.on("data", (chunk) => {
     output += String(chunk);
@@ -335,6 +341,7 @@ process.on("message", async (message) => {
   });
   const pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
   let nextId = 1;
+  let isReady = false;
   const ready = new Promise<void>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => {
@@ -350,6 +357,7 @@ process.on("message", async (message) => {
       }
       const value = message as { type?: string; id?: number; error?: string };
       if (value.type === "ready") {
+        isReady = true;
         resolve();
         return;
       }
@@ -368,16 +376,6 @@ process.on("message", async (message) => {
       }
     });
   });
-  try {
-    await withTestTimeout(ready, SOURCE_GATEWAY_TIMEOUT_MS, "Source Gateway did not become ready");
-  } catch (error) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-      await withTestTimeout(once(child, "exit"), 10_000, "Source Gateway did not stop");
-    }
-    throw new Error(`${String(error)}\n${output}`, { cause: error });
-  }
-
   const request = async (action: "mark" | "replace" | "close") => {
     const id = nextId++;
     await withTestTimeout(
@@ -395,18 +393,28 @@ process.on("message", async (message) => {
       `Source Gateway ${action} control timed out`,
     );
   };
-  return {
-    request,
-    output: () => output,
-    close: async () => {
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
       if (child.exitCode === null && child.signalCode === null) {
-        await request("close").catch(() => child.kill("SIGTERM"));
+        if (isReady) {
+          await request("close").catch(() => child.kill("SIGTERM"));
+        } else {
+          child.kill("SIGTERM");
+        }
       }
-      if (child.exitCode === null && child.signalCode === null) {
-        await withTestTimeout(once(child, "exit"), 10_000, "Source Gateway did not exit");
-      }
-    },
-  };
+      await exited;
+    })());
+  // Vitest can finish its timeout wrapper while startup's catch is still joining
+  // the child. Share that join before the surrounding fixture removes its root.
+  params.onTestFinished(close);
+  try {
+    await withinTest(ready, params.signal);
+  } catch (error) {
+    await close();
+    throw new Error(`${String(error)}\n${output}`, { cause: error });
+  }
+  return { request, output: () => output, close };
 }
 
 async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
@@ -760,26 +768,8 @@ test("lists native CLI-bound models through Telegram polling and provider callba
   };
 
   await withTempDir("openclaw-telegram-native-model-picker-", async (fixtureRoot) => {
-    const cliPath = path.join(fixtureRoot, process.platform === "win32" ? "claude.cjs" : "claude");
-    const authCallsPath = path.join(fixtureRoot, "native-auth-calls.jsonl");
-    if (process.platform === "win32") {
-      await createWindowsCmdShimFixture({
-        shimPath: path.join(fixtureRoot, "claude.cmd"),
-        scriptPath: cliPath,
-        shimLine: `@"${process.execPath}" "%~dp0\\claude.cjs" %*`,
-      });
-    }
-    await fs.writeFile(
-      cliPath,
-      `#!${process.execPath}
-const fs = require("node:fs");
-const argv = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(authCallsPath)}, JSON.stringify(argv) + "\\n");
-if (JSON.stringify(argv) !== JSON.stringify(["auth", "status", "--json"])) process.exit(1);
-process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }));
-`,
-      { mode: 0o755 },
-    );
+    const { authCallsPath, nativeRequestsPath, authArgs, discoveryArgs } =
+      await createNativeModelPickerCliFixture(fixtureRoot);
     await withServer(
       (req, res) => {
         void handleRequest(req, res);
@@ -912,9 +902,25 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
               }),
             ]),
           });
+          expect(cliCalls).toEqual(expect.arrayContaining([authArgs, discoveryArgs]));
           expect(
-            cliCalls.every((args) => JSON.stringify(args) === '["auth","status","--json"]'),
+            cliCalls.every(
+              (args) =>
+                JSON.stringify(args) === JSON.stringify(authArgs) ||
+                JSON.stringify(args) === JSON.stringify(discoveryArgs),
+            ),
           ).toBe(true);
+          const nativeRequests = (await fs.readFile(nativeRequestsPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(nativeRequests.length).toBeGreaterThan(0);
+          for (const request of nativeRequests) {
+            expect(request).toMatchObject({
+              type: "control_request",
+              request: { subtype: "initialize" },
+            });
+          }
           expect(providerRequests).toBe(0);
         } finally {
           await stopQaGatewayFixture(gatewayOwner);
@@ -924,7 +930,10 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
   });
 }, 120_000);
 
-test("recovers a replaced model catalog and drains the following Telegram callback", async () => {
+test("recovers a replaced model catalog and drains the following Telegram callback", async ({
+  signal,
+  onTestFinished,
+}) => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   const getUpdatesOffsets: Array<number | undefined> = [];
@@ -1012,6 +1021,8 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           replacementConfigPath,
           fixtureRoot,
           repoRoot,
+          signal,
+          onTestFinished,
         });
         const queue = createChannelIngressQueue({
           channelId: "telegram",

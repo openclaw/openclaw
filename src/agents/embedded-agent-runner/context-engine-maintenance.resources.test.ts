@@ -4,18 +4,16 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { markGatewayRestartDraining } from "../../process/gateway-work-admission.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import {
   runContextEngineMaintenance,
@@ -87,10 +85,7 @@ async function withResources(
   ) => Promise<void>,
 ) {
   await withStateDirEnv("openclaw-maintenance-resources-", async ({ stateDir }) => {
-    using deliveries = captureTaskDeliveryWork();
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     const db = new DatabaseSync(path.join(stateDir, "registration.sqlite"));
     db.exec("CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
     const pending: Promise<void>[] = [];
@@ -115,19 +110,80 @@ async function withResources(
       await run(db, schedule);
     } finally {
       await Promise.allSettled(pending);
-      try {
-        await deliveries.settle();
-      } finally {
-        if (db.isOpen) {
-          db.close();
-        }
-        resetCommandQueueStateForTest();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
+      if (db.isOpen) {
+        db.close();
       }
+      resetCommandQueueStateForTest();
     }
   });
 }
+
+it.each(["active", "final"] as const)("refuses to reschedule during %s disposal", async (phase) => {
+  await withResources(async (_db, schedule) => {
+    const disposalStarted = createDeferredCore();
+    const releaseDisposal = createDeferredCore();
+    const maintenanceStarted = createDeferredCore();
+    const releaseMaintenance = createDeferredCore();
+    const maintain = vi.fn(async () => unchanged);
+    if (phase === "final") {
+      maintain.mockImplementationOnce(async () => {
+        maintenanceStarted.resolve();
+        await releaseMaintenance.promise;
+        return unchanged;
+      });
+    }
+    const contextEngine = engine(maintain);
+    contextEngine.dispose = async () => {
+      disposalStarted.resolve();
+      await releaseDisposal.promise;
+    };
+    const admitted = vi.fn();
+    const failed = vi.fn();
+    const resources = { closeFactoryWork: vi.fn(async () => {}), release: vi.fn(async () => {}) };
+    const keepProcessAlive = () => {};
+    process.on("SIGTERM", keepProcessAlive);
+    try {
+      if (phase === "final") {
+        await schedule(engine(maintain));
+        await maintenanceStarted.promise;
+      }
+      await schedule(contextEngine);
+      if (phase === "final") {
+        // The pending engine is disposed in final cleanup, not by the active-run loop.
+        process.emit("SIGTERM", "SIGTERM");
+        releaseMaintenance.resolve();
+      }
+      await disposalStarted.promise;
+      await runContextEngineMaintenance({
+        contextEngine,
+        sessionId: "resources",
+        sessionKey: "agent:main:maintenance-resources",
+        sessionFile: "agent:main:maintenance-resources",
+        reason: "turn",
+        onDeferredMaintenance: admitted,
+        onDeferredMaintenanceFailure: failed,
+        factoryResources: resources,
+      });
+      expect(admitted).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            phase === "final" ? "finishing cleanup" : "was disposed",
+          ),
+        }),
+      );
+      expect(resources.closeFactoryWork).not.toHaveBeenCalled();
+      expect(resources.release).not.toHaveBeenCalled();
+      releaseDisposal.resolve();
+      await waitForDeferredTurnMaintenanceForSession("agent:main:maintenance-resources");
+      expect(maintain).toHaveBeenCalledOnce();
+    } finally {
+      releaseMaintenance.resolve();
+      releaseDisposal.resolve();
+      process.off("SIGTERM", keepProcessAlive);
+    }
+  });
+});
 
 it.each(["maintenance", "disposal"] as const)(
   "joins actual %s descendants before maintenance completion",
@@ -310,6 +366,7 @@ it("keeps accepted maintenance independent of parent completion until gateway re
       await closing;
       await parent.drain();
       await cancellationCheckpoint;
+      resetGatewayWorkAdmission();
     }
   });
 });

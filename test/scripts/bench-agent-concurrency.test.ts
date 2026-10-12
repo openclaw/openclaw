@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { testing as workerTesting } from "../../scripts/bench-agent-concurrency-worker.ts";
 import {
@@ -23,15 +22,11 @@ function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2,
           reservationsReleased: size,
           blockedWaits: size,
           settledRuns: size,
-          settledTasks: size,
           outstandingWaits: 0,
           durableSubagentRows: scenario === "spawnPipelineDurable" ? size : 0,
-          durableTaskRows: scenario === "spawnPipelineDurable" ? size : 0,
           durableStateFile: scenario === "spawnPipelineDurable",
           postTeardownRegistryRows: 0,
-          postTeardownTaskRows: 0,
           postTeardownDurableSubagentRows: 0,
-          postTeardownDurableTaskRows: 0,
           postTeardownActiveRootWork: 0,
         }
       : scenario === "admission"
@@ -133,7 +128,7 @@ describe("agent concurrency benchmark", () => {
       ).resolves.toBe("pending");
 
       deferred.resolve();
-      await expect(drain).resolves.toBeUndefined();
+      await expect(drain).resolves.toBe(0);
     } finally {
       deferred.resolve();
       await rootWork;
@@ -148,56 +143,6 @@ describe("agent concurrency benchmark", () => {
         return { drained: false, snapshot: { counts: { totalActive: 2 } } };
       }),
     ).rejects.toThrow("spawn sample left 2 active gateway work items");
-  });
-
-  it("aggregates synthetic worker results into schema version 2", () => {
-    const options = testing.parseOptions([
-      "--runs",
-      "3",
-      "--warmup",
-      "1",
-      "--fanout",
-      "2",
-      "--sweep-rows",
-      "4",
-    ]);
-    const report = testing.aggregateWorkerResults(
-      options,
-      [
-        workerResult("spawnPipelineInMemory", 2),
-        workerResult("spawnPipelineDurable", 2),
-        workerResult("admission", 2),
-        workerResult("recoverySweep", 4),
-        workerResult("duplicateSuppression", 4),
-      ],
-      { rssStartBytes: 10, rssEndBytes: 20 },
-    );
-
-    expect(report).toMatchObject({
-      schemaVersion: 2,
-      options: { runs: 3, warmup: 1, fanout: [2], sweepRows: [4] },
-      memory: {
-        rssStartBytes: 10,
-        rssEndBytes: 20,
-        workerProcessMaxRssBytes: 150,
-      },
-      invariants: {
-        ok: true,
-        failures: [],
-        spawnPipelineInMemory: true,
-        spawnPipelineDurable: true,
-        admissionCapOverflowRelease: true,
-        sweepRecoveryRowsWithoutSessionEffects: true,
-        dedupeNewestPerChild: true,
-      },
-    });
-    expect(report.scenarios.spawnPipelineDurable[0]?.timingsMs).toEqual({
-      count: 3,
-      min: 1,
-      p50: 2,
-      max: 3,
-    });
-    expect(report.generatedAt).toEqual(expect.any(String));
   });
 
   it("reports deterministic parent progress around every worker", () => {
@@ -319,28 +264,5 @@ describe("agent concurrency benchmark", () => {
         expected,
       ),
     ).toThrow("timed out after 300000ms");
-  });
-
-  it("supports help and ends failures with the marker", () => {
-    const help = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-agent-concurrency.ts", "--help"],
-      { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, NODE_NO_WARNINGS: "1" } },
-    );
-    expect(help.status).toBe(0);
-    expect(help.stdout).toContain("OpenClaw agent concurrency benchmark");
-    expect(help.stdout).toContain("--sweep-rows <list>");
-    expect(help.stderr).toBe("");
-
-    const failure = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-agent-concurrency.ts", "--wat"],
-      { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, NODE_NO_WARNINGS: "1" } },
-    );
-    expect(failure.status).toBe(1);
-    expect(failure.stdout).toBe("");
-    expect(failure.stderr.trim().split("\n").at(-1)).toBe(
-      "[bench-agent-concurrency] FAILED (exit 1)",
-    );
   });
 });

@@ -4,19 +4,39 @@ import {
   GatewayDrainingError,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../../process/gateway-work-admission.js";
+import * as pidAlive from "../../shared/pid-alive.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cronStoreKey } from "../store/key.js";
+import { releaseLocalCronRunReceiptOwnership } from "../store/run-receipt-store.js";
 import {
-  claimCronRunReceiptInDatabase,
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
+} from "../store/run-receipt-store.test-support.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
 import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { createCronServiceState, type CronServiceState, type Logger } from "./state.js";
+
+export function makeForeignOwner(handle: CronRunReceiptHandle) {
+  const ownerPid = 2_147_483_646;
+  openOpenClawStateDatabase()
+    .db.prepare("UPDATE cron_run_receipts SET owner_pid = ? WHERE receipt_id = ?")
+    .run(ownerPid, handle.receiptId);
+  releaseLocalCronRunReceiptOwnership(handle);
+  vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+  const getStartTime = pidAlive.getFileLockProcessStartTime;
+  const startTimeProbe = vi
+    .spyOn(pidAlive, "getFileLockProcessStartTime")
+    .mockImplementation((pid) => (pid === ownerPid ? handle.ownerStartTime : getStartTime(pid)));
+  return { handle: { ...handle, ownerPid }, startTimeProbe, getStartTime };
+}
 
 export async function observeCronRecoveryForTest(
   state: CronServiceState,
@@ -86,18 +106,24 @@ export function makeCronRecoveryState(
   });
 }
 
-export function claimCronRecoveryReceipt(storePath: string, job: CronJob, startedAtMs: number) {
+export function claimCronRecoveryReceipt(
+  storePath: string,
+  job: CronJob,
+  startedAtMs: number,
+  defaultAgentId = "alpha",
+) {
   const prepared = prepareCronRunReceiptClaim({
+    observed: undefined,
     storePath,
     job,
-    agentId: job.agentId ?? "alpha",
+    agentId: job.agentId ?? defaultAgentId,
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
-      resolveAgentId: (current) => current.agentId ?? "alpha",
+      resolveAgentId: (current) => current.agentId ?? defaultAgentId,
     }),
   );
 }

@@ -7,6 +7,7 @@ import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
+  executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
@@ -14,7 +15,9 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import type { UpdateDoctorWriteAuthority } from "../infra/update-doctor-result.js";
 import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import {
+  inspectUpdateRunDriver,
   readUpdateRunDriver,
   sameUpdateRunDriver,
   type UpdateRunDriver,
@@ -34,26 +37,21 @@ import {
   prepareDoctorDatabasePreflight,
   type DoctorDatabasePreflight,
 } from "./doctor-database-preflight.js";
+import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 import {
   recordUpdateDoctorRefusal,
   resolveUpdateDoctorGitRecovery,
 } from "./doctor-update-refusal.js";
 import { isUpdatePackageSwapInProgress } from "./doctor/shared/update-phase.js";
 
-type DrivingUpdater = {
-  runId: string;
-  version: string;
-  canDeferStateSchema: boolean;
-  earlyDoctorRunning: boolean;
-  postCoreStarted: boolean;
-};
+type DrivingUpdater = NonNullable<Awaited<ReturnType<typeof readDrivingUpdater>>>;
 
 // Unknown file IDs cannot prove that a recovery image covers the pending live mutation.
 function sameSnapshotFile(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">) {
   return left.dev !== 0 && left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
 }
 
-async function readDrivingUpdater(): Promise<DrivingUpdater | undefined> {
+async function readDrivingUpdater(sharedContentUpgrade = false) {
   // The runtime ledger reader consults quarantine state. This diagnostic must
   // not open any live database, including a quarantine store needing recovery.
   const snapshot = await prepareSqliteReadOnlyLocation(resolveOpenClawStateSqlitePath(), {
@@ -64,6 +62,56 @@ async function readDrivingUpdater(): Promise<DrivingUpdater | undefined> {
     let closeSchemaReadAdmission: (() => void) | undefined;
     try {
       closeSchemaReadAdmission = openDoctorStateSchemaReadAdmission(database);
+      if (
+        sharedContentUpgrade &&
+        process.platform === "win32" &&
+        tableExists(database, "update_runs")
+      ) {
+        const rows = executeSqliteQuerySync(
+          database,
+          getNodeSqliteKysely<Pick<DB, "update_runs">>(database)
+            .selectFrom("update_runs")
+            .select(["run_id", "before_json", "origin_json", "steps_json"])
+            .where("status", "=", "running")
+            .orderBy("run_id"),
+        ).rows;
+        for (const row of rows) {
+          const before = UpdateRunRecordSchema.shape.before.safeParse(
+            safeParseJson(row.before_json),
+          );
+          if (!before.success || before.data.version !== "2026.9.4") {
+            continue;
+          }
+          const origin = UpdateRunRecordSchema.shape.origin.safeParse(
+            safeParseJson(row.origin_json),
+          );
+          const drivers = origin.success
+            ? [
+                ...(origin.data.driver ? [origin.data.driver] : []),
+                ...(origin.data.previousDrivers ?? []),
+              ]
+            : [];
+          const steps = UpdateRunRecordSchema.shape.steps.safeParse(safeParseJson(row.steps_json));
+          if (
+            steps.success &&
+            !steps.data.some((step) => step.step === "driver:identity-unavailable") &&
+            drivers.length > 0 &&
+            drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")
+          ) {
+            continue;
+          }
+          // 9.4 requires the candidate content version, then its retained Windows
+          // handoff callback reopens that content with the old schema-17 reader.
+          return {
+            runId: row.run_id,
+            version: before.data.version,
+            canDeferStateSchema: false,
+            earlyDoctorRunning: false,
+            postCoreStarted: false,
+            requiresReadableSharedContent: true as const,
+          };
+        }
+      }
       const blocker = readStateSchemaPublicationBlocker(database);
       if (!blocker) {
         return undefined;
@@ -109,28 +157,64 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   schemas?: DoctorDatabasePreflight;
   runtime?: RuntimeEnv;
   json?: boolean;
+  /** These entry points run before a shipped parent can delegate Doctor. */
+  entry?: "cli-bootstrap" | "package-lifecycle";
   postCoreSchemaRepair?: UpdateDoctorWriteAuthority["postCoreSchemaRepair"];
   onVerifiedBackup?: (snapshots: readonly BackupSqliteSnapshotFact[]) => void;
+  /** Read-only pre-capture publication check; never authorizes an agent repair. */
+  statePublicationOnly?: boolean;
 }): Promise<DoctorDatabasePreflight | undefined> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return undefined;
   }
-  const schemas = options.schemas ?? (await prepareDoctorDatabasePreflight());
+  // Mode flags and retained captures are not live mutation authority. Only the
+  // current maintenance owner can exempt physically owned disposable core images.
+  const rehearsal = options.statePublicationOnly
+    ? undefined
+    : createDoctorRehearsalDatabaseCoverage(process.env);
+  const schemas =
+    options.schemas ??
+    (await prepareDoctorDatabasePreflight(
+      options.statePublicationOnly ? { scope: "state" } : undefined,
+    ));
+  rehearsal?.assertCurrent();
   if (!schemas.pendingMigrations?.length) {
     return schemas;
   }
+  rehearsal?.admit([
+    ...schemas.pendingMigrations
+      .filter((database) => database.kind === "agent")
+      .map((database) => database.path),
+    ...(schemas.agentDatabaseMigrationDiscovery?.discovery.schemaTargets.map(
+      (database) => database.path,
+    ) ?? []),
+  ]);
   let updater: Awaited<ReturnType<typeof readDrivingUpdater>>;
+  const sharedContentUpgrade =
+    (options.entry !== undefined || options.statePublicationOnly === true) &&
+    schemas.pendingMigrations.some(
+      (database) => database.kind === "state" && database.supportedVersion > 17,
+    );
   try {
-    updater = await readDrivingUpdater();
+    updater = await readDrivingUpdater(sharedContentUpgrade);
   } catch {
     // A missing or unreadable run cannot prove that the driver writes the ledger.
+  }
+  rehearsal?.assertCurrent();
+  if (options.entry === "package-lifecycle" && !updater?.requiresReadableSharedContent) {
+    return schemas;
   }
   if (!updater) {
     return schemas;
   }
-  const blockedMigrations = schemas.pendingMigrations.filter(
-    (database) => database.kind === "agent" || !updater.canDeferStateSchema,
+  const blockedMigrations = schemas.pendingMigrations.filter((database) =>
+    updater.requiresReadableSharedContent
+      ? database.kind === "state" && database.supportedVersion > 17
+      : database.kind === "agent"
+        ? !options.statePublicationOnly && !rehearsal?.excludes(database.path)
+        : !updater.canDeferStateSchema,
   );
+  rehearsal?.assertCurrent();
   if (blockedMigrations.length === 0) {
     return schemas;
   }
@@ -142,6 +226,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   const recovery = updater.postCoreStarted
     ? postCoreRecovery
     : await resolveUpdateDoctorGitRecovery();
+  rehearsal?.assertCurrent();
   if (updater.canDeferStateSchema && blockedMigrations.every((entry) => entry.kind === "agent")) {
     const capturePending = () =>
       blockedMigrations.map((database) => ({
@@ -151,7 +236,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     const coverageRefusal = (uncovered: typeof blockedMigrations, detail: string) =>
       new UpdateSchemaRefusalError(uncovered, updater.version, {
         targetVersion: VERSION,
-        cause: new Error(`Missing recoverable canonical backup coverage: ${detail}`),
+        cause: new Error(`Missing recoverable database backup coverage: ${detail}`),
         recovery,
       });
     const authority = options.postCoreSchemaRepair;
@@ -216,10 +301,13 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       if (uncovered.length) {
         throw coverageRefusal(
           uncovered.map(({ database }) => database),
-          `the retained archive at ${backup.archivePath} has no captured canonical image for these agent databases.`,
+          `the retained archive at ${backup.archivePath} has no captured database image for these agent databases.`,
         );
       }
-      await verifyBackupArchive(backup.archivePath, requiredSnapshots);
+      // A mixed fleet's archive also captures disposable agents. Bind every
+      // captured agent image before later migrations, not just the blocked subset.
+      const migrationSnapshots = snapshotFacts.filter((snapshot) => snapshot.role === "agent");
+      await verifyBackupArchive(backup.archivePath, migrationSnapshots);
       assertCurrent();
       const current = await readDrivingUpdater();
       assertCurrent();
@@ -239,7 +327,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
         const identity = statSync(migration.path, { throwIfNoEntry: false });
         if (
           !identity?.isFile() ||
-          !requiredSnapshots.some(
+          !migrationSnapshots.some(
             (fact) =>
               fact.role === "agent" &&
               fact.agentId === migration.agentId &&
@@ -289,7 +377,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
       if (uncovered.length) {
         throw coverageRefusal(
           uncovered.map(({ database }) => database),
-          "these pending agent databases have no registered canonical snapshot owner.",
+          "these pending agent databases have no registered snapshot owner.",
         );
       }
       return {
@@ -302,7 +390,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     targetVersion: VERSION,
     recovery,
   });
-  if (recovery) {
+  if (recovery && !options.statePublicationOnly) {
     recordUpdateDoctorRefusal(error.message);
   }
   if (options.json) {
@@ -317,13 +405,44 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
 export async function preflightUpdateDoctorCli(options: { json?: boolean }) {
   // Pin the invoking parent before schema admission can yield or reparent us.
   const parent = readUpdateRunDriver(process.ppid);
-  const schemas = await guardUpdateDoctorSchemaUpgrade(options);
+  if (resolveUpdateRehearsalRoot(process.env)) {
+    // This is only read admission. The real Doctor maintenance owner must run
+    // the full guard before original capture, relocation, or any repair writer.
+    await guardUpdateDoctorSchemaUpgrade({
+      ...options,
+      entry: "cli-bootstrap",
+      statePublicationOnly: true,
+    });
+    // State-only facts must never replace the later complete fleet inspection.
+    return undefined;
+  }
+  const schemas = await guardUpdateDoctorSchemaUpgrade({ ...options, entry: "cli-bootstrap" });
   if (schemas?.updateSchemaRehearsal) {
     await rehearseDeferredUpdateDoctorSchemaForParent(schemas, defaultRuntime, parent);
     // The existing one-shot owner joins cleanup and drains the warning before exit.
     exitCliAfterOutput(defaultRuntime, 0);
   }
   return schemas;
+}
+
+/** The shipped Windows driver can still discard a failed npm stage before entering repair. */
+export async function preflightUpdatePackageLifecycle(): Promise<void> {
+  if (process.platform !== "win32" || process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
+    return;
+  }
+  let updater: DrivingUpdater | undefined;
+  try {
+    updater = await readDrivingUpdater(true);
+  } catch {
+    // Unavailable legacy-driver evidence does not expand package admission.
+  }
+  if (!updater?.requiresReadableSharedContent) {
+    return;
+  }
+  await guardUpdateDoctorSchemaUpgrade({
+    schemas: await prepareDoctorDatabasePreflight({ scope: "state" }),
+    entry: "package-lifecycle",
+  });
 }
 
 /** The shipped package validator may still roll back; it must never reach live Doctor writers. */

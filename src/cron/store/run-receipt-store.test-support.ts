@@ -1,6 +1,22 @@
+import crypto from "node:crypto";
+import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJob } from "../types.js";
-import { findActiveCronRunReceiptInDatabase } from "./run-receipt-store.js";
+import { cronStoreKey } from "./key.js";
+import { cronRunReceiptSettlement } from "./run-receipt-settlement.js";
+import {
+  claimCronRunReceiptInDatabase,
+  claimLocalCronRunReceiptOwnership,
+  findActiveCronRunReceiptInDatabase,
+  prepareCronRunReceiptAdjudication,
+} from "./run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
+import type {
+  CronRunReceiptHandle,
+  CronRunReceiptOwnerObservation,
+  PreparedCronRunReceiptClaim,
+} from "./run-receipt.types.js";
 
 export function inspectActiveCronRunReceipt(params: { storePath: string; jobId: string }) {
   return runOpenClawStateWriteTransaction(({ db }) =>
@@ -21,5 +37,86 @@ export function makeCronRecoveryJob(id: string, startedAtMs: number): CronJob {
     wakeMode: "next-heartbeat",
     payload: { kind: "command", argv: ["true"] },
     state: { runningAtMs: startedAtMs, nextRunAtMs: startedAtMs },
+  };
+}
+
+export function makeCronReceiptJob(id: string, agentId = "alpha"): CronJob {
+  return {
+    id,
+    agentId,
+    name: id,
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: id },
+    state: {},
+  };
+}
+
+export function claimCronRunReceiptForTest(storePath: string, job: CronJob, startedAtMs: number) {
+  const prepared = prepareCronRunReceiptClaim({
+    observed: inspectActiveCronRunReceipt({ storePath, jobId: job.id }),
+    storePath,
+    job,
+    agentId: job.agentId!,
+    startedAtMs,
+  });
+  return runOpenClawStateWriteTransaction(({ db }) =>
+    claimCronRunReceiptInDatabaseForTest({
+      database: db,
+      prepared,
+      resolveAgentId: (current) => current.agentId!,
+    }),
+  );
+}
+
+export function claimCronRunReceiptInDatabaseForTest(
+  params: Omit<Parameters<typeof claimCronRunReceiptInDatabase>[0], "receiptSchema">,
+) {
+  const handle = claimCronRunReceiptInDatabase({
+    ...params,
+    receiptSchema: prepareCronRunReceiptWriteSchema(params.database),
+  });
+  claimLocalCronRunReceiptOwnership(handle);
+  return handle;
+}
+
+export const { finishCronRunReceiptAsync } = cronRunReceiptSettlement;
+
+export function prepareCronRunReceiptClaim(params: {
+  storePath: string;
+  job: CronJob;
+  agentId: string;
+  startedAtMs: number;
+  requestRunId?: string;
+  observed: CronRunReceiptOwnerObservation | undefined;
+}): PreparedCronRunReceiptClaim {
+  const ownerStartTime = getFileLockProcessStartTime(process.pid);
+  if (ownerStartTime === null) {
+    throw new Error("cron run cannot acquire a durable fence without process start identity");
+  }
+  const adjudication = prepareCronRunReceiptAdjudication({
+    storePath: params.storePath,
+    observed: params.observed,
+    nowMs: params.startedAtMs,
+  });
+  const storeKey = cronStoreKey(params.storePath);
+  const handle: CronRunReceiptHandle = {
+    receiptId: crypto.randomUUID(),
+    storeKey,
+    jobId: params.job.id,
+    configRevision: resolveCronJobConfigRevision(params.job),
+    agentId: params.agentId,
+    ownerPid: process.pid,
+    ownerStartTime,
+    startedAtMs: params.startedAtMs,
+  };
+  return {
+    handle,
+    ...adjudication,
+    ...(params.requestRunId ? { requestRunId: params.requestRunId } : {}),
   };
 }

@@ -7,7 +7,7 @@ import * as databaseContext from "./update-command-database-context.js";
 import type { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { updateCommand } from "./update-command.js";
 
 async function captureFreshManagedServiceAdmission(params: {
@@ -41,76 +41,27 @@ async function captureFreshManagedServiceAdmission(params: {
 
 // Discovery-known service runners stay protected when schema inspection has no service context.
 const freshManagedServiceRuntimeCases = [
-  {
-    name: "owned writable service",
-    discovered: true,
-    owned: true,
-    writable: true,
-    restart: true,
-    expectedFallback: "/current/node",
-    expectedRecovery: true,
-  },
-  {
-    name: "discovered service without inspected ownership",
-    discovered: true,
-    owned: false,
-    writable: false,
-    restart: true,
-    expectedFallback: undefined,
-    expectedRecovery: false,
-  },
-  {
-    name: "owned service with no restart",
-    discovered: true,
-    owned: true,
-    writable: true,
-    restart: false,
-    expectedFallback: undefined,
-    expectedRecovery: false,
-  },
-  {
-    name: "owned non-rewritable service",
-    discovered: true,
-    owned: true,
-    writable: false,
-    restart: true,
-    expectedFallback: undefined,
-    expectedRecovery: false,
-  },
-  {
-    name: "no discovered service",
-    discovered: false,
-    owned: false,
-    writable: false,
-    restart: true,
-    expectedFallback: undefined,
-    expectedRecovery: true,
-  },
-  {
-    name: "no discovered service with no restart",
-    discovered: false,
-    owned: false,
-    writable: false,
-    restart: false,
-    expectedFallback: undefined,
-    expectedRecovery: true,
-  },
+  // name, discovered, owned, writable, restart, fallback, recovery
+  ["owned writable service", true, true, true, true, "/current/node", true],
+  ["discovered service without inspected ownership", true, false, false, true, undefined, false],
+  ["owned service with no restart", true, true, true, false, undefined, false],
+  ["owned non-rewritable service", true, true, false, true, undefined, false],
+  ["no discovered service with no restart", false, false, false, false, undefined, true],
 ] as const;
 
 const { fixture } = installFreshUpdateFixture();
 
 describe("update command admission with fresh state", () => {
   it.each(freshManagedServiceRuntimeCases)(
-    "limits fresh-state Node recovery ($name)",
-    async (testCase) => {
-      const { owned, writable, restart, discovered, expectedFallback, expectedRecovery } = testCase;
+    "limits fresh-state Node recovery (%s)",
+    async (_name, discovered, owned, writable, restart, expectedFallback, expectedRecovery) => {
       fixture.managedServiceNodeRunner = discovered ? "/service/node" : undefined;
       vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
       vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockImplementation(() =>
         captureFreshManagedServiceAdmission({ root: fixture.root, owned, writable, restart }),
       );
       const runtimePreflight = vi
-        .spyOn(servicePlan, "resolvePackageRuntimePreflight")
+        .spyOn(runtimePlan, "resolvePackageRuntimePreflight")
         .mockResolvedValue({ ok: false, error: "fixture-stop" });
 
       await expect(
@@ -120,7 +71,7 @@ describe("update command admission with fresh state", () => {
       expect(runtimePreflight).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           nodeRunner: discovered ? "/service/node" : undefined,
-          fallbackNodeRunner: expectedFallback,
+          fallbackNodeRunner: process.versions.bun ? undefined : expectedFallback,
           runtimeRecovery: expectedRecovery ? expect.any(Object) : undefined,
         }),
       );

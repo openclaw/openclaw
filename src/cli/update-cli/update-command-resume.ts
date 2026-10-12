@@ -28,8 +28,10 @@ import {
   resolveManagedUpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { recordPostCoreUpdateEvidence } from "../../infra/update-run-interruption.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { getUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -50,7 +52,7 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
-import { readPackageUpdateIdentity } from "./update-command-package.js";
+import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import {
   collectPostCorePluginAdvisories,
   createPostCorePluginUpdateResult,
@@ -220,7 +222,10 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     );
     throw error;
   }
-  defaultRuntime.exit(0);
+  // A supplied executor belongs to the caller, which must settle it before exit.
+  if (!params.opts.run?.executorFence) {
+    defaultRuntime.exit(0);
+  }
 }
 
 async function resumePostCoreUpdateInternal(
@@ -260,6 +265,24 @@ async function resumePostCoreUpdateInternal(
   assertCurrent?.();
 
   const { parentOwnsCompletion } = params;
+  const doctorSteps: UpdateStepResult[] = [];
+  const onDoctorStep = (step: UpdateStepResult) => {
+    doctorSteps.push(step);
+    const endedAtMs = Date.now();
+    for (const row of updateRunStepsFromResultStep(step)) {
+      const diagnostic = { ...row, endedAtMs };
+      defaultRuntime.error(`[update resume] ${JSON.stringify(diagnostic)}`);
+      if (runId) {
+        try {
+          recordUpdateRunStep(runId, diagnostic, { env: params.opts.run?.env ?? process.env });
+        } catch (error) {
+          defaultRuntime.error(
+            `Post-core Doctor evidence could not be saved: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
+    }
+  };
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
@@ -296,6 +319,16 @@ async function resumePostCoreUpdateInternal(
           );
           recordDoctorWarnings();
         };
+        const doctorOptions = () => ({
+          opts: params.opts,
+          assertCurrent,
+          root: params.root,
+          yes: params.opts.yes === true,
+          json: params.opts.json === true,
+          timeoutMs: params.timeoutMs,
+          onWarnings: onDoctorWarnings,
+          onDoctorStep,
+        });
         const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
         assertCurrent?.();
         maintenance = await beginDoctorMaintenance({
@@ -308,28 +341,19 @@ async function resumePostCoreUpdateInternal(
         assertCurrent?.();
         // Each fresh Doctor holds its own database fences after admission.
         await maintenance?.releaseState();
-        await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
-          await completeSourceUpdateRuntime({
-            root: params.root,
-            sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
-            timeoutMs: params.timeoutMs,
-            lease,
-            beforePersistentEffect: assertCurrent,
-          });
+        await completeSourceUpdateRuntime({
+          root: params.root,
+          sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
+          timeoutMs: params.timeoutMs,
+          assertCurrent,
         });
         assertCurrent?.();
         if (!parentOwnsCompletion) {
           // Shipped parents expect the child to prepare migration plugins and settle
           // Doctor before plugin config writes; Doctor owns that preparation and its guards.
           const warning = await runUpdateFinalizationDoctorInFreshProcess({
-            opts: params.opts,
+            ...doctorOptions(),
             phase: "post-plugin",
-            assertCurrent,
-            root: params.root,
-            yes: params.opts.yes === true,
-            json: params.opts.json === true,
-            timeoutMs: params.timeoutMs,
-            onWarnings: onDoctorWarnings,
           });
           if (warning) {
             doctorWarnings.push(warning);
@@ -368,15 +392,8 @@ async function resumePostCoreUpdateInternal(
         // Their completion stays here, after the producer releases its lease.
         if (!parentOwnsCompletion) {
           const completed = await completePostCorePluginUpdate({
-            root: params.root,
-            opts: params.opts,
+            ...doctorOptions(),
             pluginUpdate,
-            freshDoctorRequired: pluginUpdate.changed,
-            assertCurrent,
-            yes: params.opts.yes === true,
-            json: params.opts.json === true,
-            timeoutMs: params.timeoutMs,
-            onWarnings: onDoctorWarnings,
           });
           pluginUpdate = completed.pluginUpdate;
           recordDoctorWarnings(collectPostCorePluginAdvisories(pluginUpdate));
@@ -440,7 +457,7 @@ async function resumePostCoreUpdateInternal(
     mode: "unknown",
     root: params.root,
     runId,
-    steps: pluginUpdate.doctorLint ? [pluginUpdate.doctorLint] : [],
+    steps: [...doctorSteps, ...(pluginUpdate.doctorLint ? [pluginUpdate.doctorLint] : [])],
     durationMs: 0,
     postUpdate: { plugins: pluginUpdate },
   };

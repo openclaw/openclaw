@@ -1,6 +1,5 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
@@ -11,20 +10,22 @@ import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatReactionSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
-import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
+import ai.openclaw.app.chat.runCatchingCancellable
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
@@ -68,6 +69,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -191,11 +193,9 @@ internal class ChatShareDraftQueue(
     block: suspend () -> Unit,
   ): Boolean =
     headLease.withLock {
-      val claimed =
-        synchronized(lock) {
-          firstForOwnerLocked(owner)?.id == id
-        }
-      if (!claimed) return@withLock false
+      synchronized(lock) {
+        if (firstForOwnerLocked(owner)?.id != id) return@withLock false
+      }
       block()
       true
     }
@@ -206,14 +206,9 @@ internal class ChatShareDraftQueue(
   ) {
     if (from == to) return
     synchronized(lock) {
-      var changed = false
-      for ((id, owner) in ownersById.toMap()) {
-        if (owner == from) {
-          ownersById[id] = to
-          changed = true
-        }
-      }
-      if (changed) _ownerRevision.value += 1
+      val ownedIds = ownersById.filterValues { it == from }.keys
+      ownedIds.forEach { ownersById[it] = to }
+      if (ownedIds.isNotEmpty()) _ownerRevision.value += 1
     }
   }
 
@@ -278,12 +273,12 @@ internal class CronEditorDraftMemory {
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class MainViewModel private constructor(
+class MainViewModel internal constructor(
   app: Application,
   private val prefs: SecurePrefs,
   savedStateHandle: SavedStateHandle,
-  private val resolveShareMimeType: (Uri) -> String?,
-  shareLaunchCapacity: Int,
+  private val resolveShareMimeType: (Uri) -> String? = app.contentResolver::getType,
+  shareLaunchCapacity: Int = MAX_PENDING_CHAT_SHARES,
 ) : AndroidViewModel(app) {
   constructor(
     app: Application,
@@ -292,22 +287,6 @@ class MainViewModel private constructor(
     app = app,
     prefs = (app as NodeApp).prefs,
     savedStateHandle = savedStateHandle,
-    resolveShareMimeType = app.contentResolver::getType,
-    shareLaunchCapacity = MAX_PENDING_CHAT_SHARES,
-  )
-
-  internal constructor(
-    app: NodeApp,
-    prefs: SecurePrefs,
-    savedStateHandle: SavedStateHandle,
-    resolveShareMimeType: (Uri) -> String? = app.contentResolver::getType,
-    shareLaunchCapacity: Int = MAX_PENDING_CHAT_SHARES,
-  ) : this(
-    app = app as Application,
-    prefs = prefs,
-    savedStateHandle = savedStateHandle,
-    resolveShareMimeType = resolveShareMimeType,
-    shareLaunchCapacity = shareLaunchCapacity,
   )
 
   private val nodeApp = app as NodeApp
@@ -357,6 +336,20 @@ class MainViewModel private constructor(
   private val chatDraftState = MutableStateFlow<ChatDraft?>(null)
   internal val chatDraft: StateFlow<ChatDraft?> = chatDraftState
   private val chatDraftLock = Any()
+  private val chatBrowserDismissalsState = MutableStateFlow<Map<ChatComposerOwner, List<String>>>(emptyMap())
+  internal val chatBrowserDismissals = chatBrowserDismissalsState.asStateFlow()
+
+  internal fun dismissChatBrowser(
+    owner: ChatComposerOwner,
+    presentation: List<String>,
+  ) {
+    chatBrowserDismissalsState.update { it + (owner to presentation) }
+  }
+
+  internal fun reopenChatBrowser(owner: ChatComposerOwner) {
+    chatBrowserDismissalsState.update { it - owner }
+  }
+
   private var attachedComposerRuntime: NodeRuntime? = null
   private var removeChatSessionDeletionListener: (() -> Unit)? = null
 
@@ -505,7 +498,7 @@ class MainViewModel private constructor(
 
   val runtimeInitialized: StateFlow<Boolean> =
     runtimeRef
-      .flatMapLatest { runtime -> flowOf(runtime != null) }
+      .map { runtime -> runtime != null }
       .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
@@ -519,7 +512,6 @@ class MainViewModel private constructor(
   val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
-  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
@@ -531,8 +523,6 @@ class MainViewModel private constructor(
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
   val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> =
     runtimeState(initial = GatewayNodeApprovalActionState()) { it.nodeApprovalAction }
-  val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
-  val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }
@@ -579,13 +569,6 @@ class MainViewModel private constructor(
   val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
   val clawHubSkillSearchState: StateFlow<GatewayClawHubSkillSearchState> =
     runtimeState(initial = GatewayClawHubSkillSearchState()) { it.clawHubSkillSearchState }
-  val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> =
-    runtimeState(initial = GatewaySkillWorkshopSummary(proposals = emptyList())) { it.skillWorkshopSummary }
-  val skillWorkshopRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillWorkshopRefreshing }
-  val skillWorkshopErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopErrorText }
-  val skillWorkshopNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopNoticeText }
-  val skillWorkshopInspectingProposalId: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopInspectingProposalId }
-  val skillWorkshopMutatingProposalId: StateFlow<String?> = runtimeState(initial = null) { it.skillWorkshopMutatingProposalId }
   val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> =
     runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
   val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
@@ -610,7 +593,6 @@ class MainViewModel private constructor(
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = prefs.preventSleep
-  val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
@@ -674,6 +656,9 @@ class MainViewModel private constructor(
 
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chat.sessionOwnerAgentId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chat.messages }
+  internal val chatMessageReactions: StateFlow<Map<String, List<ChatReactionSummary>>> = runtimeState(initial = emptyMap()) { it.chat.messageReactions }
+  internal val chatCanReact: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.canReact }
+  internal val chatReactionViewerId: StateFlow<String?> = runtimeState(initial = null) { it.chat.reactionViewerId }
   val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
     runtimeState(initial = null) { it.chat.transcriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.historyLoading }
@@ -691,8 +676,6 @@ class MainViewModel private constructor(
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }
-  val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
-    runtimeState(initial = emptyMap()) { it.chat.subagentActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chat.questions }
   val chatProgressCard: StateFlow<ChatProgressCard?> = runtimeState(initial = null) { it.chat.progressCard }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chat.sessions }
@@ -747,9 +730,7 @@ class MainViewModel private constructor(
     runtimeRef.value?.refreshNodePermissionSurface()
   }
 
-  fun setDisplayName(value: String) {
-    prefs.setDisplayName(value)
-  }
+  fun setDisplayName(value: String): Unit = prefs.setDisplayName(value)
 
   fun setCameraEnabled(value: Boolean) {
     runtimeRef.value?.setCameraEnabled(value) ?: prefs.setCameraEnabled(value)
@@ -759,29 +740,9 @@ class MainViewModel private constructor(
     runtimeRef.value?.setLocationMode(mode) ?: prefs.setLocationMode(mode)
   }
 
-  fun setLocationPreciseEnabled(value: Boolean) {
-    prefs.setLocationPreciseEnabled(value)
-  }
+  fun setLocationPreciseEnabled(value: Boolean): Unit = prefs.setLocationPreciseEnabled(value)
 
-  fun setPreventSleep(value: Boolean) {
-    prefs.setPreventSleep(value)
-  }
-
-  fun setManualEnabled(value: Boolean) {
-    prefs.setManualEnabled(value)
-  }
-
-  fun setManualHost(value: String) {
-    prefs.setManualHost(value)
-  }
-
-  fun setManualPort(value: Int) {
-    prefs.setManualPort(value)
-  }
-
-  fun setManualTls(value: Boolean) {
-    prefs.setManualTls(value)
-  }
+  fun setPreventSleep(value: Boolean): Unit = prefs.setPreventSleep(value)
 
   /** Auth replacement retires the old gateway identity, including every retained composer owner. */
   internal suspend fun clearChatComposerGateway(stableId: String) {
@@ -827,6 +788,7 @@ class MainViewModel private constructor(
     // Repeat after suspending share cleanup. Any callback that raced the first tombstone is
     // serialized with this final token-and-attachment purge before cleanup returns.
     chatComposerState.removeMediaOwners(matches)
+    chatBrowserDismissalsState.update { dismissals -> dismissals.filterKeys { !matches(it) } }
   }
 
   internal fun saveGatewayConfigAndConnect(
@@ -940,34 +902,17 @@ class MainViewModel private constructor(
     _startOnboardingAtGatewaySetup.value = false
   }
 
-  fun grantInstalledAppsDisclosureConsent() {
-    ensureRuntime().grantInstalledAppsDisclosureConsent()
-  }
+  fun grantInstalledAppsDisclosureConsent(): Unit = ensureRuntime().grantInstalledAppsDisclosureConsent()
 
-  fun revokeInstalledAppsDisclosureConsent() {
-    ensureRuntime().revokeInstalledAppsDisclosureConsent()
-  }
+  fun revokeInstalledAppsDisclosureConsent(): Unit = ensureRuntime().revokeInstalledAppsDisclosureConsent()
 
-  fun setAccessibilityControlEnabled(value: Boolean) {
-    prefs.setAccessibilityControlEnabled(value)
-  }
+  fun setAccessibilityControlEnabled(value: Boolean): Unit = prefs.setAccessibilityControlEnabled(value)
 
-  fun setNotificationForwardingEnabled(value: Boolean) {
-    ensureRuntime().setNotificationForwardingEnabled(value)
-  }
+  fun setNotificationForwardingEnabled(value: Boolean): Unit = ensureRuntime().setNotificationForwardingEnabled(value)
 
-  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
-    ensureRuntime().setNotificationForwardingMode(mode)
-  }
+  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode): Unit = ensureRuntime().setNotificationForwardingMode(mode)
 
-  fun setNotificationForwardingPackagesCsv(csv: String) {
-    val packages =
-      csv
-        .split(',')
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-    ensureRuntime().setNotificationForwardingPackages(packages)
-  }
+  fun setNotificationForwardingPackages(packages: List<String>): Unit = ensureRuntime().setNotificationForwardingPackages(packages)
 
   fun setNotificationForwardingQuietHours(
     enabled: Boolean,
@@ -975,17 +920,7 @@ class MainViewModel private constructor(
     end: String,
   ): Boolean = ensureRuntime().setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
 
-  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    ensureRuntime().setNotificationForwardingMaxEventsPerMinute(value)
-  }
-
-  fun setNotificationForwardingSessionKey(value: String?) {
-    ensureRuntime().setNotificationForwardingSessionKey(value)
-  }
-
-  fun setVoiceScreenActive(active: Boolean) {
-    ensureRuntime().setVoiceScreenActive(active)
-  }
+  fun setVoiceScreenActive(active: Boolean): Unit = ensureRuntime().setVoiceScreenActive(active)
 
   /** Routes assistant intents into chat, either as a draft or queued auto-send prompt. */
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {
@@ -1175,11 +1110,8 @@ class MainViewModel private constructor(
     val operation =
       synchronized(assistantAutoSendLock) {
         if (!_assistantAutoSendInFlight.compareAndSet(false, true)) return
-        if (pendingAssistantAutoSendMutable.value != pending) {
-          _assistantAutoSendInFlight.value = false
-          return
-        }
-        val composerSendId = chatComposerState.tryBeginTrackedSend(pending.owner)
+        val composerSendId =
+          if (pendingAssistantAutoSendMutable.value == pending) chatComposerState.tryBeginTrackedSend(pending.owner) else null
         if (composerSendId == null) {
           _assistantAutoSendInFlight.value = false
           return
@@ -1196,7 +1128,7 @@ class MainViewModel private constructor(
     viewModelScope.launch {
       try {
         val accepted =
-          sendChatForOwnerAwaitAcceptance(
+          ensureRuntime().sendChatForOwnerAwaitAcceptance(
             owner = pending.owner,
             message = prompt,
             thinking = thinking,
@@ -1229,9 +1161,7 @@ class MainViewModel private constructor(
     }
   }
 
-  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice) {
-    ensureRuntime().acknowledgeTalkModeFailure(notice)
-  }
+  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = ensureRuntime().acknowledgeTalkModeFailure(notice)
 
   fun showTalkSetupMessage(message: NativeText) {
     pendingTalkSetupMessageMutable.value = message
@@ -1241,23 +1171,13 @@ class MainViewModel private constructor(
     pendingTalkSetupMessageMutable.update { if (it === message) null else it }
   }
 
-  fun setTalkModeEnabled(enabled: Boolean) {
-    ensureRuntime().setTalkModeEnabled(enabled)
-  }
+  fun setTalkModeEnabled(enabled: Boolean): Unit = ensureRuntime().setTalkModeEnabled(enabled)
 
-  suspend fun requestVoiceNotePermission(): Boolean = requestRecordAudioPermission()
-
-  suspend fun requestDictationPermission(): Boolean = requestRecordAudioPermission()
-
-  private suspend fun requestRecordAudioPermission(): Boolean {
+  internal suspend fun requestRecordAudioPermission(): Boolean {
     val requester = permissionRequester ?: return false
-    return try {
+    return runCatchingCancellable {
       requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
-    } catch (error: CancellationException) {
-      throw error
-    } catch (_: Throwable) {
-      false
-    }
+    }.getOrDefault(false)
   }
 
   internal fun tryAcquireVoiceNoteMic(): Boolean = runtimeRef.value?.tryAcquireVoiceNoteMic() == true
@@ -1272,27 +1192,17 @@ class MainViewModel private constructor(
     runtimeRef.value?.releaseDictationMic()
   }
 
-  fun setSpeakerEnabled(enabled: Boolean) {
-    ensureRuntime().setSpeakerEnabled(enabled)
-  }
+  fun setSpeakerEnabled(enabled: Boolean): Unit = ensureRuntime().setSpeakerEnabled(enabled)
 
-  fun setPreferredAudioInputDevice(key: String?) {
-    ensureRuntime().setPreferredAudioInputDevice(key)
-  }
+  fun setPreferredAudioInputDevice(key: String?): Unit = ensureRuntime().setPreferredAudioInputDevice(key)
 
   internal fun observeAudioInputDevices(onChanged: (List<AudioInputDeviceOption>) -> Unit): AutoCloseable = AndroidAudioInputSession.observeAvailableDevices(getApplication(), onChanged)
 
-  fun setVoiceWakeEnabled(enabled: Boolean) {
-    ensureRuntime().setVoiceWakeEnabled(enabled)
-  }
+  fun setVoiceWakeEnabled(enabled: Boolean): Unit = ensureRuntime().setVoiceWakeEnabled(enabled)
 
-  fun setVoiceWakeWords(values: List<String>) {
-    ensureRuntime().setVoiceWakeWords(values)
-  }
+  fun setVoiceWakeWords(values: List<String>): Unit = ensureRuntime().setVoiceWakeWords(values)
 
-  fun refreshVoiceWakePermission() {
-    ensureRuntime().refreshVoiceWakePermission()
-  }
+  fun refreshVoiceWakePermission(): Unit = ensureRuntime().refreshVoiceWakePermission()
 
   private fun syncQueuedAppearancePreference(
     key: String,
@@ -1306,44 +1216,24 @@ class MainViewModel private constructor(
     }
   }
 
-  fun setAppearanceTextScale(scale: AppearanceTextScale) {
-    prefs.setAppearanceTextScale(scale)
-  }
+  fun setAppearanceTextScale(scale: AppearanceTextScale): Unit = prefs.setAppearanceTextScale(scale)
 
-  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) = setAppearancePreference("ui.themeMode", mode, prefs::setAppearanceThemeMode) { it.rawValue }
+
+  fun setAppearanceThemeFamily(family: AppearanceThemeFamily) = setAppearancePreference("ui.theme", family, prefs::setAppearanceThemeFamily) { it.rawValue }
+
+  fun setAppearanceAccentArgb(argb: Long?) = setAppearancePreference("ui.accent", argb, prefs::setAppearanceAccentArgb, ::appearanceAccentPreferenceValue)
+
+  private fun <T> setAppearancePreference(
+    key: String,
+    value: T,
+    save: (value: T, pendingSync: Boolean, pendingScope: AppearancePreferenceScope?, retainLocal: Boolean) -> Unit,
+    preferenceValue: (T) -> String?,
+  ) {
     val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
     val retainLocal = pendingScope == null
-    prefs.setAppearanceThemeMode(
-      mode = mode,
-      pendingSync = !retainLocal,
-      pendingScope = pendingScope,
-      retainLocal = retainLocal,
-    )
-    if (!retainLocal) syncQueuedAppearancePreference("ui.themeMode", mode.rawValue)
-  }
-
-  fun setAppearanceThemeFamily(family: AppearanceThemeFamily) {
-    val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
-    val retainLocal = pendingScope == null
-    prefs.setAppearanceThemeFamily(
-      family = family,
-      pendingSync = !retainLocal,
-      pendingScope = pendingScope,
-      retainLocal = retainLocal,
-    )
-    if (!retainLocal) syncQueuedAppearancePreference("ui.theme", family.rawValue)
-  }
-
-  fun setAppearanceAccentArgb(argb: Long?) {
-    val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
-    val retainLocal = pendingScope == null
-    prefs.setAppearanceAccentArgb(
-      argb = argb,
-      pendingSync = !retainLocal,
-      pendingScope = pendingScope,
-      retainLocal = retainLocal,
-    )
-    if (!retainLocal) syncQueuedAppearancePreference("ui.accent", appearanceAccentPreferenceValue(argb))
+    save(value, !retainLocal, pendingScope, retainLocal)
+    if (!retainLocal) syncQueuedAppearancePreference(key, preferenceValue(value))
   }
 
   fun refreshGatewayConnection() {
@@ -1422,15 +1312,18 @@ class MainViewModel private constructor(
   fun setGatewayConnectionEnabled(
     stableId: String,
     enabled: Boolean,
-  ) {
-    ensureRuntime().setGatewayConnectionEnabled(stableId, enabled)
-  }
+  ): Unit = ensureRuntime().setGatewayConnectionEnabled(stableId, enabled)
 
   fun forgetGateway(stableId: String) {
     launchGatewayConfigOperation { isCurrent ->
       ensureRuntime().forgetGateway(stableId, isCurrent)
     }
   }
+
+  suspend fun renameGateway(
+    stableId: String,
+    name: String,
+  ): Boolean = withContext(Dispatchers.IO) { prefs.gatewayRegistry.rename(stableId, name) }
 
   fun disconnect() {
     gatewayConfigOperationSeq.incrementAndGet()
@@ -1525,126 +1418,52 @@ class MainViewModel private constructor(
     playbackRendition: Boolean,
   ) = ensureRuntime().chat.loadMediaArtifact(artifactId, kind, playbackRendition)
 
-  fun refreshModelCatalog() {
-    ensureRuntime().refreshModelCatalog()
-  }
+  fun refreshModelCatalog(): Unit = ensureRuntime().refreshModelCatalog()
 
-  fun refreshProviderModels(refresh: Boolean = false) {
-    ensureRuntime().refreshProviderModels(refresh)
-  }
+  fun refreshProviderModels(refresh: Boolean = false): Unit = ensureRuntime().refreshProviderModels(refresh)
 
-  fun refreshTalkSetupReadiness() {
-    ensureRuntime().refreshTalkSetupReadiness()
-  }
+  fun refreshTalkSetupReadiness(): Unit = ensureRuntime().refreshTalkSetupReadiness()
 
-  fun refreshAgents() {
-    ensureRuntime().refreshAgents()
-  }
+  fun refreshAgents(): Unit = ensureRuntime().refreshAgents()
 
-  fun refreshCronJobs() {
-    ensureRuntime().refreshCronJobs()
-  }
+  fun refreshCronJobs(): Unit = ensureRuntime().refreshCronJobs()
 
-  fun loadCronJobDetail(id: String) {
-    ensureRuntime().loadCronJobDetail(id)
-  }
+  fun loadCronJobDetail(id: String): Unit = ensureRuntime().loadCronJobDetail(id)
 
-  fun refreshCronRunHistory(id: String) {
-    ensureRuntime().refreshCronRunHistory(id)
-  }
+  fun refreshCronRunHistory(id: String): Unit = ensureRuntime().refreshCronRunHistory(id)
 
-  fun clearCronJobDetail() {
-    ensureRuntime().clearCronJobDetail()
-  }
+  fun clearCronJobDetail(): Unit = ensureRuntime().clearCronJobDetail()
 
-  fun dismissCronActionNotice(id: String) {
-    ensureRuntime().dismissCronActionNotice(id)
-  }
+  fun dismissCronActionNotice(id: String): Unit = ensureRuntime().dismissCronActionNotice(id)
 
-  fun runCronJob(id: String) {
-    ensureRuntime().runCronJob(id)
-  }
+  fun runCronJob(id: String): Unit = ensureRuntime().runCronJob(id)
 
   fun setCronJobEnabled(
     id: String,
     enabled: Boolean,
-  ) {
-    ensureRuntime().setCronJobEnabled(id = id, enabled = enabled)
-  }
+  ): Unit = ensureRuntime().setCronJobEnabled(id = id, enabled = enabled)
 
   fun updateCronJob(
     original: GatewayCronJobDetail,
     edit: GatewayCronJobEdit,
-  ) {
-    ensureRuntime().updateCronJob(original = original, edit = edit)
-  }
+  ): Unit = ensureRuntime().updateCronJob(original = original, edit = edit)
 
-  fun deleteCronJob(id: String) {
-    ensureRuntime().deleteCronJob(id)
-  }
+  fun deleteCronJob(id: String): Unit = ensureRuntime().deleteCronJob(id)
 
-  fun refreshUsage() {
-    ensureRuntime().refreshUsage()
-  }
+  fun refreshUsage(): Unit = ensureRuntime().refreshUsage()
 
-  fun refreshSkills() {
-    ensureRuntime().refreshSkills()
-  }
-
-  fun refreshSkillWorkshopProposals(agentId: String? = null) {
-    ensureRuntime().refreshSkillWorkshopProposals(agentId = agentId)
-  }
-
-  fun resetSkillWorkshopAgentScope(agentId: String? = null) {
-    ensureRuntime().resetSkillWorkshopAgentScope(agentId = agentId)
-  }
-
-  fun inspectSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ) {
-    ensureRuntime().inspectSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
-  }
-
-  fun applySkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ) {
-    ensureRuntime().applySkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
-  }
-
-  fun rejectSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ) {
-    ensureRuntime().rejectSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
-  }
-
-  fun quarantineSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ) {
-    ensureRuntime().quarantineSkillWorkshopProposal(proposalId = proposalId, agentId = agentId)
-  }
+  fun refreshSkills(): Unit = ensureRuntime().refreshSkills()
 
   fun setSkillEnabled(
     skillKey: String,
     enabled: Boolean,
-  ) {
-    ensureRuntime().setSkillEnabled(skillKey, enabled)
-  }
+  ): Unit = ensureRuntime().setSkillEnabled(skillKey, enabled)
 
-  fun searchClawHubSkills(query: String) {
-    ensureRuntime().searchClawHubSkills(query)
-  }
+  fun searchClawHubSkills(query: String): Unit = ensureRuntime().searchClawHubSkills(query)
 
-  fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
-    ensureRuntime().reviewClawHubSkillInstall(skill)
-  }
+  fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary): Unit = ensureRuntime().reviewClawHubSkillInstall(skill)
 
-  fun dismissClawHubSkillInstallReview() {
-    ensureRuntime().dismissClawHubSkillInstallReview()
-  }
+  fun dismissClawHubSkillInstallReview(): Unit = ensureRuntime().dismissClawHubSkillInstallReview()
 
   fun installClawHubSkill(
     slug: String,
@@ -1653,103 +1472,55 @@ class MainViewModel private constructor(
     ensureRuntime().installClawHubSkill(slug, version)
   }
 
-  fun clearClawHubSkillMessage() {
-    ensureRuntime().clearClawHubSkillMessage()
-  }
+  fun clearClawHubSkillMessage(): Unit = ensureRuntime().clearClawHubSkillMessage()
 
-  fun refreshNodesDevices() {
-    ensureRuntime().refreshNodesDevices()
-  }
+  fun refreshNodesDevices(): Unit = ensureRuntime().refreshNodesDevices()
 
-  fun approveNodeCapabilities(requestId: String) {
-    ensureRuntime().approveNodeCapabilities(requestId)
-  }
+  fun approveNodeCapabilities(requestId: String): Unit = ensureRuntime().approveNodeCapabilities(requestId)
 
   fun approveDevicePairing(
     requestId: String,
     deviceId: String,
-  ) {
-    ensureRuntime().approveDevicePairing(requestId, deviceId)
-  }
+  ): Unit = ensureRuntime().approveDevicePairing(requestId, deviceId)
 
-  fun rejectDevicePairing(requestId: String) {
-    ensureRuntime().rejectDevicePairing(requestId)
-  }
+  fun rejectDevicePairing(requestId: String): Unit = ensureRuntime().rejectDevicePairing(requestId)
 
-  fun removePairedDevice(deviceId: String) {
-    ensureRuntime().removePairedDevice(deviceId)
-  }
+  fun removePairedDevice(deviceId: String): Unit = ensureRuntime().removePairedDevice(deviceId)
 
-  fun refreshExecApprovals() {
-    ensureRuntime().refreshExecApprovals()
-  }
+  fun refreshExecApprovals(): Unit = ensureRuntime().refreshExecApprovals()
 
   fun resolveExecApproval(
     id: String,
     decision: String,
+  ): Unit = ensureRuntime().resolveExecApproval(id = id, decision = decision)
+
+  fun dismissExecApprovalsNotice(expected: GatewayExecApprovalNotice): Unit = ensureRuntime().dismissExecApprovalsNotice(expected)
+
+  fun refreshChannels(): Unit = ensureRuntime().refreshChannels()
+
+  fun refreshDreaming(): Unit = ensureRuntime().refreshDreaming()
+
+  fun refreshHealthLogs(): Unit = ensureRuntime().refreshHealthLogs()
+
+  fun loadCurrentChat(): Unit = ensureRuntime().loadCurrentChat()
+
+  fun refreshChat(): Unit = ensureRuntime().chat.refresh()
+
+  internal fun chatSetMessageReaction(
+    messageId: String,
+    emoji: String,
+    remove: Boolean,
   ) {
-    ensureRuntime().resolveExecApproval(id = id, decision = decision)
-  }
-
-  fun dismissExecApprovalsNotice(expected: GatewayExecApprovalNotice) {
-    ensureRuntime().dismissExecApprovalsNotice(expected)
-  }
-
-  fun refreshChannels() {
-    ensureRuntime().refreshChannels()
-  }
-
-  fun refreshDreaming() {
-    ensureRuntime().refreshDreaming()
-  }
-
-  fun refreshHealthLogs() {
-    ensureRuntime().refreshHealthLogs()
-  }
-
-  fun loadCurrentChat() {
-    ensureRuntime().loadCurrentChat()
-  }
-
-  fun refreshChat() {
-    ensureRuntime().chat.refresh()
+    runtimeRef.value?.chat?.setMessageReaction(messageId, emoji, remove)
   }
 
   fun refreshChatSessions(
     limit: Int? = null,
     archived: Boolean = false,
-  ) {
-    ensureRuntime().chat.refreshSessions(limit = limit, archived = archived)
-  }
+  ): Unit = ensureRuntime().chat.refreshSessions(limit = limit, archived = archived)
 
-  suspend fun patchChatSession(
-    key: String,
-    ownerAgentId: String? = null,
-    expectedSessionId: String? = null,
-    label: String? = null,
-    clearLabel: Boolean = false,
-    category: String? = null,
-    clearCategory: Boolean = false,
-    color: String? = null,
-    clearColor: Boolean = false,
-    pinned: Boolean? = null,
-    archived: Boolean? = null,
-    unread: Boolean? = null,
-  ) {
-    ensureRuntime().chat.patchSession(
-      key = key,
-      ownerAgentId = ownerAgentId,
-      expectedSessionId = expectedSessionId,
-      label = label,
-      clearLabel = clearLabel,
-      category = category,
-      clearCategory = clearCategory,
-      color = color,
-      clearColor = clearColor,
-      pinned = pinned,
-      archived = archived,
-      unread = unread,
-    )
+  internal suspend fun patchChatSession(patch: ChatSessionPatch) {
+    ensureRuntime().chat.patchSession(patch)
   }
 
   suspend fun deleteChatSession(
@@ -1777,16 +1548,22 @@ class MainViewModel private constructor(
   suspend fun renameChatSessionGroup(
     from: String,
     to: String,
+    expectedGatewayStableId: String?,
   ) {
+    if (activeGatewayStableId.value != expectedGatewayStableId) return
     val stored = prefs.sessionCustomGroups.value
     // Web semantics: replace a stored name in place, otherwise remember the new name.
     prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
-    ensureRuntime().chat.renameSessionGroup(from = from, to = to)
+    ensureRuntime().chat.renameSessionGroup(from = from, to = to, expectedGatewayId = expectedGatewayStableId)
   }
 
-  suspend fun deleteChatSessionGroup(group: String) {
+  suspend fun deleteChatSessionGroup(
+    group: String,
+    expectedGatewayStableId: String?,
+  ) {
+    if (activeGatewayStableId.value != expectedGatewayStableId) return
     prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
-    ensureRuntime().chat.dissolveSessionGroup(group)
+    ensureRuntime().chat.dissolveSessionGroup(group, expectedGatewayId = expectedGatewayStableId)
   }
 
   suspend fun forkChatSession(
@@ -1845,9 +1622,7 @@ class MainViewModel private constructor(
 
   suspend fun fetchWorkspaceFile(path: String): GatewayWorkspaceFile = ensureRuntime().fetchWorkspaceFile(path)
 
-  fun setChatThinkingLevel(level: String) {
-    ensureRuntime().chat.setThinkingLevel(level)
-  }
+  fun setChatThinkingLevel(level: String): Unit = ensureRuntime().chat.setThinkingLevel(level)
 
   fun setChatSessionFastMode(
     sessionKey: String,
@@ -1864,27 +1639,19 @@ class MainViewModel private constructor(
   fun setChatSessionModel(
     sessionKey: String,
     modelRef: String?,
-  ) {
-    ensureRuntime().chat.setSessionModel(sessionKey = sessionKey, modelRef = modelRef)
-  }
+  ): Unit = ensureRuntime().chat.setSessionModel(sessionKey = sessionKey, modelRef = modelRef)
 
   fun setChatSessionPermissionMode(
     sessionKey: String,
     permissionMode: ChatPermissionMode?,
-  ) {
-    ensureRuntime().chat.setSessionPermissionMode(sessionKey = sessionKey, permissionMode = permissionMode)
-  }
+  ): Unit = ensureRuntime().chat.setSessionPermissionMode(sessionKey = sessionKey, permissionMode = permissionMode)
 
-  fun toggleModelFavorite(ref: String) {
-    prefs.toggleModelFavorite(ref)
-  }
+  fun toggleModelFavorite(ref: String): Unit = prefs.toggleModelFavorite(ref)
 
   fun toggleChatMessageSpeech(
     messageId: String,
     text: String,
-  ) {
-    ensureRuntime().toggleMessageSpeech(messageId = messageId, text = text)
-  }
+  ): Unit = ensureRuntime().toggleMessageSpeech(messageId = messageId, text = text)
 
   fun stopChatMessageSpeech() {
     runtimeRef.value?.stopMessageSpeech()
@@ -1893,17 +1660,11 @@ class MainViewModel private constructor(
   fun switchChatSession(
     sessionKey: String,
     ownerAgentId: String? = null,
-  ) {
-    ensureRuntime().switchChatSession(sessionKey, ownerAgentId)
-  }
+  ): Unit = ensureRuntime().switchChatSession(sessionKey, ownerAgentId)
 
-  fun refreshSessionCatalog(agentId: String?) {
-    ensureRuntime().refreshSessionCatalog(agentId)
-  }
+  fun refreshSessionCatalog(agentId: String?): Unit = ensureRuntime().refreshSessionCatalog(agentId)
 
-  fun loadMoreSessionCatalog(catalogId: String) {
-    ensureRuntime().loadMoreSessionCatalog(catalogId)
-  }
+  fun loadMoreSessionCatalog(catalogId: String): Unit = ensureRuntime().loadMoreSessionCatalog(catalogId)
 
   fun continueSessionCatalogEntry(
     entry: SessionCatalogEntry,
@@ -1916,13 +1677,9 @@ class MainViewModel private constructor(
     viewModelScope.launch { ensureRuntime().createSessionCatalogEntry(catalogId) }
   }
 
-  fun setSidebarPageOrder(pageIds: List<String>) {
-    prefs.setSidebarPageOrder(pageIds)
-  }
+  fun setSidebarPageOrder(pageIds: List<String>): Unit = prefs.setSidebarPageOrder(pageIds)
 
-  fun setSidebarVisiblePages(pageIds: List<String>) {
-    prefs.setSidebarVisiblePages(pageIds)
-  }
+  fun setSidebarVisiblePages(pageIds: List<String>): Unit = prefs.setSidebarVisiblePages(pageIds)
 
   /** Reads the authoritative flows at commit time so stale Compose callbacks cannot cross chats. */
   private fun currentChatComposerOwner(): ChatComposerOwner? {
@@ -2016,14 +1773,7 @@ class MainViewModel private constructor(
       chatComposerState.beginMediaImport(owner, mediaAuthorizationId, mainSessionKey) ?: return null
     return viewModelScope.launch(Dispatchers.IO) {
       try {
-        val loaded =
-          try {
-            load()
-          } catch (err: CancellationException) {
-            throw err
-          } catch (_: Throwable) {
-            emptyList()
-          }
+        val loaded = runCatchingCancellable { load() }.getOrDefault(emptyList())
         chatComposerState.completeMediaImport(
           importId = importId,
           candidates = loaded,
@@ -2036,36 +1786,22 @@ class MainViewModel private constructor(
     }
   }
 
-  internal fun refreshSystemAgentChat() {
-    ensureRuntime().systemAgentChatController.refresh()
-  }
+  internal fun refreshSystemAgentChat(): Unit = ensureRuntime().systemAgentChatController.refresh()
 
-  internal fun clearSystemAgentChatInput() {
-    ensureRuntime().systemAgentChatController.clearInputForBackground()
-  }
+  internal fun clearSystemAgentChatInput(): Unit = ensureRuntime().systemAgentChatController.clearInputForBackground()
 
-  internal fun setSystemAgentChatInput(value: String) {
-    ensureRuntime().systemAgentChatController.setInput(value)
-  }
+  internal fun setSystemAgentChatInput(value: String): Unit = ensureRuntime().systemAgentChatController.setInput(value)
 
-  internal fun sendSystemAgentChatInput() {
-    ensureRuntime().systemAgentChatController.sendInput()
-  }
+  internal fun sendSystemAgentChatInput(): Unit = ensureRuntime().systemAgentChatController.sendInput()
 
   internal fun answerSystemAgentQuestion(
     messageId: String,
     optionLabel: String,
-  ) {
-    ensureRuntime().systemAgentChatController.answerQuestion(messageId, optionLabel)
-  }
+  ): Unit = ensureRuntime().systemAgentChatController.answerQuestion(messageId, optionLabel)
 
-  internal fun skipSystemAgentQuestion(messageId: String) {
-    ensureRuntime().systemAgentChatController.skipQuestion(messageId)
-  }
+  internal fun skipSystemAgentQuestion(messageId: String): Unit = ensureRuntime().systemAgentChatController.skipQuestion(messageId)
 
-  internal fun restartSystemAgentChat() {
-    ensureRuntime().systemAgentChatController.restart()
-  }
+  internal fun restartSystemAgentChat(): Unit = ensureRuntime().systemAgentChatController.restart()
 
   internal fun openSystemAgentChatHandoff() {
     val handoff = ensureRuntime().systemAgentChatController.openHandoff() ?: return
@@ -2076,34 +1812,22 @@ class MainViewModel private constructor(
     handleAssistantLaunch(AssistantLaunchRequest(source = "system-agent", prompt = null, autoSend = false))
   }
 
-  fun selectChatAgent(agentId: String) {
-    ensureRuntime().selectChatAgent(agentId)
-  }
+  fun selectChatAgent(agentId: String): Unit = ensureRuntime().selectChatAgent(agentId)
 
   suspend fun fetchChatSessionList(
     search: String?,
     archived: Boolean,
   ): List<ChatSessionEntry> = ensureRuntime().chat.fetchSessionList(search = search, archived = archived)
 
-  fun abortChat() {
-    ensureRuntime().chat.abort()
-  }
+  fun abortChat(): Unit = ensureRuntime().chat.abort()
 
-  fun startNewChat(worktree: Boolean = false) {
-    ensureRuntime().startNewChat(worktree = worktree)
-  }
+  fun startNewChat(worktree: Boolean = false): Unit = ensureRuntime().startNewChat(worktree = worktree)
 
-  fun refreshChatCommands() {
-    ensureRuntime().chat.refreshCommands()
-  }
+  fun refreshChatCommands(): Unit = ensureRuntime().chat.refreshCommands()
 
-  fun retryChatOutboxCommand(id: String) {
-    ensureRuntime().chat.retryOutboxCommand(id)
-  }
+  fun retryChatOutboxCommand(id: String): Unit = ensureRuntime().chat.retryOutboxCommand(id)
 
-  fun deleteChatOutboxCommand(id: String) {
-    ensureRuntime().chat.deleteOutboxCommand(id)
-  }
+  fun deleteChatOutboxCommand(id: String): Unit = ensureRuntime().chat.deleteOutboxCommand(id)
 
   fun updateChatQuestionDraft(
     prompt: ChatQuestionPrompt,
@@ -2113,32 +1837,9 @@ class MainViewModel private constructor(
   fun resolveChatQuestion(
     prompt: ChatQuestionPrompt,
     answers: Map<String, List<String>>,
-  ) {
-    ensureRuntime().chat.resolveQuestion(prompt, answers)
-  }
+  ): Unit = ensureRuntime().chat.resolveQuestion(prompt, answers)
 
-  fun skipChatQuestion(prompt: ChatQuestionPrompt) {
-    ensureRuntime().chat.skipQuestion(prompt)
-  }
-
-  suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().chat.listBackgroundTasks(agentId)
-
-  suspend fun getBackgroundTask(taskId: String): BackgroundTask = ensureRuntime().chat.getBackgroundTask(taskId)
-
-  internal suspend fun sendChatForOwnerAwaitAcceptance(
-    owner: ChatComposerOwner,
-    message: String,
-    thinking: String,
-    attachments: List<OutgoingAttachment>,
-    idempotencyKey: String,
-  ): Boolean =
-    ensureRuntime().sendChatForOwnerAwaitAcceptance(
-      owner = owner,
-      message = message,
-      thinking = thinking,
-      attachments = attachments,
-      idempotencyKey = idempotencyKey,
-    )
+  fun skipChatQuestion(prompt: ChatQuestionPrompt): Unit = ensureRuntime().chat.skipQuestion(prompt)
 
   /** Admission outlives the composing Activity; accepted payloads clear by owner and snapshot. */
   internal fun beginChatComposerSend(
@@ -2153,17 +1854,15 @@ class MainViewModel private constructor(
       var accepted: Boolean? = null
       try {
         accepted =
-          sendChatForOwnerAwaitAcceptance(
-            owner = request.owner,
-            message = request.message,
-            thinking = thinking,
-            attachments = outgoing,
-            idempotencyKey = request.commandId,
-          )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        accepted = false
+          runCatchingCancellable {
+            ensureRuntime().sendChatForOwnerAwaitAcceptance(
+              owner = request.owner,
+              message = request.message,
+              thinking = thinking,
+              attachments = outgoing,
+              idempotencyKey = request.commandId,
+            )
+          }.getOrDefault(false)
       } finally {
         chatComposerState.completeSend(request, accepted)
       }

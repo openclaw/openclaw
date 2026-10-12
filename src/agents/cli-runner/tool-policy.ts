@@ -21,10 +21,7 @@ export function normalizeCliToolName(toolName: string): string {
 }
 
 /** Keeps only explicit runtime caps for backend-owned exact translation. */
-export function resolveCliRuntimeToolsAllow(
-  toolsAllow?: string[],
-  _toolsAllowIsDefault?: boolean,
-): string[] | undefined {
+export function resolveCliRuntimeToolsAllow(toolsAllow?: string[]): string[] | undefined {
   if (toolsAllow === undefined) {
     return undefined;
   }

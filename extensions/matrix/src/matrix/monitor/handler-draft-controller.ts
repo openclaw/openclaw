@@ -70,7 +70,6 @@ export async function createMatrixDraftController(params: {
   let currentDraftBlockOffset = 0;
   let latestDraftFullText = "";
   const pendingDraftBoundaries: PendingDraftBoundary[] = [];
-  const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
   let currentDraftReplyToId = draftReplyToId;
   const progressConfigEntry = accountConfig ?? cfg.channels?.matrix;
   const progressSeed = `${accountId}:${roomId}`;
@@ -135,15 +134,11 @@ export async function createMatrixDraftController(params: {
     };
   };
 
-  const getDisplayableDraftText = () => {
+  const updateDraftFromLatestFullText = () => {
     const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
       (boundary) => boundary.messageGeneration === currentDraftMessageGeneration,
     )?.endOffset;
-    return latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
-  };
-
-  const updateDraftFromLatestFullText = () => {
-    const blockText = getDisplayableDraftText();
+    const blockText = latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
     if (blockText) {
       draftStream?.update(blockText);
     }
@@ -153,12 +148,12 @@ export async function createMatrixDraftController(params: {
     const payloadTextLength = payload.text?.length ?? 0;
     const messageGeneration = context?.assistantMessageIndex ?? currentDraftMessageGeneration;
     const lastQueuedDraftBoundaryOffset =
-      latestQueuedDraftBoundaryOffsets.get(messageGeneration) ?? 0;
+      pendingDraftBoundaries.findLast((entry) => entry.messageGeneration === messageGeneration)
+        ?.endOffset ?? 0;
     // Logical block boundaries must follow emitted block text, not whichever
     // later partial preview has already arrived by the time the async
     // boundary callback drains.
     const nextDraftBoundaryOffset = lastQueuedDraftBoundaryOffset + payloadTextLength;
-    latestQueuedDraftBoundaryOffsets.set(messageGeneration, nextDraftBoundaryOffset);
     pendingDraftBoundaries.push({
       messageGeneration,
       endOffset: nextDraftBoundaryOffset,
@@ -168,13 +163,6 @@ export async function createMatrixDraftController(params: {
   const advanceDraftBlockBoundary = (options?: { fallbackToLatestEnd?: boolean }) => {
     const completedBoundary = pendingDraftBoundaries.shift();
     if (completedBoundary) {
-      if (
-        !pendingDraftBoundaries.some(
-          (entry) => entry.messageGeneration === completedBoundary.messageGeneration,
-        )
-      ) {
-        latestQueuedDraftBoundaryOffsets.delete(completedBoundary.messageGeneration);
-      }
       if (completedBoundary.messageGeneration === currentDraftMessageGeneration) {
         currentDraftBlockOffset = completedBoundary.endOffset;
       }
@@ -199,7 +187,6 @@ export async function createMatrixDraftController(params: {
     currentDraftBlockOffset = 0;
     latestDraftFullText = "";
     pendingDraftBoundaries.length = 0;
-    latestQueuedDraftBoundaryOffsets.clear();
     currentDraftReplyToId = draftReplyToId;
     progressDraft.beginNewTurn({ force: true });
   };

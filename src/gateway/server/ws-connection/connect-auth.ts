@@ -1,4 +1,3 @@
-// Gateway WebSocket connect authentication validates protocol, origin, credentials, and device proof.
 import {
   ConnectErrorDetailCodes,
   resolveAuthConnectErrorDetailCode,
@@ -12,8 +11,8 @@ import { verifyDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import {
   CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   deviceBootstrapProfilesEqual,
-  type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
+import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
@@ -43,11 +42,7 @@ import {
   shouldPreserveLocalCliSharedAuthScopes,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
-import {
-  buildHandshakeAuthLogKey,
-  HandshakeAuthLogLimiter,
-  shouldLimitMissingCredentialAuthLog,
-} from "./handshake-auth-log-limiter.js";
+import { HandshakeAuthLogLimiter } from "./handshake-auth-log-limiter.js";
 import type {
   AuthenticatedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -113,24 +108,13 @@ async function authenticateGatewayConnectCore(
     return undefined;
   }
   let { scopes } = admission;
-  const {
-    minProtocol,
-    maxProtocol,
-    usesLegacyNodeProtocol,
-    role,
-    isControlUi,
-    isBrowserOperatorUi,
-    isWebchat,
-    isNativeAppUi,
-    startupPending,
-  } = admission;
+  const { role, isControlUi, startupPending } = admission;
   const startupBootstrapConnect = startupPending && isStartupNodeBootstrapConnect(connectParams);
 
-  const deviceRaw = connectParams.device;
+  const device = connectParams.device;
   const hasTokenAuth = Boolean(connectParams.auth?.token);
   const hasPasswordAuth = Boolean(connectParams.auth?.password);
   const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
-  const device = deviceRaw;
   const hasBootstrapProof = Boolean(connectParams.auth?.bootstrapToken);
   const hasDeviceTokenProof = Boolean(connectParams.auth?.deviceToken);
   const hasRawHandshakeCredentials =
@@ -148,13 +132,7 @@ async function authenticateGatewayConnectCore(
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
   });
-  const {
-    sharedAuthOk,
-    pendingSharedAuthFailure,
-    bootstrapTokenCandidate,
-    deviceTokenCandidate,
-    deviceTokenCandidateSource,
-  } = connectAuthState;
+  const { sharedAuthOk, pendingSharedAuthFailure, bootstrapTokenCandidate } = connectAuthState;
   let { authResult, authOk, authMethod } = connectAuthState;
   let rejectedPendingSharedAuthFailure = pendingSharedAuthFailure;
   const settleRejectedSharedAuthFailure = async () => {
@@ -209,25 +187,14 @@ async function authenticateGatewayConnectCore(
       client: connectParams.client,
       isLocalClient,
     });
-    const authLogDecision = shouldLimitMissingCredentialAuthLog({
+    const suppressedText = unauthorizedHandshakeLogLimiter.missingCredentialLogSuffix({
       reason: failedAuth.reason,
+      remoteAddr,
+      client: clientLabel,
+      mode: connectParams.client.mode,
       authProvided,
-    })
-      ? unauthorizedHandshakeLogLimiter.register(
-          buildHandshakeAuthLogKey({
-            reason: failedAuth.reason,
-            remoteAddr,
-            client: clientLabel,
-            mode: connectParams.client.mode,
-            authProvided,
-          }),
-        )
-      : { shouldLog: true, suppressedSinceLastLog: 0 };
-    if (authLogDecision.shouldLog) {
-      const suppressedText =
-        authLogDecision.suppressedSinceLastLog > 0
-          ? ` suppressed=${authLogDecision.suppressedSinceLastLog}`
-          : "";
+    });
+    if (suppressedText !== undefined) {
       logWsControl.warn(
         `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"} guidance=${formatForLog(authMessage)}${suppressedText}`,
       );
@@ -256,24 +223,30 @@ async function authenticateGatewayConnectCore(
       connectParams.scopes = scopes;
     }
   };
-  let pairingLocality = resolvePairingLocality({
-    connectParams,
-    isLocalClient,
-    requestHost,
-    requestOrigin,
-    remoteAddress: remoteAddr,
-    hasProxyHeaders,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
-  let skipLocalBackendSelfPairing = shouldSkipLocalBackendSelfPairing({
-    connectParams,
-    locality: pairingLocality,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
+  const resolvePairingContext = () => {
+    const pairingLocality = resolvePairingLocality({
+      connectParams,
+      isLocalClient,
+      requestHost,
+      requestOrigin,
+      remoteAddress: remoteAddr,
+      hasProxyHeaders,
+      hasBrowserOriginHeader,
+      sharedAuthOk,
+      authMethod,
+    });
+    return {
+      pairingLocality,
+      skipLocalBackendSelfPairing: shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: pairingLocality,
+        hasBrowserOriginHeader,
+        sharedAuthOk,
+        authMethod,
+      }),
+    };
+  };
+  let { pairingLocality, skipLocalBackendSelfPairing } = resolvePairingContext();
   const preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
     connectParams,
     locality: pairingLocality,
@@ -298,7 +271,6 @@ async function authenticateGatewayConnectCore(
       sharedAuthOk,
       authOk,
       hasSharedAuth,
-      isLocalClient,
     });
     // Device-less shared auth clears self-declared scopes by default.
     // Only first-party local control paths preserve scopes: backend self-
@@ -362,16 +334,7 @@ async function authenticateGatewayConnectCore(
   }
 
   const authDecision = await resolveConnectAuthDecision({
-    state: {
-      authResult,
-      authOk,
-      authMethod,
-      sharedAuthOk,
-      pendingSharedAuthFailure,
-      bootstrapTokenCandidate,
-      deviceTokenCandidate,
-      deviceTokenCandidateSource,
-    },
+    state: connectAuthState,
     hasDeviceIdentity: Boolean(device),
     deviceId: device?.id,
     publicKey: device?.publicKey,
@@ -391,24 +354,7 @@ async function authenticateGatewayConnectCore(
   ({ authResult, authOk, authMethod } = authDecision);
   const deviceTokenSharedGatewaySessionGeneration =
     authDecision.deviceTokenSharedGatewaySessionGeneration;
-  pairingLocality = resolvePairingLocality({
-    connectParams,
-    isLocalClient,
-    requestHost,
-    requestOrigin,
-    remoteAddress: remoteAddr,
-    hasProxyHeaders,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
-  skipLocalBackendSelfPairing = shouldSkipLocalBackendSelfPairing({
-    connectParams,
-    locality: pairingLocality,
-    hasBrowserOriginHeader,
-    sharedAuthOk,
-    authMethod,
-  });
+  ({ pairingLocality, skipLocalBackendSelfPairing } = resolvePairingContext());
   if (!authOk) {
     if (startupPending && bootstrapTokenCandidate) {
       await rejectGatewayStartupConnect(context);
@@ -491,7 +437,6 @@ async function authenticateGatewayConnectCore(
       return undefined;
     }
   }
-  const handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
   const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
     isControlUi,
     role,
@@ -512,18 +457,17 @@ async function authenticateGatewayConnectCore(
   });
 
   return {
+    ...admission,
+    authPolicy: captureGatewayAuthPolicy(context.configSnapshot, {
+      role,
+      authMethod,
+      authModeOverride: resolvedAuth.modeSource === "override" ? resolvedAuth.mode : undefined,
+      verifiedIdentity: authResult.user,
+      browserOrigin: context.browserOrigin,
+    }),
     resolvedAuth,
-    minProtocol,
-    maxProtocol,
-    usesLegacyNodeProtocol,
-    role,
     scopes,
     hasRequestedScopes,
-    isControlUi,
-    isBrowserOperatorUi,
-    isWebchat,
-    isNativeAppUi,
-    startupPending,
     device,
     devicePublicKey: deviceProof.devicePublicKey,
     deviceAuthPayloadVersion: deviceProof.deviceAuthPayloadVersion,
@@ -532,14 +476,12 @@ async function authenticateGatewayConnectCore(
     bootstrapTokenCandidate,
     deviceTokenSharedGatewaySessionGeneration,
     authResult,
-    authOk,
     authMethod,
     pairingLocality,
-    usesSharedGatewayAuth,
     sessionUsesSharedGatewayAuth,
     sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
-    handoffBootstrapProfile,
+    handoffBootstrapProfile: null,
     trustedProxyAuthOk,
     controlUiPairingKind,
     skipLocalBackendSelfPairing,

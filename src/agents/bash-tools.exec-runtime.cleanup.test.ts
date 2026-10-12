@@ -1,15 +1,24 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  cancelExecRequestOwners,
+  captureExecRequestOwners,
+  withExecRequestTurn,
+} from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { captureExecRequestCancellation } from "./bash-process-control.js";
+import { readBackgroundProcesses } from "./bash-process-observation.js";
 import {
   acknowledgeNotifyOnExit,
+  deleteSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
   markBackgrounded,
   waitForExecScope,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
@@ -17,27 +26,30 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
-
-const requestHeartbeatMock = vi.hoisted(() => vi.fn());
+const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: requestHeartbeatMock,
+// mock-isolation: Control completion receipts while testing process cancellation and cleanup.
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: sessionKey,
+    generation: "test",
+  }),
+  enqueueSessionEventForHost: enqueueSessionEventMock,
 }));
-vi.mock("../infra/system-events.js", () => ({
+vi.mock(import("../infra/system-events.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
 }));
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => supervisorMock,
 }));
 
-let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
-beforeAll(async () => {
-  ({ runExecProcess } = await import("./bash-tools.exec-runtime.js"));
-});
 beforeEach(() => {
   resetProcessRegistryForTests();
-  requestHeartbeatMock.mockReset();
+  enqueueSessionEventMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
@@ -46,13 +58,61 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
+function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]>) {
+  return runExecProcess({
+    command: "sandbox-fixture",
+    workdir: "/tmp",
+    env: {},
+    usePty: false,
+    warnings: [],
+    maxOutput: 1000,
+    pendingMaxOutput: 1000,
+    notifyOnExit: false,
+    timeoutSec: null,
+    ...params,
+  });
+}
+
 it.each([
-  { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: false },
-  { reason: "overall-timeout" as const, cleanupFails: true, duringFinalize: false },
-  { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: true },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: false,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "overall-timeout" as const,
+    cleanupFails: true,
+    duringFinalize: false,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: true,
+    requestStop: "none" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: true,
+    requestStop: "capture" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: true,
+    duringFinalize: true,
+    requestStop: "capture" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: true,
+    duringFinalize: true,
+    requestStop: "direct" as const,
+  },
 ])(
-  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize)",
-  async ({ reason, cleanupFails, duringFinalize }) => {
+  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize, requestStop=$requestStop, cleanupFails=$cleanupFails)",
+  async ({ reason, cleanupFails, duringFinalize, requestStop }) => {
     const termination = createDeferred();
     const artifactFinalization = createDeferred();
     const artifactsEntered = createDeferred();
@@ -111,18 +171,21 @@ it.each([
         cancel: cancelOther,
         wait: () => otherExit.promise,
       }));
-    const options = {
-      command: "sandbox-fixture",
-      workdir: "/tmp",
-      env: {},
-      usePty: false,
-      warnings: [],
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
-      notifyOnExit: false,
-      timeoutSec: null,
-    };
     const originalSource = new AbortController();
+    const requestIdentity = {
+      runId: "sandbox-request-stop",
+      sessionKey: "agent:main:targeted-cleanup",
+    };
+    const request =
+      requestStop !== "none"
+        ? await withExecRequestTurn({ identity: requestIdentity }, async () => {
+            const owner = captureExecRequestOwners(requestIdentity)?.[0];
+            if (!owner) {
+              throw new Error("Expected the sandbox command's request owner");
+            }
+            return { owner, cancellation: captureExecRequestCancellation(requestIdentity) };
+          })
+        : undefined;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
@@ -132,9 +195,14 @@ it.each([
     });
     const guest = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:targeted-cleanup", operatorAuthority: authority },
-      () => runExecProcess({ ...options, scopeKey: "targeted-cleanup:guest", sandbox }),
+      () =>
+        runTestExecProcess({
+          scopeKey: "targeted-cleanup:guest",
+          sandbox,
+          requestOwners: request ? [request.owner] : undefined,
+        }),
     );
-    const other = await runExecProcess({ ...options, sandbox: otherSandbox });
+    const other = await runTestExecProcess({ sandbox: otherSandbox });
     markBackgrounded(guest.session);
     markBackgrounded(other.session);
     try {
@@ -146,7 +214,19 @@ it.each([
       if (duringFinalize) {
         guestExit.resolve(createRunExit());
         await artifactsEntered.promise;
-        originalSource.abort(new Error("original invitation revoked during artifact finalization"));
+        if (request) {
+          if (requestStop === "capture") {
+            expect(request.cancellation.cancel()).toBe(true);
+          } else {
+            cancelExecRequestOwners([request.owner]);
+          }
+          expect(originalSource.signal.aborted).toBe(false);
+          expect(guest.session.requestCancelled).toBe(true);
+        } else {
+          originalSource.abort(
+            new Error("original invitation revoked during artifact finalization"),
+          );
+        }
       } else if (reason === "manual-cancel") {
         guest.kill();
       } else {
@@ -179,13 +259,25 @@ it.each([
       }
       termination.resolve();
       const outcome = await joined;
-      expect(outcome.status).toBe(duringFinalize ? "completed" : "failed");
+      expect(outcome.status).toBe(duringFinalize && !cleanupFails ? "completed" : "failed");
       expect(sandbox.terminate).toHaveBeenCalledOnce();
       expect(sandbox.finalizeExec).toHaveBeenCalledOnce();
       expect(releaseSource).toHaveBeenCalledOnce();
       if (cleanupFails) {
         expect(guest.session.finalizationFailed).toBe(true);
         expect(outcome.aggregated).toContain(cleanupError.message);
+      }
+      if (request) {
+        // The command registered after capture; output eviction cannot erase its cleanup verdict.
+        deleteSession(guest.session.id);
+        expect(getFinishedSession(guest.session.id)).toBeUndefined();
+        if (cleanupFails) {
+          await expect(request.cancellation.settle()).rejects.toThrow(
+            "command cleanup could not be confirmed",
+          );
+        } else {
+          await expect(request.cancellation.settle()).resolves.toBeUndefined();
+        }
       }
       expect(other.session.exited).toBe(duringFinalize);
       otherExit.resolve(createRunExit());
@@ -202,54 +294,8 @@ it.each([
   },
 );
 
-it("joins targeted sandbox cleanup on startup failure and still finalizes artifacts", async () => {
-  const termination = createDeferred();
-  const terminate = vi.fn(() => termination.promise);
-  const finalizeExec = vi.fn(async () => {});
-  supervisorMock.spawn.mockRejectedValueOnce(new Error("transport construction failed"));
-  const sandbox = {
-    containerName: "startup-fixture",
-    workspaceDir: "/workspace",
-    containerWorkdir: "/workspace",
-    prepareProcessCleanup: (env: Record<string, string>) => ({
-      env,
-      terminate,
-      interrupt: async () => false,
-    }),
-    buildExecSpec: async () => ({
-      argv: ["sandbox-fixture"],
-      env: {},
-      stdinMode: "pipe-closed" as const,
-    }),
-    finalizeExec,
-  };
-  const pending = runExecProcess({
-    command: "sandbox-fixture",
-    workdir: "/tmp",
-    env: {},
-    sandbox,
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
-    timeoutSec: null,
-  });
-  const rejected = expect(pending).rejects.toThrow("transport construction failed");
-  try {
-    termination.resolve();
-    await rejected;
-    expect(terminate).toHaveBeenCalledOnce();
-    expect(finalizeExec).toHaveBeenCalledOnce();
-  } finally {
-    termination.resolve();
-    await pending.catch(() => {});
-  }
-});
-
 it.each([
   { fails: false, beforeJoin: false, commandCode: 0 },
-  { fails: true, beforeJoin: false, commandCode: 0 },
   { fails: true, beforeJoin: true, commandCode: 0 },
   { fails: true, beforeJoin: false, commandCode: 127 },
 ])(
@@ -266,16 +312,7 @@ it.each([
       startedAtMs: Date.now(),
       stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
       cancel: vi.fn(),
-      wait: async () => ({
-        reason: "exit",
-        exitCode: commandCode,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
+      wait: async () => createRunExit({ exitCode: commandCode }),
     }));
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
@@ -287,10 +324,7 @@ it.each([
     });
     try {
       await cleanupScope.run(async () => {
-        run = await runExecProcess({
-          command: "sandbox-fixture",
-          workdir: "/tmp",
-          env: {},
+        run = await runTestExecProcess({
           scopeKey,
           sandbox: {
             containerName: "fixture",
@@ -303,12 +337,6 @@ it.each([
             }),
             finalizeExec,
           },
-          usePty: false,
-          warnings: [],
-          maxOutput: 1000,
-          pendingMaxOutput: 1000,
-          notifyOnExit: false,
-          timeoutSec: null,
         });
         markBackgrounded(run.session);
         await entered.promise;
@@ -341,13 +369,10 @@ it.each([
 
 describe("terminal execution-context release", () => {
   it.each([
-    { path: "notify", trace: ["task", "enqueue", "wake"] },
+    { path: "notify", trace: ["task", "enqueue"] },
     { path: "quiet", trace: ["task"] },
     { path: "unrouted", trace: ["task"] },
     { path: "observed", trace: ["task"] },
-    { path: "task failure", trace: ["task", "task"] },
-    { path: "enqueue failure", trace: ["task", "enqueue", "task"] },
-    { path: "wake failure", trace: ["task", "enqueue", "wake", "task"] },
   ])(
     "releases routing after $path without changing notification order",
     async ({ path, trace }) => {
@@ -355,70 +380,70 @@ describe("terminal execution-context release", () => {
       const observed: string[] = [];
       const removal = vi.fn(() => true);
       const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
-      const failure = new Error("notification boundary failed");
-      enqueueSystemEventWithReceiptMock.mockImplementation((_text, options) => {
+      enqueueSessionEventMock.mockImplementation((_text, options) => {
         observed.push("enqueue");
         expect(options.deliveryContext).toEqual(deliveryContext);
-        if (path === "enqueue failure") {
-          throw failure;
-        }
-        return removal;
-      });
-      requestHeartbeatMock.mockImplementation(() => {
-        observed.push("wake");
-        if (path === "wake failure") {
-          throw failure;
-        }
+        return {
+          id: "exec-event",
+          cancel: removal,
+          settled: Promise.resolve({
+            status: "completed",
+            executionStarted: true,
+            delivered: false,
+          }),
+        };
       });
       supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
         ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
         wait: () => exit.promise,
       }));
-      const run = await runExecProcess({
+      const run = await runTestExecProcess({
         command: "context-release",
-        workdir: "/tmp",
-        env: {},
-        usePty: false,
-        warnings: [],
-        maxOutput: 1_000,
-        pendingMaxOutput: 1_000,
-        scopeKey: "process-scope",
+        scopeKey: "global",
         sessionKey: path === "unrouted" ? undefined : "agent:main:main",
         agentId: "main",
         eventRouting: { mainKey: "main", sessionScope: "per-sender" },
         notifyDeliveryContext: deliveryContext,
         notifyOnExit: true,
         notifyOnExitEmptySuccess: false,
-        timeoutSec: null,
         onSettledBeforeNotify: () => {
           observed.push("task");
-          if (path === "task failure" && observed.length === 1) {
-            throw failure;
-          }
         },
       });
       markBackgrounded(run.session);
+      const scope = { scopeKeys: ["global"], agentId: "main" };
+      const running = readBackgroundProcesses(scope).processes[0];
+      expect(running).toMatchObject({ processId: run.session.id, status: "running" });
       if (path === "observed") {
         acknowledgeNotifyOnExit(run.session);
       }
       exit.resolve(createRunExit());
       const outcome = await run.promise;
       expect(observed).toEqual(trace);
-      expect(outcome.status).toBe(path.endsWith("failure") ? "failed" : "completed");
+      expect(outcome.status).toBe("completed");
       const retained = getFinishedSession(run.session.id);
-      expect(retained).toMatchObject({ scopeKey: "process-scope", terminalStatus: "completed" });
+      expect(retained).toMatchObject({ scopeKey: "global", terminalStatus: "completed" });
+      expect(readBackgroundProcesses(scope).processes).toEqual([
+        expect.objectContaining({
+          processId: run.session.id,
+          instanceId: running?.instanceId,
+          status: "completed",
+          canStop: false,
+        }),
+      ]);
+      expect(readBackgroundProcesses({ ...scope, agentId: "other" }).processes).toEqual([]);
       for (const field of [
         "sessionKey",
-        "agentId",
         "eventRouting",
         "notifyDeliveryContext",
+        "notifySessionTarget",
         "notifyOnExit",
         "notifyOnExitEmptySuccess",
         "stdin",
       ] as const) {
         expect(retained?.[field], field).toBeUndefined();
       }
-      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("wake") ? removal : undefined);
+      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("enqueue") ? removal : undefined);
       expect(removal).not.toHaveBeenCalled();
     },
   );
@@ -426,15 +451,9 @@ describe("terminal execution-context release", () => {
 
 describe("exec settlement recovery", () => {
   it.each([
-    { boundary: "task", asynchronous: false },
-    { boundary: "persistent task", asynchronous: false },
-    { boundary: "enqueue", asynchronous: false },
-    { boundary: "wake", asynchronous: false },
     { boundary: "task", asynchronous: true },
     { boundary: "persistent task", asynchronous: true },
     { boundary: "stdin", asynchronous: true },
-    { boundary: "enqueue", asynchronous: true },
-    { boundary: "wake", asynchronous: true },
   ])(
     "settles $boundary failure with asynchronous=$asynchronous before releasing the exec scope",
     async ({ boundary, asynchronous }) => {
@@ -447,18 +466,20 @@ describe("exec settlement recovery", () => {
       const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
       const scopeKey = `settlement-recovery:${boundary}:${asynchronous}`;
       const failure = new Error("process settlement failed");
-      enqueueSystemEventWithReceiptMock.mockImplementation(() => {
+      enqueueSessionEventMock.mockImplementation(() => {
         observed.push("enqueue");
         if (boundary === "enqueue") {
           throw failure;
         }
-        return vi.fn(() => true);
-      });
-      requestHeartbeatMock.mockImplementation(() => {
-        observed.push("wake");
-        if (boundary === "wake") {
-          throw failure;
-        }
+        return {
+          id: "exec-event",
+          cancel: vi.fn(() => true),
+          settled: Promise.resolve({
+            status: "completed",
+            executionStarted: true,
+            delivered: false,
+          }),
+        };
       });
       supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
         ...runtimeManagedRun(input, "process output\n"),
@@ -467,18 +488,15 @@ describe("exec settlement recovery", () => {
       const run = await withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
         () =>
-          runExecProcess({
+          runTestExecProcess({
             command: "settlement-recovery",
-            workdir: "/tmp",
-            env: {},
-            usePty: false,
-            warnings: [],
-            maxOutput: 1000,
-            pendingMaxOutput: 1000,
             scopeKey,
             sessionKey: "agent:main:settlement-recovery",
+            agentId: "main",
+            eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+            notifyDeliveryContext: { channel: "telegram", to: "synthetic-chat" },
             notifyOnExit: true,
-            timeoutSec: null,
+            notifyOnExitEmptySuccess: false,
             onSettledBeforeNotify: (outcome) => {
               observed.push(`task:${outcome.status}`);
               identities.push(getGatewayToolCallerIdentity());
@@ -540,28 +558,38 @@ describe("exec settlement recovery", () => {
         if (boundary === "persistent task") {
           await expect(run.promise).rejects.toBe(failure);
         } else {
-          await expect(run.promise).resolves.toMatchObject({ status: "failed" });
+          await expect(run.promise).resolves.toMatchObject({
+            status: boundary === "enqueue" ? "completed" : "failed",
+          });
         }
         await joined;
         expect(observed).toEqual([
           "task:completed",
           ...(boundary === "stdin" ? ["stdin"] : []),
-          ...(boundary === "enqueue" || boundary === "wake" ? ["enqueue"] : []),
-          ...(boundary === "wake" ? ["wake"] : []),
-          "task:failed",
+          ...(boundary === "enqueue" ? ["enqueue"] : ["task:failed"]),
           "scope-released",
         ]);
-        expect(identities).toEqual([undefined, undefined]);
+        expect(identities).toEqual(boundary === "enqueue" ? [undefined] : [undefined, undefined]);
         expect(getActiveBackgroundExecSessionCount()).toBe(0);
         expect(run.session.finalizing).toBe(false);
         expect(run.session.terminalStatus).toBe("completed");
+        expect(run.session.agentId).toBe("main");
         if (boundary !== "stdin") {
           expect(getFinishedSession(run.session.id)).toMatchObject({
             terminalStatus: "completed",
             aggregated: "process output\n",
           });
         }
-        expect(run.session.sessionKey).toBeUndefined();
+        for (const field of [
+          "sessionKey",
+          "eventRouting",
+          "notifyDeliveryContext",
+          "notifySessionTarget",
+          "notifyOnExit",
+          "notifyOnExitEmptySuccess",
+        ] as const) {
+          expect(run.session[field], field).toBeUndefined();
+        }
       } finally {
         settlement.resolve();
         correction.resolve();

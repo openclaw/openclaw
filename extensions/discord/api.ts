@@ -20,12 +20,10 @@ export {
 export { tryHandleDiscordMessageActionGuildAdmin } from "./src/actions/handle-action.guild-admin.js";
 export { DiscordApiError, fetchDiscord, requestDiscord } from "./src/api.js";
 export { buildDiscordComponentMessage } from "./src/components.js";
-type DiscordMessageActionHandler =
-  typeof import("./src/channel-actions.runtime.js").handleDiscordMessageAction;
-
 // Deprecated compatibility surface for existing @openclaw/discord/api.js consumers.
-export const handleDiscordMessageAction: DiscordMessageActionHandler = async (...args) =>
-  (await import("./src/channel-actions.runtime.js")).handleDiscordMessageAction(...args);
+export const handleDiscordMessageAction: typeof import("./src/actions/handle-action.js").handleDiscordMessageAction =
+  async (...args) =>
+    (await import("./src/actions/handle-action.js")).handleDiscordMessageAction(...args);
 export {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,

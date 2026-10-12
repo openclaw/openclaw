@@ -32,14 +32,6 @@ function foldFuzzyCharacters(text: string): string {
     .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ");
 }
 
-/**
- * Normalize text for fuzzy matching. Applies progressive transformations:
- * - Strip trailing whitespace from each line
- * - Normalize smart quotes to ASCII equivalents
- * - Normalize Unicode dashes/hyphens to ASCII hyphen
- * - Normalize special Unicode spaces to regular space
- *
- */
 function normalizeForFuzzyMatch(text: string): string {
   return foldFuzzyCharacters(
     text
@@ -143,36 +135,6 @@ function buildFuzzyBoundaries(
   return boundaries;
 }
 
-function translateFuzzySpan(
-  normalized: FuzzyNormalizedFile,
-  fuzzyStart: number,
-  fuzzyLength: number,
-): { originalStart: number; originalLength: number } | undefined {
-  const fuzzyEnd = fuzzyStart + fuzzyLength;
-  const originalStart = normalized.boundaries?.[fuzzyStart]?.start;
-  const originalEnd = normalized.boundaries?.[fuzzyEnd]?.end;
-  if (originalStart === undefined || originalEnd === undefined) {
-    return undefined;
-  }
-  return {
-    originalStart,
-    originalLength: originalEnd - originalStart,
-  };
-}
-
-interface FuzzyMatchResult {
-  /** Whether a match was found */
-  found: boolean;
-  /** The index where the match starts (in original-content coordinates) */
-  index: number;
-  /** Length of the matched text (in original-content coordinates) */
-  matchLength: number;
-  /** Whether fuzzy matching was used (false = exact match) */
-  usedFuzzyMatch: boolean;
-  /** The normalized match exists but cannot map to an unambiguous source span. */
-  unsafeBoundary?: boolean;
-}
-
 export interface Edit {
   oldText: string;
   newText: string;
@@ -180,101 +142,6 @@ export interface Edit {
 
 interface MatchedEdit extends TextReplacement {
   editIndex: number;
-}
-
-interface AppliedEdits {
-  baseContent: string;
-  newContent: string;
-  replacements: MatchedEdit[];
-}
-
-/**
- * Find oldText in content, trying exact match first, then fuzzy match.
- * When fuzzy matching is used and an offsetMap is provided, the returned
- * index and matchLength are translated back to original-content coordinates
- * so the caller can apply replacements against the un-normalized content.
- */
-function fuzzyFindText(
-  content: string,
-  oldText: string,
-  normalizedFile?: FuzzyNormalizedFile,
-): FuzzyMatchResult {
-  // Try exact match first
-  const exactIndex = content.indexOf(oldText);
-  if (exactIndex !== -1) {
-    return {
-      found: true,
-      index: exactIndex,
-      matchLength: oldText.length,
-      usedFuzzyMatch: false,
-    };
-  }
-
-  // Try fuzzy match - work entirely in normalized space
-  const fuzzyContent = normalizedFile?.text ?? normalizeForFuzzyMatch(content);
-  const fuzzyOldText = normalizeForFuzzyMatch(oldText);
-  if (!fuzzyOldText) {
-    return {
-      found: false,
-      index: -1,
-      matchLength: 0,
-      usedFuzzyMatch: true,
-      unsafeBoundary: true,
-    };
-  }
-  const fuzzyIndex = fuzzyContent.indexOf(fuzzyOldText);
-
-  if (fuzzyIndex === -1) {
-    return {
-      found: false,
-      index: -1,
-      matchLength: 0,
-      usedFuzzyMatch: false,
-    };
-  }
-
-  // Source boundaries matter only after normalized text actually matches.
-  if (normalizedFile && !normalizedFile.boundaries) {
-    normalizedFile.boundaries = buildFuzzyBoundaries(content, normalizedFile.text);
-  }
-  const translated = normalizedFile
-    ? translateFuzzySpan(normalizedFile, fuzzyIndex, fuzzyOldText.length)
-    : undefined;
-  if (!translated) {
-    return {
-      found: false,
-      index: -1,
-      matchLength: 0,
-      usedFuzzyMatch: true,
-      unsafeBoundary: true,
-    };
-  }
-
-  return {
-    found: true,
-    index: translated.originalStart,
-    matchLength: translated.originalLength,
-    usedFuzzyMatch: true,
-  };
-}
-
-/** Strip UTF-8 BOM if present, return both the BOM (if any) and the text without it */
-function stripBom(content: string): { bom: string; text: string } {
-  return content.startsWith("\uFEFF")
-    ? { bom: "\uFEFF", text: content.slice(1) }
-    : { bom: "", text: content };
-}
-
-function countOccurrences(fuzzyContent: string, oldText: string): number {
-  const fuzzyOldText = normalizeForFuzzyMatch(oldText);
-  if (!fuzzyOldText) {
-    return 0;
-  }
-  return fuzzyContent.split(fuzzyOldText).length - 1;
-}
-
-function countExactOccurrences(content: string, oldText: string): number {
-  return content.split(oldText).length - 1;
 }
 
 const EDIT_CANDIDATE_LIMIT = 3;
@@ -403,44 +270,6 @@ function getCandidateHint(content: string, oldText: string): string {
   );
 }
 
-function getNotFoundError(
-  path: string,
-  editIndex: number,
-  totalEdits: number,
-  content: string,
-  oldText: string,
-): Error {
-  const prefix =
-    totalEdits === 1 ? "Could not find the exact text" : `Could not find edits[${editIndex}]`;
-  const hint = getCandidateHint(content, oldText);
-  return new Error(
-    `${prefix} in ${path}. The old text must match exactly including all whitespace and newlines.${hint}`,
-  );
-}
-
-function getDuplicateError(
-  path: string,
-  editIndex: number,
-  totalEdits: number,
-  occurrences: number,
-): Error {
-  if (totalEdits === 1) {
-    return new Error(
-      `Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`,
-    );
-  }
-  return new Error(
-    `Found ${occurrences} occurrences of edits[${editIndex}] in ${path}. Each oldText must be unique. Please provide more context to make it unique.`,
-  );
-}
-
-function getEmptyOldTextError(path: string, editIndex: number, totalEdits: number): Error {
-  if (totalEdits === 1) {
-    return new Error(`oldText must not be empty in ${path}.`);
-  }
-  return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
-}
-
 function getUnsafeFuzzyBoundaryError(path: string, editIndex: number, totalEdits: number): Error {
   const target = totalEdits === 1 ? "The fuzzy match" : `The fuzzy match for edits[${editIndex}]`;
   return new Error(
@@ -455,7 +284,7 @@ function getUnsafeFuzzyBoundaryError(path: string, editIndex: number, totalEdits
  * assembled from original spans so offsets remain stable. Fuzzy matching is
  * lookup-only: replacements always splice into the original content.
  */
-function applyEdits(normalizedContent: string, edits: Edit[], path: string): AppliedEdits {
+function applyEdits(normalizedContent: string, edits: Edit[], path: string) {
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
     newText: normalizeToLF(edit.newText),
@@ -463,48 +292,74 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
 
   for (const [i, edit] of normalizedEdits.entries()) {
     if (edit.oldText.length === 0) {
-      throw getEmptyOldTextError(path, i, normalizedEdits.length);
+      throw new Error(
+        normalizedEdits.length === 1
+          ? `oldText must not be empty in ${path}.`
+          : `edits[${i}].oldText must not be empty in ${path}.`,
+      );
     }
   }
 
-  const needsFuzzyMapping = normalizedEdits.some(
-    (edit) => !normalizedContent.includes(edit.oldText),
-  );
-  const fuzzyFile: FuzzyNormalizedFile | undefined = needsFuzzyMapping
-    ? { text: normalizeForFuzzyMatch(normalizedContent), boundaries: undefined }
-    : undefined;
+  let fuzzyFile: FuzzyNormalizedFile | undefined;
   const matchedEdits: MatchedEdit[] = [];
   for (const [i, edit] of normalizedEdits.entries()) {
-    const matchResult = fuzzyFindText(normalizedContent, edit.oldText, fuzzyFile);
-    const occurrences =
-      fuzzyFile && matchResult.usedFuzzyMatch
-        ? countOccurrences(fuzzyFile.text, edit.oldText)
-        : countExactOccurrences(normalizedContent, edit.oldText);
-    if (occurrences > 1) {
-      throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
+    let matchIndex = normalizedContent.indexOf(edit.oldText);
+    let matchLength = edit.oldText.length;
+    const fuzzy = matchIndex === -1;
+    let searchContent = normalizedContent;
+    let searchText = edit.oldText;
+    if (fuzzy) {
+      fuzzyFile ??= { text: normalizeForFuzzyMatch(normalizedContent), boundaries: undefined };
+      searchContent = fuzzyFile.text;
+      searchText = normalizeForFuzzyMatch(edit.oldText);
+      matchIndex = searchContent.indexOf(searchText);
     }
-    if (matchResult.unsafeBoundary) {
+
+    const occurrences = searchText ? searchContent.split(searchText).length - 1 : 0;
+    if (occurrences > 1) {
+      throw new Error(
+        normalizedEdits.length === 1
+          ? `Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`
+          : `Found ${occurrences} occurrences of edits[${i}] in ${path}. Each oldText must be unique. Please provide more context to make it unique.`,
+      );
+    }
+    if (!searchText) {
       throw getUnsafeFuzzyBoundaryError(path, i, normalizedEdits.length);
     }
-    if (!matchResult.found) {
-      throw getNotFoundError(path, i, normalizedEdits.length, normalizedContent, edit.oldText);
+    if (matchIndex === -1) {
+      const prefix =
+        normalizedEdits.length === 1
+          ? "Could not find the exact text"
+          : `Could not find edits[${i}]`;
+      const hint = getCandidateHint(normalizedContent, edit.oldText);
+      throw new Error(
+        `${prefix} in ${path}. The old text must match exactly including all whitespace and newlines.${hint}`,
+      );
+    }
+    if (fuzzy && fuzzyFile) {
+      // Uniqueness precedes boundary errors; only accepted fuzzy matches need the source map.
+      fuzzyFile.boundaries ??= buildFuzzyBoundaries(normalizedContent, fuzzyFile.text);
+      const start = fuzzyFile.boundaries?.[matchIndex]?.start;
+      const end = fuzzyFile.boundaries?.[matchIndex + searchText.length]?.end;
+      if (start === undefined || end === undefined) {
+        throw getUnsafeFuzzyBoundaryError(path, i, normalizedEdits.length);
+      }
+      matchIndex = start;
+      matchLength = end - start;
     }
 
     matchedEdits.push({
       editIndex: i,
-      matchIndex: matchResult.index,
-      matchLength: matchResult.matchLength,
+      matchIndex,
+      matchLength,
       newText: edit.newText,
     });
   }
 
   matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
   for (let i = 1; i < matchedEdits.length; i++) {
-    const previous = matchedEdits.at(i - 1);
-    const current = matchedEdits.at(i);
-    if (!previous || !current) {
-      continue;
-    }
+    const previous = matchedEdits[i - 1]!;
+    const current = matchedEdits[i]!;
     if (previous.matchIndex + previous.matchLength > current.matchIndex) {
       throw new Error(
         `edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${path}. Merge them into one edit or target disjoint regions.`,
@@ -513,65 +368,9 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
   }
 
   return {
-    baseContent: normalizedContent,
     newContent: applyReplacements(normalizedContent, matchedEdits),
     replacements: matchedEdits,
   };
-}
-
-export interface EditDiffResult {
-  diff: string;
-  firstChangedLine: number | undefined;
-}
-
-export interface EditDiffError {
-  error: string;
-}
-
-function validateNoOpEditTargets(
-  normalizedContent: string,
-  noOpEdits: Edit[],
-  realEdits: Edit[],
-  path: string,
-): void {
-  if (noOpEdits.length > 0) {
-    applyEdits(
-      normalizedContent,
-      noOpEdits.map((edit) => ({ oldText: edit.oldText, newText: "" })),
-      path,
-    );
-  }
-  const exactNoOpEdits = noOpEdits.filter((edit) =>
-    normalizedContent.includes(normalizeToLF(edit.oldText)),
-  );
-  if (exactNoOpEdits.length > 0 && realEdits.length > 0) {
-    applyEdits(
-      normalizedContent,
-      [...exactNoOpEdits, ...realEdits].map((edit) => ({
-        oldText: edit.oldText,
-        newText: "",
-      })),
-      path,
-    );
-  }
-}
-
-function splitNoOpEdits(
-  normalizedContent: string,
-  edits: Edit[],
-  path: string,
-): { noOpEdits: Edit[]; realEdits: Edit[] } {
-  const noOpEdits: Edit[] = [];
-  const realEdits: Edit[] = [];
-  for (const edit of edits) {
-    if (edit.oldText === edit.newText) {
-      applyEdits(normalizedContent, [{ oldText: edit.oldText, newText: "" }], path);
-      noOpEdits.push(edit);
-    } else {
-      realEdits.push(edit);
-    }
-  }
-  return { noOpEdits, realEdits };
 }
 
 type FileEditPlan =
@@ -579,28 +378,46 @@ type FileEditPlan =
   | { changed: true; content: string; editCount: number; receipt: FileDiff };
 
 export function prepareFileEdit(content: string, edits: Edit[], path: string): FileEditPlan {
-  const { bom, text } = stripBom(content);
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const text = content.slice(bom.length);
   const normalized = normalizeToLF(text);
-  const { noOpEdits, realEdits } = splitNoOpEdits(normalized, edits, path);
-  validateNoOpEditTargets(normalized, noOpEdits, realEdits, path);
+  const noOpEdits: Edit[] = [];
+  const realEdits: Edit[] = [];
+  for (const edit of edits) {
+    if (edit.oldText === edit.newText) {
+      applyEdits(normalized, [edit], path);
+      noOpEdits.push(edit);
+    } else {
+      realEdits.push(edit);
+    }
+  }
+  if (noOpEdits.length > 0) {
+    applyEdits(normalized, noOpEdits, path);
+  }
+  const exactNoOpEdits = noOpEdits.filter((edit) =>
+    normalized.includes(normalizeToLF(edit.oldText)),
+  );
+  if (exactNoOpEdits.length > 0 && realEdits.length > 0) {
+    applyEdits(normalized, [...exactNoOpEdits, ...realEdits], path);
+  }
   if (realEdits.length === 0) {
     return {
       changed: false,
       message: `No changes made to ${path}. The replacement text is identical to the original.`,
     };
   }
-  const { baseContent, newContent, replacements } = applyEdits(normalized, realEdits, path);
-  if (baseContent === newContent) {
+  const { newContent, replacements } = applyEdits(normalized, realEdits, path);
+  if (normalized === newContent) {
     return {
       changed: false,
       message: `No changes made to ${path}. The replacement produced identical content.`,
     };
   }
-  const finalContent = applyReplacementsPreservingLineEndings(text, baseContent, replacements);
+  const finalContent = applyReplacementsPreservingLineEndings(text, normalized, replacements);
   if (normalizeToLF(finalContent) !== newContent) {
     throw new Error("Line-ending restoration changed the normalized edit result.");
   }
-  const receipt = prepareFileDiff(path, baseContent, newContent);
+  const receipt = prepareFileDiff(path, normalized, newContent);
   if (!receipt) {
     throw new Error("Unbounded edit diff did not produce a patch");
   }

@@ -1,4 +1,4 @@
-// Node screen recording command: invokes screen.record and writes returned media locally.
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -19,7 +19,6 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node screen recording commands. */
 export function registerNodesScreenCommands(nodes: Command) {
   const screen = nodes
     .command("screen")
@@ -64,9 +63,8 @@ export function registerNodesScreenCommands(nodes: Command) {
           });
 
           const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const parsed = parseScreenRecordPayload(res.payload);
-          const filePath = opts.out ?? screenRecordTempPath({ ext: parsed.format || "mp4" });
+          const parsed = parseScreenRecordPayload(asRecord(raw).payload);
+          const filePath = opts.out ?? screenRecordTempPath({ ext: parsed.format });
           const written = await writeScreenRecordToFile(filePath, parsed.base64);
 
           if (opts.json) {

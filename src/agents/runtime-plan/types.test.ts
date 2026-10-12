@@ -11,7 +11,7 @@ const concreteRuntimePolicyImportPatterns = [
   /from\s+["'](?:[^"']*\/)?config(?:\/|\.js|["'])/,
   /from\s+["'](?:[^"']*\/)?plugins(?:\/|\.js|["'])/,
   /from\s+["'][^"']*embedded-agent-/,
-  /from\s+["'][^"']*transcript-policy(?:\.[^/"']+)?(?:\/|\.js|["'])/,
+  /from\s+["'][^"']*transcript-policy(?!\.types\.js)(?:\.[^/"']+)?(?:\/|\.js|["'])/,
   /from\s+["'][^"']*system-prompt(?:\.[^/"']+)?(?:\/|\.js|["'])/,
 ];
 
@@ -22,20 +22,11 @@ describe("AgentRuntimePlan leaf contracts", () => {
     for (const pattern of concreteRuntimePolicyImportPatterns) {
       expect(source).not.toMatch(pattern);
     }
-  });
 
-  it("guards against policy type imports re-entering the leaf contract", () => {
-    // The patterns intentionally match representative forbidden imports so the
-    // first test fails if concrete policy types creep into the leaf contract.
-    const forbiddenImports = [
-      'import type { PromptContribution } from "../system-prompt.types.js";',
-      'import type { TranscriptPolicy } from "../transcript-policy.types.js";',
-    ];
-
-    for (const importStatement of forbiddenImports) {
-      expect(
-        concreteRuntimePolicyImportPatterns.some((pattern) => pattern.test(importStatement)),
-      ).toBe(true);
-    }
+    const policyTypes = await fs.readFile(
+      new URL("../transcript-policy.types.ts", import.meta.url),
+      "utf8",
+    );
+    expect(policyTypes).not.toMatch(/^\s*(?:import|export)\s+(?!type\b)/m);
   });
 });

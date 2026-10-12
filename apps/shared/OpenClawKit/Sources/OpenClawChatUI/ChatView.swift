@@ -137,6 +137,7 @@ public struct OpenClawChatView: View {
     @Environment(\.openClawChatWindowCommands) private var windowCommands
     #endif
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
+    @State private var reactionPickerMessage: OpenClawChatMessage?
     #if os(iOS)
     @State private var selectTextMessage: OpenClawChatMessage?
     #endif
@@ -275,6 +276,9 @@ public struct OpenClawChatView: View {
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
         }
+        .sheet(item: self.$reactionPickerMessage) {
+            ChatMessageReactionPicker(viewModel: self.viewModel, message: $0)
+        }
         .sheet(item: self.$fullMessageRequest) { request in
             ChatFullMessageReader(
                 request: request,
@@ -374,9 +378,6 @@ extension OpenClawChatView {
             style: self.style,
             showsSessionSwitcher: self.showsSessionSwitcher,
             userAccent: self.userAccent,
-            assistantName: self.assistantName,
-            assistantAvatarText: self.assistantAvatarText,
-            assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
             isComposerEnabled: self.isComposerEnabled
                 && !self.viewModel.isSendingAttachmentDraft,
@@ -579,11 +580,17 @@ extension OpenClawChatView {
             transcript.rows,
             tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
-            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText ||
-                (self.displayOptions.contains(.toolActivity) &&
-                    !self.viewModel.subagentActivities.isEmpty),
+            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
         ForEach(groups) { group in
+            let parts = ForEach(group.parts) { part in
+                self.runPart(
+                    part,
+                    metadata: transcript.metadata,
+                    contextWindowTokens: contextWindowTokens,
+                    isGrouped: group.runID != nil,
+                    answerID: group.runID == nil ? nil : group.answerID)
+            }
             if group.runID != nil {
                 ChatAssistantRunFrame(
                     assistantName: self.assistantName,
@@ -592,25 +599,11 @@ extension OpenClawChatView {
                     showsAssistantAvatar: self.showsAssistantAvatars,
                     isClean: self.composerChrome == .clean)
                 {
-                    ForEach(group.parts) { part in
-                        self.runPart(
-                            part,
-                            metadata: transcript.metadata,
-                            contextWindowTokens: contextWindowTokens,
-                            isGrouped: true,
-                            answerID: group.answerID)
-                    }
+                    parts
                     if group.includesLive { self.liveAssistantContent }
                 }
             } else {
-                ForEach(group.parts) { part in
-                    self.runPart(
-                        part,
-                        metadata: transcript.metadata,
-                        contextWindowTokens: contextWindowTokens,
-                        isGrouped: false,
-                        answerID: nil)
-                }
+                parts
                 if group.includesLive { self.liveAssistantContent }
             }
         }
@@ -635,7 +628,8 @@ extension OpenClawChatView {
                 answerID: answerID)
                 .id(row.id)
         case let .tool(tool):
-            ChatPendingToolsBubble(toolCalls: [tool])
+            ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
+                .padding(4)
         }
     }
 
@@ -694,26 +688,19 @@ extension OpenClawChatView {
                 .equatable()
         }
 
-        if self.displayOptions.contains(.toolActivity), !self.viewModel.subagentActivities.isEmpty {
-            ChatSubagentActivityList(
-                activities: self.viewModel.subagentActivities,
-                hiddenWorkingCount: self.viewModel.hiddenWorkingSubagentCount)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        if let text = viewModel.streamingAssistantText {
+        if let text = viewModel.liveAssistantText {
             let preparedText = ChatStreamingAssistantText(
                 sourceText: text,
                 includesThinking: self.displayOptions.contains(.reasoning))
             if !preparedText.segments.isEmpty {
-                EquatableChatStreamingAssistantBubble(bubble: ChatStreamingAssistantBubble(
+                ChatStreamingAssistantBubble(
                     text: preparedText,
                     markdownVariant: self.markdownVariant,
                     assistantName: self.assistantName,
                     assistantAvatarText: self.assistantAvatarText,
                     assistantAvatarTint: self.assistantAvatarTint,
                     showsAssistantAvatar: self.showsAssistantAvatars,
-                    isClean: self.composerChrome == .clean))
+                    isClean: self.composerChrome == .clean)
                     .equatable()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -760,7 +747,7 @@ extension OpenClawChatView {
             },
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
-                await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+                await viewModel?.transport.resolveInlineWidgetResource(path: path, replacing: failedResource)
             },
             mediaArtifactResolverReady: self.viewModel.healthOK,
             mediaPlaybackAllowed: self.mediaPlaybackAllowed,
@@ -777,6 +764,7 @@ extension OpenClawChatView {
                 alignment: isUser ? .trailing : .leading)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             bubble
+            ChatMessageReactions(viewModel: self.viewModel, message: msg)
             if let outboxState = self.viewModel.outboxState(for: msg.id) {
                 ChatOutboxStatusLabel(state: outboxState)
                     .padding(.trailing, 8)
@@ -835,20 +823,12 @@ extension OpenClawChatView {
                 self.hoveredMessageID = nil
             }
         }
-        #if os(iOS)
-        if isUser || !showsActions {
-            row.contextMenu { self.messageMenuActions(for: msg) }
-        } else {
-            row
-        }
-        #else
-        row.contextMenu { self.messageMenuActions(for: msg) }
-        #endif
+        row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: msg) } }
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
         Menu {
-            self.messageMenuActions(for: message)
+            ChatDeferredContent { self.messageMenuActions(for: message) }
         } label: {
             Label("Message Actions", systemImage: "ellipsis")
         }
@@ -858,14 +838,16 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private func messageMenuActions(for message: OpenClawChatMessage) -> some View {
+        ChatMessageReactionAction(viewModel: self.viewModel, message: message) {
+            self.reactionPickerMessage = message
+        }
         self.copyMessageButton(for: message)
         #if os(iOS)
         self.selectTextButton(for: message)
         #endif
         self.replyMessageButton(for: message)
         self.openFullMessageButton(for: message)
-        self.rewindMessageButton(for: message)
-        self.forkMessageButton(for: message)
+        self.messageSessionActions(for: message)
         self.listenMessageButton(for: message)
         if let outboxState = self.viewModel.outboxState(for: message.id) {
             if outboxState.isFailed {
@@ -1010,35 +992,29 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private func messageListOverlay(hasVisibleContent: Bool) -> some View {
-        if self.viewModel.isLoading {
-            EmptyView()
-        } else if self.composerChrome == .clean, self.visibleEmptyAssistantIntro != nil {
-            EmptyView()
-        } else if self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent) {
-            EmptyView()
-        } else if let error = activeErrorText {
-            if hasVisibleContent {
-                EmptyView()
-            } else {
-                let presentation = self.errorPresentation(for: error)
+        if !self.viewModel.isLoading, self.visibleEmptyAssistantIntro == nil {
+            if let error = activeErrorText {
+                if !hasVisibleContent {
+                    let presentation = self.errorPresentation(for: error)
+                    ChatNoticeCard(
+                        systemImage: presentation.systemImage,
+                        title: presentation.title,
+                        message: presentation.message,
+                        actionTitle: "Refresh",
+                        action: { self.viewModel.refresh() })
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else if self.showsEmptyState {
                 ChatNoticeCard(
-                    systemImage: presentation.systemImage,
-                    title: presentation.title,
-                    message: presentation.message,
-                    actionTitle: "Refresh",
-                    action: { self.viewModel.refresh() })
+                    systemImage: "bubble.left.and.bubble.right.fill",
+                    title: self.emptyStateTitle,
+                    message: self.emptyStateMessage,
+                    actionTitle: nil,
+                    action: nil)
                     .padding(.horizontal, 24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else if self.showsEmptyState {
-            ChatNoticeCard(
-                systemImage: "bubble.left.and.bubble.right.fill",
-                title: self.emptyStateTitle,
-                message: self.emptyStateMessage,
-                actionTitle: nil,
-                action: nil)
-                .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1051,7 +1027,7 @@ extension OpenClawChatView {
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
-        guard let text = self.viewModel.streamingAssistantText else { return false }
+        guard let text = self.viewModel.liveAssistantText else { return false }
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))
@@ -1083,7 +1059,6 @@ extension OpenClawChatView {
 
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
-            (self.displayOptions.contains(.toolActivity) && !self.viewModel.subagentActivities.isEmpty) ||
             (self.displayOptions.contains(.toolActivity) && !self.viewModel.pendingToolCalls.isEmpty) ||
             self.hasVisibleStreamingAssistantText ||
             !self.viewModel.visibleQuestionCards.isEmpty
@@ -1094,8 +1069,7 @@ extension OpenClawChatView {
         if let error = activeErrorText,
            hasVisibleContent,
            !self.viewModel.isLoading,
-           visibleEmptyAssistantIntro == nil,
-           !self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
+           visibleEmptyAssistantIntro == nil
         {
             let presentation = self.errorPresentation(for: error)
             ChatNoticeBanner(
@@ -1135,7 +1109,6 @@ extension OpenClawChatView {
         self.viewModel.messages.isEmpty &&
             !self.hasVisibleStreamingAssistantText &&
             !self.viewModel.hasBlockingRunActivity &&
-            self.viewModel.subagentActivities.isEmpty &&
             self.viewModel.pendingToolCalls.isEmpty
     }
 
@@ -1172,24 +1145,19 @@ extension OpenClawChatView {
     }
 
     private func restoreInitialScrollPosition() {
-        switch chatReaderInitialRestorePolicy() {
-        case .liveEdge:
+        if chatReaderInitialRestorePolicy() == .latestTurn,
+           let latestTurnStartID = self.latestVisibleTurnStartID
+        {
+            self.followTarget = nil
+            self.hasNewerContentBelow = chatReaderHasNewerContent(
+                after: latestTurnStartID,
+                visibleIDs: self.transcriptPresentation.rows.map(\.id),
+                hasTransientContent: self.hasVisibleTransientContent)
+            self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
+        } else {
             self.followTarget = .latest
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
-        case .latestTurn:
-            if let latestTurnStartID = latestVisibleTurnStartID {
-                self.followTarget = nil
-                self.hasNewerContentBelow = chatReaderHasNewerContent(
-                    after: latestTurnStartID,
-                    visibleIDs: self.transcriptPresentation.rows.map(\.id),
-                    hasTransientContent: self.hasVisibleTransientContent)
-                self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
-            } else {
-                self.followTarget = .latest
-                self.hasNewerContentBelow = false
-                self.moveScrollPosition(to: self.scrollerBottomID)
-            }
         }
     }
 
@@ -1200,7 +1168,6 @@ extension OpenClawChatView {
         guard self.searchMessageID == nil else { return }
         if self.viewModel.messages.isEmpty,
            !self.viewModel.hasBlockingRunActivity,
-           self.viewModel.subagentActivities.isEmpty,
            self.viewModel.pendingToolCalls.isEmpty,
            self.viewModel.streamingAssistantText == nil
         {
@@ -1287,11 +1254,6 @@ extension OpenClawChatView {
         #endif
     }
 
-    private func isToolResultMessage(_ message: OpenClawChatMessage) -> Bool {
-        let role = message.role.lowercased()
-        return role == "toolresult" || role == "tool_result"
-    }
-
     private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
         let primaryText = ChatMessageVisibleText.displayText(
             in: message,
@@ -1300,7 +1262,7 @@ extension OpenClawChatView {
             return true
         }
 
-        if self.isToolResultMessage(message) {
+        if message.isToolResult {
             return self.displayOptions.contains(.toolActivity)
         }
 
@@ -1327,12 +1289,7 @@ extension OpenClawChatView {
             Button {
                 ChatPasteboard.copy(text)
             } label: {
-                Label {
-                    Text("Copy Message")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "doc.on.doc")
-                }
+                chatActionLabel(Text("Copy Message"), systemImage: "doc.on.doc")
             }
         }
     }
@@ -1344,11 +1301,7 @@ extension OpenClawChatView {
             Button {
                 self.selectTextMessage = message
             } label: {
-                Label {
-                    Text("Select Text").font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "text.cursor")
-                }
+                chatActionLabel(Text("Select Text"), systemImage: "text.cursor")
             }
         }
     }
@@ -1367,18 +1320,13 @@ extension OpenClawChatView {
                     viewModel: self.viewModel,
                     messageID: messageID)
             } label: {
-                Label {
-                    Text("Open Full Message")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "doc.text.magnifyingglass")
-                }
+                chatActionLabel(Text("Open Full Message"), systemImage: "doc.text.magnifyingglass")
             }
         }
     }
 
     @ViewBuilder
-    private func rewindMessageButton(for message: OpenClawChatMessage) -> some View {
+    private func messageSessionActions(for message: OpenClawChatMessage) -> some View {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if self.showsComposer, role == "user",
            message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -1386,39 +1334,17 @@ extension OpenClawChatView {
             Button {
                 Task { await self.viewModel.rewindToMessage(message) }
             } label: {
-                Label {
-                    Text("Rewind to Here")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrow.uturn.backward")
-                }
+                chatActionLabel(Text("Rewind to Here"), systemImage: "arrow.uturn.backward")
             }
-            .disabled(self.messageSessionActionsDisabled)
-        }
-    }
+            .disabled(!self.viewModel.canPerformMessageSessionAction)
 
-    @ViewBuilder
-    private func forkMessageButton(for message: OpenClawChatMessage) -> some View {
-        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if self.showsComposer, role == "user",
-           message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        {
             Button {
                 Task { await self.viewModel.forkAtMessage(message) }
             } label: {
-                Label {
-                    Text("Fork from Here")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrow.triangle.branch")
-                }
+                chatActionLabel(Text("Fork from Here"), systemImage: "arrow.triangle.branch")
             }
-            .disabled(self.messageSessionActionsDisabled)
+            .disabled(!self.viewModel.canPerformMessageSessionAction)
         }
-    }
-
-    private var messageSessionActionsDisabled: Bool {
-        !self.viewModel.canPerformMessageSessionAction
     }
 
     @ViewBuilder
@@ -1432,12 +1358,7 @@ extension OpenClawChatView {
                     text: text,
                     senderLabel: self.replySenderLabel(forRole: role))
             } label: {
-                Label {
-                    Text(String(localized: "Reply"))
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrowshape.turn.up.left")
-                }
+                chatActionLabel(Text(String(localized: "Reply")), systemImage: "arrowshape.turn.up.left")
             }
         }
     }
@@ -1534,6 +1455,7 @@ private struct ChatNoticeCard: View {
                         .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .controlSize(.large)
             }
         }

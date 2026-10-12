@@ -15,6 +15,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { createChangedCiLintPlan } from "../../scripts/check-changed.mts";
 import { SOURCE_CHANNEL_TEST_POLICY } from "../../scripts/lib/ci-node-test-plan.mts";
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
+import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 import {
   evaluateWorkflowExpression,
   quoteShell,
@@ -25,23 +26,42 @@ import {
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 
+export const CI_MANIFEST_FIXTURE_TARGETS = {
+  ui: ["ui/src/fixture-1.test.ts", "ui/src/fixture-2.test.ts", "ui/src/fixture-3.test.ts"],
+  mocked: Array.from({ length: 12 }, (_, index) => `ui/src/e2e/fixture-${index + 1}.e2e.test.ts`),
+  real: uiE2eRealGatewayTestFiles.slice(0, 2),
+  browser: ["extensions/browser/chrome-extension/bootstrap.chromium.test.ts"],
+  windows: Array.from({ length: 5 }, (_, index) => `test/windows-part-${index + 1}.test.ts`),
+};
+
 export function runCiManifestFixture(options: {
   bundledPlanner: boolean;
   sourceChannelPolicy?: boolean;
   nodeTestShards?: Record<string, unknown>[];
   nodeTestGroupsCodec?: boolean;
   bunTestRuntime?: boolean;
+  nativeBunInspection?: {
+    report: {
+      staleEntries: string[];
+      changedInputs: { file: string; reason: "changed" | "unreadable" }[];
+    };
+    failure?: "inspect" | "summary";
+  };
   bunUiTestRuntime?: boolean | "requires-ftl-flag";
   startupCorpusCoverage?: boolean;
   startupCorpusSelection?: boolean;
   releaseFastLaneSelection?: boolean;
   changedPlannerSource?: string | null;
+  selectedTestTargets?: string[];
+  targetSelector?: boolean;
   changedPlannerDependencies?: string[];
   dockerSeedPlannerSource?: string;
+  publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
   ciTypeGraphNames?: string[];
+  ciTypeBoundaryFailure?: boolean;
   changedCoreTestSupport?: boolean;
   repository?: string;
   eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
@@ -75,6 +95,8 @@ export function runCiManifestFixture(options: {
   missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
   uiReleaseTier?: boolean;
+  uiTestGroupsSource?: string;
+  uiE2eSelectorSource?: string;
   uiRealGatewayShards?: boolean;
   remoteTagRefs?: Record<string, string>;
   scopeEnv?: Record<string, string>;
@@ -123,13 +145,30 @@ export function runCiManifestFixture(options: {
       writeFileSync(target, "export {};\n");
     }
     if (options.bunTestRuntime) {
+      const inspection = options.nativeBunInspection;
       writeFileSync(
         path.join(scriptsDir, "ci-test-runtime.mts"),
         `${options.bunUiTestRuntime ? `import { ciTestShardRequiresBun as currentRuntime } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};` : ""}
         export const ciTestShardRequiresBun = (shard, policy) =>
           policy !== "node" && (shard.configs?.includes("fixture-bun.config.ts") ||
             ${options.bunUiTestRuntime === "requires-ftl-flag" ? 'shard.env?.BUN_JSC_useFTLJIT === "false" &&' : ""}
-            ${options.bunUiTestRuntime ? `currentRuntime(shard, policy, ${JSON.stringify(process.cwd())})` : "false"});`,
+            ${options.bunUiTestRuntime ? `currentRuntime(shard, policy, ${JSON.stringify(process.cwd())})` : "false"});
+        ${
+          inspection
+            ? `import { appendFileSync, mkdirSync, renameSync } from "node:fs";
+               export function inspectNativeBunQualifications() {
+                 appendFileSync(${JSON.stringify(path.join(root, "native-bun-inspections.log"))}, "called\\n");
+                 ${inspection.failure === "inspect" ? 'throw new Error("fixture inspection unavailable");' : ""}
+                 ${
+                   inspection.failure === "summary"
+                     ? `renameSync(process.env.GITHUB_STEP_SUMMARY, process.env.GITHUB_STEP_SUMMARY + ".before-native-report");
+                        mkdirSync(process.env.GITHUB_STEP_SUMMARY);`
+                     : ""
+                 }
+                 return ${JSON.stringify(inspection.report)};
+               }`
+            : ""
+        }`,
       );
     }
     for (const dependency of options.changedPlannerDependencies ?? []) {
@@ -221,14 +260,34 @@ export function runCiManifestFixture(options: {
         `\nexport { isToolingTestOwnerPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};\n`,
       );
     }
-    if (options.uiReleaseTier) {
+    if (options.uiReleaseTier || options.bundledPlanner) {
+      const uiTargets = [
+        ...new Set([
+          ...CI_MANIFEST_FIXTURE_TARGETS.ui,
+          ...(options.changedPaths ?? []).filter(
+            (file) =>
+              file.startsWith("ui/") && file.endsWith(".test.ts") && !file.endsWith(".e2e.test.ts"),
+          ),
+        ]),
+      ];
+      const e2eTargets = [
+        ...CI_MANIFEST_FIXTURE_TARGETS.mocked,
+        ...CI_MANIFEST_FIXTURE_TARGETS.real,
+      ];
+      const uiPaths = path.join(root, "test/vitest/vitest.ui-paths.mjs");
+      mkdirSync(path.dirname(uiPaths), { recursive: true });
+      copyFileSync("test/vitest/vitest.ui-paths.mjs", uiPaths);
       appendFileSync(
         path.join(scriptsDir, "ci-node-test-plan.mts"),
-        `\nexport const createUiTestShardGroups = (options) => ({
-          ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", env: {fixtureTier: JSON.stringify(options)}}],
-          e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", env: {fixtureTier: JSON.stringify(options)}}],
+        options.uiTestGroupsSource ??
+          `\nexport const createUiTestShardGroups = (options) => ({
+          ui: [{configs: ["ui/vitest.config.ts"], shard_name: "ui", includePatterns: ${JSON.stringify(uiTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
+          e2e: [{configs: ["test/vitest/vitest.ui-e2e.config.ts"], shard_name: "e2e", includePatterns: options.uiE2eFiles ? [...options.uiE2eFiles, ...${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}] : ${JSON.stringify(e2eTargets)}, env: {fixtureTier: JSON.stringify(options)}}],
         });\n`,
       );
+      if (options.uiE2eSelectorSource) {
+        appendFileSync(path.join(scriptsDir, "ci-node-test-plan.mts"), options.uiE2eSelectorSource);
+      }
       if (options.uiRealGatewayShards !== false) {
         appendFileSync(
           path.join(scriptsDir, "ci-node-test-plan.mts"),
@@ -240,8 +299,8 @@ export function runCiManifestFixture(options: {
               ...group,
               configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
               shard_name: "real-gateway-" + shard,
-              includePatterns: ["ui/src/e2e/fixture-" + shard + ".real-gateway.e2e.test.ts"],
-            })),
+              includePatterns: group.includePatterns.filter((file) => file === ${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.real)}[shard - 1]),
+            })).filter((group) => group.includePatterns.length > 0),
           }));\n`,
         );
       }
@@ -285,8 +344,11 @@ export function runCiManifestFixture(options: {
     }
     if (options.checkFamilyScope) {
       copyFileSync("scripts/ci-check-plan.mts", path.join(root, "scripts/ci-check-plan.mts"));
+      writeFileSync(
+        path.join(scriptsDir, "ci-check-family-scope.mts"),
+        `export { resolveCiCheckFamilyScope } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-check-family-scope.mts")).href)};\n`,
+      );
       for (const file of [
-        "ci-check-family-scope.mts",
         "changed-path-facts.mjs",
         "direct-run.mjs",
         "failed-trailer.mts",
@@ -322,6 +384,16 @@ export function runCiManifestFixture(options: {
         }
       `,
       );
+      writeFileSync(
+        path.join(root, "scripts/check-tsgo-core-boundary.mts"),
+        `export async function checkCoreTsgoGraphBoundary() {
+          console.log("fixture: core compiler boundary checked");
+          if (${options.ciTypeBoundaryFailure === true}) {
+            throw new Error("fixture: core compiler graph includes a bundled extension");
+          }
+          return [];
+        }\n`,
+      );
       for (const file of options.changedPaths ?? []) {
         const target = path.join(root, file);
         if (!existsSync(target)) {
@@ -349,6 +421,8 @@ export function runCiManifestFixture(options: {
             : {}),
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
+          "check:test-timeout-race-ratchet": "true",
+          "check:test-mock-exports": "true",
         }
       : {};
     writeFileSync(
@@ -360,34 +434,57 @@ export function runCiManifestFixture(options: {
         path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
         options.changedPlannerSource ??
           `
+          export { hasQaSmokeAffectingChange } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href)};
           export const createChangedNodeTestShards = (changedPaths, options = {}) => {
             console.log("changed-node-plan-options:" + JSON.stringify(options));
             if (options.releaseFastLane && changedPaths.includes("scripts/lib/ci-node-test-plan.mts")) {
-              options.onFallback("stub fallback");
-              return null;
+              options.onFallback("stub owner selection");
             }
-            return changedPaths.includes("src/focused.ts") ||
-            changedPaths.includes("scripts/openclaw-release-ready.mjs") ||
-            changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts")
-              ? [{
-                  checkName: "changed-node-plan",
-                  configs: [],
-                  requiresDist: false,
-                  runner: "ubuntu-24.04",
-                  shardName: "changed-node-plan",
-                  targets: changedPaths.includes("src/focused.ts")
-                    ? ["src/focused.test.ts"]
-                    : changedPaths.includes("scripts/openclaw-release-ready.mjs")
-                      ? ["test/scripts/openclaw-release-ready.test.ts"]
-                      : ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
-                }]
-              : null;
-          };
-          export const createChangedExtensionFallbackShards = (changedPaths) =>
-            changedPaths.some((changedPath) => changedPath.startsWith("extensions/"))
-              ? changedPaths.some((changedPath) => changedPath.startsWith("extensions/matrix/"))
-                ? [{
-                    checkName: "changed-extension-fallback-plan",
+            const selectedRows = ${JSON.stringify(options.nodeTestShards ?? null)};
+            if (selectedRows) return selectedRows;
+            if (options.runnerBackend === "runson") return [{
+              checkName: "checks-node-changed-runson-cron",
+              groups: [{
+                configs: ["test/vitest/vitest.cron.config.ts"],
+                includePatterns: ["src/cron/schedule.test.ts"],
+                env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+                shard_name: "core-runtime-cron-parallel-core",
+              }],
+              env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+              requiresDist: false,
+              runner: "runson-c8i-8xlarge",
+              shardName: "changed-runson-cron",
+            }];
+            if (changedPaths.includes("src/focused.ts") ||
+                changedPaths.includes("scripts/openclaw-release-ready.mjs") ||
+                changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts")) {
+              return [{
+                checkName: "changed-node-plan",
+                configs: [],
+                requiresDist: false,
+                runner: "ubuntu-24.04",
+                shardName: "changed-node-plan",
+                targets: changedPaths.includes("src/focused.ts")
+                  ? ["src/focused.test.ts"]
+                  : changedPaths.includes("scripts/openclaw-release-ready.mjs")
+                    ? ["test/scripts/openclaw-release-ready.test.ts"]
+                    : ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
+              }];
+            }
+            const rows = [{
+              checkName: "changed-owner-plan",
+              configs: ["test/vitest/owner.config.ts"],
+              includePatterns: changedPaths.includes("src/audit/message-delivery-progress-store.test.ts")
+                ? ["src/audit/message-delivery-progress-store.test.ts"]
+                : changedPaths.length ? ["src/owner.test.ts"] : ["src/smoke.test.ts"],
+              requiresDist: false,
+              runner: "ubuntu-24.04",
+              shardName: "changed-owner-plan",
+            }];
+            if (changedPaths.some((changedPath) => changedPath.startsWith("extensions/"))) {
+              rows.push(changedPaths.some((changedPath) => changedPath.startsWith("extensions/matrix/"))
+                ? {
+                    checkName: "changed-extension-owner-plan",
                     configs: ["test/vitest/vitest.extension-matrix.config.ts"],
                     includePatterns: [
                       "extensions/matrix/src/client.test.ts",
@@ -395,19 +492,21 @@ export function runCiManifestFixture(options: {
                     ],
                     requiresDist: false,
                     runner: "ubuntu-24.04",
-                    shardName: "changed-extension-fallback-plan",
+                    shardName: "changed-extension-owner-plan",
                     predictedSeconds: 120,
-                  }]
-                : [{
-                  checkName: "changed-extension-fallback-plan",
-                  configs: [],
-                  requiresDist: false,
-                  runner: "ubuntu-24.04",
-                  shardName: "changed-extension-fallback-plan",
-                  predictedSeconds: 120,
-                  targets: ["extensions/codex/src/focused.test.ts"],
-                }]
-              : [];
+                  }
+                : {
+                    checkName: "changed-extension-owner-plan",
+                    configs: [],
+                    requiresDist: false,
+                    runner: "ubuntu-24.04",
+                    shardName: "changed-extension-owner-plan",
+                    predictedSeconds: 120,
+                    targets: ["extensions/codex/src/focused.test.ts"],
+                  });
+            }
+            return rows;
+          };
           export const hasBuildArtifactAffectingChange = (changedPaths) =>
             !changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts");
           export const hasSqliteSessionLifecycleAffectingChange = (changedPaths) =>
@@ -415,6 +514,27 @@ export function runCiManifestFixture(options: {
             changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts");
         `,
         "utf8",
+      );
+    }
+    if (
+      options.bundledPlanner &&
+      options.changedPlannerSource !== null &&
+      options.targetSelector !== false
+    ) {
+      appendFileSync(
+        path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
+        `
+        export const resolveChangedNodeTestTargets = (changedPaths) => {
+          const selected = ${JSON.stringify(options.selectedTestTargets ?? null)};
+          if (selected) return selected;
+          const rows = ${JSON.stringify(options.nodeTestShards ?? [])};
+          const declared = rows.flatMap((row) => [
+            ...(row.targets ?? []), ...(row.includePatterns ?? []),
+            ...(row.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ]);
+          return [...new Set(["src/owner.test.ts", ...declared, ...changedPaths.filter((file) => file.endsWith(".test.ts"))])];
+        };
+      `,
       );
     }
     if (options.releaseFastLaneSelection) {
@@ -426,7 +546,12 @@ export function runCiManifestFixture(options: {
     if (options.bundledPlanner) {
       writeFileSync(
         path.join(scriptsDir, "ci-docker-seed-plan.mts"),
-        options.dockerSeedPlannerSource ?? readFileSync("scripts/lib/ci-docker-seed-plan.mts"),
+        options.dockerSeedPlannerSource ??
+          `export { resolveDockerSeedLanes, resolveChangedDockerSeedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-docker-seed-plan.mts")).href)};\n`,
+      );
+      copyFileSync(
+        "scripts/lib/ci-published-driver-update-plan.mts",
+        path.join(scriptsDir, "ci-published-driver-update-plan.mts"),
       );
       const sqliteLifecycleProof = path.join(
         root,
@@ -497,6 +622,9 @@ export function runCiManifestFixture(options: {
           ? ["openclawkit-tests-contract-v1"]
           : []),
         ...(options.bundledPlanner ? ["docker-seed-e2e-contract-v1"] : []),
+        ...((options.publishedDriverUpdateCapability ?? options.bundledPlanner)
+          ? ["published-driver-update-contract-v1"]
+          : []),
         ...((options.targetHostedRunnerProfileContract ?? options.bundledPlanner)
           ? ["hosted-runner-profile-contract-v1"]
           : []),
@@ -518,9 +646,15 @@ export function runCiManifestFixture(options: {
     for (const name of ["test-prerequisites.mjs", "test-prerequisites.json"]) {
       writeFileSync(path.join(trustedGitOwner, name), readFileSync(path.join(gitOwner, name)));
     }
+    const trustedScripts = path.join(root, ".ci-harness/scripts");
+    mkdirSync(trustedScripts, { recursive: true });
+    copyFileSync(
+      new URL("../../scripts/ci-build-manifest.mjs", import.meta.url),
+      path.join(trustedScripts, "ci-build-manifest.mjs"),
+    );
     const trustedReleasePolicy = path.join(root, ".ci-harness/scripts/lib");
     mkdirSync(trustedReleasePolicy, { recursive: true });
-    for (const name of ["release-context.mjs", "release-version.mjs"]) {
+    for (const name of ["release-context.mjs", "release-version.mjs", "ci-ios-smoke-plan.mjs"]) {
       writeFileSync(path.join(trustedReleasePolicy, name), readFileSync(`scripts/lib/${name}`));
     }
     copyFileSync(
@@ -580,6 +714,9 @@ export function runCiManifestFixture(options: {
       if (correction.status !== 0) {
         return {
           output: `${correction.stdout}${correction.stderr}`,
+          manifestStdout: "",
+          manifestStderr: "",
+          nativeBunInspectionCalls: 0,
           outputs: {} as Record<string, string>,
           checkPlanOutputs: {} as Record<string, string>,
           status: correction.status,
@@ -620,7 +757,7 @@ export function runCiManifestFixture(options: {
         OPENCLAW_CI_DOCS_ONLY: "false",
         OPENCLAW_CI_EVENT_NAME: options.eventName ?? "workflow_dispatch",
         OPENCLAW_CI_HISTORICAL_TARGET:
-          (options.historicalCompatibility ?? true) &&
+          (options.historicalCompatibility ?? !options.releaseGate) &&
           (options.eventName ?? "workflow_dispatch") === "workflow_dispatch"
             ? "true"
             : "false",
@@ -644,7 +781,6 @@ export function runCiManifestFixture(options: {
         ),
         GITHUB_REF: "refs/heads/main",
         OPENCLAW_CI_HOSTED_HEALTHY: "",
-        OPENCLAW_CI_AUTHOR_ASSOCIATION: "CONTRIBUTOR",
         OPENCLAW_CI_HEAD_REPOSITORY: options.repository ?? "openclaw/openclaw",
         OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? options.runnerProfile ?? "",
         OPENCLAW_CI_RUNNER_PROFILE: options.runnerProfile ?? options.runnerBackend ?? "blacksmith",
@@ -693,11 +829,22 @@ export function runCiManifestFixture(options: {
     }
     return {
       output: `${run.stdout}${run.stderr}${checkPlanRun?.stdout ?? ""}${checkPlanRun?.stderr ?? ""}`,
+      manifestStdout: run.stdout,
+      manifestStderr: run.stderr,
+      nativeBunInspectionCalls: existsSync(path.join(root, "native-bun-inspections.log"))
+        ? readFileSync(path.join(root, "native-bun-inspections.log"), "utf8").trim().split("\n")
+            .length
+        : 0,
       outputChars: readFileSync(outputPath, "utf8").length,
       outputs,
       checkPlanOutputs,
       status: checkPlanRun ? checkPlanRun.status : run.status,
-      summary: readFileSync(summaryPath, "utf8"),
+      summary: readFileSync(
+        existsSync(summaryPath + ".before-native-report")
+          ? summaryPath + ".before-native-report"
+          : summaryPath,
+        "utf8",
+      ),
     };
   } finally {
     rmSync(root, { force: true, recursive: true });

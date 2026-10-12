@@ -5,11 +5,8 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   resolveSandboxContext,
-  runAgentCleanupStep,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
-  type EmbeddedRunAttemptParamsV2,
-  type NativeHookRelayEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -19,7 +16,6 @@ import {
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -56,31 +52,26 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
   shouldRequireCodexSandboxExecServerEnvironment,
 } from "./dynamic-tool-build.js";
-import {
-  emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
-  emitDynamicToolTerminalDiagnostic,
-} from "./dynamic-tool-diagnostics.js";
+import { createCodexDynamicToolDiagnostics } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
-  resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import { resolveCodexDynamicToolsLoading } from "./dynamic-tool-profile.js";
-import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
-  emitCodexNativePreToolUseFailureDiagnostic,
   resolveCodexNativeHookRelayEvents,
   resolveCodexNativeHookRelayTtlMs,
-  type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
+import { createCodexNativePreToolUseFailureBuffer } from "./native-pre-tool-use-failures.js";
 import {
   mergeCodexThreadConfigs,
   refreshCodexPluginAppApprovalPolicy,
@@ -103,51 +94,49 @@ import {
   readCodexSupportedReasoningEfforts,
   resolveCodexAppServerReasoningEffort,
 } from "./reasoning-effort.js";
+import { runCodexCleanupStep } from "./run-attempt-lifecycle.js";
+import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import {
-  sessionBindingIdentity,
-  resolveCodexSessionBinding,
-  type CodexAppServerBindingStore,
-} from "./session-binding.js";
+import { sessionBindingIdentity, resolveCodexSessionBinding } from "./session-binding.js";
 import {
   applyCodexSessionPermissionPolicy,
   CODEX_SESSION_PERMISSION_EXEC_MODES,
   resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
-  type CodexEffectiveSessionPermissionPolicy,
 } from "./session-permission-policy.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import {
-  buildCodexRuntimeThreadConfig,
+  applySideQuestionModelSelection,
+  buildSideRunAttemptParams,
+} from "./side-question-run-params.js";
+import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerThreadModelSelection,
-} from "./thread-lifecycle.js";
+} from "./thread-model-selection.js";
 import {
   assertCodexSupervisionThreadLineage,
   CodexThreadPolicyHandoffError,
   refreshCodexThreadPolicy,
 } from "./thread-policy.js";
+import { buildCodexRuntimeThreadConfig } from "./thread-requests.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 import { buildCodexUserInput } from "./user-input.js";
-import {
-  resolveCodexWebSearchPlan,
-  type CodexNativeWebSearchSupport,
-  type CodexWebSearchPlan,
-} from "./web-search.js";
+import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 
@@ -156,20 +145,10 @@ class CodexSideQuestionTimeoutError extends Error {
 }
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParamsV2,
-  options: {
-    bindingStore: CodexAppServerBindingStore;
-    runtime?: PluginRuntime;
-    pluginConfig?: unknown;
-    /** Private app-server request identity; public side-run identity remains params.model. */
-    runtimeModelId?: string;
-    nativeHookRelay?: {
-      enabled?: boolean;
-      events?: readonly NativeHookRelayEvent[];
-      ttlMs?: number;
-      gatewayTimeoutMs?: number;
-      hookTimeoutSec?: number;
-    };
-  },
+  options: Pick<
+    CodexRunAttemptOptions,
+    "bindingStore" | "runtime" | "pluginConfig" | "runtimeModelId" | "nativeHookRelay"
+  >,
 ): Promise<AgentHarnessSideQuestionResult> {
   const bindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -178,7 +157,7 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
   });
   const hostCapabilities = params.hostCapabilities;
-  const { binding, assertCurrent } = await resolveCodexSessionBinding({
+  const { binding, authority } = await resolveCodexSessionBinding({
     bindingStore: options.bindingStore,
     identity: bindingIdentity,
     config: params.cfg,
@@ -186,6 +165,7 @@ export async function runCodexAppServerSideQuestion(
     assertCurrent: hostCapabilities.assertActive,
     signal: params.opts?.abortSignal,
   });
+  const assertCurrent = authority.assertCurrent;
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
@@ -280,7 +260,7 @@ export async function runCodexAppServerSideQuestion(
   });
   const modelSelection =
     supervisionModelSelection ??
-    resolveCodexAppServerThreadModelSelection({
+    (await resolveCodexAppServerThreadModelSelection({
       homeScope: appServer.start.homeScope,
       provider: params.provider,
       model: params.model,
@@ -291,7 +271,7 @@ export async function runCodexAppServerSideQuestion(
       authProfileStore: preparedRuntimeAuth.authProfileStore,
       agentDir: params.agentDir,
       config: params.cfg,
-    });
+    }));
 
   const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
     appServer,
@@ -307,39 +287,24 @@ export async function runCodexAppServerSideQuestion(
     fallbackCwd: agentWorkspaceDir,
   });
   const runId = params.opts?.runId ?? randomUUID();
-  // Side runs inherit private-binding capabilities, not outer model metadata.
-  const effectiveParams: AgentHarnessSideQuestionParamsV2 = supervisionModelSelection
-    ? {
-        ...params,
-        provider: supervisionModelSelection.modelProvider,
-        model: supervisionModelSelection.model,
-        runtimeModel: {
-          id: supervisionModelSelection.model,
-          name: supervisionModelSelection.model,
-          provider: supervisionModelSelection.modelProvider,
-          api: "openai-chatgpt-responses",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        } as NonNullable<AgentHarnessSideQuestionParamsV2["runtimeModel"]>,
-      }
-    : params;
+  const effectiveParams = applySideQuestionModelSelection(params, supervisionModelSelection);
   const sideRunParams = buildSideRunAttemptParams(effectiveParams, {
     cwd,
     authProfileId,
     runId,
     timeoutMs: appServer.requestTimeoutMs,
+    permissionPolicy: sessionPermissionPolicy,
   });
-  sideRunParams.permissionMode = sessionPermissionPolicy?.mode;
-  sideRunParams.sessionRoot = sessionPermissionPolicy?.root;
-  sideRunParams.execOverrides = sessionPermissionPolicy && {
-    mode: sessionPermissionPolicy.execMode,
-  };
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, params.sandbox);
+  const nativeExecutionPolicy = await prepareCodexNativeExecutionPolicyForRun(sideRunParams, {
+    agentId: sideRunParams.agentId,
+    sandbox: params.sandbox,
+  });
+  assertCurrent();
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     sideRunParams,
     params.sandbox ?? undefined,
-    { agentId: sideRunParams.agentId, sandboxExecServerEnabled },
+    { agentId: sideRunParams.agentId, sandboxExecServerEnabled, nativeExecutionPolicy },
   );
   const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
     sandbox: params.sandbox ?? undefined,
@@ -351,6 +316,7 @@ export async function runCodexAppServerSideQuestion(
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
     sessionId: sideRunParams.sessionId,
     agentId: sideRunParams.agentId,
+    executionPolicy: nativeExecutionPolicy.policy,
     sandbox: params.sandbox,
     sandboxEnvironmentSelected: sandboxEnvironmentRequired,
     surface: "/btw side-question mode",
@@ -364,7 +330,11 @@ export async function runCodexAppServerSideQuestion(
     );
   }
   const clientOptions = {
-    assertCurrent,
+    // Existing synchronous process startup admission.
+    assertCurrent: () => {
+      authority.assertLegacyCurrent();
+      nativeExecutionPolicy.assertCurrent();
+    },
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
     authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
@@ -375,46 +345,19 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
     ...(params.opts?.abortSignal ? { abandonSignal: params.opts.abortSignal } : {}),
   } satisfies CodexAppServerClientOptions;
-  let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+  const client = await getLeasedSharedCodexAppServerClient(clientOptions);
   const clientLease: CodexAppServerClientLease = { client };
   let collector: CodexEphemeralTurn | undefined;
   const runAbortController = new AbortController();
   let nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector | undefined;
-  const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
-  let nativePreToolUseFailureFallbackActive = false;
   let nativeToolRunWasAbortedBeforeCleanup: boolean | undefined;
-  let nativePreToolUseFailureFallbackTerminalReason:
-    | CodexNativePreToolUseFailure["disposition"]
-    | undefined;
-  const emitNativePreToolUseFailure = (failure: CodexNativePreToolUseFailure) => {
-    emitCodexNativePreToolUseFailureDiagnostic({
-      agentId: sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      runId: sideRunParams.runId,
-      signal: runAbortController.signal,
-      failure,
-      ...(nativePreToolUseFailureFallbackActive
-        ? {
-            terminalReason: nativePreToolUseFailureFallbackTerminalReason ?? failure.disposition,
-          }
-        : {}),
-    });
-  };
-  const flushPendingNativePreToolUseFailures = () => {
-    for (const failure of pendingNativePreToolUseFailures.splice(0)) {
-      emitNativePreToolUseFailure(failure);
-    }
-  };
-  const activateNativePreToolUseFailureFallback = () => {
-    if (!nativePreToolUseFailureFallbackActive) {
-      nativePreToolUseFailureFallbackTerminalReason = nativeToolRunWasAbortedBeforeCleanup
-        ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
-        : undefined;
-      nativePreToolUseFailureFallbackActive = true;
-    }
-    flushPendingNativePreToolUseFailures();
-  };
+  const nativePreToolUseFailures = createCodexNativePreToolUseFailureBuffer({
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    runId: sideRunParams.runId,
+    signal: runAbortController.signal,
+  });
   const abortFromUpstream = () =>
     runAbortController.abort(params.opts?.abortSignal?.reason ?? "codex_side_question_abort");
   if (params.opts?.abortSignal?.aborted) {
@@ -470,6 +413,79 @@ export async function runCodexAppServerSideQuestion(
     sandboxEnvironmentClient = targetClient;
   };
 
+  async function createCodexSideToolBridge(
+    nativeProviderWebSearchSupport: CodexNativeWebSearchSupport,
+  ) {
+    const resolvedWorkspace = effectiveParams.workspaceDir ?? cwd;
+    const sandboxSessionKey =
+      sideRunParams.sandboxSessionKey?.trim() ||
+      sideRunParams.sessionKey?.trim() ||
+      sideRunParams.sessionId ||
+      sessionAgentId;
+    const sandbox =
+      sideRunParams.sandbox !== undefined
+        ? sideRunParams.sandbox
+        : await resolveSandboxContext({
+            config: sideRunParams.config,
+            sessionKey: sandboxSessionKey,
+            workspaceDir: cwd,
+          });
+    let webSearchAllowed = false;
+    const tools = await buildDynamicTools({
+      params: sideRunParams,
+      resolvedWorkspace,
+      effectiveWorkspace: cwd,
+      sandboxSessionKey,
+      sandbox,
+      nativeToolSurfaceEnabled,
+      nativeExecutionPolicy,
+      nativeProviderWebSearchSupport,
+      sessionPermissionPolicy,
+      runAbortController,
+      sessionAgentId,
+      policyAgentId: sessionAgentId,
+      pluginConfig,
+      onYieldDetected: () => {},
+      onWebSearchPolicyResolved: (allowed) => {
+        webSearchAllowed = allowed;
+      },
+    });
+    const requestedWebSearchPlan = resolveCodexWebSearchPlan({
+      config: sideRunParams.config,
+      nativeToolSurfaceEnabled,
+      nativeProviderWebSearchSupport,
+      webSearchAllowed,
+    });
+    // Forks inherit dynamic declarations; BTW retains its native-only search policy.
+    const webSearchPlan =
+      requestedWebSearchPlan.kind === "managed"
+        ? resolveCodexWebSearchPlan({ config: sideRunParams.config, webSearchAllowed: false })
+        : requestedWebSearchPlan;
+    // Side threads do not own the compaction lifecycle that expires screenshot coordinates.
+    const exposedTools = tools.filter(
+      (tool) => tool.name !== "web_search" && tool.name !== "computer",
+    );
+    return {
+      toolBridge: createCodexDynamicToolBridge({
+        assertCurrent: nativeExecutionPolicy.assertCurrent,
+        tools: exposedTools,
+        signal: runAbortController.signal,
+        loading: resolveCodexDynamicToolsLoading(pluginConfig),
+        hookContext: {
+          agentId: sessionAgentId,
+          config: sideRunParams.config,
+          contextWindowTokens: sideRunParams.model.contextWindow,
+          sessionId: sideRunParams.sessionId,
+          sessionKey: sideRunParams.sessionKey,
+          runId: sideRunParams.runId,
+          currentChannelProvider: resolveCodexMessageToolProvider(sideRunParams),
+          ...buildAgentHookContextChannelFields(sideRunParams),
+        },
+      }),
+      webSearchPlan,
+    };
+  }
+
   try {
     assertCurrent();
     const autoApproveMcpTools = shouldAutoApproveCodexAppServerApprovals(appServer);
@@ -505,17 +521,9 @@ export async function runCodexAppServerSideQuestion(
             signal: runAbortController.signal,
           })
         : "unsupported";
-    const { toolBridge, webSearchPlan } = await createCodexSideToolBridge({
-      params: sideRunParams,
-      cwd,
-      resolvedWorkspace: effectiveParams.workspaceDir ?? cwd,
-      pluginConfig,
-      sessionAgentId,
-      nativeToolSurfaceEnabled,
+    const { toolBridge, webSearchPlan } = await createCodexSideToolBridge(
       nativeProviderWebSearchSupport,
-      sessionPermissionPolicy,
-      runAbortController,
-    });
+    );
     const handleServerRequest = async (
       request: CodexAppServerServerRequest,
       _scope: CodexThreadRouteScope,
@@ -546,7 +554,9 @@ export async function runCodexAppServerSideQuestion(
             });
       }
       if (request.method === "item/tool/requestUserInput") {
-        return isSideUserInputRequest(request.params, childThreadId, turnId)
+        return isJsonObject(request.params) &&
+          request.params.threadId === childThreadId &&
+          request.params.turnId === turnId
           ? { answers: {} }
           : undefined;
       }
@@ -578,14 +588,14 @@ export async function runCodexAppServerSideQuestion(
       });
       setExecutionTimeoutMs?.(timeoutMs);
       const toolStartedAt = Date.now();
-      const diagnosticContext = {
+      const diagnostics = createCodexDynamicToolDiagnostics({
         call,
         agentId: sessionAgentId,
         runId: sideRunParams.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
-      };
-      emitDynamicToolStartedDiagnostic(diagnosticContext);
+      });
+      diagnostics.started();
       const toolCall = handleDynamicToolCallWithTimeout({
         call,
         toolBridge,
@@ -596,18 +606,13 @@ export async function runCodexAppServerSideQuestion(
       activeDynamicToolCalls.add(toolCall);
       try {
         const response = await toolCall;
-        emitDynamicToolTerminalDiagnostic({
-          ...diagnosticContext,
-          response,
-          durationMs: Math.max(0, Date.now() - toolStartedAt),
-        });
+        diagnostics.terminal(response, Math.max(0, Date.now() - toolStartedAt));
         return toCodexDynamicToolProtocolResponse(response) as JsonValue;
       } catch (error) {
-        emitDynamicToolErrorDiagnostic({
-          ...diagnosticContext,
-          durationMs: Math.max(0, Date.now() - toolStartedAt),
-          terminalReason: signal.aborted ? resolveCodexToolAbortTerminalReason(signal) : "failed",
-        });
+        diagnostics.error(
+          Math.max(0, Date.now() - toolStartedAt),
+          signal.aborted ? resolveCodexToolAbortTerminalReason(signal) : "failed",
+        );
         throw error;
       } finally {
         activeDynamicToolCalls.delete(toolCall);
@@ -646,17 +651,18 @@ export async function runCodexAppServerSideQuestion(
         }),
         signal: runAbortController.signal,
         runBeforeToolCall: sideRunParams.hostCapabilities.runBeforeToolCall,
-        assertActive: assertCurrent,
+        assertActive: () => {
+          authority.assertLegacyCurrent();
+          nativeExecutionPolicy.assertCurrent();
+        },
         onPreToolUseFailure: (failure) => {
-          if (nativePreToolUseFailureFallbackActive) {
-            emitNativePreToolUseFailure(failure);
-          } else if (nativeToolLifecycleProjector) {
+          if (!nativePreToolUseFailures.active && nativeToolLifecycleProjector) {
             nativeToolLifecycleProjector.recordPreToolUseFailure(
               failure,
               nativeToolRunWasAbortedBeforeCleanup,
             );
           } else {
-            pendingNativePreToolUseFailures.push(failure);
+            nativePreToolUseFailures.record(failure);
           }
         },
         command: { timeoutMs: options.nativeHookRelay.gatewayTimeoutMs },
@@ -678,157 +684,160 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
-    const sideThreadId = await withLeasedCodexAppServerClientStartSelectionRetry({
+    const sideThreadId = await withCodexAppServerClientRequestScope({
       lease: clientLease,
       options: clientOptions,
       signal: runAbortController.signal,
       run: async (forkClient, requestOptions) =>
-        options.bindingStore.withLease(bindingIdentity, async () => {
-          const assertCurrentBinding = () => {
-            assertCurrent();
-            runAbortController.signal.throwIfAborted();
-            if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
-              throw new Error("Codex side-question binding changed before fork");
-            }
-          };
-          const currentRequestOptions = () => {
-            const scoped = requestOptions();
-            return {
-              ...scoped,
-              assertCurrent: () => {
-                scoped.assertCurrent();
-                assertCurrentBinding();
-              },
+        options.bindingStore.withLease(
+          bindingIdentity,
+          async () => {
+            const assertCurrentBinding = () => {
+              assertCurrent();
+              runAbortController.signal.throwIfAborted();
+              if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
+                throw new Error("Codex side-question binding changed before fork");
+              }
             };
-          };
-          assertCurrentBinding();
-          if (binding.connectionScope === "supervision") {
-            const { thread } = await forkClient.request(
-              "thread/read",
-              {
-                threadId: binding.threadId,
-                includeTurns: false,
-              },
-              currentRequestOptions(),
-            );
+            const currentRequestOptions = () => {
+              const scoped = requestOptions();
+              return {
+                ...scoped,
+                withCurrent: authority.withCurrent,
+                assertCurrent: () => {
+                  scoped.assertCurrent();
+                  assertCurrentBinding();
+                },
+              };
+            };
             assertCurrentBinding();
-            assertCodexSupervisionThreadLineage(binding, thread);
-          }
-          await ensureSandboxEnvironment(forkClient);
-          assertCurrentBinding();
-          const executionCwd = sandboxEnvironment?.cwd ?? cwd;
-          let pluginAppsConfigPatch: JsonObject | undefined;
-          if (binding.pluginAppPolicyContext) {
-            const refreshed = await refreshCodexPluginAppApprovalPolicy({
-              policyContext: binding.pluginAppPolicyContext,
-              configCwd: executionCwd,
-              request: (method, requestParams) => {
-                assertCurrentBinding();
-                return forkClient.request(method, requestParams, currentRequestOptions());
-              },
-            }).finally(assertCurrentBinding);
-            pluginAppPolicyContext = refreshed.policyContext;
-            pluginAppsConfigPatch = refreshed.configPatch;
-            for (const diagnostic of refreshed.diagnostics) {
-              embeddedAgentLog.warn(diagnostic.message);
-            }
-          }
-          assertCurrentBinding();
-          // Fork reloads native config; refresh ask overrides before replaying the
-          // bound app policy, including when /btw is the first run after restart.
-          const threadConfig =
-            mergeCodexThreadConfigs(
-              nativeHookRelayConfig,
-              runtimeThreadConfig,
-              pluginAppsConfigPatch,
-              appServer.networkProxy?.configPatch,
-            ) ?? runtimeThreadConfig;
-          const response = assertCodexThreadForkResponse(
-            await forkCodexSideThread(
-              forkClient,
-              {
-                threadId: binding.threadId,
-                model: modelSelection.model,
-                ...(modelSelection.modelProvider
-                  ? { modelProvider: modelSelection.modelProvider }
-                  : {}),
-                cwd: executionCwd,
-                ...(sessionPermissionPolicy
-                  ? { runtimeWorkspaceRoots: [sessionPermissionPolicy.root] }
-                  : {}),
-                approvalPolicy,
-                approvalsReviewer: appServer.approvalsReviewer,
-                ...(sandboxEnvironment || appServer.networkProxy ? {} : { sandbox }),
-                ...(serviceTier ? { serviceTier } : {}),
-                config: threadConfig,
-                developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
-                ephemeral: true,
-                // Paginated ephemeral forks require metadata-only responses; history stays native.
-                excludeTurns: true,
-                threadSource: "user",
-              },
-              currentRequestOptions(),
-            ),
-          );
-          if (!response.thread.id.trim() || response.thread.id === binding.threadId) {
-            await retireUnsafeCodexTurnClientBestEffort(forkClient, "unsafe side child identity");
-            throw new Error("Codex side fork returned an unsafe child identity");
-          }
-          childThreadId = response.thread.id;
-          childClient = forkClient;
-          collector = new CodexEphemeralTurn(forkClient, childThreadId, {
-            textMode: "last",
-            onRequest: handleServerRequest,
-            onAssistantMessageStart: async () => {
-              await params.opts?.onAssistantMessageStart?.();
-            },
-            onNotification: (notification) =>
-              nativeToolLifecycleProjector?.handleNotification(notification),
-          });
-          // A terminal answer may still be projecting after transport closure;
-          // native hook authority ends with the route, not that projection.
-          if (nativeHookRelay) {
-            collector.route.signal.addEventListener("abort", nativeHookRelay.unregister, {
-              once: true,
-            });
-          }
-          try {
-            assertCurrentBinding();
-            if (
-              supervisionModelSelection &&
-              (response.model !== supervisionModelSelection.model ||
-                response.modelProvider !== supervisionModelSelection.modelProvider)
-            ) {
-              throw new Error(
-                "Codex supervised side thread did not preserve its native model and provider",
+            if (binding.connectionScope === "supervision") {
+              const { thread } = await forkClient.request(
+                "thread/read",
+                {
+                  threadId: binding.threadId,
+                  includeTurns: false,
+                },
+                currentRequestOptions(),
               );
+              assertCurrentBinding();
+              assertCodexSupervisionThreadLineage(binding, thread);
             }
-            const scoped = requestOptions();
-            await refreshCodexThreadPolicy({
-              client: forkClient,
-              threadId: childThreadId,
-              developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
-              ...scoped,
-              signal: runAbortController.signal,
-              assertCurrent: () => {
-                assertCurrent();
-                runAbortController.signal.throwIfAborted();
-                scoped.assertCurrent();
+            await ensureSandboxEnvironment(forkClient);
+            assertCurrentBinding();
+            const executionCwd = sandboxEnvironment?.cwd ?? cwd;
+            let pluginAppsConfigPatch: JsonObject | undefined;
+            if (binding.pluginAppPolicyContext) {
+              const refreshed = await refreshCodexPluginAppApprovalPolicy({
+                policyContext: binding.pluginAppPolicyContext,
+                configCwd: executionCwd,
+                request: (method, requestParams) => {
+                  assertCurrentBinding();
+                  return forkClient.request(method, requestParams, currentRequestOptions());
+                },
+              }).finally(assertCurrentBinding);
+              pluginAppPolicyContext = refreshed.policyContext;
+              pluginAppsConfigPatch = refreshed.configPatch;
+              for (const diagnostic of refreshed.diagnostics) {
+                embeddedAgentLog.warn(diagnostic.message);
+              }
+            }
+            assertCurrentBinding();
+            // Fork reloads native config; refresh ask overrides before replaying the
+            // bound app policy, including when /btw is the first run after restart.
+            const threadConfig =
+              mergeCodexThreadConfigs(
+                nativeHookRelayConfig,
+                runtimeThreadConfig,
+                pluginAppsConfigPatch,
+                appServer.networkProxy?.configPatch,
+              ) ?? runtimeThreadConfig;
+            const response = assertCodexThreadForkResponse(
+              await forkCodexSideThread(
+                forkClient,
+                {
+                  threadId: binding.threadId,
+                  model: modelSelection.model,
+                  ...(modelSelection.modelProvider
+                    ? { modelProvider: modelSelection.modelProvider }
+                    : {}),
+                  cwd: executionCwd,
+                  ...(sessionPermissionPolicy
+                    ? { runtimeWorkspaceRoots: [sessionPermissionPolicy.root] }
+                    : {}),
+                  approvalPolicy,
+                  approvalsReviewer: appServer.approvalsReviewer,
+                  ...(sandboxEnvironment || appServer.networkProxy ? {} : { sandbox }),
+                  ...(serviceTier ? { serviceTier } : {}),
+                  config: threadConfig,
+                  developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
+                  ephemeral: true,
+                  // Paginated ephemeral forks require metadata-only responses; history stays native.
+                  excludeTurns: true,
+                  threadSource: "user",
+                },
+                currentRequestOptions(),
+              ),
+            );
+            if (!response.thread.id.trim() || response.thread.id === binding.threadId) {
+              await retireUnsafeCodexTurnClientBestEffort(forkClient, "unsafe side child identity");
+              throw new Error("Codex side fork returned an unsafe child identity");
+            }
+            childThreadId = response.thread.id;
+            childClient = forkClient;
+            collector = new CodexEphemeralTurn(forkClient, childThreadId, {
+              textMode: "last",
+              onRequest: handleServerRequest,
+              onAssistantMessageStart: async () => {
+                await params.opts?.onAssistantMessageStart?.();
               },
+              onNotification: (notification) =>
+                nativeToolLifecycleProjector?.handleNotification(notification),
             });
-          } catch (error) {
-            policyWriteUncertain =
-              error instanceof CodexThreadPolicyHandoffError && error.outcome === "unknown";
-            // A child already exists: selection recovery cannot repeat this callback.
-            throw error instanceof CodexThreadPolicyHandoffError
-              ? error
-              : new CodexThreadPolicyHandoffError("not-written", error);
-          }
-          return response.thread.id;
-        }),
-      onClientChange: (nextClient) => {
-        client = nextClient;
-      },
+            // A terminal answer may still be projecting after transport closure;
+            // native hook authority ends with the route, not that projection.
+            if (nativeHookRelay) {
+              collector.route.signal.addEventListener("abort", nativeHookRelay.unregister, {
+                once: true,
+              });
+            }
+            try {
+              assertCurrentBinding();
+              if (
+                supervisionModelSelection &&
+                (response.model !== supervisionModelSelection.model ||
+                  response.modelProvider !== supervisionModelSelection.modelProvider)
+              ) {
+                throw new Error(
+                  "Codex supervised side thread did not preserve its native model and provider",
+                );
+              }
+              const scoped = requestOptions();
+              await refreshCodexThreadPolicy({
+                client: forkClient,
+                threadId: childThreadId,
+                developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
+                ...scoped,
+                withCurrent: authority.withCurrent,
+                signal: runAbortController.signal,
+                assertCurrent: () => {
+                  assertCurrent();
+                  runAbortController.signal.throwIfAborted();
+                  scoped.assertCurrent();
+                },
+              });
+            } catch (error) {
+              policyWriteUncertain =
+                error instanceof CodexThreadPolicyHandoffError && error.outcome === "unknown";
+              // A child already exists: selection recovery cannot repeat this callback.
+              throw error instanceof CodexThreadPolicyHandoffError
+                ? error
+                : new CodexThreadPolicyHandoffError("not-written", error);
+            }
+            return response.thread.id;
+          },
+          { assertCurrent, authority },
+        ),
     });
 
     const effort = usesSupervisionConnection
@@ -885,6 +894,7 @@ export async function runCodexAppServerSideQuestion(
             timeoutMs: appServer.requestTimeoutMs,
             signal: runAbortController.signal,
             assertCurrent,
+            withCurrent: authority.withCurrent,
           },
         )
         .catch((error: unknown) => {
@@ -905,10 +915,10 @@ export async function runCodexAppServerSideQuestion(
         runAbortSignal: runAbortController.signal,
       },
     );
-    for (const failure of pendingNativePreToolUseFailures) {
+    for (const failure of nativePreToolUseFailures.pending) {
       nativeToolLifecycleProjector.recordPreToolUseFailure(failure);
     }
-    pendingNativePreToolUseFailures.length = 0;
+    nativePreToolUseFailures.pending.length = 0;
     if (!collector) {
       throw new Error("Codex side thread route was not reserved");
     }
@@ -948,7 +958,7 @@ export async function runCodexAppServerSideQuestion(
     if (!result.text) {
       throw new Error("Codex /btw completed without an answer.");
     }
-    return { text: result.text, usage: result.usage };
+    return await authority.withCurrent(() => ({ text: result.text, usage: result.usage }));
   } catch (error) {
     primaryFailure = { error };
     throw error;
@@ -976,182 +986,19 @@ export async function runCodexAppServerSideQuestion(
         },
         () => collector?.route.release(),
         () => nativeToolLifecycleProjector?.finalizeActive(nativeToolRunWasAbortedBeforeCleanup),
-        activateNativePreToolUseFailureFallback,
-        flushPendingNativePreToolUseFailures,
+        () =>
+          nativePreToolUseFailures.activateFallback(nativeToolRunWasAbortedBeforeCleanup === true),
+        nativePreToolUseFailures.flush,
         releaseSandboxEnvironment,
         () => releaseCodexAppServerClientLease(clientLease),
         () => nativeHookRelay?.unregister(),
         () =>
-          runAgentCleanupStep({
-            runId: sideRunParams.runId,
-            sessionId: sideRunParams.sessionId,
-            step: "codex-side-native-hook-relay-release",
-            log: embeddedAgentLog,
-            cleanup: async () => {
-              await nativeHookRelay?.drain();
-            },
+          runCodexCleanupStep(sideRunParams, "codex-side-native-hook-relay-release", async () => {
+            await nativeHookRelay?.drain();
           }),
       ],
     });
   }
-}
-
-function buildSideRunAttemptParams(
-  params: AgentHarnessSideQuestionParamsV2,
-  options: { cwd: string; authProfileId?: string; runId: string; timeoutMs: number },
-): EmbeddedRunAttemptParamsV2 {
-  const sideParams = {
-    params,
-    config: params.cfg,
-    agentDir: params.agentDir,
-    provider: params.provider,
-    modelId: params.model,
-    model: params.runtimeModel ?? ({ id: params.model, provider: params.provider } as never),
-    prompt: params.question,
-    timeoutMs: options.timeoutMs,
-    sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
-    sessionKey: params.sessionKey,
-    ...(params.sandboxSessionKey ? { sandboxSessionKey: params.sandboxSessionKey } : {}),
-    agentId: params.agentId,
-    ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
-    ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
-    ...(params.chatType ? { chatType: params.chatType } : {}),
-    ...(params.agentAccountId ? { agentAccountId: params.agentAccountId } : {}),
-    ...(params.messageTo ? { messageTo: params.messageTo } : {}),
-    ...(params.messageThreadId !== undefined ? { messageThreadId: params.messageThreadId } : {}),
-    ...(params.chatId ? { chatId: params.chatId } : {}),
-    ...(params.messageActionTurnCapability
-      ? { messageActionTurnCapability: params.messageActionTurnCapability }
-      : {}),
-    ...(params.groupId !== undefined ? { groupId: params.groupId } : {}),
-    ...(params.groupChannel !== undefined ? { groupChannel: params.groupChannel } : {}),
-    ...(params.groupSpace !== undefined ? { groupSpace: params.groupSpace } : {}),
-    ...(params.memberRoleIds ? { memberRoleIds: params.memberRoleIds } : {}),
-    ...(params.spawnedBy !== undefined ? { spawnedBy: params.spawnedBy } : {}),
-    ...(params.senderId !== undefined ? { senderId: params.senderId } : {}),
-    ...(params.senderName !== undefined ? { senderName: params.senderName } : {}),
-    ...(params.senderUsername !== undefined ? { senderUsername: params.senderUsername } : {}),
-    ...(params.senderE164 !== undefined ? { senderE164: params.senderE164 } : {}),
-    ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
-    ...(params.currentChannelId ? { currentChannelId: params.currentChannelId } : {}),
-    ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
-    workspaceDir: options.cwd,
-    authProfileId: options.authProfileId,
-    authProfileIdSource: options.authProfileId
-      ? params.preparedRuntimeAuth.plan.forwardedAuthProfileSource
-      : undefined,
-    thinkLevel: params.resolvedThinkLevel ?? "off",
-    resolvedReasoningLevel: params.resolvedReasoningLevel,
-    authStorage: params.preparedRuntimeAuth.authStorage,
-    authProfileStore: params.preparedRuntimeAuth.authProfileStore,
-    modelRegistry: params.preparedRuntimeAuth.modelRegistry,
-    preparedModelRuntime: params.preparedModelRuntime,
-    ...(params.preparedRuntimeAuth.resolvedApiKey
-      ? { resolvedApiKey: params.preparedRuntimeAuth.resolvedApiKey }
-      : {}),
-    runId: options.runId,
-    abortSignal: params.opts?.abortSignal,
-    onAgentEvent: (event: { stream: string; data: Record<string, unknown> }) => {
-      if (event.stream === "approval") {
-        void params.opts?.onApprovalEvent?.(event.data as never);
-      }
-    },
-    onBlockReply: params.opts?.onBlockReply,
-    onPartialReply: params.opts?.onPartialReply,
-    onToolResult: params.opts?.onToolResult,
-    requireExplicitMessageTarget: true,
-    hostCapabilities: params.hostCapabilities,
-    sandbox: params.sandbox,
-  };
-  return sideParams as EmbeddedRunAttemptParamsV2;
-}
-
-async function createCodexSideToolBridge(input: {
-  params: EmbeddedRunAttemptParamsV2;
-  cwd: string;
-  resolvedWorkspace: string;
-  pluginConfig: ReturnType<typeof readCodexPluginConfig>;
-  sessionAgentId: string;
-  nativeToolSurfaceEnabled: boolean;
-  nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
-  sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
-  runAbortController: AbortController;
-}): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
-  const { params } = input;
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() ||
-    params.sessionKey?.trim() ||
-    params.sessionId ||
-    input.sessionAgentId;
-  const sandbox =
-    params.sandbox !== undefined
-      ? params.sandbox
-      : await resolveSandboxContext({
-          config: params.config,
-          sessionKey: sandboxSessionKey,
-          workspaceDir: input.cwd,
-        });
-  let webSearchAllowed = false;
-  const tools = await buildDynamicTools({
-    params,
-    resolvedWorkspace: input.resolvedWorkspace,
-    effectiveWorkspace: input.cwd,
-    sandboxSessionKey,
-    sandbox,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    sessionPermissionPolicy: input.sessionPermissionPolicy,
-    runAbortController: input.runAbortController,
-    sessionAgentId: input.sessionAgentId,
-    policyAgentId: input.sessionAgentId,
-    pluginConfig: input.pluginConfig,
-    onYieldDetected: () => {},
-    onWebSearchPolicyResolved: (allowed) => {
-      webSearchAllowed = allowed;
-    },
-  });
-  const requestedWebSearchPlan = resolveCodexWebSearchPlan({
-    config: params.config,
-    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
-    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    webSearchAllowed,
-  });
-  // Forks inherit dynamic declarations; BTW retains its native-only search policy.
-  const webSearchPlan =
-    requestedWebSearchPlan.kind === "managed"
-      ? resolveCodexWebSearchPlan({ config: params.config, webSearchAllowed: false })
-      : requestedWebSearchPlan;
-  // Side threads do not own the compaction lifecycle that expires screenshot coordinates.
-  const exposedTools = tools.filter(
-    (tool) => tool.name !== "web_search" && tool.name !== "computer",
-  );
-  return {
-    toolBridge: createCodexDynamicToolBridge({
-      tools: exposedTools,
-      signal: input.runAbortController.signal,
-      loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
-      hookContext: {
-        agentId: input.sessionAgentId,
-        config: params.config,
-        contextWindowTokens: params.model.contextWindow,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        runId: params.runId,
-        currentChannelProvider: resolveCodexMessageToolProvider(params),
-        ...buildAgentHookContextChannelFields(params),
-      },
-    }),
-    webSearchPlan,
-  };
-}
-
-function isSideUserInputRequest(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  return isJsonObject(value) && value.threadId === threadId && value.turnId === turnId;
 }
 
 async function forkCodexSideThread(

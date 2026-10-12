@@ -1,7 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { html } from "lit";
-import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
-import { t } from "../../i18n/index.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 
 export type CustodianEventNudge = {
   severity: 1 | 2 | 3;
@@ -12,6 +10,36 @@ export type CustodianEventNudge = {
 
 export type CustodianSendDelivery = "unsent" | "sent" | "received";
 export type CustodianSendOutcome = "sent" | "rejected" | "unknown";
+
+export async function sendCustodianEventNudge(
+  owner: {
+    eventNudge: CustodianEventNudge | null;
+    eventNudgePending: CustodianEventNudge | null;
+    eventNudgeClosed: boolean;
+    readonly sensitive: boolean;
+    hasUnresolvedQuestion(): boolean;
+    send(text: string): Promise<CustodianSendOutcome>;
+  },
+  notify: () => void,
+): Promise<void> {
+  const nudge = owner.eventNudge;
+  if (!nudge || owner.sensitive || owner.hasUnresolvedQuestion()) {
+    return;
+  }
+  owner.eventNudgePending = nudge;
+  notify();
+  const outcome = await owner.send(nudge.message);
+  if (owner.eventNudgePending === nudge) {
+    owner.eventNudgePending = null;
+    const consumed =
+      outcome !== "rejected" &&
+      owner.eventNudge !== null &&
+      owner.eventNudge.severity === nudge.severity &&
+      owner.eventNudge.message === nudge.message;
+    [owner.eventNudgeClosed, owner.eventNudge] = [consumed, consumed ? null : owner.eventNudge];
+    notify();
+  }
+}
 
 export function classifyCustodianSendFailure(
   error: unknown,
@@ -33,126 +61,6 @@ export function questionUncertainty(previous: boolean, outcome: CustodianSendOut
   return outcome === "unknown" ? true : previous;
 }
 
-export function shouldConsumeNudge(
-  current: CustodianEventNudge | null,
-  finished: CustodianEventNudge,
-  outcome: CustodianSendOutcome,
-): boolean {
-  return (
-    outcome !== "rejected" &&
-    current !== null &&
-    current.severity === finished.severity &&
-    current.message === finished.message
-  );
-}
-
-export function reconcileCustodianEventNudge(
-  current: CustodianEventNudge | null,
-  pending: CustodianEventNudge | null,
-  event: Pick<GatewayEventFrame, "event" | "payload">,
-): [CustodianEventNudge | null, CustodianEventNudge | null] {
-  if (event.event !== "health") {
-    return [current, pending];
-  }
-  return [classifyHealth(event.payload), pending];
-}
-
-function eventNudgeText(nudge: CustodianEventNudge): string {
-  if (nudge.kind === "config-reload") {
-    return t("custodian.nudge.configReload");
-  }
-  const channel = nudge.channelLabel ?? t("custodian.nudge.channelFallback");
-  if (nudge.kind === "channel-auth") {
-    return t("custodian.nudge.channelAuth", { channel });
-  }
-  if (nudge.kind === "channel-disconnected") {
-    return t("custodian.nudge.channelDisconnected", { channel });
-  }
-  return t("custodian.nudge.channelDegraded", { channel });
-}
-
-export function renderCustodianEventNudge(params: {
-  nudge: CustodianEventNudge;
-  disabled: boolean;
-  onSend: () => void;
-  onDismiss: () => void;
-}) {
-  return html`<div class="custodian__nudge" role="status">
-    <button
-      class="custodian__nudge-action"
-      type="button"
-      ?disabled=${params.disabled}
-      @click=${params.onSend}
-    >
-      ${eventNudgeText(params.nudge)}
-    </button>
-    <button
-      class="custodian__nudge-dismiss"
-      type="button"
-      aria-label=${t("custodian.nudge.dismiss")}
-      @click=${params.onDismiss}
-    >
-      ×
-    </button>
-  </div>`;
-}
-
-export function renderCustodianChannelOnboardingNudge(params: {
-  onOpenChannels: () => void;
-  onDismiss: () => void;
-}) {
-  return html`<div class="custodian__nudge custodian__nudge--channel-onboarding" role="status">
-    <div class="custodian__nudge-copy">
-      <strong>${t("custodian.nudge.channelSetupTitle")}</strong>
-      <span>${t("custodian.nudge.channelSetupBody")}</span>
-    </div>
-    <button
-      class="btn btn--sm primary custodian__nudge-cta"
-      type="button"
-      @click=${params.onOpenChannels}
-    >
-      ${t("custodian.nudge.channelSetupAction")}
-    </button>
-    <button
-      class="custodian__nudge-dismiss"
-      type="button"
-      aria-label=${t("custodian.nudge.channelSetupDismiss")}
-      @click=${params.onDismiss}
-    >
-      ×
-    </button>
-  </div>`;
-}
-
-export function renderCustodianChannelOnboardingError(params: {
-  retrying: boolean;
-  onRetry: () => void;
-  onDismiss: () => void;
-}) {
-  return html`<div class="custodian__nudge custodian__nudge--channel-onboarding" role="alert">
-    <div class="custodian__nudge-copy">
-      <strong>${t("custodian.nudge.channelStatusErrorTitle")}</strong>
-      <span>${t("custodian.nudge.channelStatusErrorBody")}</span>
-    </div>
-    <button
-      class="btn btn--sm primary custodian__nudge-cta"
-      type="button"
-      ?disabled=${params.retrying}
-      @click=${params.onRetry}
-    >
-      ${params.retrying ? t("common.loading") : t("common.retry")}
-    </button>
-    <button
-      class="custodian__nudge-dismiss"
-      type="button"
-      aria-label=${t("custodian.nudge.channelSetupDismiss")}
-      @click=${params.onDismiss}
-    >
-      ×
-    </button>
-  </div>`;
-}
-
 type UnknownRecord = Record<string, unknown>;
 
 const CONSEQUENTIAL_CHANNEL_STATES = new Set([
@@ -169,10 +77,6 @@ const CHANNEL_AUTH_STATUS_KEYS = [
   "userTokenStatus",
 ] as const;
 
-function hasUnavailableAuth(account: UnknownRecord): boolean {
-  return CHANNEL_AUTH_STATUS_KEYS.some((key) => account[key] === "configured_unavailable");
-}
-
 function classifyChannelAccount(
   channelId: string,
   label: string,
@@ -182,7 +86,7 @@ function classifyChannelAccount(
     return null;
   }
   const canonical = channelId.toLowerCase();
-  if (hasUnavailableAuth(account)) {
+  if (CHANNEL_AUTH_STATUS_KEYS.some((key) => account[key] === "configured_unavailable")) {
     return {
       severity: 3,
       kind: "channel-auth",
@@ -190,15 +94,16 @@ function classifyChannelAccount(
       message: `what happened with ${canonical} authentication?`,
     };
   }
+  const degraded: CustodianEventNudge = {
+    severity: 3,
+    kind: "channel-degraded",
+    channelLabel: label,
+    message: `what happened with ${canonical}?`,
+  };
   const healthState =
     typeof account.healthState === "string" ? account.healthState.trim().toLowerCase() : undefined;
   if (healthState === "terminal-disconnect" || asRecord(account.probe)?.ok === false) {
-    return {
-      severity: 3,
-      kind: "channel-degraded",
-      channelLabel: label,
-      message: `what happened with ${canonical}?`,
-    };
+    return degraded;
   }
   if (healthState === "not-running" && account.running === false) {
     const reconnectAttempts =
@@ -222,33 +127,18 @@ function classifyChannelAccount(
     typeof account.lastError === "string" &&
     account.lastError.trim()
   ) {
-    return {
-      severity: 3,
-      kind: "channel-degraded",
-      channelLabel: label,
-      message: `what happened with ${canonical}?`,
-    };
+    return degraded;
   }
   if (account.connected === false && account.running === true) {
-    return {
-      severity: 2,
-      kind: "channel-disconnected",
-      channelLabel: label,
-      message: `what happened with ${canonical}?`,
-    };
+    return { ...degraded, severity: 2, kind: "channel-disconnected" };
   }
   if (healthState && CONSEQUENTIAL_CHANNEL_STATES.has(healthState)) {
-    return {
-      severity: 1,
-      kind: "channel-degraded",
-      channelLabel: label,
-      message: `what happened with ${canonical}?`,
-    };
+    return { ...degraded, severity: 1 };
   }
   return null;
 }
 
-function classifyHealth(payload: unknown): CustodianEventNudge | null {
+export function classifyCustodianHealthNudge(payload: unknown): CustodianEventNudge | null {
   const health = asRecord(payload);
   if (!health) {
     return null;

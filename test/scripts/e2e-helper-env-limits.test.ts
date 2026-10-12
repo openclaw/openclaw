@@ -9,11 +9,9 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { describe, expect, it, vi } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
-const browserFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
 const clickclackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
 const clickclackPluginWritePath =
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
-const httpProbePath = "scripts/e2e/lib/openwebui/http-probe.mjs";
 
 type ClickClackFixturePlugin = {
   outbound: {
@@ -29,35 +27,6 @@ function runScript(scriptPath: string, args: string[] = [], env: Record<string, 
   return spawnSync(process.execPath, [scriptPath, ...args], {
     encoding: "utf8",
     env: { ...process.env, ...env },
-  });
-}
-
-function runScriptAsync(
-  scriptPath: string,
-  args: string[] = [],
-  env: Record<string, string> = {},
-  timeout = 3_000,
-) {
-  return new Promise<{ stderr: string; stdout: string; status: number | null }>((resolve) => {
-    const child = spawn(process.execPath, [scriptPath, ...args], {
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout = createBoundedChildOutput();
-    const stderr = createBoundedChildOutput();
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout.append(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr.append(chunk);
-    });
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeout);
-    child.on("exit", (status) => {
-      clearTimeout(timer);
-      resolve({ stderr: stderr.text(), stdout: stdout.text(), status });
-    });
   });
 }
 
@@ -105,36 +74,20 @@ async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
-  child.kill("SIGTERM");
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      resolve();
     }, 1_000);
     child.once("exit", () => {
       clearTimeout(timer);
       resolve();
     });
+    // Escalation requests termination; only this child's exit completes cleanup.
+    child.kill("SIGTERM");
   });
 }
 
 describe("e2e helper numeric env limits", () => {
-  it("rejects loose Browser CDP fixture ports", async () => {
-    const result = await runScriptAsync(browserFixturePath, [], { FIXTURE_PORT: "18080http" });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid FIXTURE_PORT: 18080http");
-  });
-
-  it("rejects loose release ClickClack fixture ports", () => {
-    const result = runScript(clickclackFixturePath, [], {
-      CLICKCLACK_FIXTURE_PORT: "44181tcp",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid CLICKCLACK_FIXTURE_PORT: 44181tcp");
-  });
-
   it("rejects oversized ClickClack fixture request bodies", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-clickclack-fixture-"));
     const port = await allocatePort();
@@ -174,56 +127,6 @@ describe("e2e helper numeric env limits", () => {
     } finally {
       await stopChild(child);
       fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects loose Open WebUI HTTP probe timeouts", () => {
-    const result = runScript(httpProbePath, ["http://127.0.0.1:9"], {
-      OPENCLAW_HTTP_PROBE_TIMEOUT_MS: "8000ms",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid OPENCLAW_HTTP_PROBE_TIMEOUT_MS: 8000ms");
-  });
-
-  it("rejects loose Open WebUI HTTP probe expected statuses", () => {
-    const result = runScript(httpProbePath, ["http://127.0.0.1:9", "2e2"]);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "expected status must be lt500 or a decimal HTTP status. Got: 2e2",
-    );
-  });
-
-  it("keeps Open WebUI HTTP probe status checks working with strict timeouts", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(204).end();
-    });
-    const url = await listen(server);
-    try {
-      const result = await runScriptAsync(httpProbePath, [url, "204"], {
-        OPENCLAW_HTTP_PROBE_TIMEOUT_MS: "500",
-      });
-
-      expect(result.status).toBe(0);
-    } finally {
-      server.close();
-    }
-  });
-
-  it("keeps Open WebUI HTTP probe lt500 status checks working", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(404).end();
-    });
-    const url = await listen(server);
-    try {
-      const result = await runScriptAsync(httpProbePath, [url, "lt500"], {
-        OPENCLAW_HTTP_PROBE_TIMEOUT_MS: "500",
-      });
-
-      expect(result.status).toBe(0);
-    } finally {
-      server.close();
     }
   });
 

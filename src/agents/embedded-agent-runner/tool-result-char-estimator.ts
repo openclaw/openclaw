@@ -1,6 +1,3 @@
-/**
- * Estimates message and tool-result character costs for context guards.
- */
 import { collectTextContentBlocks } from "../content-blocks.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -18,18 +15,9 @@ export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKE
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
-function isImageBlock(block: unknown): boolean {
-  return (
-    Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
-  );
-}
-
 function estimateUnknownChars(value: unknown): number {
   if (typeof value === "string") {
     return value.length;
-  }
-  if (value === undefined) {
-    return 0;
   }
   try {
     const serialized = JSON.stringify(value);
@@ -64,13 +52,25 @@ function estimateContentBlockChars(content: unknown[], toolResult = false): numb
       chars += toolResult
         ? prepareToolResultTextChars(block, block.text, weight)
         : block.text.length;
-    } else if (isImageBlock(block)) {
+    } else if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "image"
+    ) {
       chars += IMAGE_CHAR_ESTIMATE * weight;
     } else {
       chars += estimateUnknownChars(block) * weight;
     }
   }
   return chars;
+}
+
+function estimateMessageContentChars(content: unknown): number {
+  return typeof content === "string"
+    ? content.length
+    : Array.isArray(content)
+      ? estimateContentBlockChars(content)
+      : 0;
 }
 
 export function getToolResultText(msg: AgentMessage): string {
@@ -87,14 +87,7 @@ export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknow
   }
 
   if (msg.role === "user") {
-    const content = contentOverride ?? msg.content;
-    if (typeof content === "string") {
-      return content.length;
-    }
-    if (Array.isArray(content)) {
-      return estimateContentBlockChars(content);
-    }
-    return 0;
+    return estimateMessageContentChars(contentOverride ?? msg.content);
   }
 
   if (msg.role === "assistant") {
@@ -141,27 +134,16 @@ export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknow
     return bashExecutionToText(msg as Parameters<typeof bashExecutionToText>[0]).length;
   }
 
-  if (role === "branchSummary") {
+  if (role === "branchSummary" || role === "compactionSummary") {
     const rawSummary = Reflect.get(msg, "summary");
     const summary = typeof rawSummary === "string" ? rawSummary : "";
-    return (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length;
-  }
-
-  if (role === "compactionSummary") {
-    const rawSummary = Reflect.get(msg, "summary");
-    const summary = typeof rawSummary === "string" ? rawSummary : "";
-    return (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
+    return role === "branchSummary"
+      ? (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length
+      : (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
   }
 
   if (role === "custom") {
-    const content = contentOverride ?? Reflect.get(msg, "content");
-    if (typeof content === "string") {
-      return content.length;
-    }
-    if (Array.isArray(content)) {
-      return estimateContentBlockChars(content);
-    }
-    return 0;
+    return estimateMessageContentChars(contentOverride ?? Reflect.get(msg, "content"));
   }
 
   return 256;

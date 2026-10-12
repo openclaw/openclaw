@@ -1,5 +1,8 @@
+import { statSync } from "node:fs";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { hasNodeErrorCode } from "../infra/path-guards.js";
 import {
   discoverAgentDatabaseMigrationTargets,
   type PreparedAgentDatabaseMigrationDiscovery,
@@ -17,6 +20,19 @@ import {
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 
 type AgentTarget = { agentId: string; path: string };
+
+export function inspectDatabaseCandidatePresence(
+  databasePath: string,
+): { status: "present" | "absent" } | { status: "indeterminate"; reason: string } {
+  try {
+    statSync(databasePath);
+    return { status: "present" };
+  } catch (error) {
+    return hasNodeErrorCode(error, "ENOENT")
+      ? { status: "absent" }
+      : { status: "indeterminate", reason: formatErrorMessage(error) };
+  }
+}
 
 /** An inspected custom path supplies recovery ownership, never migration admission. */
 export function recordAgentDatabaseRecoveryInspection(
@@ -64,7 +80,11 @@ export function collectAgentDatabasePreflightTargets(options: {
   const retainedDeletions = deletionJournal.status === "present" ? deletionJournal.entries : [];
   let agentTargets = registeredDatabases;
   let configuredTargets: readonly AgentTarget[] = [];
-  const retainedAgentIds = new Set(retainedDeletions.map((deletion) => deletion.agentId));
+  const retainedAgentIds = new Set(
+    retainedDeletions
+      .filter((deletion) => deletion.cleanupCompleted || deletion.manualClawRemoval)
+      .map((deletion) => deletion.agentId),
+  );
   const retainedPaths = new Set<string>();
   const failures: Array<{ path: string; reason: string }> = [];
   let preparedDiscovery: PreparedAgentDatabaseMigrationDiscovery | undefined;
@@ -89,7 +109,7 @@ export function collectAgentDatabasePreflightTargets(options: {
       registeredAgentDatabases: registeredDatabases,
       discovery,
     };
-    agentTargets = discovery.targets;
+    agentTargets = discovery.schemaTargets;
     for (const retained of [...discovery.retainedTargets, ...discovery.unverifiedTargets]) {
       retainedPaths.add(retained.realPath);
     }

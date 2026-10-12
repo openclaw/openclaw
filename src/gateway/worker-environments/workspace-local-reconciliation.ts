@@ -11,7 +11,8 @@ import {
 } from "./workspace-hash-memo.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
-  applyStagedWorkerWorkspace,
+  type WorkerWorkspaceApplyResult,
+  inspectAcceptedWorkerWorkspace,
   recoverWorkerWorkspaceReconciliation,
 } from "./workspace-reconcile.js";
 import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
@@ -23,7 +24,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
   metrics: WorkspaceReconcileMetrics;
 }) {
   const { request, hashMemo, metrics } = params;
-  const pending = request.journal.load();
+  const pending = await request.journal.load();
   if (pending) {
     await recoverWorkerWorkspaceReconciliation({
       root: request.localPath,
@@ -31,7 +32,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
       assertCurrent: request.assertCurrent,
     });
     request.assertCurrent?.();
-    request.journal.abort();
+    await request.journal.abort();
   }
   pruneWorkspaceHashMemo(hashMemo);
   const runLocal = <T>(operation: () => Promise<T>): Promise<T> =>
@@ -46,60 +47,53 @@ export async function prepareLocalWorkspaceReconciliation(params: {
     baseRaw: string;
     currentRaw: string;
     currentManifestRef: string;
-    publishAcceptedManifest: (accepted: {
-      manifestRef: string;
-      manifest: WorkerWorkspaceManifest;
-      conflictPaths: string[];
-    }) => Promise<void>;
+    publishAcceptedManifest: (
+      accepted: Omit<WorkerWorkspaceApplyResult, "verifyLocalStable">,
+    ) => Promise<void>;
     manifestRef: () => string;
     verifyStable: () => Promise<void>;
   }): Promise<WorkerWorkspaceReconcileResult> => {
-    // Catch writes that raced the inbound transfer before either staging or local acceptance.
-    // Finalization repeats the remote fence after apply, before releasing its owner.
-    await snapshot.verifyStable();
-    if (request.stagedResult) {
-      const staged = await runLocal(() =>
-        workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
-          request,
-          stagingRoot: snapshot.stagingRoot,
-          currentManifestRef: snapshot.currentManifestRef,
-          baseManifestRaw: snapshot.baseRaw,
-          currentManifestRaw: snapshot.currentRaw,
-          publishAcceptedManifest: snapshot.publishAcceptedManifest,
-        }),
-      );
-      return {
-        get manifestRef() {
-          return snapshot.manifestRef();
-        },
-        changed: snapshot.currentManifestRef !== request.baseManifestRef,
-        verifyStable: snapshot.verifyStable,
-        ...staged,
-        applyPreparedStagedResult: () => runLocal(() => staged.applyPreparedStagedResult()),
-        verifyLocalStable: () => runLocal(() => staged.verifyLocalStable()),
-      };
+    const inspected =
+      snapshot.currentManifestRef === request.baseManifestRef
+        ? await runLocal(() =>
+            inspectAcceptedWorkerWorkspace({
+              root: request.localPath,
+              expectedManifestRef: request.baseManifestRef,
+              base: snapshot.base,
+              current: snapshot.current,
+            }),
+          )
+        : undefined;
+    const unchanged = inspected?.conflictPaths.length === 0 ? inspected : undefined;
+    if (!unchanged) {
+      await snapshot.verifyStable();
     }
-    const applied = await runLocal(() =>
-      applyStagedWorkerWorkspace({
-        root: request.localPath,
+    const staged = await runLocal(() =>
+      workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+        request,
         stagingRoot: snapshot.stagingRoot,
-        baseManifestRef: request.baseManifestRef,
         currentManifestRef: snapshot.currentManifestRef,
-        base: snapshot.base,
-        current: snapshot.current,
-        journal: request.journal,
-        assertCurrent: request.assertCurrent,
-        acceptance: { kind: "reconcile", publish: snapshot.publishAcceptedManifest },
+        baseManifestRaw: snapshot.baseRaw,
+        currentManifestRaw: snapshot.currentRaw,
+        publishAcceptedManifest: snapshot.publishAcceptedManifest,
+        unchanged,
       }),
     );
+    const { acceptUnchangedStagedResult } = staged;
     return {
       get manifestRef() {
         return snapshot.manifestRef();
       },
       changed: snapshot.currentManifestRef !== request.baseManifestRef,
       verifyStable: snapshot.verifyStable,
-      getAppliedWorkspaceResult: () => applied,
-      verifyLocalStable: () => runLocal(() => applied.verifyLocalStable()),
+      ...staged,
+      applyPreparedStagedResult: () => runLocal(staged.applyPreparedStagedResult),
+      ...(acceptUnchangedStagedResult
+        ? {
+            acceptUnchangedStagedResult: () => runLocal(acceptUnchangedStagedResult),
+          }
+        : {}),
+      verifyLocalStable: () => runLocal(() => staged.verifyLocalStable()),
     };
   };
 }

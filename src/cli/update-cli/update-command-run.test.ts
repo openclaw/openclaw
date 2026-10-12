@@ -7,41 +7,46 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
-import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
-import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import { defaultRuntime } from "../../runtime.js";
+import * as updateFailureTriage from "../../infra/update-triage.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { createUpdateProgress } from "./progress.js";
-import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { confirmUpdateDowngrade } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { failUpdateCommandRun } from "./update-command-result.js";
 import {
+  registerUpdateRunReceiptTests,
+  registerUpdateRunReceiptFailureTests,
+} from "./update-command-run-progress.test-support.js";
+import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
-  createUpdateRunProgress,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
-import * as servicePlan from "./update-command-service-plan.js";
 import {
   publishUpdateCommandTerminalResult,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
+import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
+
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  confirm: async () => false,
+}));
 
 vi.mock("node:crypto", async () => {
   const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
@@ -56,6 +61,7 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
   : [];
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
 it.each([
   { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 0 },
   { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 86 },
@@ -110,8 +116,8 @@ it.each([
   expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(message);
   expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(otherWarning);
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -170,140 +176,7 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
   }
 });
 
-it("presents committed steps without reopening the ledger for display", () => {
-  const env = { OPENCLAW_STATE_DIR: dirs.make("update-progress-committed-") };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-  const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  let presentation: ReturnType<typeof createUpdateProgress> | undefined;
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
-  try {
-    presentation = createUpdateProgress(true, run);
-    const progress = createUpdateRunProgress(run, presentation.progress);
-    updateRunLedger.recordUpdateRunPhase(run.runId, "validating", {}, { env });
-    const reread = vi.spyOn(updateRunLedger, "getUpdateRun").mockImplementation(() => {
-      throw new Error("step presentation must use its committed row");
-    });
-    try {
-      for (const [index, name] of ["fetch", "build", "doctor"].entries()) {
-        const step = { name, command: `run ${name}`, index, total: 3 };
-        progress.onStepStart?.(step);
-        progress.onStepComplete?.({
-          ...step,
-          durationMs: 1,
-          exitCode: name === "fetch" ? 0 : 1,
-          ...(name === "build" ? { stdoutTail: "Build type error" } : {}),
-          ...(name === "doctor"
-            ? {
-                advisory: {
-                  kind: "package-post-install-doctor" as const,
-                  message: "Skipped optional cache cleanup",
-                },
-                warnings: ["Skipped optional cache cleanup", "Skipped legacy cache cleanup"],
-              }
-            : {}),
-        });
-      }
-      expect(log).toHaveBeenCalledWith("validating — fetch...");
-      expect(log).toHaveBeenCalledWith("validating — build...");
-      expect(log.mock.calls.flat().join("\n")).toContain("Build type error");
-      expect(log.mock.calls.flat().join("\n")).toContain("Skipped optional cache cleanup");
-      expect(
-        log.mock.calls
-          .flat()
-          .filter((line) => typeof line === "string" && line.startsWith("Phase:")),
-      ).toEqual(["Phase: requested", "Phase: validating"]);
-    } finally {
-      reread.mockRestore();
-    }
-    const recorded = getUpdateRun(run.runId, { env });
-    expect(
-      recorded?.steps
-        .filter((step) => step.step === "fetch" || step.step === "build")
-        .map(({ step, status, detail }) => ({ step, status, detail })),
-    ).toEqual([
-      { step: "fetch", status: "completed", detail: undefined },
-      { step: "build", status: "failed", detail: "Exit code: 1; Build type error" },
-    ]);
-    expect(recorded?.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ step: "doctor", status: "completed" }),
-        expect.objectContaining({
-          step: "warning:doctor",
-          status: "completed",
-          detail: "Skipped optional cache cleanup",
-        }),
-        expect.objectContaining({
-          step: "warning:doctor:2",
-          status: "completed",
-          detail: "Skipped legacy cache cleanup",
-        }),
-      ]),
-    );
-  } finally {
-    try {
-      presentation?.dispose();
-    } finally {
-      if (tty) {
-        Object.defineProperty(process.stdout, "isTTY", tty);
-      } else {
-        Reflect.deleteProperty(process.stdout, "isTTY");
-      }
-    }
-  }
-});
-it.each(["state", "config", "include", "environment"])(
-  "refuses changed %s ownership after target initialization before writing update history",
-  async (changed) => {
-    const root = dirs.make("update-initialization-admission-");
-    const stateDir = path.join(root, "profile");
-    const configPath = path.join(root, "openclaw.json");
-    const includePath = path.join(root, "gateway.json");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    vi.stubEnv("FIXTURE_WORKSPACE_DIR", path.join(root, "workspace"));
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-    vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
-    fs.writeFileSync(includePath, JSON.stringify({ gateway: { mode: "local" } }));
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        $include: "./gateway.json",
-        agents: { defaults: { workspace: "${FIXTURE_WORKSPACE_DIR}" } },
-      }),
-    );
-    const env = { ...process.env };
-    const context = await captureTargetDatabaseSchemaContext(env);
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    const initialization = {
-      env,
-      runId: randomUUID(),
-      databasePath: resolvePathViaExistingAncestorSync(databasePath),
-      configPath: resolvePathViaExistingAncestorSync(configPath),
-      target: { configSnapshot: context.configSnapshot },
-    };
-    if (changed === "state") {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "replacement-profile"));
-    } else if (changed === "config") {
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "replacement.json"));
-    } else if (changed === "include") {
-      fs.writeFileSync(includePath, JSON.stringify({ gateway: { mode: "local", port: 19222 } }));
-    } else {
-      vi.stubEnv("FIXTURE_WORKSPACE_DIR", path.join(root, "replacement-workspace"));
-    }
-    const configBefore = fs.readFileSync(configPath);
-    const includeBefore = fs.readFileSync(includePath);
-
-    await expect(
-      admitUpdateCommandRun({ opts: {}, root, initialization }).then(() => "admitted"),
-    ).rejects.toThrow(/changed/);
-
-    expect(fs.existsSync(databasePath)).toBe(false);
-    expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(false);
-    expect(fs.readFileSync(configPath)).toEqual(configBefore);
-    expect(fs.readFileSync(includePath)).toEqual(includeBefore);
-  },
-);
+registerUpdateRunReceiptTests(dirs);
 
 it.each([false, true])(
   "keeps restored-generation completion with its helper across CLI unwind (handoff=%s)",
@@ -641,6 +514,8 @@ it.skipIf(process.platform === "win32").each([
       caller,
       `
       import fs from 'node:fs';
+      import { withCliProcessScope, withCliCommandCleanup } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.cliCleanupScope).href)};
+      import { runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.oneShotExit).href)};
       import { registerSignalExitGate } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)};
       import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)};
       import { createRetainedUpdateRecovery } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)};
@@ -651,7 +526,7 @@ it.skipIf(process.platform === "win32").each([
       const mode = ${JSON.stringify(mode)};
       if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
       const run = await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
-      await withUpdatePreviewSignals({ ...opts, run }, async () => {
+      const preview = () => withUpdatePreviewSignals({ ...opts, run }, async () => {
         const sibling = createUpdateRun({ trigger: 'cli' });
         if (mode.startsWith('resolved')) {
           const foreign = () => recordUpdateRunPhase(run.runId, 'requested', { target: { tag: 'foreign' } });
@@ -685,8 +560,28 @@ it.skipIf(process.platform === "win32").each([
           fs.renameSync(base + '/openclaw.sqlite', family + '/displaced');
         }
         process.send({ runId: run.runId, expected, sibling });
-        await new Promise(() => setInterval(() => {}, 1000));
+        process.channel.ref();
+        await new Promise(resolve => {
+          if (mode !== "inherited") process.once(${JSON.stringify(signal)}, resolve);
+        });
       });
+      if (mode === "inherited") await preview();
+      else {
+        let resources;
+        await withCliProcessScope(() => runCliWithExitFinalization({
+          run: () => withCliCommandCleanup(false, async cleanup => {
+            resources = cleanup.pluginResources;
+            await preview();
+            // A later command result must not overwrite the accepted signal.
+            process.exitCode = 19;
+          }),
+          onError: error => { throw error; },
+          finalize: async () => { await resources?.release(); },
+        }));
+      }
+      fs.writeFileSync(${JSON.stringify(path.join(root, "signal-owner-unwound"))}, "settled");
+      closeOpenClawStateDatabaseForTest();
+      process.disconnect();
     `,
     );
     const child = spawn(process.execPath, [...sourceImportArgs, caller], {
@@ -735,6 +630,10 @@ it.skipIf(process.platform === "win32").each([
       }
       const [code, exitSignal] = await closed;
       expect(code ?? (exitSignal === "SIGINT" ? 130 : 143)).toBe(signal === "SIGINT" ? 130 : 143);
+      if (mode !== "inherited") {
+        expect(exitSignal).toBeNull();
+        expect(fs.readFileSync(path.join(root, "signal-owner-unwound"), "utf8")).toBe("settled");
+      }
       const options =
         mode === "missing"
           ? {
@@ -807,33 +706,79 @@ it.each([false, true])(
   },
 );
 
-it.each(["in_progress", "completed"] as const)(
-  "identifies a progress ledger failure at preflight worktree (%s)",
-  (status) => {
-    const cause = new GatewayStateOwnerContentionError("/synthetic/openclaw.sqlite");
-    const record = vi.spyOn(updateRunLedger, "recordUpdateRunStep").mockImplementation(() => {
-      throw cause;
-    });
-    const display = { onStepStart: vi.fn(), onStepComplete: vi.fn() };
-    const progress = createUpdateRunProgress({ runId: "synthetic-run", env: {} }, display);
-    const step = { name: "preflight worktree", command: "git worktree add", index: 1, total: 3 };
+it.each([false, true])(
+  "preserves reported downgrade decisions through cleanup and triage (json=%s)",
+  async (json) => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("update-reported-exit-") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const opts = { json, yes: true, run };
+    const triage = vi.fn(async () => ({ status: "cancelled" as const }));
+    vi.spyOn(updateFailureTriage, "prepareUpdateFailureTriage").mockResolvedValue(triage);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    const cleaned: string[] = [];
+    let reported: unknown;
+    let recorded: ReturnType<typeof getUpdateRun> | undefined;
     try {
-      const invoke = () =>
-        status === "in_progress"
-          ? progress.onStepStart?.(step)
-          : progress.onStepComplete?.({ ...step, durationMs: 1, exitCode: 0 });
-      expect(invoke).toThrow(
-        `Could not record update step "preflight worktree" (${status}): ${cause.message}`,
+      const outcome = withUpdateFailureTriage(opts, { env }, () =>
+        withUpdateCommandTerminalResult(async (registerRun) => {
+          registerRun(run);
+          await withUpdateCommandRecoveryUnwind(
+            opts,
+            {
+              triageTarget: { env },
+              windowsTaskAutoStartRecovery: {
+                suspended: Promise.resolve(true),
+                beginMutation() {},
+                assertRecoveryCurrent() {},
+                handoff() {},
+                interrupted: () => false,
+                restore: async () => {
+                  cleaned.push("restore");
+                },
+                complete: async () => {
+                  cleaned.push("complete");
+                },
+              },
+            },
+            async () => {
+              try {
+                await confirmUpdateDowngrade({
+                  opts,
+                  currentVersion: "2.0.0",
+                  targetVersion: "1.0.0",
+                  tag: "latest",
+                });
+              } catch (error) {
+                reported = error;
+                recorded = getUpdateRun(run.runId, { env });
+                throw error;
+              }
+            },
+          );
+        }, opts),
       );
-      try {
-        invoke();
-      } catch (error) {
-        expect(error).toHaveProperty("cause", cause);
-      }
-      expect(display.onStepStart).not.toHaveBeenCalled();
-      expect(display.onStepComplete).not.toHaveBeenCalled();
+      await expect(outcome).rejects.toEqual(new ExitError(json ? 1 : 0));
+      await expect(outcome).rejects.toBe(reported);
+      expect(cleaned).toEqual(["restore", "complete"]);
+      expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
+      expect(recorded).toMatchObject({
+        status: "skipped",
+        reason: json ? "downgrade-confirmation-required" : "cancelled",
+      });
+      expect(triage).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     } finally {
-      record.mockRestore();
+      if (stdinTty) {
+        Object.defineProperty(process.stdin, "isTTY", stdinTty);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
     }
   },
 );
+
+registerUpdateRunReceiptFailureTests(dirs);

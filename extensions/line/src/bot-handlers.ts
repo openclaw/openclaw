@@ -1,4 +1,5 @@
 import type { webhook } from "@line/bot-sdk";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   type buildChannelInboundEventContext,
   buildMentionRegexes,
@@ -41,7 +42,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { firstDefined, normalizeLineAllowEntry } from "./bot-access.js";
+import { normalizeLineAllowEntry } from "./bot-access.js";
 import {
   buildLineMessageContext,
   buildLinePostbackContext,
@@ -57,7 +58,11 @@ import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { quotesLineBotMessage } from "./outbound-message-log.js";
-import { parseLineQuestionPostbackData, resolveLineQuestionPostback } from "./question-postback.js";
+import {
+  isLineQuestionPostbackData,
+  parseLineQuestionPostbackData,
+  resolveLineQuestionPostback,
+} from "./question-postback.js";
 import { getLineRuntime } from "./runtime.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -167,8 +172,8 @@ async function sendLinePairingReply(params: {
   await createChannelPairingChallengeIssuer({
     channel: "line",
     accountId: context.account.accountId,
-    upsertPairingRequest: async ({ id, meta }) =>
-      await upsertChannelPairingRequest({
+    upsertPairingRequest: ({ id, meta }) =>
+      upsertChannelPairingRequest({
         channel: "line",
         id,
         accountId: context.account.accountId,
@@ -180,8 +185,8 @@ async function sendLinePairingReply(params: {
     onCreated: () => {
       logVerbose(`line pairing request sender=${senderId}`);
     },
-    sendPairingReply: async (text) =>
-      await sendLineHandlerText({
+    sendPairingReply: (text) =>
+      sendLineHandlerText({
         context,
         text,
         replyToken,
@@ -203,14 +208,7 @@ function isLineEventAdmitted(access: ResolvedChannelMessageIngress): boolean {
 async function resolveLineEventAdmission(
   event: MessageEvent | PostbackEvent | JoinEvent,
   context: LineHandlerContext,
-): Promise<{
-  access: ResolvedChannelMessageIngress;
-  resolveBoundAccess: (
-    contextBinding?: ChannelIngressContextBinding,
-  ) => Promise<ResolvedChannelMessageIngress>;
-  mentions?: LineInboundMentionAccess;
-  preparedRoute?: PreparedLineInboundRoute;
-} | null> {
+) {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
@@ -252,8 +250,7 @@ async function resolveLineEventAdmission(
         entryIdPrefix: "line-entry",
       },
       cfg,
-      readStoreAllowFrom: async () =>
-        await readChannelAllowFromStore("line", undefined, account.accountId),
+      readStoreAllowFrom: () => readChannelAllowFromStore("line", undefined, account.accountId),
       subject: event.type === "join" ? {} : { stableId: senderId },
       conversation: {
         kind: isGroup ? "group" : "direct",
@@ -649,6 +646,11 @@ async function handlePostbackEvent(
     return;
   }
 
+  // A malformed question callback must not fall through as an ordinary user message.
+  if (isLineQuestionPostbackData(data ?? "")) {
+    return;
+  }
+
   const postbackContext = await buildLinePostbackContext({
     event,
     cfg: context.cfg,
@@ -694,45 +696,36 @@ export async function handleLineWebhookEvents(
     return;
   }
   try {
-    await handleLineWebhookEvent(event, context, setParts);
+    switch (event.type) {
+      case "message":
+        await handleMessageEvent(
+          event,
+          context,
+          setParts.filter((part): part is MessageEvent => part.type === "message"),
+        );
+        break;
+      case "follow":
+      case "unfollow": {
+        const { userId } = getLineSourceInfo(event.source);
+        logVerbose(`line: user ${userId ?? "unknown"} ${event.type}ed`);
+        break;
+      }
+      case "join":
+        await handleJoinEvent(event, context);
+        break;
+      case "leave": {
+        const { groupId, roomId } = getLineSourceInfo(event.source);
+        logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
+        break;
+      }
+      case "postback":
+        await handlePostbackEvent(event, context);
+        break;
+      default:
+        logVerbose(`line: unhandled event type: ${event.type}`);
+    }
   } catch (err) {
     context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
     throw toErrorObject(err, "Non-Error thrown");
-  }
-}
-
-async function handleLineWebhookEvent(
-  event: WebhookEvent,
-  context: LineHandlerContext,
-  /** The remaining parts of the image set this event opens, if any. */
-  setParts: readonly WebhookEvent[] = [],
-): Promise<void> {
-  switch (event.type) {
-    case "message":
-      await handleMessageEvent(
-        event,
-        context,
-        setParts.filter((part): part is MessageEvent => part.type === "message"),
-      );
-      break;
-    case "follow":
-    case "unfollow": {
-      const { userId } = getLineSourceInfo(event.source);
-      logVerbose(`line: user ${userId ?? "unknown"} ${event.type}ed`);
-      break;
-    }
-    case "join":
-      await handleJoinEvent(event, context);
-      break;
-    case "leave": {
-      const { groupId, roomId } = getLineSourceInfo(event.source);
-      logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
-      break;
-    }
-    case "postback":
-      await handlePostbackEvent(event, context);
-      break;
-    default:
-      logVerbose(`line: unhandled event type: ${event.type}`);
   }
 }

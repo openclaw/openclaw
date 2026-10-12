@@ -9,28 +9,41 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
 } from "./plugin-instance.types.js";
-import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry, PluginRegistryGatewayOwner } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
   readonly disposing: boolean;
-  readonly hasActiveCall: boolean;
   readonly acceptingCalls: boolean;
+  readonly replacementPending: boolean;
   readonly hasRetainedConsumers: boolean;
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
+  admitFactory(
+    factory: (...args: never[]) => unknown,
+    resultCallbacks?: readonly PropertyKey[],
+  ): void;
   retainWork(): () => void;
   readonly retainedWorkCount: number;
-  waitForRetainedWork(signal: AbortSignal, includeConsumers?: boolean): Promise<void>;
+  readonly ordinaryCallCount: number;
+  waitForRetainedWork(
+    signal: AbortSignal,
+    options?: { includeConsumers?: boolean; includeCalls?: boolean },
+  ): Promise<void>;
+  waitForIdle(signal: AbortSignal): Promise<void>;
   reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
     kind?: "work" | "custody",
   ): PluginInstanceConsumer;
-  runInRegistry<T>(registry: PluginRegistry, run: () => T, options?: { joinDisposal?: boolean }): T;
+  runInRegistry<T>(
+    registry: PluginRegistry | undefined,
+    run: () => T,
+    options?: { joinDisposal?: boolean },
+  ): T;
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T;
   drain(options?: {
     includeConsumers?: boolean;
@@ -45,15 +58,19 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  readonly holdsPendingReplacement?: boolean;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 
 export type PluginInstanceOwner = {
   record: PluginRecord;
-  registry: PluginRegistry;
-  revoked: boolean;
+  /** Recovery follows the live Gateway without retaining a disposed registry. */
+  retiredGatewayOwner?: WeakRef<PluginRegistryGatewayOwner>;
   instance?: PluginInstanceHandle;
-};
+} & (
+  | { revoked: false; registry: PluginRegistry }
+  | { revoked: true; registry: PluginRegistry | undefined }
+);
 // SDK source transforms and native core chunks must observe the same exact owner.
 export const pluginInstanceState = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInstanceState"),
@@ -67,6 +84,15 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInvocationContext"),
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
+
+/** Compatibility query for callers holding a published plugin invocation context. */
+export function currentPluginWorkHoldsPendingReplacement(): boolean {
+  const call = pluginInstanceInvocation.getStore();
+  return (
+    (call?.instance.holdsPendingReplacement(call.token) ?? false) ||
+    pluginInvocationContext.getStore()?.holdsPendingReplacement === true
+  );
+}
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {
   let owner = pluginInstanceState.records.get(record);

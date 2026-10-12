@@ -9,8 +9,8 @@ import { getDefaultHighWaterMark, setDefaultHighWaterMark } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
-import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile-core.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
 
@@ -21,7 +21,7 @@ async function uploadFixture(content: string | Buffer) {
   const workspaceDir = path.join(root, "workspace");
   await fs.mkdir(workspaceDir);
   await fs.writeFile(path.join(workspaceDir, "result.txt"), content);
-  const currentRef = (await readActualWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
+  const currentRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
     .manifestRef;
   const baseRaw = serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries: [] });
   const baseDigest = createHash("sha256").update(baseRaw).digest("hex");
@@ -291,6 +291,7 @@ describe("node worker upload HTTP lifetime", () => {
             }
           : {
               message: "workspace-transfer-failed: transfer did not complete",
+              operation: "upload",
               stage: mode === "cancellation" ? "reconcile" : "acknowledgement",
               ...(mode === "writer failure" || mode === "writer failure after headers"
                 ? { cause: readInterruption }

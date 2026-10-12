@@ -3,7 +3,6 @@ import Foundation
 enum PlatformLabelFormatter {
     static func parse(_ raw: String) -> (prefix: String, version: String?) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return ("", nil) }
         let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         let prefix = parts.first?.lowercased() ?? ""
         let versionToken = parts.dropFirst().first
@@ -22,7 +21,7 @@ enum PlatformLabelFormatter {
         default: prefix.prefix(1).uppercased() + prefix.dropFirst()
         }
         guard let version, !version.isEmpty else { return name }
-        let parts = version.split(separator: ".").map(String.init)
+        let parts = version.split(separator: ".")
         if parts.count >= 2 {
             return "\(name) \(parts[0]).\(parts[1])"
         }

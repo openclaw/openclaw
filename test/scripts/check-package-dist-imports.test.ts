@@ -2,11 +2,108 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
+import {
+  collectPackageDistImportErrors,
+  collectPackageDistImports,
+} from "../../scripts/lib/package-dist-imports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function checkPackage(
+  sources: Record<string, string>,
+  args: (root: string) => string[] = (root) => [root],
+) {
+  const root = tempDirs.make("openclaw-package-dist-imports-");
+  mkdirSync(join(root, "dist"));
+  for (const [file, source] of Object.entries(sources)) {
+    writeFileSync(join(root, "dist", file), source);
+  }
+  return spawnSync(process.execPath, [CHECK_SCRIPT, ...args(root)], { encoding: "utf8" });
+}
+
+describe("collectPackageDistImportErrors", () => {
+  it.each([undefined, "commonjs"])(
+    "resolves CommonJS files and directory entries with package type %s",
+    (type) => {
+      const sources: Record<string, string> = {
+        "package.json": JSON.stringify({ type }),
+        "index.js": [
+          "./exact",
+          "./lib/global",
+          "./data",
+          "./native",
+          "./directory",
+          "./main-file",
+          "./main-directory",
+          "./main-missing",
+        ]
+          .map((specifier) => `require(${JSON.stringify(specifier)});`)
+          .join("\n"),
+        exact: "module.exports = true;",
+        "lib/global.js": "module.exports = true;",
+        "data.json": '{"value":true}',
+        "native.node": "",
+        "directory/index.js": "module.exports = true;",
+        "main-file/package.json": '{"main":"./entry"}',
+        "main-file/entry.js": "module.exports = true;",
+        "main-directory/package.json": '{"main":"./runtime"}',
+        "main-directory/runtime/index.js": "module.exports = true;",
+        "main-missing/package.json": '{"main":"./missing"}',
+        "main-missing/index.js": "module.exports = true;",
+      };
+      const check = () =>
+        collectPackageDistImportErrors({
+          files: Object.keys(sources),
+          readText: (file) => sources[file]!,
+        });
+
+      expect(check()).toEqual([]);
+      delete sources["lib/global.js"];
+      expect(check()).toEqual(["index.js imports missing lib/global"]);
+      sources["index.js"] = 'import("./data"); require("./data?rev=1");';
+      expect(check()).toEqual([
+        "index.js imports missing data",
+        "index.js imports missing data?rev=1",
+      ]);
+    },
+  );
+
+  it.each<{ name: string; sources: Record<string, string>; errors: string[] }>([
+    {
+      name: "explicit CommonJS extensions and nested package boundaries",
+      sources: {
+        "package.json": '{"type":"module"}',
+        "index.cjs": 'function sloppy(value, value) {}\nrequire("./leaf");',
+        "leaf.js": "export {};",
+        "nested/package.json": "{}",
+        "nested/index.js": 'function sloppy(value, value) {}\nrequire("./leaf");',
+        "nested/leaf.js": "module.exports = true;",
+      },
+      errors: [],
+    },
+    ...[
+      { type: "module", entry: "index.js" },
+      { type: "commonjs", entry: "index.mjs" },
+    ].map(({ type, entry }) => ({
+      name: `${entry} ESM paths with package type ${type}`,
+      sources: {
+        "package.json": JSON.stringify({ type }),
+        [entry]: 'import "./leaf"; export * from "./leaf"; import("./leaf");',
+        "leaf.js": "",
+      },
+      errors: Array.from({ length: 3 }, () => `${entry} imports missing leaf`),
+    })),
+  ])("resolves $name", ({ sources, errors }) => {
+    expect(
+      collectPackageDistImportErrors({
+        files: Object.keys(sources),
+        readText: (file) => sources[file]!,
+      }),
+    ).toEqual(errors);
+  });
+});
 
 describe("collectPackageDistImports", () => {
   it.each(["mjs", "cjs"])(
@@ -53,7 +150,7 @@ describe("collectPackageDistImports", () => {
     ].join("\n");
     expect(
       collectPackageDistImports({ files: ["dist/index.cjs"], readText: () => source }),
-    ).toEqual([{ importerPath: "dist/index.cjs", importedPath: "dist/leaf.cjs" }]);
+    ).toEqual([{ importerPath: "dist/index.cjs", importedPath: "dist/leaf.cjs", kind: "require" }]);
     expect(() =>
       collectPackageDistImports({
         files: ["dist/index.cjs"],
@@ -78,6 +175,7 @@ describe("collectPackageDistImports", () => {
       files: ["dist/index.js"],
       readText: () =>
         [
+          'const example = `\nimport "./phantom.js"\n`;',
           '/** @type {import("./type.js").Value} */',
           'import value from "./value.js";',
           '/** @example import "./example.js"; */',
@@ -93,19 +191,20 @@ describe("collectPackageDistImports", () => {
       ["value.js", "exports.js", "dynamic.js", "common.cjs", "worker.mjs"].map((name) => ({
         importerPath: "dist/index.js",
         importedPath: `dist/${name}`,
+        kind: name === "common.cjs" ? "require" : undefined,
       })),
     );
   });
 
   it("excludes only the handoff runtime's staged native URL", () => {
-    const stagedPath = "./node_modules/koffi/indirect.cjs";
+    const stagedPath = "./node_modules/@openclaw/proc-safe/dist/identity.js";
     const source = [
       `new URL("${stagedPath}", import.meta.url);`,
       `import "${stagedPath}";`,
       `export * from "${stagedPath}";`,
       `import("${stagedPath}");`,
       `require("${stagedPath}");`,
-      'new URL("./node_modules/koffi/other.cjs", import.meta.url);',
+      'new URL("./node_modules/@openclaw/proc-safe/dist/other.js", import.meta.url);',
     ].join("\n");
     for (const importerPath of ["dist/managed-handoff-runtime.mjs", "dist/other.mjs"]) {
       const imports = collectPackageDistImports({
@@ -114,11 +213,12 @@ describe("collectPackageDistImports", () => {
       });
       const expectedNativeEdges = importerPath === "dist/managed-handoff-runtime.mjs" ? 4 : 5;
       expect(imports).toEqual([
-        ...Array.from({ length: expectedNativeEdges }, () => ({
+        ...Array.from({ length: expectedNativeEdges }, (_, index) => ({
           importerPath,
-          importedPath: "dist/node_modules/koffi/indirect.cjs",
+          importedPath: "dist/node_modules/@openclaw/proc-safe/dist/identity.js",
+          kind: index === expectedNativeEdges - 1 ? "require" : undefined,
         })),
-        { importerPath, importedPath: "dist/node_modules/koffi/other.cjs" },
+        { importerPath, importedPath: "dist/node_modules/@openclaw/proc-safe/dist/other.js" },
       ]);
     }
   });
@@ -139,6 +239,7 @@ describe("collectPackageDistImports", () => {
       ["dist/data.json", "outside.cjs", "dist/worker.mjs"].map((importedPath) => ({
         importerPath: "dist/index.mjs",
         importedPath,
+        kind: importedPath === "outside.cjs" ? "require" : undefined,
       })),
     );
   });
@@ -168,63 +269,39 @@ describe("check-package-dist-imports", () => {
     }
   });
 
-  it("prints help before reading package state", () => {
-    const result = spawnSync("node", [CHECK_SCRIPT, "--help"], { encoding: "utf8" });
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      "Usage: node scripts/check-package-dist-imports.mjs [package-root]",
-    );
-    expect(result.stderr).toBe("");
-  });
-
-  it("rejects option-like and extra arguments before dist scanning", () => {
-    const unknown = spawnSync("node", [CHECK_SCRIPT, "--tag"], { encoding: "utf8" });
-
-    expect(unknown.status).not.toBe(0);
-    expect(unknown.stderr).toContain("Unknown package dist import check option: --tag");
-    expect(unknown.stderr).not.toContain("missing dist directory");
-
-    const extra = spawnSync("node", [CHECK_SCRIPT, ".", "extra"], { encoding: "utf8" });
-
-    expect(extra.status).not.toBe(0);
-    expect(extra.stderr).toContain("Unexpected package dist import check argument: extra");
-    expect(extra.stderr).not.toContain("missing dist directory");
-  });
-
   it.each([
-    { leading: [], tail: [], accepted: true },
-    { leading: ["--"], tail: [], accepted: true },
-    { leading: [], tail: [""], accepted: false },
-    { leading: [], tail: [" \t "], accepted: false },
-    { leading: [], tail: ["", "extra"], accepted: false },
-    { leading: [], tail: ["", "--unexpected"], accepted: false },
-    { leading: ["--"], tail: [""], accepted: false },
-  ])(
-    "enforces one dist root with leading $leading and tail $tail",
-    ({ leading, tail, accepted }) => {
-      const root = tempDirs.make("openclaw-package-dist-imports-");
-      mkdirSync(join(root, "dist"), { recursive: true });
-      writeFileSync(join(root, "dist", "index.js"), "export {};\n", "utf8");
-
-      const result = spawnSync(process.execPath, [CHECK_SCRIPT, ...leading, root, ...tail], {
-        encoding: "utf8",
-      });
-
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
-      if (accepted) {
-        expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
-      } else {
-        expect(result.stderr).toContain("Unexpected package dist import check argument");
-        expect(result.stdout).not.toContain("OpenClaw package dist import closure passed.");
-      }
+    {
+      args: ["--help"],
+      code: 0,
+      output: "Usage: node scripts/check-package-dist-imports.mjs [package-root]",
     },
-  );
+    { args: ["--tag"], code: 1, error: "Unknown package dist import check option: --tag" },
+    {
+      args: [".", "extra"],
+      code: 1,
+      error: "Unexpected package dist import check argument: extra",
+    },
+    { args: ["--", "$ROOT"], code: 0, output: "OpenClaw package dist import closure passed." },
+    { args: ["$ROOT", ""], code: 1, error: "Unexpected package dist import check argument" },
+  ])("validates CLI arguments $args before scanning", ({ args, code, output, error }) => {
+    const result = checkPackage({ "index.js": "export {};\n" }, (root) =>
+      args.map((arg) => (arg === "$ROOT" ? root : arg)),
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(code);
+    if (output) {
+      expect(result.stdout).toContain(output);
+    }
+    if (error) {
+      expect(result.stderr).toContain(error);
+      expect(result.stderr).not.toContain("missing dist directory");
+      expect(result.stdout).not.toContain("OpenClaw package dist import closure passed.");
+    } else {
+      expect(result.stderr).toBe("");
+    }
+  });
 
   it("rejects missing chunks across ESM import, re-export, and CommonJS forms", () => {
-    const root = tempDirs.make("openclaw-package-dist-imports-");
-    mkdirSync(join(root, "dist"), { recursive: true });
     const sources = {
       "named-import.js": 'import { value } from "./missing.js";\n',
       "multiline-import.js": 'import {\n  value,\n} from "./missing.js";\n',
@@ -233,32 +310,13 @@ describe("check-package-dist-imports", () => {
       "index.cjs": 'module.exports = require("./chunk.cjs");\n',
       "return.cjs": 'var await = require("./chunk.cjs"); return await;\n',
     };
-    for (const [file, source] of Object.entries(sources)) {
-      writeFileSync(join(root, "dist", file), source, "utf8");
-    }
-
-    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+    const result = checkPackage(sources);
 
     expect(result.status).not.toBe(0);
     for (const file of Object.keys(sources)) {
       const target = file.endsWith(".cjs") ? "chunk.cjs" : "missing.js";
       expect(result.stderr).toContain(`dist/${file} imports missing dist/${target}`);
     }
-  });
-
-  it("ignores import-like text inside multiline template literals", () => {
-    const root = tempDirs.make("openclaw-package-dist-imports-");
-    mkdirSync(join(root, "dist"), { recursive: true });
-    writeFileSync(
-      join(root, "dist", "index.js"),
-      'const example = `\nimport "./phantom.js"\n`;\n',
-      "utf8",
-    );
-
-    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
   });
 
   it("ignores import.meta.url probes outside packaged dist", () => {

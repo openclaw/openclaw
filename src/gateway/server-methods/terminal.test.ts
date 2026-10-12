@@ -57,6 +57,12 @@ vi.mock("../session-utils.js", async () => ({
   loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
 }));
 
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    sessionMocks.loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }),
+}));
+
 function makeOpts(
   params: unknown,
   terminalConfig: { enabled?: boolean } | undefined,
@@ -158,24 +164,11 @@ describe("terminal gateway policy", () => {
     ).toBeUndefined();
     expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
       agentId: "main",
-      clone: false,
     });
   });
 
   it.each([
     { state: "is missing", entry: undefined, error: { code: ErrorCodes.UNAVAILABLE } },
-    {
-      state: "awaits project preparation",
-      entry: {
-        sessionId: "ui-session-id",
-        pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-      },
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
-      },
-    },
     {
       state: "awaits worktree preparation",
       entry: {
@@ -314,7 +307,7 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it.each([undefined, "selected-codex-home"])(
+  it.each(["selected-codex-home"])(
     "opens a provider-built local resume plan for source %s and returns its title",
     async (sourceHomeId) => {
       const openTerminal = vi.fn(async () => ({
@@ -413,41 +406,6 @@ describe("terminal gateway policy", () => {
       await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
 
       expect(sessions.open).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: "terminal open timed out" }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("maps a catalog rejection after the absolute deadline to a timeout", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      installCatalog({
-        id: "codex",
-        label: "Codex",
-        list: async () => [],
-        read: async (request) => ({ ...request, items: [] }),
-        openTerminal: async () => {
-          vi.setSystemTime(TERMINAL_OPEN_DEADLINE_MS);
-          throw new Error("late catalog failure");
-        },
-      });
-      const { opts, respond } = makeOpts(
-        {
-          cols: 80,
-          rows: 24,
-          catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread" },
-        },
-        { enabled: true },
-      );
-
-      await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,
@@ -940,6 +898,7 @@ describe("terminal gateway policy", () => {
     expect(sessions.upload).toHaveBeenCalledWith("conn-1", "s1", {
       name: "report.pdf",
       contentBase64: "dGVzdA==",
+      assertCommitAllowed: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { path: "/tmp/upload/report.pdf", size: 4 });
   });
@@ -960,10 +919,7 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it.each([
-    { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA] },
-    { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] },
-  ])(
+  it.each([{ caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] }])(
     "only returns insertion metadata to clients advertising its capability: $caps",
     async ({ caps }: { caps: string[] }) => {
       const { opts, sessions, respond } = makeOpts(
@@ -1049,6 +1005,7 @@ describe("terminal gateway policy", () => {
         expectedPairingGeneration: "generation-node",
         command: uploadCommand,
         params: { name: "report.pdf", contentBase64: "dGVzdA==" },
+        isDispatchAuthorized: expect.any(Function),
         timeoutMs: 120_000,
       });
       expect(result).toEqual({

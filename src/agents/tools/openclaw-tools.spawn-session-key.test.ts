@@ -48,10 +48,6 @@ vi.mock("../openclaw-tools.media-factory-plan.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../openclaw-tools.nodes-workspace-guard.js", () => ({
-  applyNodesToolWorkspaceGuard: (tool: AnyAgentTool) => tool,
-}));
-
 vi.mock("./agents-list-tool.js", () => ({
   createAgentsListTool: () => mocks.stubTool("agents_list"),
 }));
@@ -159,10 +155,7 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
     mocks.musicGenerateToolOptions.mockClear();
   });
 
-  it("passes the durable runSessionKey as agentSessionKey when both keys differ", () => {
-    // Regression for #137690: the factory must prefer runSessionKey (durable
-    // store key) over agentSessionKey (sandbox/policy key) so that visible
-    // spawns resolve the correct persisted parent in Gateway.
+  it("uses durable lineage keys while preserving policy-owned media tasks", () => {
     const policyKey = "agent:main:telegram:default:direct:456";
     const durableKey = "agent:main:telegram:direct:456";
 
@@ -179,110 +172,23 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
         completionOwnerKey: durableKey,
       }),
     );
-    // The policy key must NOT leak into the spawn tool's agentSessionKey.
-    const call = mocks.spawnToolOptions.mock.calls[0]?.[0] as
+    const spawnCall = mocks.spawnToolOptions.mock.calls[0]?.[0] as
       | { agentSessionKey?: string }
       | undefined;
-    expect(call?.agentSessionKey).not.toBe(policyKey);
-  });
-
-  it("falls back to agentSessionKey when runSessionKey is absent", () => {
-    const policyKey = "agent:main:telegram:default:direct:456";
-
-    createOpenClawTools({
-      agentSessionKey: policyKey,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
-
-    expect(mocks.spawnToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSessionKey: policyKey,
-      }),
-    );
-  });
-
-  it("passes the durable runSessionKey to createSessionsSendTool when keys differ", () => {
-    // Regression for #144265: spawned children persist spawnedBy under the durable
-    // run session key (Gateway canonicalizes the spawn parent), so sessions_send must
-    // identify the requester with the same key or it treats its own visible child as
-    // a peer and starts the A2A announce flow after a waited reply.
-    const policyKey = "agent:main:telegram:default:direct:456";
-    const durableKey = "agent:main:telegram:direct:456";
-
-    createOpenClawTools({
-      agentSessionKey: policyKey,
-      runSessionKey: durableKey,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
-
+    expect(spawnCall?.agentSessionKey).not.toBe(policyKey);
     expect(mocks.sendToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({ agentSessionKey: durableKey }),
     );
-  });
-
-  it("passes the durable runSessionKey to createSubagentsTool when keys differ", () => {
-    // Regression for the ClawSweeper P1 finding on #137779: spawn registers runs under the
-    // durable controller key (derived from the spawn tool's agentSessionKey), but the
-    // subagents listing tool matches that key by exact equality. If the listing tool kept
-    // receiving the policy key, split-key callers (Telegram DM) would never see their newly
-    // spawned runs. The factory must hand the listing tool the same durable key.
-    const policyKey = "agent:main:telegram:default:direct:456";
-    const durableKey = "agent:main:telegram:direct:456";
-
-    createOpenClawTools({
-      agentSessionKey: policyKey,
-      runSessionKey: durableKey,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
-
     expect(mocks.subagentsToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: durableKey,
-        // The policy key is forwarded as the fallback owner key so retained task rows
-        // (created before the durable-key alignment, still carrying the policy key in
-        // owner_key) stay reachable and cancellable for split-key callers.
         callerPolicySessionKey: policyKey,
       }),
     );
-    // The policy key must NOT reach the listing tool as the primary agentSessionKey,
-    // or split-key runs stay invisible.
-    const call = mocks.subagentsToolOptions.mock.calls[0]?.[0] as
+    const subagentsCall = mocks.subagentsToolOptions.mock.calls[0]?.[0] as
       | { agentSessionKey?: string }
       | undefined;
-    expect(call?.agentSessionKey).not.toBe(policyKey);
-  });
-
-  it("passes agentSessionKey to createSubagentsTool when runSessionKey is absent", () => {
-    const policyKey = "agent:main:telegram:default:direct:456";
-
-    createOpenClawTools({
-      agentSessionKey: policyKey,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
-
-    expect(mocks.subagentsToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentSessionKey: policyKey,
-      }),
-    );
-  });
-
-  it("preserves the policy owner key for non-cron media tasks when keys differ", () => {
-    // Retained tasks use the policy key for media status and duplicate lookup.
-    // The subagents tool accepts both keys without changing media ownership.
-    const policyKey = "agent:main:telegram:default:direct:456";
-    const durableKey = "agent:main:telegram:direct:456";
-
-    createOpenClawTools({
-      agentSessionKey: policyKey,
-      runSessionKey: durableKey,
-      disableMessageTool: true,
-      disablePluginTools: true,
-    });
+    expect(subagentsCall?.agentSessionKey).not.toBe(policyKey);
 
     for (const [name, captured] of [
       ["image_generate", mocks.imageGenerateToolOptions],
@@ -299,7 +205,7 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
     }
   });
 
-  it("passes agentSessionKey to media-generation tools when runSessionKey is absent", () => {
+  it("falls back to agentSessionKey when runSessionKey is absent", () => {
     const policyKey = "agent:main:telegram:default:direct:456";
 
     createOpenClawTools({
@@ -308,6 +214,12 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
       disablePluginTools: true,
     });
 
+    expect(mocks.spawnToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionKey: policyKey }),
+    );
+    expect(mocks.subagentsToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionKey: policyKey }),
+    );
     expect(mocks.imageGenerateToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({ agentSessionKey: policyKey }),
     );

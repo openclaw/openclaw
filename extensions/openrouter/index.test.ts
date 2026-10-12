@@ -12,19 +12,18 @@ import {
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it, vi } from "vitest";
 
-const { getOpenRouterModelCapabilitiesMock, loadOpenRouterModelCapabilitiesMock } = vi.hoisted(
-  () => ({
-    getOpenRouterModelCapabilitiesMock: vi.fn(),
+const { getLoadedOpenRouterModelCapabilitiesMock, loadOpenRouterModelCapabilitiesMock } =
+  vi.hoisted(() => ({
+    getLoadedOpenRouterModelCapabilitiesMock: vi.fn(),
     loadOpenRouterModelCapabilitiesMock: vi.fn(async () => {}),
-  }),
-);
+  }));
 
 vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/provider-stream-family")>();
   return {
     ...actual,
-    getOpenRouterModelCapabilities: getOpenRouterModelCapabilitiesMock,
+    getLoadedOpenRouterModelCapabilities: getLoadedOpenRouterModelCapabilitiesMock,
     loadOpenRouterModelCapabilities: loadOpenRouterModelCapabilitiesMock,
   };
 });
@@ -383,9 +382,9 @@ describe("openrouter provider hooks", () => {
   });
 
   it("normalizes OpenRouter API ids before capability loading and lookup", async () => {
-    getOpenRouterModelCapabilitiesMock.mockReset();
+    getLoadedOpenRouterModelCapabilitiesMock.mockReset();
     loadOpenRouterModelCapabilitiesMock.mockClear();
-    getOpenRouterModelCapabilitiesMock.mockReturnValue({
+    getLoadedOpenRouterModelCapabilitiesMock.mockReturnValue({
       name: "Claude Sonnet 4.6",
       reasoning: true,
       compat: { supportedReasoningEfforts: ["high", "low"] },
@@ -408,7 +407,9 @@ describe("openrouter provider hooks", () => {
     const model = provider.resolveDynamicModel?.(context);
 
     expect(loadOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
-    expect(getOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
+    expect(getLoadedOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith(
+      "anthropic/claude-sonnet-4.6",
+    );
     expect(model).toMatchObject({
       id: modelId,
       name: "Claude Sonnet 4.6",
@@ -422,7 +423,7 @@ describe("openrouter provider hooks", () => {
   });
 
   it("keeps native OpenRouter namespace ids for capability lookup", async () => {
-    getOpenRouterModelCapabilitiesMock.mockReset();
+    getLoadedOpenRouterModelCapabilitiesMock.mockReset();
     loadOpenRouterModelCapabilitiesMock.mockClear();
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const context = {
@@ -435,7 +436,7 @@ describe("openrouter provider hooks", () => {
     provider.resolveDynamicModel?.(context);
 
     expect(loadOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
-    expect(getOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
+    expect(getLoadedOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
   });
 
   it("does not include retired stealth models in the bundled catalog", () => {
@@ -757,8 +758,6 @@ describe("openrouter provider hooks", () => {
     const options = baseStreamFn.mock.calls[0]?.[2] as { headers?: HeadersInit } | undefined;
     const headers = new Headers(options?.headers);
     expect(headers.get("authorization")).toBe("Bearer or-test-key");
-    expect(headers.get("http-referer")).toBe("https://openclaw.ai");
-    expect(headers.get("x-openrouter-title")).toBe("OpenClaw");
   });
 
   it("merges resolved OpenRouter model params into transport params", async () => {

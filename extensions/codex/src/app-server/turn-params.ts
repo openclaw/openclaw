@@ -40,20 +40,13 @@ type CodexCurrentSender = {
 
 function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentSender | undefined {
   const metadata = asOptionalRecord(
-    asOptionalRecord(params.userTurnTranscriptRecorder?.message as unknown)?.["__openclaw"],
+    asOptionalRecord(params.userTurnTranscriptRecorder?.message)?.["__openclaw"],
   );
-  const recorded = [
-    normalizeOptionalString(metadata?.["senderId"]),
-    normalizeOptionalString(metadata?.["senderName"]),
-    normalizeOptionalString(metadata?.["senderUsername"]),
-  ] as const;
+  const fields = ["senderId", "senderName", "senderUsername"] as const;
+  const recorded = fields.map((key) => normalizeOptionalString(metadata?.[key]));
   const [id, name, username] = recorded.some(Boolean)
     ? recorded
-    : [
-        normalizeOptionalString(params.senderId),
-        normalizeOptionalString(params.senderName),
-        normalizeOptionalString(params.senderUsername),
-      ];
+    : fields.map((key) => normalizeOptionalString(params[key]));
   if (!id && !name && !username) {
     return undefined;
   }
@@ -78,7 +71,7 @@ export function buildCodexHistoryProvenancePrefix(
     : undefined;
 }
 
-export function buildTurnStartParams(
+export async function buildTurnStartParams(
   params: EmbeddedRunAttemptParams,
   options: {
     threadId: string;
@@ -91,8 +84,6 @@ export function buildTurnStartParams(
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
     modelProvider?: string | null;
-    turnScopedDeveloperInstructions?: string;
-    memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
     parentLocalEgress?: boolean;
     clearInheritedServiceTier?: boolean;
@@ -101,10 +92,10 @@ export function buildTurnStartParams(
     requireExplicitMessageTarget?: boolean;
     historyProvenancePrefix?: string;
   },
-): CodexTurnStartParams {
+): Promise<CodexTurnStartParams> {
   const modelSelection = options.preserveNativeTurnSettings
     ? undefined
-    : resolveCodexAppServerRequestModelSelection({
+    : await resolveCodexAppServerRequestModelSelection({
         homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider: options.modelProvider,
@@ -116,8 +107,6 @@ export function buildTurnStartParams(
   const collaborationMode = modelSelection
     ? buildTurnCollaborationMode(params, {
         model: modelSelection.model,
-        turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
-        memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       })
     : undefined;
   if (collaborationMode && options.parentLocalEgress) {
@@ -216,7 +205,11 @@ export function buildTurnStartParams(
           collaborationMode,
         }
       : {}),
-    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+    ...(params.requireWorkspaceOnly === true
+      ? { environments: [] }
+      : options.environmentSelection
+        ? { environments: options.environmentSelection }
+        : {}),
   };
 }
 
@@ -241,8 +234,6 @@ export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
   options: {
     model?: string;
-    turnScopedDeveloperInstructions?: string;
-    memoryCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
   const model = options.model ?? params.modelId;
@@ -255,7 +246,7 @@ export function buildTurnCollaborationMode(
         modelId: model,
         supportedReasoningEfforts: readCodexSupportedReasoningEfforts(params.model?.compat),
       }),
-      developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
+      developer_instructions: params.trigger === "cron" ? CRON_COLLABORATION_INSTRUCTIONS : null,
     },
   };
 }
@@ -263,57 +254,25 @@ export function buildTurnCollaborationMode(
 export function buildCodexParentLocalInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
-    turnScopedDeveloperInstructions?: string;
+    personaInstructions?: string;
     skillsInstructions?: string;
-    memoryCollaborationInstructions?: string;
+    memoryInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
-    options.turnScopedDeveloperInstructions,
+    options.personaInstructions,
     options.skillsInstructions,
-    options.memoryCollaborationInstructions,
+    options.memoryInstructions,
   );
   if (params.trigger === "cron") {
-    return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
+    return joinPresentSections(CRON_COLLABORATION_INSTRUCTIONS, contextInstructions);
   }
   return contextInstructions || null;
 }
 
-function buildTurnScopedCollaborationInstructions(
-  params: EmbeddedRunAttemptParams,
-  options: Parameters<typeof buildCodexParentLocalInstructions>[1],
-): string | null {
-  const instructions = buildCodexParentLocalInstructions(params, options);
-  // Shipped external app-server compatibility: preserve its existing collaboration carrier.
-  return instructions && params.trigger !== "cron"
-    ? joinPresentSections(buildDefaultCollaborationInstructions(), instructions)
-    : instructions;
-}
-
-function buildDefaultCollaborationInstructions(): string {
-  // Codex only applies the built-in Default-mode preset when `developer_instructions`
-  // is null. OpenClaw adds per-turn workspace instructions here, so preserve that
-  // pinned Codex default behavior before appending the workspace overlay.
-  return [
-    "# Collaboration Mode: Default",
-    "",
-    "You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.",
-    "",
-    "Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.",
-    "",
-    "## request_user_input availability",
-    "",
-    "Use the `request_user_input` tool only when it is listed in the available tools for this turn.",
-    "",
-    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. When a missing preference, constraint, or clarification warrants a question, use `request_user_input_async` if it is available and continue independent work. Answers arrive as ordinary user messages. A suggested or preselected answer is not consent; wait for explicit approval before dependent actions that require it. If neither question tool is available, ask a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
-  ].join("\n");
-}
-
-function buildCronCollaborationInstructions(): string {
-  return [
-    "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
-    "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
-    "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
-    "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
-  ].join("\n\n");
-}
+const CRON_COLLABORATION_INSTRUCTIONS = [
+  "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
+  "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
+  "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
+  "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
+].join("\n\n");

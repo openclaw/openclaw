@@ -1,3 +1,9 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type {
+  WorkerExecutionMode,
+  WorkerMachineOption as ProtocolWorkerMachineOption,
+  WorkerOperatingSystem as ProtocolWorkerOperatingSystem,
+} from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
@@ -45,27 +51,16 @@ import type {
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
-/** JSON-compatible provider settings for one configured worker profile. */
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
 /** Provider-authored picker metadata for one machine class or exact machine type. */
-export type WorkerMachineOption = Readonly<{
-  id: string;
-  label: string;
-  os?: string;
-  cpu?: number;
-  memoryGb?: number;
-  default?: boolean;
-}>;
+export type WorkerMachineOption = Readonly<SchemaContract<ProtocolWorkerMachineOption>>;
 
-/** Provider-owned operating system choices for one configured worker profile. */
-export type WorkerOperatingSystem = Readonly<{
-  id: string;
-  label: string;
-  default?: boolean;
-  /** Why this advertised target cannot currently be selected, including a repair hint. */
-  disabledReason?: string;
-}>;
+/**
+ * Provider-owned operating system choices for one configured worker profile.
+ * disabledReason explains why a target cannot currently be selected, including a repair hint.
+ */
+export type WorkerOperatingSystem = Readonly<SchemaContract<ProtocolWorkerOperatingSystem>>;
 
 /** SSH endpoint material returned by a worker provider after provisioning. */
 export type WorkerSshEndpoint = {
@@ -126,8 +121,7 @@ export type WorkerDesktopEndpoint = {
   apps?: WorkerDesktopApp[];
 };
 
-/** Placement execution modes a worker provider can carry. */
-export type WorkerExecutionMode = "worker-turn" | "remote-exec";
+export type { WorkerExecutionMode } from "../../packages/gateway-protocol/src/schema/environments.js";
 
 /** Grant-free identity of the runtime bytes a provider may retain in a prepared image. */
 export type WorkerNodeRuntimeIdentity = {
@@ -138,6 +132,8 @@ export type WorkerNodeRuntimeIdentity = {
 };
 
 type WorkerNodeBootstrapAccess = {
+  /** Core-owned command window for downloading and installing this grant's artifacts. */
+  bootstrapTimeoutMs?: number;
   /** Immutable node distribution prepared by the Gateway for this provision operation. */
   nodeBootstrap: {
     url: string;
@@ -342,6 +338,8 @@ export type WorkerProvider = {
       machineClass?: string;
       os?: string;
       nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
+      /** Upper bound per runtime preparation/enrollment phase, including the node connection wait. */
+      nodeBootstrapTimeoutMs?: number;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
       project?: {
@@ -397,7 +395,10 @@ export type WorkerProvider = {
     ...args: Parameters<WorkerProvider["provision"]>
   ) => Promise<() => Promise<WorkerLease>>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
-  resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
+  resolveProvisionTimeoutMs?: (
+    profile: WorkerProfile,
+    options?: { nodeBootstrapTimeoutMs?: number },
+  ) => number;
   /**
    * Throws on transient/indeterminate observation failures. `unknown` means the provider no
    * longer recognizes a usable lease; core fences it and requests destroy. Only `destroyed`
@@ -426,7 +427,6 @@ export type WorkerProvider = {
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };
 
-/** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
@@ -449,7 +449,9 @@ export type SpeechProviderPlugin = {
     | SpeechProviderPreparedSynthesis
     | undefined
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
+  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: SpeechProviderConfiguredContext) => Promise<boolean>;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   streamSynthesize?: (req: SpeechSynthesisStreamRequest) => Promise<SpeechSynthesisStreamResult>;
   synthesizeTelephony?: (
@@ -458,7 +460,6 @@ export type SpeechProviderPlugin = {
   listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
 };
 
-/** Realtime transcription capability registered by a plugin. */
 export type RealtimeTranscriptionProviderPlugin = {
   id: RealtimeTranscriptionProviderId;
   label: string;
@@ -469,14 +470,14 @@ export type RealtimeTranscriptionProviderPlugin = {
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;
+  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
   isConfigured: (ctx: RealtimeTranscriptionProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: RealtimeTranscriptionProviderConfiguredContext) => Promise<boolean>;
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
 };
 
-/** Transcript source capability registered by a channel or meeting plugin. */
 export type TranscriptSourceProvider = TranscriptsSourceProviderCapability;
 
-/** Realtime voice capability registered by a plugin. */
 export type RealtimeVoiceProviderPlugin = {
   id: RealtimeVoiceProviderId;
   label: string;
@@ -487,8 +488,14 @@ export type RealtimeVoiceProviderPlugin = {
   voices?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
+  /** @deprecated Use resolveConfigAsync when config resolution needs credentials. */
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
+  resolveConfigAsync?: (
+    ctx: RealtimeVoiceProviderResolveConfigContext,
+  ) => Promise<RealtimeVoiceProviderConfig>;
+  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: RealtimeVoiceProviderConfiguredContext) => Promise<boolean>;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
   createBrowserSession?: (
     req: RealtimeVoiceBrowserSessionCreateRequest,

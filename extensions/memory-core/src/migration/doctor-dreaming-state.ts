@@ -1,193 +1,110 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
-  archiveLegacyStateSource,
   legacyStateFileExists,
+  type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
-  normalizeDailyIngestionState,
-  normalizeSessionIngestionState,
-  writeDailyIngestionState,
-  writeSessionIngestionState,
-} from "../dreaming-ingestion-state.js";
-import {
+  DREAMING_DAILY_INGESTION_NAMESPACE,
+  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   configureMemoryCoreDreamingState,
-  writeMemoryCoreWorkspaceEntries,
-  writeMemoryCoreWorkspaceEntry,
+  readMemoryCoreWorkspaceEntries,
 } from "../dreaming-state.js";
-// Import from the defining modules, not the short-term-promotion barrel: the
-// barrel pulls memory-host-events/kysely, which doctor enumeration cold-loads.
-import { normalizeShortTermPhaseSignalStore } from "../short-term-promotion-store.js";
-import { normalizeShortTermRecallStore } from "../short-term-promotion-utils.js";
 import { resolveConfiguredWorkspaces } from "./doctor-workspaces.js";
-import { dreamingStateComparison } from "./dreaming-state-comparison.js";
 
-type LegacySource = {
-  workspaceDir: string;
+const RETIRED_DREAMING_SOURCES: readonly {
   label: string;
-  filePath: string;
-};
+  fileName: string;
+  namespaces: readonly string[];
+  metaKey?: string;
+}[] = [
+  {
+    label: "daily ingestion",
+    fileName: "daily-ingestion.json",
+    namespaces: [DREAMING_DAILY_INGESTION_NAMESPACE],
+  },
+  {
+    label: "session ingestion",
+    fileName: "session-ingestion.json",
+    namespaces: [
+      DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+    ],
+  },
+  {
+    label: "short-term recall",
+    fileName: "short-term-recall.json",
+    namespaces: [SHORT_TERM_RECALL_NAMESPACE],
+    metaKey: "recall",
+  },
+  {
+    label: "phase signals",
+    fileName: "phase-signals.json",
+    namespaces: [SHORT_TERM_PHASE_SIGNAL_NAMESPACE],
+    metaKey: "phase",
+  },
+];
 
-const LEGACY_DREAMING_STATE_DIR = path.join("memory", ".dreams");
-
-async function readJsonFile(filePath: string): Promise<unknown> {
-  return JSON.parse(await fs.readFile(filePath, "utf8"));
-}
-
-async function collectLegacySources(
-  config: unknown,
-  env: NodeJS.ProcessEnv,
-): Promise<LegacySource[]> {
-  const sources: LegacySource[] = [];
-  for (const workspaceDir of await resolveConfiguredWorkspaces(config, env)) {
-    const candidates = [
-      { label: "daily ingestion", fileName: "daily-ingestion.json" },
-      { label: "session ingestion", fileName: "session-ingestion.json" },
-      { label: "short-term recall", fileName: "short-term-recall.json" },
-      { label: "phase signals", fileName: "phase-signals.json" },
-    ];
-    for (const candidate of candidates) {
-      const filePath = path.join(workspaceDir, LEGACY_DREAMING_STATE_DIR, candidate.fileName);
+async function unsupportedDreamingSources(
+  params: Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0],
+): Promise<string[]> {
+  configureMemoryCoreDreamingState(params.context.openPluginStateKeyedStore);
+  const warnings: string[] = [];
+  for (const workspaceDir of await resolveConfiguredWorkspaces(params.config, params.env)) {
+    const sources = [];
+    for (const source of RETIRED_DREAMING_SOURCES) {
+      const filePath = path.join(workspaceDir, "memory", ".dreams", source.fileName);
       if (await legacyStateFileExists(filePath)) {
-        sources.push({ workspaceDir, label: candidate.label, filePath });
+        sources.push({ ...source, filePath });
       }
     }
-  }
-  return sources;
-}
-
-async function migrateDailyIngestion(source: LegacySource): Promise<number> {
-  const state = normalizeDailyIngestionState(await readJsonFile(source.filePath));
-  await writeDailyIngestionState(source.workspaceDir, state);
-  return Object.keys(state.files).length;
-}
-
-async function migrateSessionIngestion(source: LegacySource): Promise<number> {
-  const state = normalizeSessionIngestionState(await readJsonFile(source.filePath));
-  await writeSessionIngestionState(source.workspaceDir, state);
-  return Object.keys(state.files).length + Object.keys(state.seenMessages).length;
-}
-
-async function migrateShortTermStore(
-  source: LegacySource,
-  kind: "recall" | "phase",
-): Promise<number> {
-  const nowIso = new Date().toISOString();
-  const raw = await readJsonFile(source.filePath);
-  const state =
-    kind === "recall"
-      ? normalizeShortTermRecallStore(raw, nowIso)
-      : normalizeShortTermPhaseSignalStore(raw, nowIso);
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace:
-        kind === "recall" ? SHORT_TERM_RECALL_NAMESPACE : SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-      workspaceDir: source.workspaceDir,
-      entries: Object.entries(state.entries).map(([key, value]) => ({ key, value })),
-    }),
-    writeMemoryCoreWorkspaceEntry({
+    if (sources.length === 0) {
+      continue;
+    }
+    const acknowledgements = await readMemoryCoreWorkspaceEntries({
+      namespace: "legacy-dreaming-source-acknowledgements",
+      workspaceDir,
+    });
+    const metadata = await readMemoryCoreWorkspaceEntries({
       namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir: source.workspaceDir,
-      key: kind,
-      value: { updatedAt: state.updatedAt },
-    }),
-  ]);
-  return Object.keys(state.entries).length;
-}
-
-async function migrateSource(source: LegacySource): Promise<number> {
-  if (source.label === "daily ingestion") {
-    return await migrateDailyIngestion(source);
+      workspaceDir,
+    });
+    for (const source of sources) {
+      // Empty ingestion stores have no marker except an existing migration acknowledgement.
+      if (
+        acknowledgements.some((entry) => entry.key === `legacy-source:${source.label}`) ||
+        (source.metaKey && metadata.some((entry) => entry.key === source.metaKey))
+      ) {
+        continue;
+      }
+      const entries = await Promise.all(
+        source.namespaces.map((namespace) =>
+          readMemoryCoreWorkspaceEntries({ namespace, workspaceDir }),
+        ),
+      );
+      if (entries.some((rows) => rows.length > 0)) {
+        continue;
+      }
+      warnings.push(
+        `Memory Core ${source.label}: upgrades from pre-July-2026 dreaming JSON are no longer migrated (${source.filePath}). No canonical SQLite state was found; an empty ingestion store cannot be distinguished from unmigrated state. Restore a backup produced by a July 2026 or newer release, or back up and move this retired file aside after verifying the SQLite state, then rerun openclaw doctor --fix. The file was left unchanged.`,
+      );
+    }
   }
-  if (source.label === "session ingestion") {
-    return await migrateSessionIngestion(source);
-  }
-  return await migrateShortTermStore(
-    source,
-    source.label === "short-term recall" ? "recall" : "phase",
-  );
+  return warnings;
 }
 
 export const dreamingStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-dreams-json-to-sqlite",
-  label: "Memory Core dreaming state",
+  label: "Memory Core unsupported dreaming JSON",
+  collectBackupResources: () => [],
   async detectLegacyState(params) {
-    configureMemoryCoreDreamingState(params.context.openPluginStateKeyedStore);
-    const sources = await collectLegacySources(params.config, params.env);
-    if (sources.length === 0) {
-      return null;
-    }
-    return {
-      preview: sources.map(
-        (source) => `- Memory Core ${source.label}: ${source.filePath} -> SQLite plugin state`,
-      ),
-    };
+    const warnings = await unsupportedDreamingSources(params);
+    return warnings.length > 0 ? { preview: warnings.map((warning) => `- ${warning}`) } : null;
   },
   async migrateLegacyState(params) {
-    configureMemoryCoreDreamingState(params.context.openPluginStateKeyedStore);
-    const changes: string[] = [];
-    const warnings: string[] = [];
-    const notices: string[] = [];
-    for (const source of await collectLegacySources(params.config, params.env)) {
-      const targetHasRows = await dreamingStateComparison.targetHasRows(source);
-      if (targetHasRows) {
-        let sourceAcknowledged: boolean;
-        try {
-          sourceAcknowledged = await dreamingStateComparison.sourceIsAcknowledged(source);
-        } catch (err) {
-          warnings.push(
-            `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because the legacy source could not be compared: ${String(err)}`,
-          );
-          continue;
-        }
-        if (sourceAcknowledged) {
-          // Older releases may rewrite these rollback sources. The stored hash
-          // keeps unchanged sources informational; rewritten sources fail closed.
-          notices.push(
-            `Retained acknowledged Memory Core ${source.label} legacy source for rollback: ${source.filePath}`,
-          );
-          continue;
-        }
-        // Each retired journal mirrors the SQLite namespaces used by the runtime.
-        // Keep canonical state active and retain only the divergent rollback source.
-        changes.push(
-          `Resolved Memory Core ${source.label} legacy conflict by keeping canonical SQLite plugin state`,
-        );
-        await archiveLegacyStateSource({
-          filePath: source.filePath,
-          label: `Memory Core ${source.label} conflicting legacy source`,
-          changes,
-          warnings,
-        });
-        continue;
-      }
-      let imported: number;
-      try {
-        imported = await migrateSource(source);
-      } catch (err) {
-        warnings.push(
-          `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because the legacy source could not be imported: ${String(err)}`,
-        );
-        continue;
-      }
-      changes.push(
-        `Migrated Memory Core ${source.label} -> SQLite plugin state (${imported} row(s))`,
-      );
-      await archiveLegacyStateSource({
-        filePath: source.filePath,
-        label: `Memory Core ${source.label}`,
-        changes,
-        warnings,
-      });
-    }
-    return {
-      changes,
-      warnings,
-      ...(notices.length > 0 ? { notices } : {}),
-    };
+    return { changes: [], warnings: await unsupportedDreamingSources(params) };
   },
 };

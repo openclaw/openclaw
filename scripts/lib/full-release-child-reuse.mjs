@@ -18,7 +18,8 @@ import {
 import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
 
-const MAX_RUNS = 30;
+const MAX_RUNS = 100;
+const MAX_ARTIFACT_PROBES = 40;
 const MAX_CANDIDATES = 5;
 const MAX_ATTEMPTS = 32;
 const MAX_JOB_PAGES = 20;
@@ -48,12 +49,11 @@ function normalizedInputs(inputs) {
       ),
     "requires scalar dispatch inputs",
   );
-  return canonicalizeJsonValue(
-    Object.fromEntries(
-      Object.entries(inputs)
-        .filter(([key]) => key !== "dispatch_id")
-        .map(([key, value]) => [key, String(value)]),
-    ),
+  // GitHub omits empty-string dispatch inputs from github.event.inputs.
+  return Object.fromEntries(
+    Object.entries(inputs)
+      .filter(([key, value]) => key !== "dispatch_id" && value !== "")
+      .map(([key, value]) => [key, String(value)]),
   );
 }
 
@@ -61,8 +61,9 @@ function requestValue(request) {
   requireEvidence(
     isRecord(request) &&
       /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(request.repository) &&
-      SHA.test(request.targetSha),
-    "request identity is invalid",
+      SHA.test(request.targetSha) &&
+      SHA.test(request.workflowSha),
+    "request identity or current parent workflow SHA is invalid",
   );
   const spec = releaseChildSpec(request.role);
   return { ...request, inputs: normalizedInputs(request.inputs), spec };
@@ -256,15 +257,21 @@ function validateSelectionIdentity(selection, request) {
 }
 
 async function validateEvidence(selection, request, deps) {
+  requireEvidence(
+    selection.workflowSha === request.workflowSha,
+    `tooling ${selection.workflowSha} differs from current parent ${request.workflowSha}; same tooling is required`,
+  );
   validateSelectionIdentity(selection, request);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
-  const lineage = await deps.github(`compare/${selection.workflowSha}...main?per_page=1`);
-  requireEvidence(
-    ["ahead", "identical"].includes(lineage?.status) &&
-      lineage.merge_base_commit?.sha === selection.workflowSha,
-    "workflow SHA is not a main ancestor",
-  );
+  if (selection.workflowSha !== request.targetSha) {
+    const lineage = await deps.github(`compare/${selection.workflowSha}...main?per_page=1`);
+    requireEvidence(
+      ["ahead", "identical"].includes(lineage?.status) &&
+        lineage.merge_base_commit?.sha === selection.workflowSha,
+      "workflow SHA is not a main ancestor or the candidate SHA",
+    );
+  }
   const artifact = await deps.github(`actions/artifacts/${String(selection.artifact.id)}`);
   requireEvidence(
     canonical(artifactIdentity(artifact, request, run, deps.now)) === canonical(selection.artifact),
@@ -324,7 +331,7 @@ async function validateEvidence(selection, request, deps) {
       receipt.sourceParentRunId === selection.sourceParentRunId &&
       receipt.sourceParentAttempt === selection.sourceParentAttempt &&
       receipt.workloadConclusion === "success" &&
-      canonical(receipt.inputs) === canonical(request.inputs),
+      canonical(normalizedInputs(receipt.inputs)) === canonical(request.inputs),
     "receipt target, origin, or exact dispatch inputs changed",
   );
   const attempts = [];
@@ -377,34 +384,55 @@ export async function validateReusableReleaseChild(selection, request, deps = {}
 export async function discoverReusableReleaseChild(request, deps = {}) {
   const normalized = requestValue(request);
   const resolved = dependencies(request.repository, deps);
+  const report = deps.report ?? console.error;
   const inventory = await resolved.github(
     `actions/workflows/${normalized.spec.workflow}/runs?event=workflow_dispatch&per_page=${MAX_RUNS}`,
   );
   requireEvidence(Array.isArray(inventory?.workflow_runs), "run inventory is invalid");
+  let scanned = 0;
+  let probed = 0;
   let evaluated = 0;
+  const skipped = {};
+  const skip = (reason) => {
+    skipped[reason] = (skipped[reason] ?? 0) + 1;
+  };
+  const summary = (reused) =>
+    report(
+      `${reused ? "reusable" : "no reusable"} ${request.role} child for ${request.targetSha}: scanned ${scanned} runs, evaluated ${evaluated}; ${reused ? "" : "dispatching fresh work; "}skipped ${JSON.stringify(skipped)}`,
+    );
   for (const run of inventory.workflow_runs.slice(0, MAX_RUNS)) {
+    scanned += 1;
     if (run.status !== "completed" || run.conclusion !== "success") {
+      skip("not-green");
       continue;
     }
     const prefix = `${normalized.spec.displayName} full-release-validation-`;
     if (!String(run.display_title).startsWith(prefix)) {
+      skip("other role/suffix");
       continue;
     }
     const parent = /^([1-9][0-9]*)-([1-9][0-9]*)(.*)$/u.exec(
       run.display_title.slice(prefix.length),
     );
-    if (
-      !parent ||
-      parent[3] !== normalized.spec.suffix ||
-      parent[1] === String(request.excludeRunId ?? "")
-    ) {
+    if (!parent || parent[3] !== normalized.spec.suffix) {
+      skip("other role/suffix");
       continue;
     }
-    if (evaluated >= MAX_CANDIDATES) {
-      break;
+    if (parent[1] === String(request.excludeRunId ?? "")) {
+      skip("current parent");
+      continue;
     }
-    evaluated += 1;
+    if (
+      Date.now() >= resolved.deadlineMs ||
+      probed >= MAX_ARTIFACT_PROBES ||
+      evaluated >= MAX_CANDIDATES
+    ) {
+      skip("budget exhausted");
+      continue;
+    }
+    const previousEvaluated = evaluated;
     try {
+      probed += 1;
       const name = artifactName(normalized, run.id, run.run_attempt);
       const artifacts = await resolved.github(
         `actions/runs/${run.id}/artifacts?name=${encodeURIComponent(name)}&per_page=100`,
@@ -414,7 +442,20 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         "artifact inventory is incomplete",
       );
       const matching = artifacts.artifacts.filter((artifact) => artifact.name === name);
-      requireEvidence(matching.length === 1, "receipt artifact is absent or ambiguous");
+      if (matching.length === 0) {
+        skip("target receipt absent");
+        continue;
+      }
+      // Older tooling cannot pass validation; keep it off the full-validation budget.
+      if (run.head_sha !== request.workflowSha) {
+        skip("other tooling");
+        report(
+          `run ${run.id} ${run.display_title}: rejected: tooling ${run.head_sha} differs from current parent ${request.workflowSha}; same tooling is required`,
+        );
+        continue;
+      }
+      evaluated += 1;
+      requireEvidence(matching.length === 1, "receipt artifact is ambiguous");
       const selection = {
         repository: request.repository,
         targetSha: request.targetSha,
@@ -430,11 +471,17 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         artifact: artifactIdentity(matching[0], normalized, run, resolved.now),
         inputs: normalized.inputs,
       };
-      return (await validateEvidence(selection, normalized, resolved)).selection;
-    } catch {
-      // Reuse is optional. Invalid, missing, or unavailable evidence schedules
-      // fresh work; immutable selections are revalidated strictly by consumers.
+      const verified = await validateEvidence(selection, normalized, resolved);
+      report(`run ${run.id} ${run.display_title}: reused: verified receipt and same tooling`);
+      summary(true);
+      return verified.selection;
+    } catch (error) {
+      if (evaluated === previousEvaluated) {
+        skip("artifact probe failed");
+      }
+      report(`run ${run.id} ${run.display_title}: rejected: ${error.message}`);
     }
   }
+  summary(false);
   return null;
 }

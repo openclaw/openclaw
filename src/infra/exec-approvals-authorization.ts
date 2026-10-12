@@ -1,66 +1,52 @@
 // Revalidates and commits exec authority against the current policy.
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   buildAllowlistEntryMatchKey,
   createExecApprovalPolicySnapshot,
 } from "./exec-approvals-allow-always.js";
-import {
-  applyRecordedAllowlistUse,
-  assertCurrentUsageAuthorization,
-} from "./exec-approvals-authorization.kernel.js";
+import { assertCurrentUsageAuthorization } from "./exec-approvals-authorization.kernel.js";
 import type {
   ExecApprovalUsageAuthorization,
   ExecAuthorizationCommitInput,
 } from "./exec-approvals-contracts.js";
-import type { ExecApprovalsFile } from "./exec-approvals-core.js";
-import {
-  commitExecAuthorizations,
-  replaceExecApprovalsSnapshot,
-  updateExecApprovalsSync,
-} from "./exec-approvals-store.js";
+import { commitExecAuthorizations } from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type { ExecApprovalUsageAuthorization } from "./exec-approvals-contracts.js";
 
-export function recordAllowlistUse(
-  approvals: ExecApprovalsFile,
-  agentId: string | undefined,
-  entry: ExecAllowlistEntry,
-  command: string,
-  resolvedPath?: string,
-): void {
-  recordAllowlistMatchesUse({
-    approvals,
-    agentId,
-    matches: [entry],
-    command,
-    resolvedPath,
+export async function recordAllowlistMatchesUse(
+  params: {
+    agentId: string | undefined;
+    matches: readonly ExecAllowlistEntry[];
+    command: string;
+    resolvedPath?: string;
+    authorization: ExecApprovalUsageAuthorization;
+    assertCurrent?: () => void;
+  },
+  context?: OpenClawStateWorkerContext,
+): Promise<() => void> {
+  const input: ExecAuthorizationCommitInput = structuredClone({
+    agentId: params.agentId,
+    matches: [...params.matches],
+    command: params.command,
+    resolvedPath: params.resolvedPath,
+    authorization: params.authorization,
   });
-}
-
-export function recordAllowlistMatchesUse(params: {
-  approvals: ExecApprovalsFile;
-  agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
-  command: string;
-  resolvedPath?: string;
-  authorization?: ExecApprovalUsageAuthorization;
-}): void {
-  if (params.matches.length === 0 && !params.authorization) {
-    return;
-  }
-  const snapshot = updateExecApprovalsSync({
-    update: (file) => applyRecordedAllowlistUse({ ...params, file }),
-  });
-  if (snapshot) {
-    replaceExecApprovalsSnapshot(params.approvals, snapshot.file);
-  }
+  const committed = await commitExecAuthorizations(input, params.assertCurrent, context);
+  return retainedAuthorization(input, committed);
 }
 
 export async function commitExecAuthorizationLocked(
   input: ExecAuthorizationCommitInput,
 ): Promise<() => void> {
   const params = structuredClone(input);
-  const { snapshot, readCurrent } = await commitExecAuthorizations(params);
+  return retainedAuthorization(params, await commitExecAuthorizations(params));
+}
+
+function retainedAuthorization(
+  params: ExecAuthorizationCommitInput,
+  { snapshot, readCurrent }: Awaited<ReturnType<typeof commitExecAuthorizations>>,
+): () => void {
   const matchKeys = new Set(
     params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
   );

@@ -33,16 +33,18 @@ Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
 **Code SHA/ref**. Package source preflight requires a matching release section;
 an empty placeholder is not preparation. If the notes are final, this commit
-can also be the **Release SHA**. Select one trusted workflow commit and context
-as the **Tooling SHA/ref**, then run:
+can also be the **Release SHA**. The candidate C owns qualification Q=C; select
+independently trusted admission/publication tooling P, then run:
 
 ```bash
-TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
 PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
 pnpm ci:full-release \
   --sha <code-sha> \
   --target-ref release/YYYY.M.PATCH \
-  --workflow-sha "$TOOLING_SHA" \
+  --admission-workflow-sha "$PUBLISHER_SHA" \
+  --admission-workflow-ref main \
+  --request-file <private-request-file> \
   -f validation_purpose=publish \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
@@ -89,12 +91,18 @@ summaries instead of repeating the two local registry sweeps. Preparation and
 publication compare that evidence with their actual selected operands; a normal
 parent cannot authorize the prepared route by changing the command afterward.
 
-Record the candidate SHA/ref and Tooling SHA/ref once for the release and reuse
-them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
-authorizes the initial Tooling SHA selection; it does not authorize refreshing
-the tooling from moving `main`.
+Record C, Q, and P with the request. Q defaults to C; an explicit qualification
+SHA must equal C for a new publish request. P may advance independently, but
+never replaces Q or selects its tests. A product or qualification repair creates
+a new C/Q. Explicit trusted-main or protected-tooling routes remain available
+for diagnostics, main qualification, and postpublish confidence, not fresh
+candidate-owned publication evidence.
 
 ## Exact frozen-target test omissions
+
+Candidate-owned Q=C qualification rejects test omissions. The following inputs
+apply only to explicit cross-revision diagnostics and retained historical
+contracts; they do not authorize a narrower new publish request.
 
 Declare narrowly justified omissions before dispatch with JSON arrays of exact
 repository-relative test paths. `plugin_prerelease_node_exclude_patterns_json`
@@ -109,7 +117,7 @@ Plugin Prerelease owns the full extension sweep.
 Pass them through the SHA-pinned helper as `-f name='["exact/path.test.ts"]'`.
 The helper packs the extension input into the existing trusted dispatch envelope
 to stay within GitHub's 25-input limit, and refuses tooling without the matching
-lane-input capability before creating remote refs or dispatching.
+lane-input capability before creating the workflow ref or dispatching.
 
 Preflight rejects malformed, duplicate, nonexistent, and out-of-lane paths using
 the selected target's actual Vitest discovery. Globs and basenames are not
@@ -126,10 +134,16 @@ coverage, not passing evidence.
 
 ## Retain and reconcile the root request
 
-Before creating remote refs, the helper writes a private operator artifact at
+For new dispatches, including `--dry-run`, the helper first proves GitHub serves
+the exact Validation SHA by bare-SHA fetch in a fresh temporary repository. A failed
+fetch stops before any request artifact or remote mutation. The helper pushes one
+immutable `release-ci/*` workflow ref at Q=C only after independently trusted P
+admits the frozen request, then dispatches C as `ref` and `expected_sha`.
+
+Before creating that workflow ref, the helper writes a private operator artifact at
 `.artifacts/full-release-validation/<request-id>.json` and prints its path.
 Use `--request-file <path>` to choose the artifact location. It retains the
-repository, workflow, frozen target/tooling identities, transport refs, complete
+repository, workflow, frozen target/tooling identities, workflow transport ref, complete
 typed/defaulted inputs, effective soak, and the first observed run and attempt.
 The helper records attempted intent before its single workflow dispatch POST.
 
@@ -141,22 +155,34 @@ node scripts/full-release-validation-at-sha.mjs \
 ```
 
 An existing `--request-file` also enters read-only reconciliation; conflicting
-target, tooling, or input arguments are rejected. Recovery performs no ref
+target, tooling, or input arguments are rejected. An explicitly selected
+`--resume-request <file>` may continue an admitted candidate request only before
+its qualification ref mutation or workflow POST. It retains the original tuple
+and never repeats an uncertain write. Recovery performs no ref
 creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.
 `dispatch=observed` reports the exact run URL and attempt, not successful
 validation. A newer attempt cannot replace the retained attempt.
 
+Requests written before the helper stopped creating `validation/target-*` refs
+still record `targetRef` and `refs.target`, and the current helper rejects them
+as invalid. Reconcile such a file with the helper from the parent of the merge
+commit that removed the target ref, for example from
+`git worktree add --detach <path> <merge-commit>^`. Neither version creates or
+deletes refs during reconciliation. Keep any remaining `release-ci/*` or
+`validation/target-*` ref while GitHub reruns or evidence diagnosis may still
+need it, then delete it deliberately.
+
 Missing or ambiguous runs, incomplete pagination, unavailable or mismatched input
 witnesses, and exhausted discovery remain `dispatch=unknown`. A complete HTTP
 rejection is retained as `dispatch=rejected`; neither state permits redispatch.
-Keep the artifact and printed refs for investigation. There is no automatic
+Keep the artifact and printed workflow ref for investigation. There is no automatic
 retention expiry or cleanup for the local artifact; remove it only through
 deliberate operator cleanup. Losing or deleting it never proves non-execution.
 Independent requests and copies on other hosts are not globally deduplicated.
 
-New requests require `FULL_RELEASE_SOURCE_ADMISSION_CONTRACT=1` and
-`FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1` in the pinned
-workflow. Older frozen tooling fails before remote creation instead of starting
+New candidate-owned requests require `FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT=1`,
+`FULL_RELEASE_SOURCE_ADMISSION_CONTRACT=1`, and
+`FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1` in Q. Older frozen tooling fails before remote creation instead of starting
 work whose inputs cannot be proven. The helper never upgrades the Tooling SHA.
 Use `frv status` for already-running frozen validations; choosing different
 tooling for a new validation requires the release owner's explicit decision.
@@ -177,9 +203,8 @@ package version or a matching beta prerelease. For a correction, use
 `--target-ref release/YYYY.M.PATCH-N` to preserve the intended final tag before
 tagging. Its base package version is also accepted when `vYYYY.M.PATCH` resolves
 to the exact Code SHA; preparation retains the package version and seals both
-npm and Docker artifacts for `vYYYY.M.PATCH-N`. Tideclaw alpha validation uses
-its exact alpha tag and matching alpha branch. The helper maps beta releases and
-exact alpha tags to the `beta` profile and final versions to `stable`. Pass
+npm and Docker artifacts for `vYYYY.M.PATCH-N`. The helper maps beta releases
+to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
 only for the broad provider sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose

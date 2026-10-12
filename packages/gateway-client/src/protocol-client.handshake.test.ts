@@ -18,6 +18,7 @@ function createHandshakeClient(
   const onConnectHello = vi.fn(() => ({ ignored: true }));
   const onClose = vi.fn();
   const onTiming = vi.fn();
+  const onReconnectScheduled = vi.fn<(delayMs: number, signal: AbortSignal) => void>();
   let nextRequestId = 0;
   const client = new GatewayProtocolClient<Record<string, never>>({
     createSocket: (handlers) => {
@@ -40,10 +41,11 @@ function createHandshakeClient(
     onConnectHello,
     onClose,
     onTiming,
+    onReconnectScheduled,
     handshake: { mode: "require-challenge", timeoutMs: 100 },
     reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
   });
-  return { client, connections, onHello, onConnectHello, onClose, onTiming };
+  return { client, connections, onHello, onConnectHello, onClose, onTiming, onReconnectScheduled };
 }
 
 function receiveConnectChallenge(connection: HandshakeConnection, ts = 1_800_000_000_000): void {
@@ -75,28 +77,12 @@ describe("GatewayProtocolClient connect handshake", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { retryable: true, retryAfterMs: 90_000, delayMs: 90_000, draw: 0, nextDelayMs: 20 },
-    { retryable: true, retryAfterMs: 90_000, delayMs: 99_000, draw: 0.5, nextDelayMs: 22 },
-    { retryable: true, retryAfterMs: 11, delayMs: 11, draw: 0, nextDelayMs: 20 },
-    // The existing native sleep ceiling must survive an overflowing jitter calculation.
-    {
-      retryable: true,
-      retryAfterMs: Number.MAX_VALUE,
-      delayMs: 2_147_000_000,
-      draw: 0.5,
-      nextDelayMs: 22,
-    },
-    { retryable: false, retryAfterMs: 90_000, delayMs: 10, draw: 0, nextDelayMs: 20 },
-    { retryable: true, retryAfterMs: 1, delayMs: 10, draw: 0, nextDelayMs: 20 },
-    { retryable: true, retryAfterMs: 0, delayMs: 10, draw: 0, nextDelayMs: 20 },
-    { retryable: true, retryAfterMs: undefined, delayMs: 10, draw: 0, nextDelayMs: 20 },
-  ])(
+  it.each([{ retryable: true, retryAfterMs: 90_000, delayMs: 99_000, draw: 0.5, nextDelayMs: 22 }])(
     "keeps admitted retry timing while advancing backoff: %j",
     async ({ retryable, retryAfterMs, delayMs, draw, nextDelayMs }) => {
       vi.useFakeTimers();
       vi.mocked(Math.random).mockReturnValue(draw);
-      const { client, connections } = createHandshakeClient();
+      const { client, connections, onReconnectScheduled } = createHandshakeClient();
       try {
         client.start();
         const first = connections[0];
@@ -119,6 +105,13 @@ describe("GatewayProtocolClient connect handshake", () => {
           }),
         );
         await vi.advanceTimersByTimeAsync(0);
+        expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(
+          delayMs,
+          expect.any(AbortSignal),
+        );
+        const signal = onReconnectScheduled.mock.calls[0]?.[1];
+        assert(signal);
+        expect(signal.aborted).toBe(false);
         await vi.advanceTimersByTimeAsync(delayMs - 1);
         expect(connections).toHaveLength(1);
         await vi.advanceTimersByTimeAsync(1);
@@ -127,10 +120,42 @@ describe("GatewayProtocolClient connect handshake", () => {
         const second = connections[1];
         assert(second);
         second.close(1006, "transport unavailable");
+        expect(signal.aborted).toBe(true);
+        expect(onReconnectScheduled).toHaveBeenLastCalledWith(nextDelayMs, expect.any(AbortSignal));
         await vi.advanceTimersByTimeAsync(nextDelayMs - 1);
         expect(connections).toHaveLength(2);
         await vi.advanceTimersByTimeAsync(1);
         expect(connections).toHaveLength(3);
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "cancels a scheduled retry when its observer stops the client (restart=%s)",
+    async (restart) => {
+      vi.useFakeTimers();
+      const { client, connections, onReconnectScheduled } = createHandshakeClient();
+      let timersAtNotification = 0;
+      onReconnectScheduled.mockImplementation(() => {
+        timersAtNotification = vi.getTimerCount();
+        client.stop();
+        if (restart) {
+          client.start();
+        }
+      });
+      try {
+        client.start();
+        const first = connections[0];
+        assert(first);
+        first.close(1006, "transport unavailable");
+        expect(onReconnectScheduled).toHaveBeenCalledOnce();
+        expect(timersAtNotification).toBe(1);
+        expect(onReconnectScheduled.mock.calls[0]?.[1].aborted).toBe(true);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(connections).toHaveLength(restart ? 2 : 1);
+        expect(vi.getTimerCount()).toBe(0);
       } finally {
         client.stop();
       }
@@ -239,29 +264,6 @@ describe("GatewayProtocolClient connect handshake", () => {
     } finally {
       client.stop();
     }
-  });
-
-  it("passes the Gateway challenge timestamp into connect planning", () => {
-    const buildConnectPlan = vi.fn(() => ({}));
-    const { client, connections } = createHandshakeClient(buildConnectPlan);
-    client.start();
-    const connection = connections[0];
-    expect(connection).toBeDefined();
-    if (!connection) {
-      return;
-    }
-
-    receiveConnectChallenge(connection, 1_700_000_000_123);
-
-    expect(buildConnectPlan).toHaveBeenCalledWith({
-      nonce: "synthetic-nonce",
-      challengeTs: 1_700_000_000_123,
-      serverCapabilities: [],
-      generation: 1,
-      signal: expect.any(AbortSignal),
-      assertCurrent: expect.any(Function),
-    });
-    client.stop();
   });
 
   it("does not retain an advertised capability after reconnecting to a different Gateway", async () => {

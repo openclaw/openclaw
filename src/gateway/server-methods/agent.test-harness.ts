@@ -1,4 +1,4 @@
-// Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
+// Agent method tests cover run/steer/reset/wait behavior, native subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -15,12 +15,7 @@ import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/s
 import type { SessionEntry } from "../../config/sessions.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import {
-  resetDetachedTaskLifecycleRuntimeForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
@@ -33,6 +28,7 @@ import { agentIdentityHandlers } from "./agent-identity.js";
 import { createAgentTestSessionRowProjection } from "./agent-session-projection.test-support.js";
 import { agentHandlers } from "./agent.js";
 import { resetSubagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -143,16 +139,17 @@ export function mockMainSessionEntry(
   entry: Record<string, unknown>,
   cfg: Record<string, unknown> = {},
 ) {
+  const sessionEntry = buildExistingMainStoreEntry(entry);
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
-    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
-    entry: {
-      sessionId: "existing-session-id",
-      updatedAt: Date.now(),
-      ...entry,
-    },
+    agentId: "main",
+    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
+    store: { "agent:main:main": sessionEntry },
+    storeKeys: ["agent:main:main"],
+    entry: sessionEntry,
     canonicalKey: "agent:main:main",
-  });
+    legacyKey: undefined,
+  } satisfies ReturnType<typeof import("../session-utils.js").loadSessionEntry>);
 }
 
 export function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
@@ -193,16 +190,20 @@ export async function expectResetCall(expectedMessage: string) {
   return call;
 }
 
+export function mockSuccessfulAgentCommand() {
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+}
+
 export function primeMainAgentRun(params?: { sessionId?: string; cfg?: Record<string, unknown> }) {
   mockMainSessionEntry(
     { sessionId: params?.sessionId ?? "existing-session-id" },
     params?.cfg ?? {},
   );
   mocks.updateSessionStore.mockResolvedValue(undefined);
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
+  mockSuccessfulAgentCommand();
 }
 
 export async function runMainAgent(message: string, idempotencyKey: string) {
@@ -232,10 +233,7 @@ export async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
     capturedEntry = structuredClone(store[canonicalKey]) as Record<string, unknown>;
     return result;
   });
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
+  mockSuccessfulAgentCommand();
   await runMainAgent("hi", idempotencyKey);
   return requireValue(capturedEntry, "updated session entry missing");
 }
@@ -304,7 +302,7 @@ export function setupCronContinuationReleaseFixture() {
   };
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
-    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
     canonicalKey: sessionKey,
     entry,
   });
@@ -342,7 +340,7 @@ export async function invokeGatewaySuspendPrepare(
 
 // Operator-write client that is NOT the in-process backend ACP spawn caller:
 // a control-UI connection with the same operator.write scope. It can set
-// acpTurnSource but owns no replacement `acp` task row, so CLI tracking stays on.
+// acpTurnSource without receiving the authority of the in-process backend.
 export function operatorWriteGatewayClient(): AgentHandlerArgs["client"] {
   return {
     connect: {
@@ -519,26 +517,15 @@ export async function invokeAgentIdentityGet(
   return respond;
 }
 
-/** Keep handler tests on the real task lifecycle without paying for SQLite durability. */
-export function resetAgentTaskRegistryForTests(): void {
-  resetTaskRegistryForTests({ persist: false });
-  installInMemoryTaskRegistryRuntime();
-}
-
-export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
-  resetTaskRegistryForTests({ persist: false });
-}
-
 export const describe0AfterEach0 = async () => {
   mocks.userTurnStorePath = undefined;
   // Drain deferred broadcasts before retiring the test-owned row and runtime state.
   await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
-  resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
-  resetAgentTaskRegistryForTests();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetSubagentRegistryMocks();
+  mocks.getLatestLiveSubagentRunByChildSessionKey.mockReset();
   mocks.agentCommand.mockReset();
   mocks.updateSessionStore.mockReset().mockResolvedValue(undefined);
   mocks.loadConfigReturn = {};
@@ -568,9 +555,7 @@ export const describe0AfterEach0 = async () => {
 async function resetIntegrationState() {
   await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
-  resetDetachedTaskLifecycleRuntimeForTests();
-  resetAgentTaskRegistryForTests();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetSubagentRegistryMocks();
   mocks.agentCommand.mockReset();
   mocks.loadConfigReturn = {};
@@ -580,6 +565,7 @@ async function resetIntegrationState() {
   mocks.emitGatewaySessionEndPluginHook.mockReset();
   mocks.emitGatewaySessionStartPluginHook.mockReset();
   mocks.getLatestSubagentRunByChildSessionKey.mockReset();
+  mocks.getLatestLiveSubagentRunByChildSessionKey.mockReset();
   mocks.replaceSubagentRunAfterSteer.mockReset();
   mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
   mocks.readAcpSessionMetaAsync.mockReset().mockResolvedValue(undefined);

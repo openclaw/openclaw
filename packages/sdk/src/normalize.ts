@@ -5,10 +5,9 @@ import { resolveSdkLifecycleEventType } from "./run-terminal.js";
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
 
 function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
-  const stream = readNonEmptyString(payload.stream);
+  const stream = payload.stream;
   const data = asRecord(payload.data);
-  const phase = readNonEmptyString(data.phase);
-  const status = readNonEmptyString(data.status);
+  const { phase, status } = data;
 
   if (stream === "assistant") {
     return data.delta === true || typeof data.delta === "string"
@@ -53,13 +52,12 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
   return "raw";
 }
 
-function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
-  const payload = asRecord(event.payload);
-  switch (event.event) {
+function normalizeNamedEventType(event: string, payload: JsonObject): OpenClawEventType {
+  switch (event) {
     case "agent":
       return normalizeAgentEventType(payload);
     case "sessions.changed": {
-      const reason = readNonEmptyString(payload.reason);
+      const reason = payload.reason;
       if (reason === "create") {
         return "session.created";
       }
@@ -78,9 +76,6 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
     case "exec.approval.resolved":
     case "plugin.approval.resolved":
       return "approval.resolved";
-    case "task.updated":
-    case "tasks.changed":
-      return "task.updated";
     default:
       return "raw";
   }
@@ -92,7 +87,6 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const runId = readNonEmptyString(payload.runId);
   const sessionId = readNonEmptyString(payload.sessionId);
   const sessionKey = readNonEmptyString(payload.sessionKey);
-  const taskId = readNonEmptyString(payload.taskId);
   const agentId = readNonEmptyString(payload.agentId);
   const ts = asFiniteNumber(payload.ts) ?? Date.now();
   const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(
@@ -103,11 +97,10 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
     version: 1,
     id: idParts.join(":"),
     ts,
-    type: normalizeNamedEventType(event),
+    type: normalizeNamedEventType(event.event, payload),
     ...(runId ? { runId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
-    ...(taskId ? { taskId } : {}),
     ...(agentId ? { agentId } : {}),
     data: payload.data ?? payload,
     raw: event,

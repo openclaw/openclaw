@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionBrowserAuthority } from "./browser-dashboard.types.js";
 import { getBrowserStateRuntime, setBrowserStateRuntime } from "./browser-runtime-state.js";
@@ -35,9 +36,10 @@ vi.mock("./control-service.js", async (importOriginal) => ({
 vi.mock("./browser/pw-ai-module.js", () => ({
   getPwAiModule: async () => ({ createPageViaPlaywright: mocked.create }),
 }));
-vi.mock("./browser/server-context.lifecycle.js", () => ({
+vi.mock("./browser/server-context.lifecycle.js", async (original) => ({
+  ...(await original<typeof import("./browser/server-context.lifecycle.js")>()),
   getProfileLifecycle: () => mocked.lifecycle,
-  isProfileGenerationCurrent: () => mocked.profileCurrent,
+  isProfileOperationCurrent: () => mocked.profileCurrent,
 }));
 
 const request = { sessionKey: "agent:main:dashboard:one", agentId: "main", name: "review" };
@@ -104,7 +106,7 @@ beforeEach(() => {
   const state = makeBrowserServerState();
   state.profiles.set("openclaw", { profile: makeBrowserProfile(), running: null });
   mocked.state = state;
-  mocked.lifecycle = { generation: 1, configRevision: 1, controller: new AbortController() };
+  mocked.lifecycle = { controller: new AbortController() };
   mocked.profileCurrent = true;
   mocked.definition.mockResolvedValue(definition);
   mocked.start.mockResolvedValue(true);
@@ -131,29 +133,23 @@ describe("isolated session browser owner", () => {
   ])(
     "rejects a delayed old $change read without replacing the newer collaborator's context",
     async ({ replacement }) => {
-      let releaseOldRead!: (value: typeof definition) => void;
-      let markOldReadStarted!: () => void;
-      const oldReadStarted = new Promise<void>((resolve) => {
-        markOldReadStarted = resolve;
-      });
-      const oldRead = new Promise<typeof definition>((resolve) => {
-        releaseOldRead = resolve;
-      });
+      const oldReadStarted = createDeferred<void>();
+      const oldRead = createDeferred<typeof definition>();
       mocked.definition.mockImplementationOnce(() => {
-        markOldReadStarted();
-        return oldRead;
+        oldReadStarted.resolve();
+        return oldRead.promise;
       });
       const stale = accessSessionBrowserDashboard(request, authority().value, {
         operation: "open",
       });
-      await oldReadStarted;
+      await oldReadStarted.promise;
       mocked.definition.mockResolvedValue(replacement);
       const current = await accessSessionBrowserDashboard(
         { ...request, instanceId: replacement.instanceId },
         authority().value,
         { operation: "open" },
       );
-      releaseOldRead(definition);
+      oldRead.resolve(definition);
       await expect(stale).rejects.toThrow("dashboard changed before this operation");
       expect(mocked.create).toHaveBeenCalledOnce();
       expect(mocked.create).toHaveBeenCalledWith(expect.objectContaining({ url: replacement.url }));
@@ -202,13 +198,11 @@ describe("isolated session browser owner", () => {
     expect(mocked.create).toHaveBeenCalledTimes(2);
   });
 
-  it("fences a changed board immediately and closes its complete context", async () => {
+  it("closes the complete context when its board definition changes", async () => {
     const owner = authority();
     const { resource } = await accessSessionBrowserDashboard(request, owner.value, {
       operation: "open",
     });
-    resource.definitionChanged();
-    expect(() => resource.assertCurrent()).toThrow("definition changed");
     mocked.definition.mockResolvedValue({ ...definition, url: "https://replacement.test/" });
     await expect(resource.assertDefinitionCurrent()).rejects.toThrow("removed or replaced");
     expect(resource.page?.close).toHaveBeenCalledOnce();

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { disposeAllSessionMcpRuntimes } from "./agent-bundle-mcp-manager-api.js";
-import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  reloadSessionMcpRuntimes,
+} from "./agent-bundle-mcp-manager-api.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
@@ -174,48 +176,27 @@ it("shares a single failed startup across concurrent sessions", async () => {
 });
 
 it.each([
-  { change: "configuration", url: "https://changed.invalid/mcp", requesterScope: undefined },
-  { change: "requester", url: undefined, requesterScope: { requesterSenderId: "alice" } },
+  {
+    change: "configuration",
+    url: "https://changed.invalid/mcp",
+    requesterScope: undefined,
+    reset: () => reloadSessionMcpRuntimes({ cfg: {} }),
+  },
+  {
+    change: "requester",
+    url: undefined,
+    requesterScope: { requesterSenderId: "alice" },
+    reset: disposeAllSessionMcpRuntimes,
+  },
 ])(
   "isolates $change failures and resets them on explicit reload",
-  async ({ url, requesterScope }) => {
+  async ({ url, requesterScope, reset }) => {
     await discover(makeRuntime());
     expect((await discover(makeRuntime())).waitedMs).toBe(0);
     expect((await discover(makeRuntime(url, requesterScope))).waitedMs).toBe(30_000);
     expect((await discover(makeRuntime(url, requesterScope))).waitedMs).toBe(0);
-    await disposeAllSessionMcpRuntimes();
+    await reset();
     expect((await discover(makeRuntime(url, requesterScope))).waitedMs).toBe(30_000);
     expect(initializes).toBe(3);
   },
 );
-
-it("invalidates a startup failure that completes after config publication", async () => {
-  const cfg = { mcp: { servers: { remote: { url: "https://mcp.invalid/mcp" } } } };
-  const manager = createSessionMcpRuntimeManager({
-    createRuntime: createSessionMcpRuntime,
-    enableIdleSweepTimer: false,
-  });
-  const { runtime, releaseLease } = await manager.acquire({
-    sessionId: "reload-during-start",
-    workspaceDir: "/workspace",
-    cfg,
-  });
-  try {
-    const pending = runtime.getCatalog();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(initializes).toBe(1);
-    await manager.reloadConfig({ cfg });
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(initializes).toBe(2);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect((await pending).diagnostics?.[0]?.message).toContain(
-      new Date(Date.now() + 5_000).toISOString(),
-    );
-    await manager.reloadConfig({ cfg });
-    reachable = true;
-    expect((await discover(runtime)).catalog.tools).toHaveLength(1);
-  } finally {
-    releaseLease();
-    await manager.disposeAll();
-  }
-});

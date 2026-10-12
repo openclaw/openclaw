@@ -5,12 +5,14 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   cleanupSessionLifecycleArtifacts,
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
-  patchSessionEntry,
+  prepareSessionEntryPatch,
+  rethrowIncognitoSessionError,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -47,7 +49,8 @@ async function persistActiveMemoryTranscriptArtifact(params: {
     let sourceEvents: readonly unknown[];
     try {
       sourceEvents = await readSessionTranscriptEvents(source);
-    } catch {
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
       continue;
     }
     for (const event of sourceEvents) {
@@ -93,6 +96,7 @@ async function cleanupActiveMemoryRecallSession(params: {
       }
       return;
     } catch (error) {
+      rethrowIncognitoSessionError(error);
       lastError = error;
     }
   }
@@ -101,12 +105,13 @@ async function cleanupActiveMemoryRecallSession(params: {
     : new Error(`active-memory recall cleanup failed: ${String(lastError)}`);
 }
 
-async function runRecallSubagent(params: {
+export async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
   parentSessionKey?: string;
+  parentSessionEntry?: SessionEntry;
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
@@ -114,9 +119,13 @@ async function runRecallSubagent(params: {
   searchQuery: string;
   modelRef: { provider: string; model: string } | undefined;
   conversationRecall?: ConversationRecallContext;
+  memoryAudience?: Parameters<
+    OpenClawPluginApi["runtime"]["agent"]["runEmbeddedAgent"]
+  >[0]["memoryAudience"];
   storePath: string;
   fastMode?: ActiveMemoryFastMode;
   abortSignal?: AbortSignal;
+  assertMemoryAudienceCurrent?: () => void;
   onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
   onEmbeddedRunSettled?: () => void;
 }): Promise<RecallSubagentResult> {
@@ -128,21 +137,25 @@ async function runRecallSubagent(params: {
   }
   const subagentSessionId = `active-memory-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
   const parentSessionKey = params.parentSessionKey;
+  const incognito = isIncognitoSessionKey(parentSessionKey);
   const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
-  const subagentSuffix = `active-memory:${crypto
+  const subagentId = crypto
     .createHash("sha1")
     .update(`${subagentScope}:${params.query}:${subagentSessionId}`)
     .digest("hex")
-    .slice(0, 12)}`;
-  const subagentSessionKey = parentSessionKey
-    ? `${parentSessionKey}:${subagentSuffix}`
-    : `agent:${params.agentId}:${subagentSuffix}`;
-  const persistedDir = params.config.persistTranscripts
-    ? resolveSafeTranscriptDir(
-        resolvePersistentTranscriptBaseDir(params.api, params.agentId),
-        params.config.transcriptDir,
-      )
-    : undefined;
+    .slice(0, 12);
+  const subagentSessionKey = incognito
+    ? `agent:${params.agentId}:subagent:incognito-${subagentId}`
+    : parentSessionKey
+      ? `${parentSessionKey}:active-memory:${subagentId}`
+      : `agent:${params.agentId}:active-memory:${subagentId}`;
+  const persistedDir =
+    params.config.persistTranscripts && !incognito
+      ? resolveSafeTranscriptDir(
+          resolvePersistentTranscriptBaseDir(params.api, params.agentId),
+          params.config.transcriptDir,
+        )
+      : undefined;
   const artifactSessionFile =
     persistedDir !== undefined ? path.join(persistedDir, `${subagentSessionId}.jsonl`) : undefined;
   const storePath = params.storePath;
@@ -164,6 +177,18 @@ async function runRecallSubagent(params: {
   let transcriptArtifactPersisted = false;
   let runtimeSessionCreated = false;
   let resultStatus: RecallSubagentResult["resultStatus"];
+  const readRecallEvidence = async () => {
+    const state = await readMergedActiveMemoryTranscriptState({
+      sources: transcriptSources,
+      toolsAllow: params.config.toolsAllow,
+    });
+    return {
+      ...state,
+      hasUsableMemoryResult: state.hasUsableMemoryResult || harnessHasUsableMemoryResult,
+      hasUnavailableMemorySearchResult:
+        state.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
+    };
+  };
   const cleanupRecallResources = async () => {
     try {
       if (runtimeSessionCreated) {
@@ -172,6 +197,7 @@ async function runRecallSubagent(params: {
             sources: transcriptSources,
             sessionFile: artifactSessionFile,
           }).catch((error: unknown) => {
+            rethrowIncognitoSessionError(error);
             const message = toSingleLineErrorMessage(error);
             params.api.logger.debug?.(
               `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
@@ -199,20 +225,21 @@ async function runRecallSubagent(params: {
   };
 
   try {
-    const runtimeEntry = {
+    const runtimeEntry: SessionEntry = {
       pluginOwnerId: params.api.id,
       sessionId: subagentSessionId,
       sessionFile: runtimeSessionFile,
       updatedAt: Date.now(),
+      ...(incognito ? { incognito: true } : {}),
     };
-    const createdEntry = await patchSessionEntry({
+    const createdEntry = await prepareSessionEntryPatch({
       agentId: params.agentId,
       fallbackEntry: runtimeEntry,
       replaceEntry: true,
       sessionKey: subagentSessionKey,
       skipMaintenance: true,
       storePath,
-      update: (_entry, context) => (context.existingEntry ? null : runtimeEntry),
+      prepare: (_entry, context) => (context.existingEntry ? null : runtimeEntry),
     });
     if (createdEntry?.sessionId !== subagentSessionId) {
       throw new Error(`active-memory recall session already exists: ${subagentSessionKey}`);
@@ -229,14 +256,13 @@ async function runRecallSubagent(params: {
       searchQuery: params.searchQuery,
     });
     const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
-      api: params.api,
-      agentId: params.agentId,
-      sessionKey: parentSessionKey,
-      sessionId: params.sessionId,
+      sessionEntry: params.parentSessionEntry,
       messageProvider: params.messageProvider,
       channelId: params.channelId,
     });
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
+    params.abortSignal?.throwIfAborted();
+    params.assertMemoryAudienceCurrent?.();
     const result = await params.api.runtime.agent
       .runEmbeddedAgent({
         sessionId: subagentSessionId,
@@ -262,6 +288,7 @@ async function runRecallSubagent(params: {
         runId: subagentSessionId,
         trigger: "manual",
         conversationRecall: params.conversationRecall,
+        memoryAudience: params.memoryAudience,
         toolsAllow: [...params.config.toolsAllow],
         disableMessageTool: true,
         allowGatewaySubagentBinding: true,
@@ -329,35 +356,20 @@ async function runRecallSubagent(params: {
       });
       transcriptArtifactPersisted = true;
     }
-    const transcriptState = await readMergedActiveMemoryTranscriptState({
-      sources: transcriptSources,
-      toolsAllow: params.config.toolsAllow,
-    });
     return {
       rawReply: rawReply || "NONE",
       resultStatus,
       transcriptPath: artifactSessionFile,
-      searchDebug: transcriptState.searchDebug,
-      hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
-      hasUnavailableMemorySearchResult:
-        transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
+      ...(await readRecallEvidence()),
     };
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     if (params.abortSignal?.aborted) {
       const partialReply = await readPartialAssistantTextFromSources(transcriptSources);
-      const transcriptState = await readMergedActiveMemoryTranscriptState({
-        sources: transcriptSources,
-        toolsAllow: params.config.toolsAllow,
-      });
       attachPartialTimeoutData(error, {
         rawReply: partialReply ?? undefined,
         resultStatus,
-        searchDebug: transcriptState.searchDebug,
-        hasUnavailableMemorySearchResult:
-          transcriptState.hasUnavailableMemorySearchResult ||
-          harnessHasUnavailableMemorySearchResult,
-        hasUsableMemoryResult:
-          transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
+        ...(await readRecallEvidence()),
       });
     }
     if (
@@ -381,5 +393,3 @@ async function runRecallSubagent(params: {
     await cleanupRecallResources();
   }
 }
-
-export { runRecallSubagent };

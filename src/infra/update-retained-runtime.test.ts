@@ -1,3 +1,4 @@
+import "../../test/helpers/private-update-handoff-store.js";
 import assert from "node:assert/strict";
 import fsSync from "node:fs";
 import fs, { mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
@@ -5,14 +6,51 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import * as processCensus from "./openclaw-process-census.js";
+import {
+  resolvePackageActivationAnchor,
+  resolvePackageActivationControl,
+} from "./package-update-activation-paths.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import * as temporaryArtifacts from "./temp-artifact-cleanup.js";
+import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { type RetainUpdateRuntime, withRetainedUpdateRuntime } from "./update-retained-runtime.js";
+
+const inspectionFixture = vi.hoisted(() => ({ moduleUrl: "" }));
+vi.mock("./runtime-process-entrypoints.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-process-entrypoints.js")>();
+  return {
+    ...actual,
+    runtimeProcessEntrypoints: {
+      ...actual.runtimeProcessEntrypoints,
+      updateCandidateState: {
+        ...actual.runtimeProcessEntrypoints.updateCandidateState,
+        get currentModuleUrl() {
+          return (
+            inspectionFixture.moduleUrl ||
+            actual.runtimeProcessEntrypoints.updateCandidateState.currentModuleUrl
+          );
+        },
+      },
+    },
+  };
+});
+
+afterEach(() => {
+  inspectionFixture.moduleUrl = "";
+  vi.restoreAllMocks();
+});
 
 type Operations = { append: { input: string; output: string[] } };
 const stores = new Set<SqliteWorkerStore<Operations>>();
@@ -27,54 +65,128 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each([false, true])(
-  "preserves the update outcome when disposable runtime removal fails (failed=%s)",
-  async (failed) => {
-    const base = tempDirs.make("openclaw-retained-runtime-cleanup-");
+it.for([false, true])(
+  "defers runtime deletion until eligible maintenance without losing settled work (failed=%s)",
+  async (failed, { signal }) => {
+    const base = await fs.realpath(tempDirs.make("openclaw-retained-runtime-cleanup-"));
     const root = await fixture(base, "npm");
     const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
     const original = new Error("original update failure");
-    const remove = fs.rm;
-    let denyRemoval = false;
-    let directory: Parameters<typeof fs.rm>[0] | undefined;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const nativeEntered = createDeferred();
+    const nativeRelease = createDeferred();
+    const removed = vi.spyOn(fs, "rm");
+    const reportRetained = vi.spyOn(temporaryArtifacts, "reportRetainedUpdateRuntime");
+    vi.spyOn(os, "tmpdir").mockReturnValue(base);
+    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+    let directory: string | undefined;
+    let store: SqliteWorkerStore<Operations> | undefined;
+    let acceptedWrite: Promise<string[]> | undefined;
+    let resourcesSettled = false;
     const receipt: { metrics?: Awaited<ReturnType<RetainUpdateRuntime>> } = {};
-    const cleanup = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
-      if (denyRemoval) {
-        directory = args[0];
-        denyRemoval = false;
-        throw new Error("retained runtime removal denied");
-      }
-      return await remove(...args);
-    });
-    try {
-      const result = withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-        receipt.metrics = await retain({
-          mutationRoots: [root],
-          timeoutMs: 30_000,
-          assertCurrent() {},
-        });
-        denyRemoval = true;
-        if (failed) {
-          throw original;
-        }
-        return receipt.metrics;
+    const assertResourcesSettled = vi.fn(() => expect(resourcesSettled).toBe(true));
+    const maintain = () =>
+      temporaryArtifacts.maintainRetainedUpdateRuntimes({
+        packageRoots: [root],
+        repair: true,
+        assertCurrent() {},
+        assertResourcesSettled,
       });
+    const result = withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+      receipt.metrics = await retain({
+        mutationRoots: [root],
+        timeoutMs: 30_000,
+        assertCurrent() {},
+      });
+      const name = (await fs.readdir(base)).find((entry) =>
+        entry.startsWith("openclaw-update-runtime-"),
+      );
+      assert.ok(name);
+      directory = path.join(base, name);
+      const source = captureRuntimeWorkerSource(
+        pathToFileURL(path.join(root, "dist/state/store.js")),
+      );
+      assert.ok(source.runtimeGeneration);
+      store = await openSqliteWorkerStore<Operations>({
+        ...source,
+        databasePath: path.join(base, "retained.sqlite"),
+        input: undefined,
+      });
+      stores.add(store);
+      source.runtimeGeneration.retain({}, async () => {
+        entered.resolve();
+        await release.promise;
+        return async () => {
+          nativeEntered.resolve();
+          await nativeRelease.promise;
+          resourcesSettled = true;
+        };
+      });
+      acceptedWrite = store.execute({ type: "append", input: "accepted before exit" });
+      void acceptedWrite.catch(() => undefined);
       if (failed) {
-        await expect(result).rejects.toBe(original);
-      } else {
-        expect(await result).toBe(receipt.metrics);
+        throw original;
       }
-      assert.ok(receipt.metrics);
-      expect(receipt.metrics.linked + receipt.metrics.copied).toBe(6);
-      assert.ok(typeof directory === "string");
-      expect(directory).toContain("openclaw-update-runtime-");
+      return receipt.metrics;
+    });
+    const settled = result.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          settled,
+          "Updater returned before worker settlement",
+        ),
+        signal,
+      );
+      expect(await maintain()).toContainEqual(
+        expect.stringContaining("the creating update still owns this runtime"),
+      );
+      expect(assertResourcesSettled).not.toHaveBeenCalled();
+      assert.ok(directory);
+      expect((await stat(directory)).isDirectory()).toBe(true);
+      release.resolve();
+      await withinTest(
+        awaitGateBeforeSettlement(
+          nativeEntered.promise,
+          settled,
+          "Updater returned before native retirement",
+        ),
+        signal,
+      );
+      expect(await maintain()).toContainEqual(
+        expect.stringContaining("the creating update still owns this runtime"),
+      );
+      expect(assertResourcesSettled).not.toHaveBeenCalled();
+      expect(reportRetained).not.toHaveBeenCalledWith(
+        directory,
+        expect.stringContaining("worker generation settled; cleanup deferred"),
+      );
       expect((await stat(directory)).isDirectory()).toBe(true);
     } finally {
-      cleanup.mockRestore();
-      if (directory) {
-        await remove(directory, { recursive: true, force: true });
-      }
+      release.resolve();
+      nativeRelease.resolve();
+      await settled;
     }
+    expect(await settled).toEqual(failed ? { error: original } : { value: receipt.metrics });
+    expect(resourcesSettled).toBe(true);
+    expect(await acceptedWrite).toEqual(["retained:accepted before exit"]);
+    assert.ok(directory && store);
+    await expect(store.execute({ type: "append", input: "escaped" })).rejects.toThrow();
+    expect(removed.mock.calls.some(([target]) => String(target) === directory)).toBe(false);
+    expect((await stat(directory)).isDirectory()).toBe(true);
+    expect(reportRetained).toHaveBeenCalledWith(
+      directory,
+      expect.stringContaining("worker generation settled; cleanup deferred"),
+    );
+    expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
+    expect(assertResourcesSettled).toHaveBeenCalledOnce();
+    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(root, "dist/state/store.js"), "utf8")).toBe(backend);
   },
 );
 
@@ -142,7 +254,7 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
 
 async function fixture(
   base: string,
-  layout: "npm" | "pnpm" | "pnpm-workspace" | "git" | "git-linked",
+  layout: "npm" | "pnpm" | "pnpm-workspace" | "git" | "git-linked" | "git-modules",
 ) {
   const root = layout.startsWith("pnpm")
     ? path.join(base, "global/node_modules/.pnpm/openclaw@1/node_modules/openclaw")
@@ -189,7 +301,7 @@ async function fixture(
       process.platform === "win32" ? "junction" : "dir",
     );
   }
-  if (layout === "git") {
+  if (layout === "git" || layout === "git-modules") {
     // Pulling a workspace retirement can leave ignored modules and a pnpm hoist link.
     const retired = path.join(root, "extensions/retired");
     const hoisted = path.join(root, "node_modules/.pnpm/node_modules");
@@ -197,13 +309,127 @@ async function fixture(
     await mkdir(path.join(hoisted, "@fixture"), { recursive: true });
     const linkType = process.platform === "win32" ? "junction" : "dir";
     await symlink(root, path.join(hoisted, "openclaw"), linkType);
-    await symlink(retired, path.join(hoisted, "@fixture/retired"), linkType);
+    await symlink(
+      layout === "git-modules" ? path.join(retired, "node_modules") : retired,
+      path.join(hoisted, "@fixture/retired"),
+      linkType,
+    );
     await symlink(dependency, path.join(retired, "node_modules/fixture"), linkType);
   }
   await mkdir(path.join(root, ".git"));
   await writeFile(path.join(root, ".git/private"), "unrelated checkout data");
   return root;
 }
+
+it.each(
+  ["control", "anchor", "superseded"].flatMap((kind) =>
+    [false, true].map((explicitLink) => ({ kind, explicitLink })),
+  ),
+)(
+  "leaves package recovery $kind untouched during runtime retention (explicitLink=$explicitLink)",
+  async ({ kind, explicitLink }) => {
+    const root = await fixture(tempDirs.make("retained-recovery-boundary-"), "npm");
+    const anchor = resolvePackageActivationAnchor(path.join(root, "node_modules/openclaw"));
+    const recoveryRoot =
+      kind === "control"
+        ? resolvePackageActivationControl(anchor)
+        : kind === "anchor"
+          ? anchor
+          : `${anchor}.superseded-00000000-0000-4000-8000-000000000001`;
+    const recoveryFile = path.join(
+      recoveryRoot,
+      kind === "control" ? "operation.sqlite" : "previous/dist/entry.js",
+    );
+    await mkdir(path.dirname(recoveryFile), { recursive: true, mode: 0o700 });
+    await writeFile(recoveryFile, "preserved recovery evidence", { mode: 0o600 });
+    const before = await fs.lstat(recoveryFile, { bigint: true });
+    const assets = [
+      path.join("node_modules", "runtime.control", "asset.sqlite"),
+      path.join("node_modules", `${path.basename(anchor)}.notes`, "asset.sqlite"),
+      path.join("node_modules", `${path.basename(anchor)}.superseded-not-a-uuid`, "asset.sqlite"),
+      path.join("dist", path.basename(recoveryRoot), "asset.sqlite"),
+    ];
+    for (const relative of assets) {
+      await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+      await writeFile(path.join(root, relative), "runtime asset");
+    }
+    if (explicitLink) {
+      await symlink(recoveryFile, path.join(root, "dist/recovery-link"));
+    }
+    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
+    const operation = withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
+      await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
+      const retained = fileURLToPath(captureRuntimeWorkerSource(moduleUrl).moduleUrl);
+      expect(retained).not.toBe(fileURLToPath(moduleUrl));
+      const retainedRoot = path.resolve(path.dirname(retained), "..");
+      for (const relative of assets) {
+        expect(await readFile(path.join(retainedRoot, relative), "utf8")).toBe("runtime asset");
+      }
+      expect(await fs.lstat(recoveryFile, { bigint: true })).toMatchObject({
+        nlink: before.nlink,
+        ctimeNs: before.ctimeNs,
+      });
+      expect(fsSync.existsSync(path.join(retainedRoot, path.relative(root, recoveryRoot)))).toBe(
+        false,
+      );
+    });
+    if (explicitLink) {
+      await expect(operation).rejects.toThrow(
+        "Package recovery state cannot be a runtime dependency",
+      );
+    } else {
+      await operation;
+    }
+    expect(await readFile(recoveryFile, "utf8")).toBe("preserved recovery evidence");
+    // Old sealed helpers hash these fields: hard-linking identical bytes still
+    // invalidates their recovery fingerprint, even after the link is removed.
+    expect(await fs.lstat(recoveryFile, { bigint: true })).toMatchObject({
+      dev: before.dev,
+      ino: before.ino,
+      nlink: before.nlink,
+      ctimeNs: before.ctimeNs,
+    });
+  },
+);
+
+it("runs default inspection from the retained updater and explicit inspection from the target", async () => {
+  const base = await fs.realpath(tempDirs.make("retained-inspection-transport-"));
+  const root = await fixture(base, "npm");
+  const worker = path.join(root, "dist/infra/update-candidate-state.worker.js");
+  await mkdir(path.dirname(worker));
+  const transport = `
+let input = "";
+for await (const chunk of process.stdin) input += chunk;
+process.stdout.write(JSON.stringify({ generation, mode: JSON.parse(input).mode }));
+`;
+  await writeFile(worker, `import { generation } from "../shared-old-hash.mjs";\n${transport}`);
+  inspectionFixture.moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+  await withRetainedUpdateRuntime(inspectionFixture.moduleUrl, async (retain) => {
+    await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
+    await rename(root, `${root}.previous`);
+    await mkdir(path.dirname(worker), { recursive: true });
+    await writeFile(path.join(root, "package.json"), '{"name":"openclaw","type":"module"}');
+    await writeFile(worker, `const generation = "candidate";\n${transport}`);
+
+    const inspect = (selectedRoot?: string) =>
+      runUpdateStateInspectionWorker({
+        input: { mode: "database-restore-preparation", stateDir: base, config: {} },
+        nodeRunner: process.execPath,
+        root: selectedRoot,
+        sourceEnv: { ...process.env, HOME: base, USERPROFILE: base },
+        stagingRoot: base,
+        databases: [],
+      });
+    const original = await inspect();
+    const target = await inspect(root);
+    expect(original).toMatchObject({ code: 0, termination: "exit" });
+    expect(target).toMatchObject({ code: 0, termination: "exit" });
+    expect([JSON.parse(original.stdout), JSON.parse(target.stdout)]).toEqual([
+      { generation: "retained", mode: "database-restore-preparation" },
+      { generation: "candidate", mode: "database-restore-preparation" },
+    ]);
+  });
+});
 
 it.each([".git", "extensions/retired", "extensions/linked-residue"])(
   "refuses unrelated host files reached through a hoist link to %s",
@@ -240,39 +466,6 @@ it.each([".git", "extensions/retired", "extensions/linked-residue"])(
   },
 );
 
-it("retains a directly linked module directory beneath a manifest-less host parent", async () => {
-  const root = await fixture(tempDirs.make("openclaw-retained-module-owner-"), "git");
-  const link = path.join(root, "node_modules/.pnpm/node_modules/@fixture/retired");
-  await fs.unlink(link);
-  await symlink(
-    path.join(root, "extensions/retired/node_modules"),
-    link,
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
-  await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-    await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
-    const worker = captureRuntimeWorkerSource(
-      resolveRuntimeWorkerUrl({
-        currentModuleUrl: moduleUrl,
-        sourceWorkerName: "store",
-        distWorkerPath: "state/store.js",
-      }),
-    );
-    const retainedRoot = path.resolve(path.dirname(fileURLToPath(worker.moduleUrl)), "../..");
-    await rm(root, { recursive: true });
-    expect(
-      await readFile(
-        path.join(
-          retainedRoot,
-          "node_modules/.pnpm/node_modules/@fixture/retired/fixture/index.js",
-        ),
-        "utf8",
-      ),
-    ).toBe('export const generation = "retained";\n');
-  });
-});
-
 it("refuses files added between residue selection and inventory", async () => {
   const root = await fixture(tempDirs.make("openclaw-retained-residue-inventory-"), "git");
   const residue = path.join(root, "extensions/retired");
@@ -301,7 +494,7 @@ it("refuses files added between residue selection and inventory", async () => {
   }
 });
 
-it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
+it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as const)(
   "retains %s worker chunks and dependencies through replacement and drains only its borrowers",
   async (layout) => {
     const base = tempDirs.make("openclaw-retained-runtime-");
@@ -365,13 +558,17 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
       );
       await rm(displaced, { recursive: true });
 
-      if (layout === "git") {
+      if (layout === "git" || layout === "git-modules") {
         const retired = path.join(retainedRoot, "node_modules/.pnpm/node_modules/@fixture/retired");
-        expect(await fs.realpath(retired)).toBe(path.join(retainedRoot, "extensions/retired"));
-        await expect(stat(path.join(retired, "package.json"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        expect(await readFile(path.join(retired, "node_modules/fixture/index.js"), "utf8")).toBe(
+        const modulePath =
+          layout === "git-modules" ? "fixture/index.js" : "node_modules/fixture/index.js";
+        if (layout === "git") {
+          expect(await fs.realpath(retired)).toBe(path.join(retainedRoot, "extensions/retired"));
+          await expect(stat(path.join(retired, "package.json"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+        expect(await readFile(path.join(retired, modulePath), "utf8")).toBe(
           'export const generation = "retained";\n',
         );
       }
@@ -397,12 +594,12 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
       expect(await retainedStore.execute({ type: "append", input: "first" })).toEqual([
         "retained:first",
       ]);
-      // Scope cleanup must join this accepted native write before retiring its tree.
+      // Deferring tree deletion must still join accepted native writes.
       acceptedWrite = retainedStore.execute({ type: "append", input: "second" });
       void acceptedWrite.catch(() => undefined);
     });
     assert.ok(retainedPath && retainedStore);
-    await expect(readFile(retainedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(retainedPath, "utf8")).toBe(backend);
     expect(await acceptedWrite).toEqual(["retained:first", "retained:second"]);
     await expect(retainedStore.execute({ type: "append", input: "escaped" })).rejects.toThrow();
     expect(await unrelated.execute({ type: "append", input: "still open" })).toEqual([
@@ -411,24 +608,155 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
   },
 );
 
-it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)(
+it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
+  "keeps the retained %s runtime inside its install's dependency owner",
+  async (layout) => {
+    const base = await fs.realpath(tempDirs.make("retained-dependency-owner-"));
+    const npm = layout !== "pnpm11";
+    const globalRoot = path.join(base, "prefix", npm ? "lib/node_modules" : "v11");
+    const root = npm
+      ? path.join(globalRoot, "openclaw")
+      : path.join(globalRoot, ".pnpm/openclaw@1/node_modules/openclaw");
+    // `npm link` leaves only a global link to a package checkout elsewhere.
+    const dependency =
+      layout === "npm-linked"
+        ? path.join(base, "linked/fixture")
+        : path.join(globalRoot, npm ? "fixture" : ".pnpm/node_modules/fixture");
+    const ambientModules = path.join(base, "node_modules");
+    // Another globally installed tool shares the install's module directory.
+    const globalSibling = path.join(globalRoot, "unrelated-global");
+    for (const directory of [
+      path.join(root, "dist"),
+      dependency,
+      globalSibling,
+      path.join(ambientModules, "ambient-peer"),
+      path.join(ambientModules, "unrelated"),
+    ]) {
+      await mkdir(directory, { recursive: true });
+    }
+    if (layout === "npm-linked") {
+      await symlink(dependency, path.join(globalRoot, "fixture"), "junction");
+    }
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module", dependencies: { fixture: "1.0.0" } }),
+    );
+    await writeFile(path.join(root, "dist/updater.mjs"), 'export { value } from "fixture";');
+    await writeFile(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        type: "module",
+        exports: "./index.js",
+        peerDependencies: { "ambient-peer": "*" },
+        peerDependenciesMeta: { "ambient-peer": { optional: true } },
+      }),
+    );
+    await writeFile(path.join(dependency, "index.js"), 'export const value = "hoisted survived";');
+    await writeFile(
+      path.join(ambientModules, "ambient-peer/package.json"),
+      '{"name":"ambient-peer"}',
+    );
+    await writeFile(path.join(ambientModules, "unrelated/sentinel.txt"), "unrelated dependency");
+    await writeFile(path.join(globalSibling, "package.json"), '{"name":"unrelated-global"}');
+    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
+    await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
+      await retain({
+        mutationRoots: [globalRoot],
+        // Without an install target the enclosing module directory is the only
+        // known owner of hoisted dependencies.
+        ...(layout === "npm-unresolved"
+          ? {}
+          : {
+              installTarget: {
+                manager: npm ? ("npm" as const) : ("pnpm" as const),
+                command: npm ? "npm" : "pnpm",
+                globalRoot,
+                packageRoot: root,
+              },
+            }),
+        timeoutMs: 30_000,
+        assertCurrent() {},
+      });
+      const retainedUrl = captureRuntimeWorkerSource(moduleUrl).moduleUrl;
+      const retainedRoot = path.resolve(path.dirname(fileURLToPath(retainedUrl)), "..");
+      const retainedAmbient = path.resolve(retainedRoot, path.relative(root, ambientModules));
+      const retainedSibling = stat(path.resolve(retainedRoot, path.relative(root, globalSibling)));
+      if (layout === "npm-unresolved") {
+        await expect(retainedSibling).resolves.toBeDefined();
+      } else {
+        await expect(retainedSibling).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await rename(globalRoot, `${globalRoot}.previous`);
+      await mkdir(globalRoot);
+      await rm(`${globalRoot}.previous`, { recursive: true });
+      await rm(path.join(base, "linked"), { recursive: true, force: true });
+      expect((await import(retainedUrl.href)).value).toBe("hoisted survived");
+      if (layout === "npm-linked" || layout === "npm-unresolved") {
+        // These owners resolve their peers from their own locations, as Node does.
+        return;
+      }
+      await expect(stat(path.join(retainedAmbient, "ambient-peer"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  },
+);
+
+it("refuses unsafe fallback storage without changing the installed runtime", async () => {
+  const base = tempDirs.make("retained-owner-refusal-");
+  const owner = path.join(base, "manager-project");
+  const globalRoot = path.join(owner, "v11");
+  const root = await fixture(globalRoot, "npm");
+  const temporary = path.join(owner, "scratch");
+  await mkdir(temporary);
+  vi.spyOn(os, "tmpdir").mockReturnValue(temporary);
+  const allocate = fs.mkdtemp;
+  vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
+    if (args[0].startsWith(path.join(base, "openclaw-update-runtime-"))) {
+      throw Object.assign(new Error("fixture parent read-only"), { code: "EROFS" });
+    }
+    return allocate(...args);
+  });
+  const original = await readFile(path.join(root, "dist/state/store.js"), "utf8");
+  const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+  await expect(
+    withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+      await retain({
+        mutationRoots: [root],
+        installTarget: { manager: "pnpm", command: "pnpm", globalRoot, packageRoot: root },
+        timeoutMs: 30_000,
+        assertCurrent() {},
+      });
+    }),
+  ).rejects.toThrow("Updater temporary directory is inside an installation being replaced");
+  expect(await readFile(path.join(root, "dist/state/store.js"), "utf8")).toBe(original);
+  expect(await fs.readdir(base)).toEqual(["manager-project"]);
+});
+
+it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-env"] as const)(
   "retains %s on the source filesystem outside the complete replacement boundary",
   async (layout) => {
     const base = await fs.realpath(tempDirs.make("openclaw-retained-placement-"));
-    const temporary = path.join(base, "other-volume");
-    await mkdir(temporary);
     const project = path.join(base, "installation");
     const globalRoot = path.join(
       project,
       layout === "pnpm10" ? "5/node_modules" : layout === "pnpm11" ? "v11" : "node_modules",
     );
-    const packaged = ["npm", "pnpm10", "pnpm11", "bun"].includes(layout);
+    const packaged = ["npm", "pnpm10", "pnpm11", "bun", "bun-no-env"].includes(layout);
     const packageParent = packaged
       ? layout === "pnpm11"
         ? path.join(globalRoot, "group/node_modules")
         : globalRoot
       : project;
     const root = await fixture(packageParent, "npm");
+    const temporary = path.join(packaged && layout !== "npm" ? project : base, "scratch");
+    await mkdir(temporary);
     const alias = path.join(base, "alias");
     if (layout === "alias") {
       await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
@@ -438,7 +766,7 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
       layout === "npm" ? globalRoot : packaged || layout === "ancestor" ? project : root;
     const installTarget: ResolvedGlobalInstallTarget | undefined = packaged
       ? {
-          manager: layout === "bun" ? "bun" : layout === "npm" ? "npm" : "pnpm",
+          manager: layout.startsWith("bun") ? "bun" : layout === "npm" ? "npm" : "pnpm",
           command: "fixture",
           globalRoot,
           packageRoot: root,
@@ -459,12 +787,13 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
       return await link(source, destination);
     });
     let retained: string | undefined;
+    let retainedStore: SqliteWorkerStore<Operations> | undefined;
     try {
       await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
         await retain({
           mutationRoots: [mutationRoot],
           installTarget,
-          env: { BUN_INSTALL_GLOBAL_DIR: project },
+          env: layout === "bun-no-env" ? {} : { BUN_INSTALL_GLOBAL_DIR: project },
           timeoutMs: 30_000,
           assertCurrent() {},
         });
@@ -490,13 +819,15 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
           databasePath: path.join(base, "retained.sqlite"),
           input: undefined,
         });
+        retainedStore = store;
         stores.add(store);
         expect(await store.execute({ type: "append", input: "after replacement" })).toEqual([
           "retained:after replacement",
         ]);
       });
-      assert.ok(retained);
-      await expect(stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
+      assert.ok(retained && retainedStore);
+      expect(await readFile(retained, "utf8")).toBe(backend);
+      await expect(retainedStore.execute({ type: "append", input: "escaped" })).rejects.toThrow();
     } finally {
       links.mockRestore();
       temporaryRoot.mockRestore();
@@ -504,43 +835,86 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
   },
 );
 
-it.each(["EACCES", "EROFS"])(
-  "falls back when the runtime sibling is unavailable (%s)",
-  async (code) => {
-    const base = await fs.realpath(tempDirs.make("openclaw-retained-fallback-"));
-    const root = await fixture(base, "npm");
-    const temporary = path.join(base, "temporary");
-    await mkdir(temporary);
-    const makeTemp = fs.mkdtemp;
-    const temporaryRoot = vi.spyOn(os, "tmpdir").mockReturnValue(temporary);
-    const allocation = vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
-      if (path.dirname(args[0]) === base) {
-        throw Object.assign(new Error("sibling is unavailable"), { code });
-      }
-      return await makeTemp(...args);
+it("retains and reclaims the runtime when the install is spelled unlike its native realpath", async ({
+  skip,
+}) => {
+  // Windows 8.3 names (C:\Users\RUNNER~1) and case-insensitive volumes give one
+  // directory several spellings; native realpath returns only the on-disk one.
+  const base = await fs.realpath(tempDirs.make("openclaw-retained-spelling-"));
+  const root = await fixture(path.join(base, "Profile"), "npm");
+  const aliasRoot = path.join(base, "profile", path.relative(path.join(base, "Profile"), root));
+  if (!fsSync.existsSync(aliasRoot) || fsSync.realpathSync.native(aliasRoot) !== root) {
+    skip("the temporary volume is case-sensitive");
+  }
+  vi.spyOn(os, "tmpdir").mockReturnValue(base);
+  vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+  const maintain = () =>
+    temporaryArtifacts.maintainRetainedUpdateRuntimes({
+      packageRoots: [aliasRoot],
+      repair: true,
+      assertCurrent() {},
     });
-    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
-    let retained: string | undefined;
-    try {
-      await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-        await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
-        retained = fileURLToPath(
-          captureRuntimeWorkerSource(
-            resolveRuntimeWorkerUrl({
-              currentModuleUrl: moduleUrl,
-              sourceWorkerName: "store",
-              distWorkerPath: "state/store.js",
-            }),
-          ).moduleUrl,
-        );
-        expect(retained.startsWith(`${temporary}${path.sep}`)).toBe(true);
-        expect(await readFile(retained, "utf8")).toBe(backend);
-      });
-      assert.ok(retained);
-      await expect(stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      allocation.mockRestore();
-      temporaryRoot.mockRestore();
+  const moduleUrl = pathToFileURL(path.join(aliasRoot, "dist/updater.mjs")).href;
+  const directory = await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+    expect(
+      await retain({ mutationRoots: [aliasRoot], timeoutMs: 30_000, assertCurrent() {} }),
+    ).toMatchObject({ entries: expect.any(Number) });
+    const retained = fileURLToPath(
+      captureRuntimeWorkerSource(
+        resolveRuntimeWorkerUrl({
+          currentModuleUrl: moduleUrl,
+          sourceWorkerName: "store",
+          distWorkerPath: "state/store.js",
+        }),
+      ).moduleUrl,
+    );
+    const [name = ""] = path.relative(path.join(base, "Profile"), retained).split(path.sep);
+    expect(name).toMatch(/^openclaw-update-runtime-/u);
+    expect(await readFile(retained, "utf8")).toBe(backend);
+    expect(await maintain()).toContainEqual(
+      expect.stringContaining("the creating update still owns this runtime"),
+    );
+    return path.join(base, "Profile", name);
+  });
+  expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
+  await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("falls back when the runtime sibling is read-only", async () => {
+  const base = await fs.realpath(tempDirs.make("openclaw-retained-fallback-"));
+  const root = await fixture(base, "npm");
+  const temporary = path.join(base, "temporary");
+  await mkdir(temporary);
+  const makeTemp = fs.mkdtemp;
+  const temporaryRoot = vi.spyOn(os, "tmpdir").mockReturnValue(temporary);
+  const allocation = vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
+    if (path.dirname(args[0]) === base) {
+      throw Object.assign(new Error("sibling is unavailable"), { code: "EROFS" });
     }
-  },
-);
+    return await makeTemp(...args);
+  });
+  const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+  let retained: string | undefined;
+  let generation: ReturnType<typeof captureRuntimeWorkerSource>["runtimeGeneration"];
+  try {
+    await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+      await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
+      const source = captureRuntimeWorkerSource(
+        resolveRuntimeWorkerUrl({
+          currentModuleUrl: moduleUrl,
+          sourceWorkerName: "store",
+          distWorkerPath: "state/store.js",
+        }),
+      );
+      retained = fileURLToPath(source.moduleUrl);
+      generation = source.runtimeGeneration;
+      expect(retained.startsWith(`${temporary}${path.sep}`)).toBe(true);
+      expect(await readFile(retained, "utf8")).toBe(backend);
+    });
+    assert.ok(retained && generation);
+    expect(await readFile(retained, "utf8")).toBe(backend);
+  } finally {
+    allocation.mockRestore();
+    temporaryRoot.mockRestore();
+  }
+});

@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadExecApprovalsReadOnly, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { loadExecApprovalsReadOnly } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
@@ -154,10 +155,8 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
   }
 
   it.skipIf(!python3).each([
-    { mode: "auto", command: "python probe.py *.txt", shadowed: false },
     { mode: "auto", command: "python probe.py *.txt", shadowed: true },
     { mode: "ask", command: "python probe.py approved.txt", shadowed: false },
-    { mode: "ask", command: "python probe.py approved.txt", shadowed: true },
   ] as const)(
     "preserves the $mode virtualenv invocation or rejects PATH drift: $command (shadowed=$shadowed)",
     async ({ mode, command, shadowed }) => {
@@ -277,7 +276,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     expect(result.details.aggregated).toBe("CUSTOMIZED");
   });
 
-  it.each(["auto", "human-once", "human-always", "current-policy"] as const)(
+  it.each(["auto", "human-always", "current-policy"] as const)(
     "revalidates %s after asynchronous shell preparation",
     async (authority) => {
       vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");

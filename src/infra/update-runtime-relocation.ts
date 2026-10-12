@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { hasErrnoCode } from "./errno.js";
+import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
 import { isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 
 export type RuntimeRelocation = {
@@ -91,40 +92,49 @@ export async function relocateRuntimeLauncher(
 ): Promise<void> {
   const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
-  // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
-  // Resolve them before changing the directory; absolute store/runtime paths stay external.
-  let content = original.replace(
-    /(\$(?:basedir|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
-    (match, prefix: string, relative: string) => {
-      if (/[$%]/u.test(relative)) {
-        return match;
-      }
-      const sourceTarget = path.resolve(
-        path.dirname(sourceFile),
-        relative.replaceAll("\\", path.sep),
-      );
-      const target = isPathInside(path.dirname(sourceFile), sourceTarget)
-        ? path.resolve(
-            path.dirname(destinationFile),
-            path.relative(path.dirname(sourceFile), sourceTarget),
-          )
-        : relocateRuntimePath(sourceTarget, prepared);
-      const replacement = path.relative(path.dirname(destinationFile), target);
-      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
-    },
-  );
-  for (const relocation of prepared.rules) {
-    for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
-      // NODE_PATH and the shim's target comment can carry absolute project paths.
-      content = content.replaceAll(
-        `${sourceRoot}${path.sep}`,
-        `${relocation.destinationRoot}${path.sep}`,
-      );
-      if (path.sep === "\\") {
-        content = content.replaceAll(
-          `${sourceRoot.replaceAll("\\", "/")}/`,
-          `${relocation.destinationRoot.replaceAll("\\", "/")}/`,
+  const bunLauncher = parseBunCliLauncher(original);
+  let content: string;
+  if (bunLauncher) {
+    content = renderBunCliLauncher({
+      bunPath: relocateRuntimePath(bunLauncher.bunPath, prepared),
+      entryPath: relocateRuntimePath(bunLauncher.entryPath, prepared),
+    });
+  } else {
+    // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
+    // Resolve them before changing the directory; absolute store/runtime paths stay external.
+    content = original.replace(
+      /(\$(?:basedir|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
+      (match, prefix: string, relative: string) => {
+        if (/[$%]/u.test(relative)) {
+          return match;
+        }
+        const sourceTarget = path.resolve(
+          path.dirname(sourceFile),
+          relative.replaceAll("\\", path.sep),
         );
+        const target = isPathInside(path.dirname(sourceFile), sourceTarget)
+          ? path.resolve(
+              path.dirname(destinationFile),
+              path.relative(path.dirname(sourceFile), sourceTarget),
+            )
+          : relocateRuntimePath(sourceTarget, prepared);
+        const replacement = path.relative(path.dirname(destinationFile), target);
+        return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
+      },
+    );
+    for (const relocation of prepared.rules) {
+      for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
+        // NODE_PATH and the shim's target comment can carry absolute project paths.
+        content = content.replaceAll(
+          `${sourceRoot}${path.sep}`,
+          `${relocation.destinationRoot}${path.sep}`,
+        );
+        if (path.sep === "\\") {
+          content = content.replaceAll(
+            `${sourceRoot.replaceAll("\\", "/")}/`,
+            `${relocation.destinationRoot.replaceAll("\\", "/")}/`,
+          );
+        }
       }
     }
   }
@@ -135,12 +145,9 @@ export async function relocateRuntimeLauncher(
 }
 
 export async function readRuntimeModulesManifest(file: string) {
-  const original = await fs.readFile(file, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const original = await fs
+    .readFile(file, "utf8")
+    .catch((error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? null);
   if (original === null) {
     return null;
   }
@@ -188,40 +195,15 @@ async function relocateModulesManifest(
   }
 }
 
-/** Relocate one admitted entry without traversing neighboring private files. */
-export async function relocateRuntimeEntry(
-  file: string,
-  sourceFile: string,
-  destinationFile: string,
-  kind: "file" | "symlink",
-  relocations: RuntimeRelocations,
-  assertBeforeMutation?: () => void,
-): Promise<void> {
-  if (kind === "symlink") {
-    await relocateRuntimeSymlink(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
-  } else if (path.basename(file) === ".modules.yaml") {
-    await relocateModulesManifest(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
-  } else if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
-    await relocateRuntimeLauncher(
-      file,
-      sourceFile,
-      destinationFile,
-      relocations,
-      assertBeforeMutation,
-    );
+/** Files rewritten during relocation must never share an inode with the live package. */
+export function resolveRuntimeFileRelocator(file: string) {
+  if (path.basename(file) === ".modules.yaml") {
+    return relocateModulesManifest;
   }
+  if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
+    return relocateRuntimeLauncher;
+  }
+  return undefined;
 }
 
 /** Rebind copied entries only; following a store symlink would mutate external data. */
@@ -238,14 +220,20 @@ export async function relocateRuntimeTree(
   }
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
     const file = path.join(root, entry.name);
-    const sourceFile = path.join(sourceRoot, entry.name);
-    const destinationFile = path.join(destinationRoot, entry.name);
-    if (entry.isDirectory()) {
-      await relocateRuntimeTree(file, sourceFile, destinationFile, prepared);
-    } else if (entry.isSymbolicLink()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "symlink", prepared);
-    } else if (entry.isFile()) {
-      await relocateRuntimeEntry(file, sourceFile, destinationFile, "file", prepared);
+    const relocate = entry.isDirectory()
+      ? relocateRuntimeTree
+      : entry.isSymbolicLink()
+        ? relocateRuntimeSymlink
+        : entry.isFile()
+          ? resolveRuntimeFileRelocator(file)
+          : undefined;
+    if (relocate) {
+      await relocate(
+        file,
+        path.join(sourceRoot, entry.name),
+        path.join(destinationRoot, entry.name),
+        prepared,
+      );
     }
   }
 }

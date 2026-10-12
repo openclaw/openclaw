@@ -3,11 +3,11 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../config/state-dir.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
-import { isPathInside } from "../infra/path-guards.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   acquireSqliteStagingToken,
   SQLITE_STAGING_TOKEN_FILES,
@@ -15,11 +15,16 @@ import {
 } from "../infra/sqlite-staging-token.js";
 import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
   pluginSourceCaptureMaintenance,
+  resolvePluginSourceCaptureStorage,
   runInPluginSourceCaptureContext,
 } from "./plugin-source-capture-context.js";
-import { observePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
+import {
+  createPluginNativeCaptureCustody,
+  type NativeCaptureMaintenance,
+} from "./plugin-source-capture-native-loads.js";
 import {
   isLegacyPluginSourceCaptureName,
   PLUGIN_SOURCE_CAPTURE_PREFIX,
@@ -30,33 +35,27 @@ import {
 const CAPTURE_GRACE_MS = 60 * 60 * 1_000;
 
 type Instance = {
+  storage: PluginSourceCaptureStorage;
   references: Set<{ scheduler: GatewayScheduler | null }>;
   pendingNative: Set<string>;
   closing?: boolean;
   scheduler?: GatewayScheduler;
-  cleanupJob?: GatewayScheduledJob;
-  detachScheduler?: () => void;
+  cleanupScope?: GatewaySchedulerScope;
   root?: string;
   managedRoot?: string;
   token?: SqliteStagingToken;
 };
-type NativeCaptureMaintenance = {
-  retainedPaths: ReadonlySet<string>;
-  assertCurrent: () => void;
-  removed: string[];
-  startup?: boolean;
-};
 const {
   instances,
   ownedRoots,
-  nativeReferences,
-  retiringNativeRoots,
-  nativeLoadPaths,
-  retainedRoots,
+  reclaimInstance,
+  isPluginSourceCaptureRetained,
+  retainLoadedPluginSourceCapture,
+  retainPluginNativeCapturePath,
   sweeps,
-  warningBackoff,
 } = resolveGlobalSingleton(Symbol.for("openclaw.pluginSourceCaptureInstances"), () => {
-  const observedNativePaths = observePluginNativeLoads();
+  const instanceRoots = new Set<string>();
+  const nativeCustody = createPluginNativeCaptureCustody(instanceRoots);
   process.once("exit", () => {
     // Explicit exits cannot await generation disposal. These native leases belong
     // only to this exiting process; worker overrides remain with their parent.
@@ -73,15 +72,17 @@ const {
   });
   return {
     instances: new Map<string, Instance>(),
-    ownedRoots: new Set<string>(),
-    nativeReferences: new Map<string, number>(),
-    retiringNativeRoots: new Set<string>(),
-    nativeLoadPaths: observedNativePaths,
-    retainedRoots: new Set<string>(),
+    ownedRoots: instanceRoots,
+    ...nativeCustody,
     sweeps: new Map<string, Promise<void>>(),
-    warningBackoff: new Map<string, { next: number; delay: number }>(),
   };
 });
+
+export {
+  isPluginSourceCaptureRetained,
+  retainLoadedPluginSourceCapture,
+  retainPluginNativeCapturePath,
+};
 
 function retireInstance(key: string, instance: Instance): string | undefined {
   if (instance.root && retainLoadedPluginSourceCapture(instance.root)) {
@@ -108,125 +109,12 @@ function retireInstance(key: string, instance: Instance): string | undefined {
   }
   instance.references.clear();
   instances.delete(key);
-  instance.cleanupJob?.cancel();
-  instance.detachScheduler?.();
+  scheduleCaptureCleanup(key, instance);
   return removalRoot;
 }
 
 function warn(error: unknown) {
   process.emitWarning(`Plugin source capture cleanup: ${String(error)}`);
-}
-
-/** Reclamation owns an existing native token until its captured payload is gone. */
-async function reclaimInstance(
-  directory: string,
-  originalDirectory: fs.Stats,
-  nativeMaintenance?: NativeCaptureMaintenance,
-): Promise<void> {
-  const ownerPath = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
-  const family = SQLITE_STAGING_TOKEN_FILES.map((file) =>
-    fs.lstatSync(path.join(directory, file), { throwIfNoEntry: false }),
-  );
-  const originalOwner = family[0];
-  const captures = path.join(directory, "captures");
-  const captured = fs.lstatSync(captures, { throwIfNoEntry: false });
-  if (
-    (process.getuid && originalDirectory.uid !== process.getuid()) ||
-    !originalOwner ||
-    family.some(
-      (file) =>
-        file &&
-        (!file.isFile() || file.nlink !== 1 || (process.getuid && file.uid !== process.getuid())),
-    ) ||
-    (captured && !captured.isDirectory())
-  ) {
-    return;
-  }
-  const unchanged = () => {
-    const currentDirectory = fs.lstatSync(directory);
-    const currentOwner = fs.lstatSync(ownerPath);
-    return (
-      currentDirectory.dev === originalDirectory.dev &&
-      currentDirectory.ino === originalDirectory.ino &&
-      currentDirectory.isDirectory() &&
-      currentOwner.isFile() &&
-      currentOwner.nlink === 1 &&
-      currentOwner.dev === originalOwner.dev &&
-      currentOwner.ino === originalOwner.ino
-    );
-  };
-  // Reclaim refuses a missing token and never creates a replacement ownership database.
-  const release = acquireSqliteStagingToken(directory, "reclaim");
-  let released = false;
-  ownedRoots.add(directory);
-  try {
-    if (!unchanged()) {
-      return;
-    }
-    const native = path.join(directory, "native");
-    // A producer can publish native bytes between inspection and exclusive admission.
-    const nativeStat = fs.lstatSync(native, { throwIfNoEntry: false });
-    await fsPromises.rm(captures, { recursive: true, force: true });
-    let retainedNative = Boolean(nativeStat);
-    if (nativeStat?.isDirectory() && nativeMaintenance) {
-      for (const nativeEntry of await fsPromises.readdir(native, { withFileTypes: true })) {
-        const nativeDirectory = path.join(native, nativeEntry.name);
-        if (!nativeEntry.isDirectory()) {
-          continue;
-        }
-        nativeMaintenance.assertCurrent();
-        if (!unchanged()) {
-          return;
-        }
-        const contained = (file: string) => file.startsWith(nativeDirectory + path.sep);
-        if (
-          [...nativeMaintenance.retainedPaths].some(contained) ||
-          [...nativeReferences.keys()].some(contained)
-        ) {
-          continue;
-        }
-        retiringNativeRoots.add(nativeDirectory);
-        try {
-          await fsPromises.rm(nativeDirectory, { recursive: true, force: true });
-          nativeMaintenance.removed.push(nativeDirectory);
-        } finally {
-          retiringNativeRoots.delete(nativeDirectory);
-        }
-      }
-      retainedNative = (await fsPromises.readdir(native)).length > 0;
-    }
-    // Retirement closes staging admission; committed native readers use receipt-bound files.
-    release(true);
-    released = true;
-    // The shipped instance ID is never reused. Windows requires closing before unlink.
-    if (!retainedNative && unchanged()) {
-      nativeMaintenance?.assertCurrent();
-      await fsPromises.rm(directory, { recursive: true, force: true });
-    }
-  } finally {
-    try {
-      if (!released) {
-        release();
-      }
-    } finally {
-      ownedRoots.delete(directory);
-    }
-  }
-}
-
-/** Physical module lifetime outlives registration and CommonJS cache eviction. */
-export function retainLoadedPluginSourceCapture(directory: string): boolean {
-  if (![...nativeLoadPaths].some((file) => isPathInside(directory, file))) {
-    return false;
-  }
-  const retained = [...ownedRoots].find((root) => isPathInside(root, directory)) ?? directory;
-  if (
-    ![...retainedRoots].some((root) => isPathInside(root, retained) || isPathInside(retained, root))
-  ) {
-    warn(`retained-by-loaded-module: ${retained}; cleanup deferred until the next startup`);
-  }
-  retainedRoots.add(retained);
-  return true;
 }
 
 function removeInstanceSync(root: string, pendingNative: Iterable<string> = []): void {
@@ -264,7 +152,13 @@ async function reclaimInstances(
     return;
   }
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
-  let legacyAllowed: boolean | undefined;
+  const lstatIfPresent = (file: string) =>
+    fsPromises.lstat(file).catch((error: unknown) => {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      return undefined;
+    });
   for (const entry of entries) {
     if (
       !entry.isDirectory() ||
@@ -288,20 +182,8 @@ async function reclaimInstances(
         continue;
       }
       const tokenPath = path.join(canonical, SQLITE_STAGING_TOKEN_FILES[0]);
-      const nativeStat = await fsPromises
-        .lstat(path.join(canonical, "native"))
-        .catch((error: unknown) => {
-          if (!hasErrnoCode(error, "ENOENT")) {
-            throw error;
-          }
-          return undefined;
-        });
-      const tokenStat = await fsPromises.lstat(tokenPath).catch((error: unknown) => {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-        return undefined;
-      });
+      const nativeStat = await lstatIfPresent(path.join(canonical, "native"));
+      const tokenStat = await lstatIfPresent(tokenPath);
       if (legacy && tokenStat) {
         continue;
       }
@@ -314,25 +196,18 @@ async function reclaimInstances(
         if (nativeStat) {
           continue;
         }
-        if (legacy) {
-          if (legacyAllowed === undefined) {
-            const { inspectOtherOpenClawProcesses } =
-              await import("../infra/openclaw-process-census.js");
-            const census = inspectOtherOpenClawProcesses();
-            legacyAllowed = "error" in census || census.pids.length === 0;
-          }
-          if (!legacyAllowed) {
-            continue;
-          }
+        await nativeMaintenance?.assertCurrent();
+        const current = fs.lstatSync(canonical);
+        if (
+          current.isDirectory() &&
+          current.dev === stat.dev &&
+          current.ino === stat.ino &&
+          current.uid === stat.uid &&
+          (!process.getuid || current.uid === process.getuid())
+        ) {
+          // Legacy producers surviving the grace period are best effort; managed captures retain tokens.
+          await fsPromises.rm(canonical, { recursive: true, force: true });
         }
-        // Legacy writers have no token. Probe for Windows sharing violations before
-        // removing aged scratch; retain the recognizable name if removal is interrupted.
-        const retired = path.join(
-          root,
-          `${legacy ? PLUGIN_SOURCE_CAPTURE_PREFIX : ""}${randomUUID()}`,
-        );
-        await fsPromises.rename(canonical, retired);
-        await fsPromises.rm(retired, { recursive: true, force: true });
         continue;
       }
       await reclaimInstance(canonical, stat, nativeMaintenance);
@@ -344,39 +219,50 @@ async function reclaimInstances(
   }
 }
 
-/** Warm generations retain superseded snapshots until their local cache retires. */
-export function retainPluginNativeCapturePath(capturedPath: string): () => void {
-  const file = path.resolve(capturedPath);
-  if ([...retiringNativeRoots].some((root) => file.startsWith(root + path.sep))) {
-    throw new Error("Plugin native capture is being reclaimed");
+/** Only exact process-owned roots are excluded; a partially retained root may still need cleanup. */
+export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string): Promise<boolean> {
+  for (const [root, prefix] of [
+    [resolvePluginSourceCapturesDirectory(stateDir), undefined],
+    [tmpdir(), resolvePluginSourceCaptureFallbackPrefix(stateDir)],
+  ] as const) {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsPromises.readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || (prefix && !entry.name.startsWith(prefix))) {
+        continue;
+      }
+      try {
+        if (!ownedRoots.has(await fsPromises.realpath(path.join(root, entry.name)))) {
+          return true;
+        }
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+      }
+    }
   }
-  nativeReferences.set(file, (nativeReferences.get(file) ?? 0) + 1);
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    const references = nativeReferences.get(file)!;
-    if (references === 1) {
-      nativeReferences.delete(file);
-    } else {
-      nativeReferences.set(file, references - 1);
-    }
-  };
+  return false;
 }
 
-/** The caller holds database maintenance and supplies a fresh installed-index reference set. */
+/** The caller holds plugin lifecycle or offline maintenance custody and fresh index references. */
 export async function prunePluginNativeCaptureDirectories(
   stateDir: string,
   retainedPaths: ReadonlySet<string>,
-  assertCurrent: () => void,
+  assertCurrent: () => void | Promise<void>,
   options: { startup?: boolean } = {},
 ) {
   const removed: string[] = [];
   const warnings: string[] = [];
-  assertCurrent();
-  const recordFailure = (error: unknown) => warnings.push(String(error));
+  await assertCurrent();
+  const recordFailure = (error: unknown) => warnings.push(formatErrorMessage(error));
   const maintenance = { retainedPaths, assertCurrent, removed, ...options };
   await reclaimInstances(
     path.resolve(resolvePluginSourceCapturesDirectory(stateDir)),
@@ -394,7 +280,7 @@ export async function prunePluginNativeCaptureDirectories(
   return { removed, warnings };
 }
 
-/** Coalesce active scans, but throttle diagnostics independently of cleanup retries. */
+/** Coalesce active scans and report one summary per sweep. */
 function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
   const root = path.resolve(resolvePluginSourceCapturesDirectory(stateDir));
   let sweep = sweeps.get(root);
@@ -436,28 +322,10 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
       })
       .then(() => {
         if (failures === 0) {
-          warningBackoff.delete(root);
           return;
         }
-        const now = Date.now();
-        const previous = warningBackoff.get(root);
-        if (previous && now < previous.next) {
-          return;
-        }
-        const delay = Math.min(
-          (previous?.delay ?? CAPTURE_GRACE_MS / 2) * 2,
-          24 * CAPTURE_GRACE_MS,
-        );
-        // Bound diagnostics for processes that inspect many independent profiles.
-        if (!previous && warningBackoff.size >= 32) {
-          const oldest = warningBackoff.keys().next().value;
-          if (oldest !== undefined) {
-            warningBackoff.delete(oldest);
-          }
-        }
-        warningBackoff.set(root, { next: now + delay, delay });
         warn(
-          `${failures} cleanup failure(s) in ${root}; will retry. First: ${String(firstFailure)}`,
+          `${failures} cleanup failure(s) in ${root}; will retry. First: ${formatErrorMessage(firstFailure)}`,
         );
       })
       .finally(() => sweeps.delete(root));
@@ -466,12 +334,8 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
   return sweep;
 }
 
-function createCaptureDirectory(
-  instance: Instance,
-  stateDir: string,
-  prefix: string,
-  kind = "captures",
-): string {
+function createCaptureDirectory(instance: Instance, prefix: string, kind = "captures"): string {
+  const { stateDir, placement } = instance.storage;
   if (instance.root) {
     const captures = path.join(instance.root, kind);
     try {
@@ -520,12 +384,10 @@ function createCaptureDirectory(
         if (directory) {
           ownedRoots.add(directory);
         }
-        throw new AggregateError(
+        throw createSqliteLifecycleAggregateError(
           [error, releaseError],
           "Plugin source preparation cleanup failed",
-          {
-            cause: releaseError,
-          },
+          error,
         );
       }
       if (directory) {
@@ -538,6 +400,9 @@ function createCaptureDirectory(
       throw error;
     }
   };
+  if (placement === "temporary") {
+    return prepare(true);
+  }
   try {
     return prepare(false);
   } catch (error) {
@@ -559,31 +424,35 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
   if (instance.scheduler === scheduler) {
     return;
   }
-  instance.detachScheduler?.();
-  instance.cleanupJob?.cancel();
   instance.scheduler = scheduler;
-  instance.cleanupJob = undefined;
-  instance.detachScheduler = undefined;
-  if (!scheduler) {
+  instance.cleanupScope?.beginClose();
+  instance.cleanupScope = undefined;
+  if (!scheduler || instance.storage.placement === "temporary") {
     return;
   }
   // Metadata can retain native custody after its Gateway stops accepting timed work.
-  const rebind = () => scheduleCaptureCleanup(key, instance);
-  scheduler.signal.addEventListener("abort", rebind, { once: true });
-  instance.detachScheduler = () => scheduler.signal.removeEventListener("abort", rebind);
-  instance.cleanupJob = runInPluginSourceCaptureContext(() =>
-    scheduler.schedule({
+  const scope = scheduler.scope();
+  instance.cleanupScope = scope;
+  scope.signal.addEventListener("abort", () => scheduleCaptureCleanup(key, instance), {
+    once: true,
+  });
+  runInPluginSourceCaptureContext(() =>
+    scope.schedule({
       id: `plugin-source-captures:${key}`,
       delayMs: CAPTURE_GRACE_MS,
       everyMs: CAPTURE_GRACE_MS,
-      run: () => sweepPluginSourceCaptureDirectories(key),
+      run: () => sweepPluginSourceCaptureDirectories(instance.storage.stateDir),
     }),
   );
 }
 
 /** Artifact custody survives until every producer and metadata owner releases it. */
-export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) {
-  const key = path.resolve(stateDir);
+export function retainPluginSourceCaptureInstance(
+  stateDir?: string,
+  placement?: PluginSourceCaptureStorage["placement"],
+) {
+  const storage = resolvePluginSourceCaptureStorage(stateDir, placement);
+  const key = JSON.stringify([storage.stateDir, storage.placement]);
   const maintenance = pluginSourceCaptureMaintenance.getStore();
   const scheduler = maintenance?.scheduler;
   scheduler?.signal.throwIfAborted();
@@ -594,12 +463,14 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
     );
   }
   if (!instance) {
-    instance = { references: new Set(), pendingNative: new Set() };
+    instance = { storage, references: new Set(), pendingNative: new Set() };
     instances.set(key, instance);
-    if (maintenance) {
-      void maintenance.run(() => sweepPluginSourceCaptureDirectories(key));
-    } else {
-      void sweepPluginSourceCaptureDirectories(key);
+    if (storage.placement === "state") {
+      if (maintenance) {
+        void maintenance.run(() => sweepPluginSourceCaptureDirectories(storage.stateDir));
+      } else {
+        void sweepPluginSourceCaptureDirectories(storage.stateDir);
+      }
     }
   }
   const reference: { scheduler: GatewayScheduler | null } = { scheduler: scheduler ?? null };
@@ -629,7 +500,9 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
       ownerScheduler.signal.throwIfAborted();
       reference.scheduler = ownerScheduler;
       scheduleCaptureCleanup(key, retained);
-      return sweepPluginSourceCaptureDirectories(key);
+      return storage.placement === "temporary"
+        ? Promise.resolve()
+        : sweepPluginSourceCaptureDirectories(storage.stateDir);
     },
     get managedRoot() {
       return retained.managedRoot;
@@ -638,13 +511,13 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
       if (released || retained.closing) {
         throw new Error("Plugin source instance has been released");
       }
-      return createCaptureDirectory(retained, key, prefix);
+      return createCaptureDirectory(retained, prefix);
     },
     createNativeDirectory() {
       if (released || retained.closing) {
         throw new Error("Plugin source instance has been released");
       }
-      const directory = createCaptureDirectory(retained, key, "admission-", "native");
+      const directory = createCaptureDirectory(retained, "admission-", "native");
       retained.pendingNative.add(directory);
       return { directory, commit: () => retained.pendingNative.delete(directory) };
     },
@@ -655,7 +528,15 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
       }
     },
     async releaseAsync() {
+      const scope = retained.cleanupScope;
       const root = retire();
+      if (scope !== retained.cleanupScope) {
+        await scope?.stop();
+      }
+      if (retained.references.size === 0) {
+        // A previous scheduler may still own the root's coalesced scan after rebinding.
+        await sweeps.get(path.resolve(resolvePluginSourceCapturesDirectory(storage.stateDir)));
+      }
       if (root) {
         try {
           await fsPromises.rm(path.join(root, "captures"), { recursive: true, force: true });
@@ -682,8 +563,11 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
 }
 
 /** Native snapshots become durable only after their installed-index receipt is published. */
-export function createPluginNativeCaptureRoot(stateDir = resolveStateDir()) {
-  const instance = retainPluginSourceCaptureInstance(stateDir);
+export function createPluginNativeCaptureRoot(
+  stateDir?: string,
+  placement?: PluginSourceCaptureStorage["placement"],
+) {
+  const instance = retainPluginSourceCaptureInstance(stateDir, placement);
   try {
     const root = instance.createNativeDirectory();
     let committed = false;

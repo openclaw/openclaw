@@ -4,11 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  inspectMemorySourceState,
-  loadMemorySourceFileState,
-  resolveMemorySourceExistingHash,
-} from "./manager-source-state.js";
+import { inspectMemorySourceState, loadMemorySourceFileState } from "./manager-source-state.js";
 
 describe("memory source state", () => {
   let db: DatabaseSync;
@@ -52,36 +48,6 @@ describe("memory source state", () => {
       loadMemorySourceFileState({ db, source: "memory", paths }).map((row) => row.hash),
     ).toEqual(expected);
   });
-
-  it.each([
-    {
-      existingHashes: new Map([["memory/one.md", "hash-from-snapshot"]]),
-      expected: "hash-from-snapshot",
-    },
-    { existingHashes: new Map<string, string>(), expected: undefined },
-  ])(
-    "uses the bulk snapshot without consulting newer rows: $expected",
-    ({ existingHashes, expected }) => {
-      expect(
-        resolveMemorySourceExistingHash({
-          db,
-          source: "memory",
-          path: "memory/one.md",
-          existingHashes,
-        }),
-      ).toBe(expected);
-    },
-  );
-
-  it.each([
-    { source: "sessions" as const, path: "memory/one.md", expected: "session-hash" },
-    { source: "sessions" as const, path: "memory/missing.md", expected: undefined },
-  ])(
-    "reads the current $source row for $path without a snapshot",
-    ({ source, path: rowPath, expected }) => {
-      expect(resolveMemorySourceExistingHash({ db, source, path: rowPath })).toBe(expected);
-    },
-  );
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -112,7 +78,7 @@ describe("memory source inspection extra-path diagnostics", () => {
       await fs.symlink(vaultDir, path.join(workspaceDir, ".openclaw-repair", "root-memory"), "dir");
 
       const inspection = await inspectMemorySourceState({
-        db,
+        readIndexedRows: async () => loadMemorySourceFileState({ db, source: "memory" }),
         workspaceDir,
         settings: {
           extraPaths: [
@@ -148,7 +114,7 @@ describe("memory source inspection extra-path diagnostics", () => {
       await fs.symlink(nestedTarget, path.join(vaultDir, "nested"), "dir");
 
       const inspection = await inspectMemorySourceState({
-        db,
+        readIndexedRows: async () => loadMemorySourceFileState({ db, source: "memory" }),
         workspaceDir,
         settings: {
           extraPaths: [{ path: vaultDir }],

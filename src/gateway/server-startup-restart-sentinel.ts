@@ -4,17 +4,10 @@ import {
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { hasRestartSentinel } from "../infra/restart-sentinel.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import {
   scheduleGatewayGenerationTimer,
   type GatewayPostReadySidecarHandle,
 } from "./server-startup-sidecar-scheduler.js";
-
-const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
-  () => import("./server-restart-sentinel.js"),
-);
 
 export function scheduleRestartSentinelWakeAfterReady(params: {
   scheduler: GatewayScheduler;
@@ -24,27 +17,30 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
   shouldRun?: () => boolean;
 }): GatewayPostReadySidecarHandle {
   const context = params.context ?? captureDeliveryQueueStateContext();
-  let stopped = false;
-  const imports = new Set<Promise<unknown>>();
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, params.scheduler.signal]);
+  const pending = new Set<Promise<unknown>>();
   const timer = scheduleGatewayGenerationTimer({
     scheduler: params.scheduler,
     delayMs: 750,
     origin: "restart-sentinel:wake",
     shouldRun: params.shouldRun,
     run: async (isStopped) => {
-      const { scheduleRestartSentinelWake } = await loadGatewayRestartSentinelModule();
+      const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
       if (isStopped()) {
         return;
       }
       await scheduleRestartSentinelWake({
+        scheduler: params.scheduler,
+        signal,
         deps: params.deps,
         context,
-        shouldRun: () => !stopped && !isStopped(),
-        trackImport: (work) => {
-          imports.add(work);
+        shouldRun: () => !signal.aborted && !isStopped(),
+        trackWork: (work) => {
+          pending.add(work);
           void work.then(
-            () => imports.delete(work),
-            () => imports.delete(work),
+            () => pending.delete(work),
+            () => pending.delete(work),
           );
         },
       });
@@ -53,18 +49,9 @@ export function scheduleRestartSentinelWakeAfterReady(params: {
   });
   return {
     async stop() {
-      stopped = true;
+      controller.abort();
       await timer.stop();
-      await Promise.all(imports);
+      await Promise.all(pending);
     },
   };
-}
-
-export async function refreshLatestUpdateRestartSentinelIfPresent(
-  env: NodeJS.ProcessEnv = captureDeliveryQueueStateContext().workerContext.environment,
-): Promise<Awaited<ReturnType<typeof refreshLatestUpdateRestartSentinel>> | null> {
-  if (!(await hasRestartSentinel(env))) {
-    return null;
-  }
-  return await (await loadGatewayRestartSentinelModule()).refreshLatestUpdateRestartSentinel(env);
 }

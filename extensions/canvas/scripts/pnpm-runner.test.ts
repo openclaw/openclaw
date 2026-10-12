@@ -138,7 +138,7 @@ describe("canvas pnpm runner", () => {
         windowsVerbatimArguments: cmd.windowsVerbatimArguments,
       });
       expect(cmdResult.status, cmdResult.stderr).toBe(0);
-      expect(cmdResult.stdout.trim()).toBe(process.version);
+      expect(cmdResult.stdout.trim()).toBe(process.versions.bun ?? process.version);
       expect(() =>
         resolvePnpmRunner({ npmExecPath: cmdPath, pnpmArgs: ["unsafe&argument"] }),
       ).toThrow(/unsafe/);

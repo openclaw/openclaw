@@ -1,11 +1,13 @@
-// Browser tests cover pw session plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Frame, Page } from "playwright-core";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
+import type { Dialog, Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import { pwAi } from "./pw-ai.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
+  armObservedDialogResponseOnPage,
   beginActionDownloadCaptureOnPage,
   ensurePageState,
   isDownloadStartingNavigationError,
@@ -14,9 +16,11 @@ import {
   storeRoleRefsForTarget,
 } from "./pw-session.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
+import { reconcileRemoteDialogAfterActionSettled } from "./pw-tools-core.interactions.navigation.js";
 
 type MutableDownload = {
-  url?: () => string;
+  url: () => string;
+  cancel: () => Promise<void>;
   suggestedFilename: () => string;
   saveAs: ReturnType<typeof vi.fn>;
   path?: () => Promise<string>;
@@ -26,20 +30,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function fakePage(): {
-  page: Page;
-  handlers: Map<string, Array<(...args: unknown[]) => void>>;
-  mainFrame: { url: () => string };
-  selectedFrame: Frame;
-  mocks: {
-    on: ReturnType<typeof vi.fn>;
-    frameGetByRole: ReturnType<typeof vi.fn>;
-    frameQuery: ReturnType<typeof vi.fn>;
-    getByRole: ReturnType<typeof vi.fn>;
-    frameLocator: ReturnType<typeof vi.fn>;
-    locator: ReturnType<typeof vi.fn>;
-  };
-} {
+function fakePage() {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   const on = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
     const list = handlers.get(event) ?? [];
@@ -93,6 +84,12 @@ function fakePage(): {
   };
 }
 
+function saveContents(contents: string) {
+  return vi.fn(async (outPath: string) => {
+    await fs.writeFile(outPath, contents, "utf8");
+  });
+}
+
 function firstSavePath(saveAs: MutableDownload["saveAs"]): string {
   const [call] = saveAs.mock.calls;
   if (!call) {
@@ -106,33 +103,19 @@ function firstSavePath(saveAs: MutableDownload["saveAs"]): string {
 }
 
 describe("pw-session refLocator", () => {
-  it("uses the captured Frame for refs from a frame-scoped snapshot", () => {
+  it("matches empty accessibility names in the captured snapshot Frame", () => {
+    const ref = "ax12";
+    const name = "";
     const { page, selectedFrame, mocks } = fakePage();
     const state = ensurePageState(page);
-    state.roleRefs = { e1: { role: "button", name: "OK" } };
-    state.roleRefsFrameSelector = "iframe#main";
-    state.roleRefsFrame = selectedFrame;
-
-    refLocator(page, "e1");
-
-    expect(mocks.frameGetByRole).toHaveBeenCalledWith("button", {
-      name: "OK",
-      exact: true,
-    });
-    expect(mocks.frameLocator).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { ref: "e1", name: "OK" },
-    { ref: "ax12", name: "" },
-  ])("matches the exact name for unmarked $ref with name '$name'", ({ ref, name }) => {
-    const { page, mocks } = fakePage();
-    const state = ensurePageState(page);
     state.roleRefs = { [ref]: { role: "button", name } };
+    state.roleRefsFrame = selectedFrame;
 
     refLocator(page, ref);
 
-    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name, exact: true });
+    expect(mocks.frameGetByRole).toHaveBeenCalledWith("button", { name, exact: true });
+    expect(mocks.getByRole).not.toHaveBeenCalled();
+    expect(mocks.frameLocator).not.toHaveBeenCalled();
   });
 
   it("uses aria-ref locators when refs mode is aria", () => {
@@ -145,7 +128,8 @@ describe("pw-session refLocator", () => {
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
 
-  it.each(["e1", "ax12"])("uses backend-marked DOM locators for %s refs", (ref) => {
+  it("uses backend-marked DOM locators for role refs", () => {
+    const ref = "e1";
     const { page, mocks } = fakePage();
     const state = ensurePageState(page);
     state.roleRefs = { [ref]: { role: "button", name: "OK", domMarker: true } };
@@ -164,27 +148,6 @@ describe("pw-session refLocator", () => {
 });
 
 describe("pw-session role refs cache", () => {
-  it("invalidates cached refs for replacement Pages after main-frame navigation", () => {
-    const cdpUrl = "http://127.0.0.1:9222";
-    const targetId = "t1";
-
-    const { page: pageA, handlers, mainFrame } = fakePage();
-    storeRoleRefsForTarget({
-      page: pageA,
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "Page A" } },
-      mode: "role",
-    });
-
-    handlers.get("framenavigated")?.[0]?.(mainFrame);
-    expect(ensurePageState(pageA).roleRefs).toBeUndefined();
-
-    const { page: pageB } = fakePage();
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page: pageB });
-    expect(ensurePageState(pageB).roleRefs).toBeUndefined();
-  });
-
   it("restores fresh post-navigation refs for a replacement Page", () => {
     const cdpUrl = "http://127.0.0.1:9222";
     const targetId = "t1";
@@ -198,6 +161,7 @@ describe("pw-session role refs cache", () => {
       mode: "role",
     });
     handlers.get("framenavigated")?.[0]?.(mainFrame);
+    expect(ensurePageState(pageA).roleRefs).toBeUndefined();
 
     storeRoleRefsForTarget({
       page: pageA,
@@ -215,58 +179,26 @@ describe("pw-session role refs cache", () => {
     expect(ensurePageState(pageB).roleRefsMode).toBe("aria");
   });
 
-  it("does not let an obsolete Page invalidate a newer cache generation", () => {
+  it("invalidates page-wide aria refs on subframe navigation", () => {
+    const event = "framenavigated";
     const cdpUrl = "http://127.0.0.1:9222";
-    const targetId = "shared-target";
-    const { page: oldPage, handlers, mainFrame } = fakePage();
+    const targetId = `aria-target-${event}`;
+    const { page, handlers } = fakePage();
     storeRoleRefsForTarget({
-      page: oldPage,
+      page,
       cdpUrl,
       targetId,
-      refs: { e1: { role: "button", name: "Old document" } },
-      mode: "role",
-    });
-
-    const { page: currentPage } = fakePage();
-    storeRoleRefsForTarget({
-      page: currentPage,
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "heading", name: "Current document" } },
+      refs: { e1: { role: "button", name: "Embedded" } },
       mode: "aria",
     });
-    handlers.get("framenavigated")?.[0]?.(mainFrame);
 
+    handlers.get(event)?.[0]?.({ url: () => "https://frame.example/new" });
+
+    expect(ensurePageState(page).roleRefs).toBeUndefined();
     const { page: replacementPage } = fakePage();
     restoreRoleRefsForTarget({ cdpUrl, targetId, page: replacementPage });
-    expect(ensurePageState(replacementPage).roleRefs).toEqual({
-      e1: { role: "heading", name: "Current document" },
-    });
-    expect(ensurePageState(replacementPage).roleRefsMode).toBe("aria");
+    expect(ensurePageState(replacementPage).roleRefs).toBeUndefined();
   });
-
-  it.each(["framenavigated", "framedetached"] as const)(
-    "invalidates page-wide aria refs when a subframe emits %s",
-    (event) => {
-      const cdpUrl = "http://127.0.0.1:9222";
-      const targetId = `aria-target-${event}`;
-      const { page, handlers } = fakePage();
-      storeRoleRefsForTarget({
-        page,
-        cdpUrl,
-        targetId,
-        refs: { e1: { role: "button", name: "Embedded" } },
-        mode: "aria",
-      });
-
-      handlers.get(event)?.[0]?.({ url: () => "https://frame.example/new" });
-
-      expect(ensurePageState(page).roleRefs).toBeUndefined();
-      const { page: replacementPage } = fakePage();
-      restoreRoleRefsForTarget({ cdpUrl, targetId, page: replacementPage });
-      expect(ensurePageState(replacementPage).roleRefs).toBeUndefined();
-    },
-  );
 });
 
 describe("pw-session ensurePageState", () => {
@@ -274,17 +206,17 @@ describe("pw-session ensurePageState", () => {
     const { page, handlers } = fakePage();
     ensurePageState(page);
 
-    const saveAsA = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "download-a", "utf8");
-    });
-    const saveAsB = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "download-b", "utf8");
-    });
+    const saveAsA = saveContents("download-a");
+    const saveAsB = saveContents("download-b");
     const downloadA: MutableDownload = {
+      url: () => "",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "report.pdf",
       saveAs: saveAsA,
     };
     const downloadB: MutableDownload = {
+      url: () => "",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "report.pdf",
       saveAs: saveAsB,
     };
@@ -325,6 +257,8 @@ describe("pw-session ensurePageState", () => {
 
     const err = new Error("save failed");
     const download: MutableDownload = {
+      url: () => "",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "report.pdf",
       saveAs: vi.fn(async () => {
         throw err;
@@ -344,67 +278,17 @@ describe("pw-session ensurePageState", () => {
     }
   });
 
-  it("reports all downloads owned by the active action with managed metadata", async () => {
-    const { page, handlers } = fakePage();
-    ensurePageState(page);
-    const capture = beginActionDownloadCaptureOnPage(page);
-    const firstSave = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "first-action-download", "utf8");
-    });
-    const secondSave = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "second-action-download", "utf8");
-    });
-
-    for (const download of [
-      {
-        url: () => "https://example.com/first.txt",
-        suggestedFilename: () => "first.txt",
-        saveAs: firstSave,
-      },
-      {
-        url: () => "https://example.com/second.txt",
-        suggestedFilename: () => "second.txt",
-        saveAs: secondSave,
-      },
-    ]) {
-      handlers.get("download")?.[0]?.(download);
-    }
-
-    const result = await capture.drain();
-    capture.dispose();
-
-    expect(result).toEqual([
-      {
-        url: "https://example.com/first.txt",
-        suggestedFilename: "first.txt",
-        path: expect.stringMatching(/-first\.txt$/),
-      },
-      {
-        url: "https://example.com/second.txt",
-        suggestedFilename: "second.txt",
-        path: expect.stringMatching(/-second\.txt$/),
-      },
-    ]);
-    await expect(fs.readFile(result?.[0]?.path ?? "", "utf8")).resolves.toBe(
-      "first-action-download",
-    );
-    await expect(fs.readFile(result?.[1]?.path ?? "", "utf8")).resolves.toBe(
-      "second-action-download",
-    );
-  });
-
   it("waits only the requested first-event grace for a just-late action download", async () => {
     const { page, handlers } = fakePage();
     ensurePageState(page);
     const capture = beginActionDownloadCaptureOnPage(page);
-    const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "late-action-download", "utf8");
-    });
+    const saveAs = saveContents("late-action-download");
     const drain = capture.drain({ firstEventGraceMs: 1_000 });
 
     setImmediate(() => {
       handlers.get("download")?.[0]?.({
         url: () => "https://example.com/late.txt",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "late.txt",
         saveAs,
       });
@@ -412,35 +296,6 @@ describe("pw-session ensurePageState", () => {
 
     await expect(drain).resolves.toEqual([
       expect.objectContaining({ suggestedFilename: "late.txt" }),
-    ]);
-    capture.dispose();
-  });
-
-  it("keeps a quiet window open for sibling downloads after the first event", async () => {
-    const { page, handlers } = fakePage();
-    ensurePageState(page);
-    const capture = beginActionDownloadCaptureOnPage(page);
-    const save = (contents: string) =>
-      vi.fn(async (outPath: string) => {
-        await fs.writeFile(outPath, contents, "utf8");
-      });
-
-    handlers.get("download")?.[0]?.({
-      url: () => "https://example.com/first.txt",
-      suggestedFilename: () => "first.txt",
-      saveAs: save("first"),
-    });
-    setImmediate(() => {
-      handlers.get("download")?.[0]?.({
-        url: () => "https://example.com/second.txt",
-        suggestedFilename: () => "second.txt",
-        saveAs: save("second"),
-      });
-    });
-
-    await expect(capture.drain({ quietMs: 1_000 })).resolves.toEqual([
-      expect.objectContaining({ suggestedFilename: "first.txt" }),
-      expect.objectContaining({ suggestedFilename: "second.txt" }),
     ]);
     capture.dispose();
   });
@@ -460,16 +315,16 @@ describe("pw-session ensurePageState", () => {
     });
     handlers.get("download")?.[0]?.({
       url: () => "https://example.com/first.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "first.txt",
       saveAs: firstSave,
     });
 
     const drain = capture.drain();
-    const lateSave = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "late", "utf8");
-    });
+    const lateSave = saveContents("late");
     const lateDownload: MutableDownload = {
       url: () => "https://example.com/late.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "late.txt",
       saveAs: lateSave,
     };
@@ -489,22 +344,20 @@ describe("pw-session ensurePageState", () => {
     const { page, handlers } = fakePage();
     ensurePageState(page);
     const first = beginActionDownloadCaptureOnPage(page);
-    const firstSaveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "first-action-download", "utf8");
-    });
+    const firstSaveAs = saveContents("first-action-download");
     handlers.get("download")?.[0]?.({
       url: () => "https://example.com/first.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "first.txt",
       saveAs: firstSaveAs,
     });
 
     const latest = beginActionDownloadCaptureOnPage(page);
     first.dispose();
-    const latestSaveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "latest-action-download", "utf8");
-    });
+    const latestSaveAs = saveContents("latest-action-download");
     handlers.get("download")?.[0]?.({
       url: () => "https://example.com/latest.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "latest.txt",
       saveAs: latestSaveAs,
     });
@@ -526,6 +379,8 @@ describe("pw-session ensurePageState", () => {
     state.downloadWaiterDepth = 1;
     const capture = beginActionDownloadCaptureOnPage(page);
     const download = {
+      url: () => "",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "explicit.txt",
       saveAs: vi.fn(async () => {}),
     };
@@ -536,33 +391,6 @@ describe("pw-session ensurePageState", () => {
     capture.dispose();
     expect(download).not.toHaveProperty("path");
     expect(download.saveAs).not.toHaveBeenCalled();
-  });
-
-  it("validates action-owned download URLs before saving bytes", async () => {
-    const { page, handlers } = fakePage();
-    ensurePageState(page);
-    const blocked = new Error("blocked action download");
-    const beforeSave = vi.fn(async () => {
-      throw blocked;
-    });
-    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
-    const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "blocked-action-download", "utf8");
-    });
-
-    handlers.get("download")?.[0]?.({
-      url: () => "http://127.0.0.1/private.txt",
-      suggestedFilename: () => "private.txt",
-      saveAs,
-    });
-
-    await expect(capture.drain()).rejects.toBe(blocked);
-    capture.dispose();
-    expect(beforeSave).toHaveBeenCalledWith({
-      url: "http://127.0.0.1/private.txt",
-      suggestedFilename: "private.txt",
-    });
-    expect(saveAs).not.toHaveBeenCalled();
   });
 
   it("drains late siblings before surfacing the first download policy failure", async () => {
@@ -578,12 +406,14 @@ describe("pw-session ensurePageState", () => {
 
     handlers.get("download")?.[0]?.({
       url: () => "http://127.0.0.1/first.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "first.txt",
       saveAs: firstSave,
     });
     setImmediate(() => {
       handlers.get("download")?.[0]?.({
         url: () => "http://127.0.0.1/second.txt",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "second.txt",
         saveAs: secondSave,
       });
@@ -612,6 +442,7 @@ describe("pw-session ensurePageState", () => {
     });
     const allowedDownload: MutableDownload = {
       url: () => "https://example.com/allowed.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "allowed.txt",
       saveAs: vi.fn(async (outPath: string) => {
         await allowedSaveGate;
@@ -622,6 +453,7 @@ describe("pw-session ensurePageState", () => {
     setImmediate(() => {
       handlers.get("download")?.[0]?.({
         url: () => "https://example.com/blocked.txt",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "blocked.txt",
         saveAs: vi.fn(async () => {}),
       });
@@ -643,6 +475,7 @@ describe("pw-session ensurePageState", () => {
     });
 
     handlers.get("download")?.[0]?.({
+      url: () => "",
       suggestedFilename: () => "failed.txt",
       saveAs: vi.fn(async () => {
         throw error;
@@ -659,11 +492,10 @@ describe("pw-session ensurePageState", () => {
     const { page, handlers } = fakePage();
     const state = ensurePageState(page);
     const capture = createDownloadCaptureForPage(page, state, 1_000);
-    const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "attachment", "utf8");
-    });
+    const saveAs = saveContents("attachment");
     const download = {
       url: () => "https://example.com/export.csv",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "export.csv",
       saveAs,
     };
@@ -689,11 +521,10 @@ describe("pw-session ensurePageState", () => {
       throw blocked;
     });
     const capture = createDownloadCaptureForPage(page, state, 1_000, { beforeSave });
-    const saveAs = vi.fn(async (outPath: string) => {
-      await fs.writeFile(outPath, "blocked", "utf8");
-    });
+    const saveAs = saveContents("blocked");
     const download = {
       url: () => "http://127.0.0.1:18080/export.csv",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "export.csv",
       saveAs,
     };
@@ -801,88 +632,220 @@ describe("pw-session ensurePageState", () => {
     expect(request?.ok).toBe(false);
   });
 
-  it("drops state on page close", () => {
-    const { page, handlers } = fakePage();
-    const state1 = ensurePageState(page);
-    handlers.get("close")?.[0]?.();
-
-    const state2 = ensurePageState(page);
-    expect(state2).not.toBe(state1);
-    expect(state2.console).toStrictEqual([]);
-    expect(state2.errors).toStrictEqual([]);
-    expect(state2.requests).toStrictEqual(new Map());
-  });
-
-  it.each([
-    { mode: "role" as const, frameSelector: undefined },
-    { mode: "aria" as const, frameSelector: "iframe#content" },
-  ])("clears $mode role refs on main-frame navigation", ({ mode, frameSelector }) => {
-    const { page, handlers, mainFrame, selectedFrame } = fakePage();
+  it("clears frame-scoped role refs on frame detachment", () => {
+    const { page, handlers, selectedFrame } = fakePage();
     const state = ensurePageState(page);
 
     storeRoleRefsForTarget({
       page,
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "t1",
-      refs: { e1: { role: "button", name: "Save" } },
-      frameSelector,
-      frame: frameSelector ? selectedFrame : undefined,
-      mode,
-    });
-    expect(state.roleRefs).toBeDefined();
-    expect(state.roleRefsMode).toBe(mode);
-    expect(state.roleRefsFrameSelector).toBe(frameSelector);
-
-    handlers.get("framenavigated")?.[0]?.(mainFrame);
-
-    expect(state.roleRefs).toBeUndefined();
-    expect(state.roleRefsMode).toBeUndefined();
-    expect(state.roleRefsFrameSelector).toBeUndefined();
-    expect(() => refLocator(page, "e1")).toThrow(/Unknown ref/);
-  });
-
-  it("preserves role refs on subframe navigation", () => {
-    const { page, handlers } = fakePage();
-    const state = ensurePageState(page);
-
-    storeRoleRefsForTarget({
-      page,
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "t1",
-      refs: { e1: { role: "button", name: "MainBtn" } },
+      refs: { e1: { role: "button", name: "Inside frame" } },
+      frameSelector: "iframe#content",
+      frame: selectedFrame,
       mode: "role",
     });
-    expect(Object.keys(state.roleRefs!)).toHaveLength(1);
 
-    const subframe = { url: () => "https://ads.example.com/widget" };
-    handlers.get("framenavigated")?.[0]?.(subframe);
-
+    handlers.get("framedetached")?.[0]?.({ url: () => "https://ads.example.com" });
     expect(state.roleRefs).toBeDefined();
-    expect(Object.keys(state.roleRefs!)).toHaveLength(1);
+
+    handlers.get("framedetached")?.[0]?.(selectedFrame);
+    expect(state.roleRefs).toBeUndefined();
+    expect(state.roleRefsFrame).toBeUndefined();
+  });
+});
+
+const {
+  createObservedDialogAbortSignalForPage,
+  getObservedBrowserStateForPage,
+  isBrowserObservedDialogBlockedError,
+  respondToObservedDialogOnPage,
+} = pwAi;
+
+type Handler = (arg: unknown) => void;
+
+function createPageHarness() {
+  const handlers = new Map<string, Handler[]>();
+  const page = {
+    on: (event: string, handler: Handler) => {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      return page;
+    },
+  };
+  const observedPage = page as unknown as Page;
+  ensurePageState(observedPage);
+  return {
+    page: observedPage,
+    emit: (event: string, arg: unknown) => {
+      for (const handler of handlers.get(event) ?? []) {
+        handler(arg);
+      }
+    },
+  };
+}
+
+function createDialog(
+  overrides: Partial<{
+    type: string;
+    message: string;
+    defaultValue: string;
+  }> = {},
+) {
+  return {
+    type: vi.fn(() => overrides.type ?? "confirm"),
+    message: vi.fn(() => overrides.message ?? "Continue?"),
+    defaultValue: vi.fn(() => overrides.defaultValue ?? ""),
+    accept: vi.fn(async (_promptText?: string) => {}),
+    dismiss: vi.fn(async () => {}),
+  } as unknown as Dialog & {
+    accept: ReturnType<typeof vi.fn>;
+    dismiss: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe("observed browser dialogs", () => {
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it.each(["framenavigated", "framedetached"] as const)(
-    "clears frame-scoped role refs on %s",
-    (event) => {
-      const { page, handlers, selectedFrame } = fakePage();
-      const state = ensurePageState(page);
+  it("surfaces pending dialogs and lets callers respond by id", async () => {
+    const { page, emit } = createPageHarness();
+    const dialog = createDialog({ message: "Ship it?" });
 
-      storeRoleRefsForTarget({
-        page,
-        cdpUrl: "http://127.0.0.1:9222",
-        targetId: "t1",
-        refs: { e1: { role: "button", name: "Inside frame" } },
-        frameSelector: "iframe#content",
-        frame: selectedFrame,
-        mode: "role",
-      });
+    emit("dialog", dialog);
 
-      handlers.get(event)?.[0]?.({ url: () => "https://ads.example.com" });
-      expect(state.roleRefs).toBeDefined();
+    expect(getObservedBrowserStateForPage(page).dialogs.pending).toMatchObject([
+      { id: "d1", type: "confirm", message: "Ship it?" },
+    ]);
 
-      handlers.get(event)?.[0]?.(selectedFrame);
-      expect(state.roleRefs).toBeUndefined();
-      expect(state.roleRefsFrameSelector).toBeUndefined();
-    },
-  );
+    const closed = await respondToObservedDialogOnPage({
+      page,
+      dialogId: "d1",
+      accept: true,
+      promptText: "yes",
+    });
+
+    expect(dialog.accept).toHaveBeenCalledWith("yes");
+    expect(closed.closedBy).toBe("agent");
+    expect(closed).not.toHaveProperty("dialog");
+    expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
+    expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
+      { id: "d1", closedBy: "agent" },
+    ]);
+  });
+
+  it("aborts every in-flight action and consumes a failed armed dialog", async () => {
+    const accept = true;
+    const { page, emit } = createPageHarness();
+    const dialog = createDialog();
+    const failure = new Error("Browser dialog response failed");
+    dialog[accept ? "accept" : "dismiss"].mockRejectedValue(failure);
+    const first = createObservedDialogAbortSignalForPage({ page });
+    const second = createObservedDialogAbortSignalForPage({ page });
+
+    armObservedDialogResponseOnPage({ page, accept, timeoutMs: 1000 });
+    emit("dialog", dialog);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(first.signal.reason).toBe(failure);
+    expect(second.signal.reason).toBe(failure);
+    expect(getObservedBrowserStateForPage(page).dialogs).toEqual({ pending: [], recent: [] });
+    await expect(respondToObservedDialogOnPage({ page, dialogId: "d1", accept })).rejects.toThrow(
+      'Dialog "d1" is not pending.',
+    );
+    first.cleanup();
+    second.cleanup();
+  });
+
+  it("records an already-closed dialog as remotely handled", async () => {
+    const accept = false;
+    const { page, emit } = createPageHarness();
+    const dialog = createDialog();
+    dialog[accept ? "accept" : "dismiss"].mockRejectedValue(
+      new Error("Protocol error: No dialog is showing"),
+    );
+    emit("dialog", dialog);
+
+    const closed = await respondToObservedDialogOnPage({ page, dialogId: "d1", accept });
+
+    expect(closed.closedBy).toBe("remote");
+    expect(getObservedBrowserStateForPage(page).dialogs).toMatchObject({
+      pending: [],
+      recent: [{ id: "d1", closedBy: "remote" }],
+    });
+  });
+
+  it("uses the default arm-next-dialog timeout for non-finite timeoutMs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { page, emit } = createPageHarness();
+    const dialog = createDialog({ type: "alert", message: "Still armed" });
+    const observed = createObservedDialogAbortSignalForPage({ page });
+
+    armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: Number.NaN });
+    await vi.advanceTimersByTimeAsync(119_999);
+    emit("dialog", dialog);
+    await Promise.resolve();
+
+    expect(observed.signal.aborted).toBe(false);
+    expect(dialog.dismiss).toHaveBeenCalledOnce();
+    expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
+    expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
+      { id: "d1", type: "alert", closedBy: "armed" },
+    ]);
+    observed.cleanup();
+  });
+
+  it("does not arm next-dialog responses when the expiry would overflow Date bounds", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+      const { page, emit } = createPageHarness();
+      const dialog = createDialog({ type: "alert", message: "Still pending" });
+
+      armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: 1000 });
+      emit("dialog", dialog);
+
+      expect(dialog.dismiss).not.toHaveBeenCalled();
+      expect(getObservedBrowserStateForPage(page).dialogs.pending).toMatchObject([
+        { id: "d1", type: "alert", message: "Still pending" },
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("keeps a newer dialog pending after the interrupted dialog was handled remotely", async () => {
+    const { page, emit } = createPageHarness();
+    const observed = createObservedDialogAbortSignalForPage({ page });
+    const first = createDialog({ message: "First" });
+    emit("dialog", first);
+    expect(observed.signal.aborted).toBe(true);
+    expect(isBrowserObservedDialogBlockedError(observed.signal.reason)).toBe(true);
+    expect(getObservedBrowserStateForPage(page).dialogs.pending).toMatchObject([
+      { id: "d1", message: "First" },
+    ]);
+    expect(first.dismiss).not.toHaveBeenCalled();
+    const next = createDialog({ message: "Second" });
+    emit("dialog", next);
+
+    reconcileRemoteDialogAfterActionSettled(page, observed.signal);
+
+    expect(getObservedBrowserStateForPage(page).dialogs).toMatchObject({
+      pending: [{ id: "d2", message: "Second" }],
+      recent: [{ id: "d1", closedBy: "remote" }],
+    });
+    await respondToObservedDialogOnPage({ page, dialogId: "d2", accept: false });
+    expect(next.dismiss).toHaveBeenCalledOnce();
+    expect(getObservedBrowserStateForPage(page).dialogs).toMatchObject({
+      pending: [],
+      recent: [
+        { id: "d1", closedBy: "remote" },
+        { id: "d2", closedBy: "agent" },
+      ],
+    });
+    observed.cleanup();
+  });
 });

@@ -1,10 +1,14 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
+import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry.types.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
+import { resolveCurrentChannelTarget } from "./channel-output-policy.js";
 import {
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
@@ -14,6 +18,42 @@ import { logWarn } from "./run.runtime.js";
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
+
+/** Prepare one channel projection for both model routing hooks and embedded execution. */
+export async function prepareCronModelResolveInput(
+  params: Pick<RunEntryModelResolve, "cwd" | "prompt"> & {
+    cronSession: { sessionEntry: Pick<SessionEntry, "modelSelectionLocked"> };
+    job: Pick<CronJob, "id">;
+    runSessionKey: string;
+    resolvedDelivery: Pick<Parameters<typeof resolveCurrentChannelTarget>[0], "to" | "threadId"> & {
+      accountId?: string;
+    };
+    messageChannel: string | undefined;
+  },
+) {
+  const currentChannelId = await resolveCurrentChannelTarget({
+    channel: params.messageChannel,
+    to: params.resolvedDelivery.to,
+    threadId: params.resolvedDelivery.threadId,
+  });
+  const modelResolve: RunEntryModelResolve = {
+    prompt: params.prompt,
+    cwd: params.cwd,
+    modelSelectionLocked: params.cronSession.sessionEntry.modelSelectionLocked,
+    context: {
+      trigger: "cron",
+      jobId: params.job.id,
+      ...buildAgentHookContextChannelFields({
+        sessionKey: params.runSessionKey,
+        messageChannel: params.messageChannel,
+        messageTo: params.resolvedDelivery.to,
+        currentChannelId,
+        agentAccountId: params.resolvedDelivery.accountId,
+      }),
+    },
+  };
+  return { modelResolve, currentChannelId };
+}
 
 /** Resolves cron model fallbacks, giving explicit payload fallbacks precedence over subagent/default policy. */
 export function resolveCronFallbacksOverride(params: {
@@ -65,13 +105,7 @@ export function resolveCronPreflightCandidates(params: {
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
 }): ModelCandidate[] {
-  const fallbacksOverride = resolveCronFallbacksOverride({
-    cfg: params.cfg,
-    job: params.job,
-    agentId: params.agentId,
-    useSubagentFallbacks: params.useSubagentFallbacks,
-    inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-  });
+  const fallbacksOverride = resolveCronFallbacksOverride(params);
   return resolveModelCandidateChain({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -88,53 +122,44 @@ export async function resolveCronPreflight(
 ) {
   const modelPreflightRuntime = await cronModelPreflightRuntimeLoader.load();
   const preflightCandidates = resolveCronPreflightCandidates(params);
-  let { provider, model } = params;
-  let selectedPreflightCandidate: ModelCandidate | undefined;
-  let selectedPreflightCandidateIndex = -1;
-  let firstUnavailablePreflight:
-    | Awaited<ReturnType<typeof modelPreflightRuntime.preflightCronModelProvider>>
-    | undefined;
+  let firstUnavailableReason: string | undefined;
   for (const [index, candidate] of preflightCandidates.entries()) {
     const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
       cfg: params.cfg,
       provider: candidate.provider,
       model: candidate.model,
     });
-    if (candidatePreflight.status === "available") {
-      selectedPreflightCandidate = candidate;
-      selectedPreflightCandidateIndex = index;
-      break;
+    if (candidatePreflight.status === "unavailable") {
+      firstUnavailableReason ??= candidatePreflight.reason;
+      continue;
     }
-    firstUnavailablePreflight ??= candidatePreflight;
-  }
-  if (!selectedPreflightCandidate && firstUnavailablePreflight?.status === "unavailable") {
-    return { ok: false as const, reason: firstUnavailablePreflight.reason };
-  }
-  const modelFallbacksOverride =
-    selectedPreflightCandidate &&
-    (selectedPreflightCandidate.provider !== provider || selectedPreflightCandidate.model !== model)
-      ? preflightCandidates
-          .slice(selectedPreflightCandidateIndex + 1)
-          .map((candidate) => `${candidate.provider}/${candidate.model}`)
-      : undefined;
-  // When preflight skips the first local candidate, start at the reachable provider.
-  if (selectedPreflightCandidate && modelFallbacksOverride) {
-    if (firstUnavailablePreflight?.status === "unavailable") {
+    const modelFallbacksOverride =
+      candidate.provider !== params.provider || candidate.model !== params.model
+        ? preflightCandidates
+            .slice(index + 1)
+            .map((remaining) => `${remaining.provider}/${remaining.model}`)
+        : undefined;
+    if (modelFallbacksOverride && firstUnavailableReason !== undefined) {
       logWarn(
-        `[cron:${params.job.id}] ${firstUnavailablePreflight.reason}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
+        `[cron:${params.job.id}] ${firstUnavailableReason}; continuing with fallback ${candidate.provider}/${candidate.model}.`,
       );
     }
-    provider = selectedPreflightCandidate.provider;
-    model = selectedPreflightCandidate.model;
+    return {
+      ok: true as const,
+      provider: candidate.provider,
+      model: candidate.model,
+      modelFallbacksOverride,
+      runtimePluginCandidates: preflightCandidates.slice(index),
+    };
+  }
+  if (firstUnavailableReason !== undefined) {
+    return { ok: false as const, reason: firstUnavailableReason };
   }
   return {
     ok: true as const,
-    provider,
-    model,
-    modelFallbacksOverride,
-    runtimePluginCandidates:
-      selectedPreflightCandidateIndex >= 0
-        ? preflightCandidates.slice(selectedPreflightCandidateIndex)
-        : preflightCandidates,
+    provider: params.provider,
+    model: params.model,
+    modelFallbacksOverride: undefined,
+    runtimePluginCandidates: preflightCandidates,
   };
 }

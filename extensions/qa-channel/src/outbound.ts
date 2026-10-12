@@ -27,6 +27,12 @@ type QaChannelMediaAccessParams = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
+export function collectQaMediaUrls(...urls: Array<string | undefined>): string[] {
+  return [
+    ...new Set(urls.filter((url): url is string => typeof url === "string" && Boolean(url.trim()))),
+  ];
+}
+
 export async function sendQaChannelText(params: QaChannelTextSendParams) {
   const account = resolveQaChannelAccount({ cfg: params.cfg, accountId: params.accountId });
   const resolved = resolveQaTargetThread({ target: params.to, threadId: params.threadId });

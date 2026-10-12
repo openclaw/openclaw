@@ -1,28 +1,7 @@
-// Centralized cooldown decision for heartbeat wakes.
-//
-// Background: a heartbeat run can be triggered by many wake sources — the
-// scheduler's interval tick, a manual user request, a backgrounded `process.start`
-// exit, a cron tick, an ACP spawn stream event, etc. Different sources used to
-// take different code paths through the dispatcher, and historically the
-// `nextDueMs` cooldown gate was only enforced on the `interval` branch. That let
-// event-driven wakes (especially `exec-event`) fire heartbeat runs back-to-back
-// when a heartbeat agent's tools triggered more wakes (#17797 → #75436).
-//
-// This module owns the single decision: "given this wake, should we run now or
-// defer it?" Both the targeted and broadcast dispatch branches must call
-// `shouldDeferWake` so the gate can never be forgotten on one path.
+// Targeted and broadcast wakes share cooldown policy to prevent tool-exit feedback loops.
+import type { HeartbeatWakeIntent } from "./heartbeat-wake.js";
 
-import type { HeartbeatWakeIntent, HeartbeatWakeSource } from "./heartbeat-wake.js";
-
-// Default minimum spacing between heartbeat runs for the same agent, regardless
-// of configured `every`. Even when `nextDueMs` is enforced, two wakes arriving
-// within milliseconds can race the schedule update; this floor prevents that.
 const DEFAULT_MIN_WAKE_SPACING_MS = 30_000;
-
-// Flood guard: if more than this many wakes for the same agent fall within the
-// flood window, the dispatcher logs a warning and forces the wake to defer to
-// the next scheduled tick. Tuned so a normal heartbeat that legitimately uses
-// `manual` retry doesn't trip it but a feedback loop does.
 const DEFAULT_FLOOD_WINDOW_MS = 60_000;
 const DEFAULT_FLOOD_THRESHOLD = 5;
 
@@ -36,60 +15,18 @@ export type DeferDecision =
     };
 
 type ShouldDeferInput = {
-  /** Scheduler behavior requested by the wake producer. */
   intent: HeartbeatWakeIntent;
-  /** Wake producer, used for diagnostics and future source-specific telemetry. */
-  source?: HeartbeatWakeSource;
-  /** Raw wake reason string for logs/model context. It does not drive scheduling policy. */
-  reason: string | undefined;
-  /** Current monotonic-ish wall clock. Pass `Date.now()`. */
   now: number;
   /** When this agent's next interval-tick run is due. */
   nextDueMs: number;
-  /** When this agent last *started* a run, if known. */
   lastRunStartedAtMs?: number;
-  /** Recent wake timestamps for flood detection. */
   recentRunStarts?: readonly number[];
-  /** Override the minimum spacing floor. */
-  minSpacingMs?: number;
-  /** Override the flood-window length. */
-  floodWindowMs?: number;
-  /** Override the flood-window threshold. */
-  floodThreshold?: number;
   /** Work already retained by the wake queue after a prior guard deferral. */
   retainedWork?: boolean;
+  /** Every pending event is a command completion owned by a conversation turn. */
+  conversationTurn?: boolean;
 };
 
-/**
- * Decide whether an incoming wake should be deferred.
- *
- * The decision matrix:
- *
- * | Wake intent   | First wake (no prior run) | Subsequent wakes                       |
- * |---------------|----------------------------|-----------------------------------------|
- * | manual        | Run                        | Run (never deferred)                    |
- * | immediate     | Run                        | Run (never deferred, except flood)      |
- * | scheduled     | Defer if now < nextDueMs   | Defer if now < nextDueMs                |
- * | task          | Run                        | Defer only within floor or on flood      |
- * | event         | Run (bootstrap responsive) | Defer if now < nextDueMs OR within floor |
- *
- * Immediate is for documented wake-now delivery paths such as `openclaw system
- * event --mode now`, task completion follow-ups, cron `--wake now`, and
- * `/hooks/wake mode=now`. Event is for external/system notifications such as
- * background exec exits, node notification changes, hook/cron next-heartbeat
- * handoffs, ACP spawn stream updates, and retry wakes.
- *
- * Additional gates layered on top of the reason matrix:
- *
- *   1. **Minimum spacing floor** (`min-spacing`): even if `nextDueMs` has been
- *      passed, defer if a run started within the last `minSpacingMs`. Catches
- *      the race where a second wake arrives between `runOnce` returning and
- *      `advanceAgentSchedule` updating `nextDueMs`.
- *   2. **Flood guard** (`flood`): if `recentRunStarts` shows ≥ `floodThreshold`
- *      runs within `floodWindowMs`, defer regardless of reason (except
- *      `manual`-class immediate intent). Caller should also emit a single
- *      warning log when this fires.
- */
 export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
   if (input.intent === "manual") {
     return { defer: false };
@@ -110,14 +47,18 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
       : { defer: false };
   }
 
-  // Event-driven wakes. First wake (no prior run) bypasses cooldown gates so
-  // an idle agent can respond to an external event without waiting for the
-  // first scheduled phase tick.
+  // An idle agent can respond to its first event before the first scheduled tick.
   if (input.lastRunStartedAtMs === undefined) {
     return { defer: false };
   }
 
-  if (input.intent !== "task" && !input.retainedWork && input.now < input.nextDueMs) {
+  // A conversation's own completion is its reply, not periodic work; spacing and flood still apply.
+  if (
+    input.intent !== "task" &&
+    !input.retainedWork &&
+    !input.conversationTurn &&
+    input.now < input.nextDueMs
+  ) {
     const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
     return {
       defer: true,
@@ -135,53 +76,35 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
 }
 
 function resolveMinSpacingRetryAtMs(input: ShouldDeferInput): number | undefined {
-  const minSpacing = input.minSpacingMs ?? DEFAULT_MIN_WAKE_SPACING_MS;
-  if (minSpacing <= 0 || input.lastRunStartedAtMs === undefined) {
+  if (input.lastRunStartedAtMs === undefined) {
     return undefined;
   }
-  const retryAtMs = input.lastRunStartedAtMs + minSpacing;
+  const retryAtMs = input.lastRunStartedAtMs + DEFAULT_MIN_WAKE_SPACING_MS;
   return input.now < retryAtMs ? retryAtMs : undefined;
 }
 
 function checkFloodGuard(input: ShouldDeferInput): DeferDecision | null {
-  const floodWindow = input.floodWindowMs ?? DEFAULT_FLOOD_WINDOW_MS;
-  const floodThreshold = input.floodThreshold ?? DEFAULT_FLOOD_THRESHOLD;
-  if (!input.recentRunStarts || input.recentRunStarts.length < floodThreshold || floodWindow <= 0) {
+  if (!input.recentRunStarts || input.recentRunStarts.length < DEFAULT_FLOOD_THRESHOLD) {
     return null;
   }
-  const windowStart = input.now - floodWindow;
+  const windowStart = input.now - DEFAULT_FLOOD_WINDOW_MS;
   let inWindow = 0;
-  let thresholdOldestTs: number | undefined;
   for (let i = input.recentRunStarts.length - 1; i >= 0; i--) {
     const ts = input.recentRunStarts[i];
     if (ts === undefined || ts < windowStart) {
       break;
     }
     inWindow += 1;
-    if (inWindow === floodThreshold) {
-      thresholdOldestTs = ts;
+    if (inWindow === DEFAULT_FLOOD_THRESHOLD) {
+      return { defer: true, reason: "flood", retryAtMs: ts + DEFAULT_FLOOD_WINDOW_MS + 1 };
     }
   }
-  return inWindow >= floodThreshold && thresholdOldestTs !== undefined
-    ? { defer: true, reason: "flood", retryAtMs: thresholdOldestTs + floodWindow + 1 }
-    : null;
+  return null;
 }
 
-/**
- * Append a run-start timestamp to a bounded recent-runs buffer. Caller passes
- * the previous buffer; this returns a new (mutated) buffer with the entry
- * appended and trimmed to `floodThreshold + 1` entries (only the newest matter
- * for flood detection).
- */
-export function recordRunStart(
-  buffer: number[],
-  ts: number,
-  floodThreshold: number = DEFAULT_FLOOD_THRESHOLD,
-): number[] {
+export function recordRunStart(buffer: number[], ts: number): void {
   buffer.push(ts);
-  const max = floodThreshold + 1;
-  while (buffer.length > max) {
+  while (buffer.length > DEFAULT_FLOOD_THRESHOLD + 1) {
     buffer.shift();
   }
-  return buffer;
 }

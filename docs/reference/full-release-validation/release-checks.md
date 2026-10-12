@@ -18,7 +18,7 @@ artifact when package or Docker-facing stages need it.
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Release target           | **Job:** `Resolve target ref`<br />**Backing workflow:** none<br />**Tests:** selected ref, optional expected Validation SHA, profile, concrete release-check groups, and focused live suite filter.<br />**Rerun:** select the concrete group for the failed surface.                                                                                                                                                                                                                                                                                                                                      |
 | Package artifact         | **Job:** `Prepare release package artifact`<br />**Backing workflow:** none<br />**Tests:** validates the umbrella's immutable package tuple, or packs one candidate tarball for a direct/focused Release Checks dispatch, then exposes it to downstream package-facing checks.<br />**Rerun:** the affected package, cross-OS, or live/E2E group.                                                                                                                                                                                                                                                          |
-| Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install plus CLI/local-agent/Gateway runtime smoke.<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                                                                                               |
+| Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install plus CLI/local-agent/Gateway runtime smoke and the advisory Bun-only runtime smoke (except frozen targets).<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                               |
 | Cross-OS                 | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package. Linux, Windows, and macOS Gateway install and upgrade suites gate beta, stable, and full publication, with recorded pass/fail conclusions.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                                |
 | Repo and live E2E        | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`.                                                                                                          |
 | Docker release path      | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                                                                                                                               |
@@ -52,9 +52,12 @@ empty:
 | `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                       |
 | `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                     |
 
-All four package/update rows retain their coverage across every release profile.
-The provider-neutral checks are balanced across three runners, preserving each
-runner's npm limit. `package-update-core` and `package-update` remain aggregate
+All package/update rows retain their coverage across every release profile.
+With multiple published baselines, `package-update-migrations` expands into one
+channel-switching job and one isolated upgrade job per baseline. Every job reuses
+the exact candidate package and images, retains the existing weighted npm limit,
+and uploads a separate shard artifact. This avoids serializing all published
+upgrades behind one runner's npm pool without increasing per-host concurrency. `package-update-core` and `package-update` remain aggregate
 manual chunk names. Root-managed VPS upgrade and authenticated restart checks
 run in the OpenAI row.
 Missing required credentials still fail the job; the diagnostic pool continues
@@ -62,8 +65,10 @@ so independent non-live checks also report their results. Setup failures and
 cancellation do not start that pool.
 
 Expanded published-upgrade survivor and update-migration coverage runs in
-baseline-specific groups of at most three scenarios, with up to 32 targeted
-Docker jobs active per matrix. The grouping and execution planners share the
+baseline-specific, isolated scenario jobs, with up to 32 targeted Docker jobs
+active per matrix. Long standalone restart/auth, plugin-update, and root-managed
+upgrade jobs are admitted before the scenario expansion; pinned baseline cohorts
+start newest first. The grouping and execution planners share the
 same baseline compatibility rules; package identities, fresh scenario
 containers, per-runner npm limits, and failure reporting remain unchanged.
 

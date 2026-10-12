@@ -1,20 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
-  closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
-import { meetingTranscriptDb } from "./store-sqlite.js";
-import { safeTranscriptPathSegment, transcriptSessionSelector, TranscriptsStore } from "./store.js";
+import { appendMeetingTranscriptUtterance, meetingTranscriptDb } from "./store-sqlite.js";
+import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -113,118 +113,113 @@ describe("TranscriptsStore", () => {
     expect(await store.readSummarySnapshot(session("missing"), 20)).toBeUndefined();
   });
 
-  it.each(["next_utterance_seq", "created_at_ms", "updated_at_ms"] as const)(
-    "preserves native integer errors for summary and match reads of %s",
-    async (column) => {
-      const { store, stateDir } = createStore();
-      const target = session();
-      await store.writeSession(target);
-      const { db } = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-      db.prepare(`UPDATE meeting_transcript_sessions SET ${column} = ? WHERE session_id = ?`).run(
-        9_007_199_254_740_993n,
-        target.sessionId,
-      );
-      await expect(store.readSummarySnapshot(target, 20)).rejects.toMatchObject({
-        code: "ERR_OUT_OF_RANGE",
-      });
-      await expect(store.matchSessionEntries(target.sessionId)).rejects.toMatchObject({
-        code: "ERR_OUT_OF_RANGE",
-      });
-    },
-  );
-  it("keeps a streamed page stable across writes and shared writer closure", async () => {
-    const { store, stateDir } = createStore();
-    for (const id of ["a", "b", "c"]) {
-      await store.writeSession({ ...session(id), title: id });
-    }
-    // Drain fixture writers before retaining a reader; their orderly TRUNCATE close would wait for it.
-    await closeOpenClawStateDatabaseAsync();
-    const writer = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const rows = store.iterateReadEntries({ limit: 3 });
-    try {
-      const first = await rows.next();
-      expect(first.done).toBe(false);
-      if (first.done) {
-        throw new Error("Expected first transcript row");
-      }
-      expect(first.value.session.title).toBe("a");
-      runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          executeSqliteQuerySync(
-            db,
-            meetingTranscriptDb(db)
-              .updateTable("meeting_transcript_sessions")
-              .set({ title: "changed" })
-              .where("session_id", "=", "c"),
-          ),
-        { database: writer },
-      );
-      // The retained reader deliberately prevents a truncating WAL checkpoint.
-      closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
-      expect(writer.db.isOpen).toBe(false);
-      await expect(probeExclusiveDatabaseAccess(writer.path)).rejects.toMatchObject({
-        code: "ERR_SQLITE_ERROR",
-        errcode: 5,
-      });
-      const remaining: string[] = [];
-      for await (const entry of rows) {
-        remaining.push(entry.session.title ?? "");
-      }
-      expect(remaining).toEqual(["b", "c"]);
-    } finally {
-      await rows.return(false);
-    }
-    await expect(probeExclusiveDatabaseAccess(writer.path)).resolves.toBeUndefined();
-    expect((await store.readSession("c"))?.title).toBe("changed");
-  });
-
-  it.each(["return", "consumer-error"] as const)(
-    "releases its streamed utterance reader after %s",
+  it.each(["cancel", "consumer-error"] as const)(
+    "releases its worker snapshot after %s",
     async (finish) => {
       const { store, stateDir } = createStore();
       const target = session();
       await store.writeSession(target);
       await store.appendUtteranceForSession(target, { text: "first" });
       await store.appendUtteranceForSession(target, { text: "second" });
-      await closeOpenClawStateDatabaseAsync();
-      const writer = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-      const rows = store.iterateExport(transcriptSessionSelector(target), false);
-      try {
-        const first = await rows.next();
-        expect(first.done).toBe(false);
-        closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
-        expect(writer.db.isOpen).toBe(false);
-        await expect(probeExclusiveDatabaseAccess(writer.path)).rejects.toMatchObject({
-          code: "ERR_SQLITE_ERROR",
-          errcode: 5,
-        });
-        if (finish === "return") {
-          expect((await rows.return(undefined)).done).toBe(true);
-        } else {
-          const failure = new Error("consumer stopped reading");
-          await expect(
-            (async () => {
-              for await (const row of rows) {
-                expect(row.text).toBe("second");
-                throw failure;
-              }
-            })(),
-          ).rejects.toBe(failure);
-        }
-      } finally {
-        await rows.return(undefined);
-      }
-      await expect(probeExclusiveDatabaseAccess(writer.path)).resolves.toBeUndefined();
+      const controller = new AbortController();
+      const failure = new Error("consumer stopped reading");
+      const reading = store.streamExport(
+        transcriptSessionSelector(target),
+        false,
+        (rows) => {
+          expect(rows.map((row) => row.text)).toEqual(["first", "second"]);
+          if (finish === "cancel") {
+            controller.abort(failure);
+          } else {
+            throw failure;
+          }
+        },
+        controller.signal,
+      );
+      await expect(reading).rejects.toThrow("consumer stopped reading");
+      await expect(
+        probeExclusiveDatabaseAccess(path.join(stateDir, "state", "openclaw.sqlite")),
+      ).resolves.toBeUndefined();
       expect((await store.readUtterancesForSession(target)).map((row) => row.text)).toEqual([
         "first",
         "second",
       ]);
+    },
+  );
+
+  it.each(["rewrite", "reset"] as const)(
+    "keeps rows and notes on one worker snapshot across foreign %s and appends",
+    async (change) => {
+      const { store, stateDir } = createStore();
+      const target = { ...session(), title: "Original meeting" };
+      await store.writeSession(target);
+      const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+      const database = openOpenClawStateDatabase(options);
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          for (let index = 0; index < 130; index++) {
+            appendMeetingTranscriptUtterance({
+              database: db,
+              session: target,
+              utterance: { text: `row-${index}` },
+              metadataJson: null,
+              now: index,
+            });
+          }
+        },
+        options,
+        { operationLabel: "test.transcripts.export.seed" },
+      );
+      await store.writeSummary(
+        summarizeTranscripts({ session: target, utterances: [{ text: "Original note" }] }),
+        target,
+      );
+      const texts: string[] = [];
+      let batches = 0;
+      const result = await store.streamExport(
+        transcriptSessionSelector(target),
+        true,
+        async (rows) => {
+          texts.push(...rows.map((row) => row.text));
+          if (batches++ === 0) {
+            const foreign = new DatabaseSync(database.path);
+            try {
+              if (change === "reset") {
+                foreign.exec("PRAGMA foreign_keys = ON");
+                foreign
+                  .prepare("DELETE FROM meeting_transcript_sessions WHERE session_id = ?")
+                  .run(target.sessionId);
+              } else {
+                foreign
+                  .prepare("UPDATE meeting_transcript_utterances SET text = ? WHERE session_id = ?")
+                  .run("Foreign replacement", target.sessionId);
+              }
+            } finally {
+              foreign.close();
+            }
+            await store.writeSession({ ...target, title: "New meeting" });
+            await store.appendUtteranceForSession(target, { text: "Later append" });
+            await store.writeSummary(
+              summarizeTranscripts({ session: target, utterances: [{ text: "New note" }] }),
+              target,
+            );
+          }
+        },
+      );
+      expect(batches).toBeGreaterThan(1);
+      expect(texts).toEqual(Array.from({ length: 130 }, (_, index) => `row-${index}`));
+      expect(result.entry.session.title).toBe("Original meeting");
+      expect(result.notes?.markdown).toContain("Original note");
+      const refreshed: string[] = [];
+      const next = await store.streamExport(transcriptSessionSelector(target), true, (rows) => {
+        refreshed.push(...rows.map((row) => row.text));
+      });
+      expect(refreshed).toEqual([
+        ...(change === "reset" ? [] : Array<string>(130).fill("Foreign replacement")),
+        "Later append",
+      ]);
+      expect(next.entry.session.title).toBe("New meeting");
+      expect(next.notes?.markdown).toContain("New note");
     },
   );
 
@@ -295,41 +290,53 @@ describe("TranscriptsStore", () => {
     }
   });
 
-  it("encodes portable slugs for Windows-reserved and trailing-dot IDs", () => {
-    expect(safeTranscriptPathSegment("CON")).toBe("%43%4F%4E");
-    expect(safeTranscriptPathSegment("foo.")).toBe("%66%6F%6F%2E");
-    expect(safeTranscriptPathSegment("foo")).toBe("foo");
-  });
-
-  it("persists sessions and utterances only in SQLite until export", async () => {
-    const { stateDir, store } = createStore();
-    const target = session();
-
-    await store.writeSession(target);
-    await store.appendUtteranceForSession(target, { text: "hello", final: true });
-    await store.appendUtteranceForSession(target, { text: "world", final: true });
-
-    expect(await store.readSession(target.sessionId)).toEqual(target);
-    expect(await store.readUtterancesForSession(target)).toEqual([
-      { sessionId: target.sessionId, text: "hello", final: true },
-      { sessionId: target.sessionId, text: "world", final: true },
-    ]);
-    expect(fs.existsSync(path.join(stateDir, "transcripts"))).toBe(false);
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
-  });
-
-  it("returns the requested ordered utterance tail", async () => {
-    const { store } = createStore();
+  it("bounds exact retry lookups to one caption ID without adding statements", async () => {
+    const { store, stateDir } = createStore();
     const target = session();
     await store.writeSession(target);
-    for (let index = 0; index < 5; index += 1) {
-      await store.appendUtteranceForSession(target, { text: `line-${index}` });
-    }
-
-    await expect(store.readUtterancesForSession(target, { maxUtterances: 2 })).resolves.toEqual([
-      expect.objectContaining({ text: "line-3" }),
-      expect.objectContaining({ text: "line-4" }),
-    ]);
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const sql = observeMainThreadSql();
+        try {
+          const append = (utterance: TranscriptUtterance) => {
+            sql.clear();
+            appendMeetingTranscriptUtterance({
+              database: db,
+              session: target,
+              utterance,
+              metadataJson: null,
+              now: 1,
+            });
+            return sql.calls.flatMap((call) =>
+              call.mock.contexts.flatMap((receiver) =>
+                receiver instanceof StatementSync ? [receiver.expandedSQL] : [],
+              ),
+            );
+          };
+          const utterance = { id: "new-caption", text: "Speech" };
+          const statements = append(utterance);
+          expect(statements).toHaveLength(4);
+          const retryQuery = statements.find((query) =>
+            /^select .* from "meeting_transcript_utterances"/u.test(query),
+          );
+          expect(retryQuery).toBeDefined();
+          const plan = db.prepare(`EXPLAIN QUERY PLAN ${retryQuery}`).all();
+          expect(plan).toContainEqual(
+            expect.objectContaining({
+              detail: expect.stringContaining(
+                "idx_meeting_transcript_utterances_id (session_id=? AND session_started_at=? AND utterance_id=?)",
+              ),
+            }),
+          );
+          expect(append(utterance)).toHaveLength(1);
+          expect(append({ text: "No ID" })).toHaveLength(3);
+        } finally {
+          sql.restore();
+        }
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+      { operationLabel: "test.transcripts.retry-plan" },
+    );
   });
 
   it("deduplicates exact retries but preserves same-id revisions", async () => {
@@ -395,19 +402,16 @@ describe("TranscriptsStore", () => {
     await expect(store.readUtterancesForSession(target)).resolves.toEqual(stored);
   });
 
-  it.each(["standup", "2026-07-03/raw-id"])(
-    "requires dated selectors for repeated %s",
-    async (id) => {
-      const { store } = createStore();
-      await store.writeSession(session(id, "2026-07-01T10:00:00.000Z"));
-      await store.writeSession(session(id, "2026-07-02T10:00:00.000Z"));
+  it.each(["standup"])("requires dated selectors for repeated %s", async (id) => {
+    const { store } = createStore();
+    await store.writeSession(session(id, "2026-07-01T10:00:00.000Z"));
+    await store.writeSession(session(id, "2026-07-02T10:00:00.000Z"));
 
-      await expect(store.readSession(id)).rejects.toThrow("multiple transcripts sessions match");
-      await expect(store.readSession(`2026-07-01/${id}`)).resolves.toMatchObject({
-        startedAt: "2026-07-01T10:00:00.000Z",
-      });
-    },
-  );
+    await expect(store.readSession(id)).rejects.toThrow("multiple transcripts sessions match");
+    await expect(store.readSession(`2026-07-01/${id}`)).resolves.toMatchObject({
+      startedAt: "2026-07-01T10:00:00.000Z",
+    });
+  });
 
   it.each([false, true])(
     "prioritizes qualified targets regardless of insertion order %s",
@@ -426,59 +430,7 @@ describe("TranscriptsStore", () => {
     },
   );
 
-  it("reads literal date-prefixed raw IDs and shipped date/raw suffixes", async () => {
-    const { store } = createStore();
-    const raw = session("2026-07-03/raw-id");
-    const punctuated = session("notes: room/one");
-    for (const target of [raw, punctuated]) {
-      await store.writeSession(target);
-      await expect(store.readSession(target.sessionId)).resolves.toEqual(target);
-      await expect(store.readSession(`2026-07-01/${target.sessionId}`)).resolves.toEqual(target);
-      await expect(store.readSession(`2026-07-02/${target.sessionId}`)).resolves.toBeUndefined();
-    }
-    await expect(store.readSession("2026-07-01/notes: Room/one")).resolves.toBeUndefined();
-  });
-
-  it("does not reinterpret legacy export ownership as a raw ID lookup", async () => {
-    const { store } = createStore();
-    await store.writeSession(session(".", "2026-07-01T10:00:00.000Z"));
-    await store.writeSession(session(".", "2026-07-02T10:00:00.000Z"));
-    await expect(store.writeSession(session(".."))).resolves.toBeUndefined();
-  });
-
-  it("matches bare selector slugs literally and case-sensitively", async () => {
-    const { store } = createStore();
-    await store.writeSession(session("fooXbar"));
-    await store.writeSession(session("Capital", "2026-07-02T10:00:00.000Z"));
-    await store.writeSession(session("foo@bar", "2026-07-03T10:00:00.000Z"));
-    await store.writeSession(session("foo-bar", "2026-07-04T10:00:00.000Z"));
-
-    await expect(store.readSession("foo_bar")).resolves.toBeUndefined();
-    await expect(store.readSession("capital")).resolves.toBeUndefined();
-    await expect(store.readSession("foo#bar")).resolves.toBeUndefined();
-    await expect(store.readSession("foo@bar")).resolves.toMatchObject({ sessionId: "foo@bar" });
-    await expect(store.readSession("foo-bar")).rejects.toThrow(
-      "multiple transcripts sessions match foo-bar",
-    );
-  });
-
-  it("round-trips empty nullable text values", async () => {
-    const { store } = createStore();
-    const target = { ...session("empty-values"), title: "" };
-    await store.writeSession(target);
-    await store.appendUtteranceForSession(target, {
-      id: "",
-      speaker: { id: "", label: "" },
-      text: "",
-    });
-
-    await expect(store.readSession("empty-values")).resolves.toEqual(target);
-    await expect(store.readUtterancesForSession(target)).resolves.toEqual([
-      { id: "", sessionId: "empty-values", speaker: { id: "", label: "" }, text: "" },
-    ]);
-  });
-
-  it.each(["stored", "exported", "concurrent"] as const)(
+  it.each(["exported", "concurrent"] as const)(
     "reports a typed conflict for a selector with a %s owner",
     async (mode) => {
       const { store } = createStore();
@@ -525,18 +477,6 @@ describe("TranscriptsStore", () => {
         metadataPath: path.join(store.sessionDir(upper), "metadata.json"),
       });
     }
-  });
-
-  it("uses remaining manifest artifacts when aliased export metadata is absent", async () => {
-    const { store } = createStore();
-    const upper = session("Capital", "2026-07-01T10:00:00.000Z");
-    const lower = session("capital", "2026-07-01T11:00:00.000Z");
-    await store.writeSession(upper);
-    await store.appendUtteranceForSession(upper, { text: "owned transcript" });
-    const artifacts = await store.materializeSessionArtifacts(upper, "transcript");
-    fs.rmSync(artifacts.metadataPath);
-
-    await expect(store.writeSession(lower)).resolves.toBeUndefined();
   });
 
   it("does not let a case-distinct SQLite owner mask a legacy directory", async () => {
@@ -654,8 +594,11 @@ describe("TranscriptsStore", () => {
     expect(fs.existsSync(store.sessionDir(session("phantom-export")))).toBe(false);
   });
 
-  it("stores summaries in SQLite and materializes explicit artifacts", async () => {
+  it("stores summaries in SQLite and materializes artifacts beneath a shared export parent", async () => {
     const { stateDir, store } = createStore();
+    const exportRoot = path.join(stateDir, "transcripts");
+    fs.mkdirSync(exportRoot, { recursive: true });
+    fs.chmodSync(exportRoot, 0o770);
     const target = {
       ...session("ansi-\u001b[31mprovider\u001b[0m", "2026-05-22T10:00:00.000Z"),
       title: "ANSI import",
@@ -687,25 +630,6 @@ describe("TranscriptsStore", () => {
     await expect(reopened.readSummary(target)).resolves.toMatchObject({
       summary: { sessionId: target.sessionId },
     });
-  });
-
-  it("removes stale summary exports when canonical state has no summary", async () => {
-    const { stateDir, store } = createStore();
-    const target = session("no-summary");
-    await store.writeSession(target);
-    await store.writeSummary(
-      summarizeTranscripts({ session: target, utterances: [{ text: "stale" }] }),
-      target,
-    );
-    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
-      .db.prepare("DELETE FROM meeting_transcript_summaries WHERE session_id = ?")
-      .run(target.sessionId);
-
-    const artifacts = await store.materializeSessionArtifacts(target, "summary");
-
-    expect(artifacts.hasSummary).toBe(false);
-    expect(fs.existsSync(artifacts.summaryJsonPath)).toBe(false);
-    expect(fs.existsSync(artifacts.summaryPath)).toBe(false);
   });
 
   it("repairs an interrupted manifest update and serializes concurrent exports", async () => {

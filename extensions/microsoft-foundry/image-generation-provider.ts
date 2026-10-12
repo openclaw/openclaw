@@ -14,7 +14,7 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -87,8 +87,6 @@ function resolveMaiImageSize(size: string | undefined): { width: number; height:
   const width = Number(match[1]);
   const height = Number(match[2]);
   if (
-    !Number.isInteger(width) ||
-    !Number.isInteger(height) ||
     width < MAI_MIN_IMAGE_SIDE_PX ||
     height < MAI_MIN_IMAGE_SIDE_PX ||
     width * height > MAI_MAX_IMAGE_PIXELS
@@ -230,7 +228,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
     label: "Microsoft Foundry",
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PROVIDER_ID, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: PROVIDER_ID, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MAI_IMAGE_MAX_RESULTS,

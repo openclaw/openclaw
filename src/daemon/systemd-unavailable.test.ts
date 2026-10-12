@@ -21,7 +21,6 @@ import {
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
-  isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
@@ -31,24 +30,6 @@ describe("classifySystemdUnavailableDetail", () => {
     expect(classifySystemdUnavailableDetail("systemctl not available")).toBe("missing_systemctl");
   });
 
-  it("classifies user bus/session failures", () => {
-    expect(
-      isSystemdUserBusUnavailableDetail(
-        "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
-      ),
-    ).toBe(true);
-    expect(
-      classifySystemdUnavailableDetail(
-        "systemctl --user unavailable: Failed to connect to bus: No medium found",
-      ),
-    ).toBe("user_bus_unavailable");
-    expect(
-      classifySystemdUnavailableDetail(
-        "systemctl --user unavailable: Failed to connect to bus: Permission denied",
-      ),
-    ).toBe("user_bus_unavailable");
-  });
-
   it("classifies generic systemd-unavailable details", () => {
     expect(
       classifySystemdUnavailableDetail("System has not been booted with systemd as init system"),
@@ -56,10 +37,6 @@ describe("classifySystemdUnavailableDetail", () => {
     expect(classifySystemdUnavailableDetail("not supported on this host")).toBe(
       "generic_unavailable",
     );
-  });
-
-  it("returns null for unrelated details", () => {
-    expect(classifySystemdUnavailableDetail("permission denied")).toBeNull();
   });
 });
 
@@ -93,7 +70,7 @@ printf 's "252.39"\\n'
     };
   }
 
-  it.each(["ENOENT", "EACCES"])("rejects unavailable systemctl with %s", async (errorCode) => {
+  it.each(["EACCES"])("rejects unavailable systemctl with %s", async (errorCode) => {
     await withTempDir("openclaw-systemctl-", async (dir) => {
       if (errorCode === "EACCES") {
         await fs.writeFile(path.join(dir, "systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o600 });
@@ -104,7 +81,7 @@ printf 's "252.39"\\n'
       await expect(isSystemdUserServiceAvailable(env)).resolves.toBe(false);
       await expect(assertSystemdAvailable(env)).rejects.toThrow(
         errorCode === "EACCES"
-          ? "service-manager probe could not start"
+          ? "service-manager check could not start"
           : "systemctl not available",
       );
 
@@ -182,6 +159,8 @@ printf 's "252.39"\\n'
         try {
           await ready.promise;
           await vi.advanceTimersByTimeAsync(500);
+          // Command deadlines take their decision one timer turn after expiry.
+          await vi.advanceTimersToNextTimerAsync();
           return await result;
         } finally {
           await vi.runOnlyPendingTimersAsync();

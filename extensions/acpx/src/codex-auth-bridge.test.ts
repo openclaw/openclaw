@@ -9,6 +9,7 @@ import {
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GENERATED_ADAPTER_ORPHAN_SCENARIO } from "./adapter-wrapper-script.test-support.js";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
@@ -156,7 +157,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/codex-acp@1.12.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/codex-acp@2.1.1"');
     expect(wrapper).toContain('"--", "codex-acp"');
     expect(wrapper).not.toContain("@zed-industries/codex-acp");
   });
@@ -169,7 +170,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.79.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.85.1"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -186,36 +187,90 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 
-  it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
-    const { generated, prepare } = createWrapperFixture();
+  it.each([
+    { agent: "codex", packageName: "codex-acp", version: "2.1.1" },
+    { agent: "claude", packageName: "claude-agent-acp", version: "0.85.1" },
+  ] as const)(
+    "launches $agent after its captured adapter is removed",
+    async ({ agent, packageName, version }) => {
+      const { root, generated, generatedClaude, prepare } = createWrapperFixture();
+      const capturedBin = path.join(root, "captured-adapter.cjs");
+      await fs.writeFile(capturedBin, "console.log('captured adapter');\n");
+      await prepare({
+        resolveInstalledCodexAcpBinPath: async () => capturedBin,
+        resolveInstalledClaudeAcpBinPath: async () => capturedBin,
+      });
+      const wrapperPath = agent === "codex" ? generated.wrapperPath : generatedClaude.wrapperPath;
+      const packageDir = path.join(root, "node_modules", "@agentclientprotocol", packageName);
+      const binDir = path.join(root, "node_modules", ".bin");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: `@agentclientprotocol/${packageName}`,
+          version,
+          bin: { [packageName]: "index.cjs" },
+        }),
+      );
+      const fallbackBin = path.join(packageDir, "index.cjs");
+      await fs.writeFile(fallbackBin, "#!/usr/bin/env node\nconsole.log('fallback adapter');\n", {
+        mode: 0o755,
+      });
+      if (process.platform === "win32") {
+        await fs.writeFile(
+          path.join(binDir, `${packageName}.cmd`),
+          `@"${process.execPath}" "${fallbackBin}" %*\r\n`,
+        );
+      } else {
+        await fs.symlink(fallbackBin, path.join(binDir, packageName));
+      }
+      const options = {
+        cwd: root,
+        env: {
+          ...process.env,
+          npm_config_offline: "true",
+          npm_config_cache: path.join(root, "cache"),
+        },
+      };
+      const present = await execFileAsync(process.execPath, [wrapperPath], options);
+      expect(present.stdout.trim()).toBe("captured adapter");
+      await fs.rm(capturedBin);
+      const reclaimed = await execFileAsync(process.execPath, [wrapperPath], options);
+      expect(reclaimed.stdout.trim()).toBe("fallback adapter");
+    },
+  );
 
-    await prepare();
-
-    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('killChildTree("SIGTERM")');
-    expect(wrapper).toContain('killChildTree("SIGKILL", { force: true })');
-    expect(wrapper).toMatch(
-      /forceKillTimer = setTimeout\(\(\) => \{\s*killChildTree\("SIGKILL", \{ force: true \}\);\s*childExitCode = 1;/s,
-    );
-    expect(wrapper).toMatch(
-      /child\.on\("exit", \(code, signal\) => \{\s*if \(parentWatcher\) \{\s*clearInterval\(parentWatcher\);\s*\}\s*if \(orphanCleanupStarted\) \{\s*return;\s*\}/s,
-    );
-    expect(wrapper).toMatch(
-      /child\.on\("close", \(\) => \{\s*finishStderrLog\(\);\s*process\.exit\(childExitCode\);/s,
-    );
-    expect(wrapper).not.toMatch(
-      /forceKillTimer = setTimeout\(\(\) => killChildTree\("SIGKILL"\), 1_500\);\s*forceKillTimer\.unref\?\.\(\);\s*process\.exit\(1\);/s,
-    );
-    // Orphan detection must trigger on any PPID change, not only when the new
-    // PPID is init (1). Systemd user services and container init reparent
-    // orphaned processes to a session manager or container init (PID != 1),
-    // and the older `process.ppid !== 1` guard would silently leak the codex
-    // adapter tree there.
-    expect(wrapper).not.toContain("process.ppid !== 1");
-    expect(wrapper).toMatch(
-      /setInterval\(\(\) => \{[\s\S]*?if \(process\.ppid === originalParentPid\) \{\s*return;\s*\}/,
-    );
-  });
+  it.each(["before-orphan", "after-orphan"])(
+    "keeps orphan cleanup owned when the direct child exits %s",
+    async (exitOrder) => {
+      const { root, generated, prepare } = createWrapperFixture();
+      await prepare();
+      const scenario = path.join(root, "orphan-scenario.mjs");
+      await fs.writeFile(scenario, GENERATED_ADAPTER_ORPHAN_SCENARIO);
+      const { stdout } = await execFileAsync(
+        process.execPath,
+        [scenario, generated.wrapperPath, exitOrder],
+        {
+          env: { PATH: process.env.PATH, HOME: root, USERPROFILE: root },
+        },
+      );
+      expect(JSON.parse(stdout)).toEqual({
+        initialSignals: [],
+        orphanSignals: [[-42, "SIGTERM"]],
+        finalSignals: [
+          [-42, "SIGTERM"],
+          [-42, "SIGKILL"],
+        ],
+        timerReferenced: true,
+        timerStillArmedAfterChildClose: true,
+        listenersRetainedBeforeEscalation: true,
+        repeatSignalHandled: true,
+        exitCode: 1,
+        listenersRetired: true,
+      });
+    },
+  );
 
   it("uses the bundled Claude ACP dependency by default when it is installed", async () => {
     const { generatedClaude: generated, prepare } = createWrapperFixture();
@@ -282,6 +337,34 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
   });
+
+  it.each([
+    { config: "not-json", override: "{}", diagnostic: "CODEX_CONFIG must be a valid JSON object" },
+    { config: "{}", override: "[]", diagnostic: "invalid generated Codex ACP startup config" },
+  ])(
+    "rejects invalid startup configuration before launching the adapter: $diagnostic",
+    async ({ config, override, diagnostic }) => {
+      const { root, generated, prepare } = createWrapperFixture();
+      process.env.CODEX_HOME = path.join(root, "empty-codex-home");
+      const marker = path.join(root, "adapter-started");
+      const installedBinPath = path.join(root, "codex-acp-bin.mjs");
+      await fs.writeFile(
+        installedBinPath,
+        `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(marker)}, "started");`,
+      );
+      await prepare({ resolveInstalledCodexAcpBinPath: async () => installedBinPath });
+      await expect(
+        execFileAsync(
+          process.execPath,
+          [generated.wrapperPath, OPENCLAW_CODEX_CONFIG_ARG, override],
+          {
+            env: { ...process.env, CODEX_CONFIG: config },
+          },
+        ),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining(diagnostic) });
+      await expectPathMissing(marker);
+    },
+  );
 
   it("writes API-key auth into the isolated Codex ACP home when env auth is present", async () => {
     const { root, stateDir, generated, prepare } = createWrapperFixture();

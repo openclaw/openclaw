@@ -1,10 +1,8 @@
 import crypto from "node:crypto";
-import {
-  isHostScopedAgentToolActive,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
@@ -27,7 +25,6 @@ import {
   type CodexDynamicToolSpec,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
-  type CodexTurnEnvironmentParams,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
@@ -59,26 +56,8 @@ const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   suppress_unstable_features_warning: true,
 };
 
-const CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG: JsonObject = {
-  "features.goals": false,
-};
-
-const CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG: JsonObject = {
-  // OpenClaw owns the durable progress card; Codex's native checklist would create a second owner.
-  "tools.update_plan.enabled": false,
-};
-
-const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
-  "features.code_mode": false,
-  "features.code_mode_only": false,
-};
-
 const CODEX_NO_PROJECT_DOCS_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
-};
-
-const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
-  "features.multi_agent": false,
 };
 
 const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -159,12 +138,13 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
   Pick<
-    EmbeddedRunAttemptParams,
+    AgentHarnessSessionRuntimeParamsV1,
     | "pluginHarnessToolPolicyRestricted"
     | "pluginHarnessToolPolicySafeDeniedTools"
     | "authoredContextTokenCap"
     | "bootstrapContextMode"
     | "scheduledRuntimeAuthority"
+    | "requireWorkspaceOnly"
   >;
 
 /** Common deterministic start/resume/fork fields; no run resources or unsupported setters. */
@@ -172,6 +152,10 @@ export function buildCodexThreadConfiguration(
   params: CodexThreadConfigurationContext,
   options: CodexThreadConfigurationOptions,
 ) {
+  const config = buildCodexRuntimeThreadConfigForRun(params, options.config, {
+    ...options,
+    directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
+  });
   return {
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     ...(options.appServer.sessionRoot
@@ -183,38 +167,37 @@ export function buildCodexThreadConfiguration(
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
-    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
-      ...options,
-      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
-    }),
+    config,
     // Catalog-owned collaboration messages replace caller collaboration instructions
-    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so the skill
-    // catalog rides the thread developer carrier after the immutable generic policy.
+    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so refreshable
+    // workspace instructions ride the thread developer carrier after the immutable generic policy.
     developerInstructions: joinPresentSections(
       options.developerInstructions ??
-        buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-      options.skillsInstructions,
+        buildDeveloperInstructions(params, {
+          dynamicTools: options.dynamicTools,
+          nativeCodeModeOnlyEnabled: config["features.code_mode_only"] === true,
+        }),
+      options.refreshableInstructions,
     ),
   };
 }
 
-export function buildThreadStartParams(
-  params: EmbeddedRunAttemptParams,
+export async function buildThreadStartParams(
+  params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
-): CodexThreadStartParams {
-  const resolvedModelProvider = resolveCodexAppServerModelProvider({
+): Promise<CodexThreadStartParams> {
+  const resolvedModelProvider = await resolveCodexAppServerModelProvider({
     ...params,
     homeScope: options.appServer.start.homeScope,
   });
-  const modelSelection = resolveCodexAppServerRequestModelSelection({
+  const modelSelection = await resolveCodexAppServerRequestModelSelection({
     ...params,
     homeScope: options.appServer.start.homeScope,
     model: options.model ?? params.modelId,
     modelProvider: options.modelProvider ?? resolvedModelProvider,
   });
   return {
-    model: modelSelection.model,
-    ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
+    ...modelSelection,
     ...buildCodexThreadConfiguration(params, options),
     ...((options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
@@ -223,7 +206,11 @@ export function buildThreadStartParams(
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
-    ...resolveCodexThreadEnvironmentSelection(options),
+    ...(params.requireWorkspaceOnly === true || options.nativeCodeModeEnabled === false
+      ? { environments: [] }
+      : options.environmentSelection
+        ? { environments: options.environmentSelection }
+        : {}),
     // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
@@ -234,27 +221,27 @@ export function buildThreadStartParams(
   };
 }
 
-export function buildThreadResumeParams(
-  params: EmbeddedRunAttemptParams,
+export async function buildThreadResumeParams(
+  params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & {
     threadId: string;
     authProfileId?: string;
     preserveNativeModel?: boolean;
   },
-): CodexThreadResumeParams & { developerInstructions: string } {
+): Promise<CodexThreadResumeParams & { developerInstructions: string }> {
   const modelSelection = options.preserveNativeModel
     ? undefined
-    : resolveCodexAppServerRequestModelSelection({
+    : await resolveCodexAppServerRequestModelSelection({
         ...params,
         homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider:
           options.modelProvider ??
-          resolveCodexAppServerModelProvider({
+          (await resolveCodexAppServerModelProvider({
             ...params,
             homeScope: options.appServer.start.homeScope,
             authProfileId: options.authProfileId ?? params.authProfileId,
-          }),
+          })),
         authProfileId: options.authProfileId ?? params.authProfileId,
       });
   return {
@@ -267,12 +254,7 @@ export function buildThreadResumeParams(
       sortDirection: "desc",
       itemsView: "notLoaded",
     },
-    ...(modelSelection
-      ? {
-          model: modelSelection.model,
-          ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
-        }
-      : {}),
+    ...modelSelection,
     ...buildCodexThreadConfiguration(params, options),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
   };
@@ -286,40 +268,36 @@ export function buildCodexRuntimeThreadConfig(
     directOnlyToolNamespaces?: readonly string[];
   } = {},
 ): JsonObject {
-  const configured = buildCodexProjectDocThreadConfig(config);
-  // Native goal RPCs remain available through app-server, but the Codex goals
-  // feature also starts autonomous turns. Keep it disabled until a run owner exists.
-  const codeModeConfig: JsonObject = {
-    ...CODEX_CODE_MODE_THREAD_CONFIG,
-    "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
-  };
-  if (options.nativeCodeModeEnabled === false) {
-    const disabledConfig = expectDefined(
-      mergeCodexThreadConfigs(
-        configured,
-        CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-        CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-        CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-      ),
-      "Codex disabled code mode config",
-    );
-    // Native patch streaming is part of native code mode, so do not send it
-    // when runtime policy disables that tool surface.
-    delete disabledConfig["features.apply_patch_streaming_events"];
-    return disabledConfig;
-  }
+  const enabled = options.nativeCodeModeEnabled !== false;
+  const codeModeOnly = options.nativeCodeModeOnlyEnabled === true;
   const merged = expectDefined(
     mergeCodexThreadConfigs(
-      codeModeConfig,
-      configured,
-      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-      CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-      options.nativeCodeModeOnlyEnabled === true ? { "features.code_mode_only": true } : undefined,
+      enabled
+        ? { ...CODEX_CODE_MODE_THREAD_CONFIG, "features.code_mode_only": codeModeOnly }
+        : undefined,
+      buildCodexProjectDocThreadConfig(config),
+      {
+        // Native goals start autonomous turns; OpenClaw owns both continuation and progress cards.
+        "features.goals": false,
+        "tools.update_plan.enabled": false,
+        ...(!enabled
+          ? { "features.code_mode": false, "features.code_mode_only": false }
+          : codeModeOnly
+            ? { "features.code_mode_only": true }
+            : {}),
+      },
     ),
-    options.nativeCodeModeOnlyEnabled === true
-      ? "Codex code mode only config"
-      : "Codex code mode config",
+    !enabled
+      ? "Codex disabled code mode config"
+      : codeModeOnly
+        ? "Codex code mode only config"
+        : "Codex code mode config",
   );
+  if (!enabled) {
+    // Native patch streaming belongs to the code-mode tool surface.
+    delete merged["features.apply_patch_streaming_events"];
+    return merged;
+  }
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }
 
@@ -359,6 +337,21 @@ function resolveDirectOnlyToolNamespaces(
     .map((tool) => tool.name);
 }
 
+export function isCodexNativeDelegationDisabledForRun(
+  params: CodexThreadConfigurationContext,
+  hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
+): boolean {
+  // Disabling only multi_agent still permits Codex's model-selected or explicit V2 tools.
+  return (
+    isCodexResponsesOAuthRun(params) ||
+    params.delegationCapability === "report_only" ||
+    params.requireWorkspaceOnly === true ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    isMessageOnlyCodexSourceReply(params) ||
+    (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
+  );
+}
+
 export function buildCodexRuntimeThreadConfigForRun(
   params: CodexThreadConfigurationContext,
   config: JsonObject | undefined,
@@ -373,6 +366,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
     shellPathPrepend?: readonly string[];
+    shellGitConfigParameters?: string;
     disableLoginShell?: boolean;
   } = {},
 ): JsonObject {
@@ -381,7 +375,10 @@ export function buildCodexRuntimeThreadConfigForRun(
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
   const restrictedToolSurface =
-    ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    params.requireWorkspaceOnly === true;
   const restrictedTurnDisablesProjectDocs =
     ringZeroActive ||
     messageOnlySourceReply ||
@@ -411,9 +408,11 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      isCodexNativeDelegationDisabledForRun(params, options.hostSystemAgentActive)
+        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
+        : undefined,
       isCodexResponsesOAuthRun(params)
         ? {
-            ...CODEX_DELEGATION_DISABLED_THREAD_CONFIG,
             "features.apps": false,
             "features.plugins": false,
             "features.image_generation": false,
@@ -428,15 +427,16 @@ export function buildCodexRuntimeThreadConfigForRun(
         ? { "features.image_generation": false }
         : undefined,
       shouldDisableCodexToolSearchForModel(params.modelId)
-        ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
+        ? { "features.multi_agent": false }
         : undefined,
-      params.delegationCapability === "report_only"
-        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
-        : undefined,
-      messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
+      messageOnlySourceReply ||
+        params.pluginHarnessToolPolicyRestricted === true ||
+        params.requireWorkspaceOnly === true
         ? buildRestrictedToolConfigPatch(
             restrictedToolSurfaceMcpServerNames,
-            Boolean(params.scheduledRuntimeAuthority) && !isCodexResponsesOAuthRun(params),
+            Boolean(params.scheduledRuntimeAuthority) &&
+              !isCodexResponsesOAuthRun(params) &&
+              params.requireWorkspaceOnly !== true,
           )
         : buildCodexRingZeroThreadConfigPatch(
             params,
@@ -457,11 +457,12 @@ export function buildCodexRuntimeThreadConfigForRun(
     options.shellEnvironment,
     options.disableLoginShell,
     options.shellPathPrepend,
+    options.shellGitConfigParameters,
   );
 }
 
 export function buildCodexRingZeroThreadConfigPatch(
-  params: Pick<EmbeddedRunAttemptParams, "toolsAllow">,
+  params: Pick<AgentHarnessSessionRuntimeParamsV1, "toolsAllow">,
   hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
   inheritedMcpServerNames: readonly string[] = [],
 ): JsonObject | undefined {
@@ -689,17 +690,4 @@ export function codexThreadSandboxOrPermissions(
     return {};
   }
   return { sandbox: appServer.sandbox };
-}
-
-function resolveCodexThreadEnvironmentSelection(options: {
-  nativeCodeModeEnabled?: boolean;
-  environmentSelection?: CodexTurnEnvironmentParams[];
-}): Pick<CodexThreadStartParams, "environments"> {
-  if (options.nativeCodeModeEnabled === false) {
-    return { environments: [] };
-  }
-  if (options.environmentSelection) {
-    return { environments: options.environmentSelection };
-  }
-  return {};
 }

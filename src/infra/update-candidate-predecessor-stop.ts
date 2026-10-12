@@ -1,11 +1,24 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { needsCandidateManagedServiceStop } from "../cli/update-cli/update-command-legacy-service-stop.js";
+import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-context-types.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import {
+  findServiceOwnershipRefusal,
+  hasGatewayServiceStopUnsafeError,
+} from "../daemon/service-inspection-error.js";
+import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
-import { getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { getUpdateRunAsync } from "./update-run-reader.js";
+import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 /**
@@ -69,8 +82,8 @@ function decodeReceipt(step: string): StoppedServiceIdentity | undefined {
   return identity;
 }
 
-function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
-  for (const step of getUpdateRun(runId, ledger)?.steps ?? []) {
+async function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
+  for (const step of (await getUpdateRunAsync(runId, ledger))?.steps ?? []) {
     if (step.status !== "completed") {
       continue;
     }
@@ -94,7 +107,6 @@ export async function stopSupervisedPredecessorGateway(
   input: { runId: string; repair: boolean },
   params: {
     root: string;
-    timeoutMs?: number;
     assertCurrent: () => void;
     warn: (message: string) => void;
   },
@@ -116,19 +128,45 @@ export async function stopSupervisedPredecessorGateway(
     return false;
   }
   params.assertCurrent();
+  const runId = input.runId;
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  const context = captureOpenClawStateWorkerContext({ env });
   let recorded = false;
+  let receipt: Promise<void> | undefined;
   const record = (state: PreManagedServiceStop) => {
-    if (recorded) {
+    if (receipt) {
       return;
     }
-    recorded = true;
     const stoppedAtMs = state.stoppedAtMs ?? Date.now();
-    recordUpdateRunStep(input.runId, {
-      step: encodeReceipt(serviceIdentity(state, stoppedAtMs)),
-      status: "completed",
-      endedAtMs: stoppedAtMs,
+    const step = encodeReceipt(serviceIdentity(state, stoppedAtMs));
+    receipt = recordUpdateRunStepAsync(
+      runId,
+      { step, status: "completed", endedAtMs: stoppedAtMs },
+      {
+        env,
+        context,
+        assertCurrent: params.assertCurrent,
+        retainSettlement(completion) {
+          const release = registerSignalExitGate(completion);
+          void completion.then(release, release);
+        },
+      },
+    ).then((result) => {
+      if (
+        result?.runId !== runId ||
+        result.status !== "running" ||
+        !result.steps.some((stored) => stored.step === step && stored.status === "completed")
+      ) {
+        throw new UpdateCommandRecoveryPendingError(
+          "The predecessor Gateway stopped, but its update receipt was not recorded; recovery remains pending.",
+        );
+      }
+      recorded = true;
     });
+    // The native callback stays synchronous; join its receipt after native cleanup below.
+    void receipt.catch(() => undefined);
   };
+  let stopFailure: { error: unknown } | undefined;
   try {
     // The native stop reports its mutation before later checks can still throw;
     // the ledger keeps that fact for finalization and recovery either way.
@@ -141,7 +179,7 @@ export async function stopSupervisedPredecessorGateway(
       // The delegated Doctor input carries no step budget; bound the drain and
       // stop by the service stop budget so a stuck predecessor cannot outlive
       // the parent's Doctor allowance.
-      timeoutMs: params.timeoutMs ?? GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+      timeoutMs: GATEWAY_SERVICE_STOP_TIMEOUT_MS,
       onStopped: record,
       assertCurrent: params.assertCurrent,
       warn: params.warn,
@@ -150,12 +188,27 @@ export async function stopSupervisedPredecessorGateway(
       record(state);
     }
   } catch (error) {
-    if (!recorded) {
-      throw error;
+    stopFailure = { error };
+  }
+  try {
+    await receipt;
+  } catch (error) {
+    if (stopFailure && stopFailure.error !== error) {
+      throw createSqliteLifecycleAggregateError(
+        [stopFailure.error, error],
+        "Predecessor Gateway stop and receipt persistence failed.",
+        stopFailure.error,
+      );
     }
-    // The stop already happened; Doctor decides whether the lock is free now.
+    throw error;
+  }
+  if (stopFailure) {
+    if (!recorded || hasCommandProcessCleanupError(stopFailure.error)) {
+      throw stopFailure.error;
+    }
+    // The joined stop already happened; Doctor decides whether the lock is free now.
     params.warn(
-      `Predecessor Gateway stop reported an error after its native mutation: ${String(error)}`,
+      `Predecessor Gateway stop reported an error after its native mutation: ${String(stopFailure.error)}`,
     );
   }
   return recorded;
@@ -172,12 +225,14 @@ export async function adoptCandidateManagedServiceStop(params: {
   transferred: PreManagedServiceStop | undefined;
   shouldRestart: boolean;
   mode: UpdateRunResult["mode"];
+  status: UpdateRunResult["status"];
   windowsTaskAutoStartSuspended?: boolean;
   runId: string;
   ledger: UpdateRunLedgerOptions;
   root: string;
   timeoutMs?: number;
   assertCurrent: () => void;
+  onStopped?: (stopped: PreManagedServiceStop) => void;
   onStep: (step: UpdateRunResult["steps"][number]) => void;
 }): Promise<{ stopped: PreManagedServiceStop | undefined; restartRequired: boolean }> {
   const unchanged = { stopped: params.transferred, restartRequired: false };
@@ -194,20 +249,48 @@ export async function adoptCandidateManagedServiceStop(params: {
     ...(advisory ? { advisory: { kind: "recoverable-maintenance", message: advisory } } : {}),
   });
   const updateInstallKind = params.mode === "git" ? "git" : "package";
-  const doctorStop = readDoctorStop(params.runId, params.ledger);
+  params.assertCurrent();
+  const doctorStop = await readDoctorStop(params.runId, params.ledger);
+  params.assertCurrent();
   if (doctorStop) {
     // Inspect without mutating: a service replaced after Doctor must not inherit the stop.
-    const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-      updateInstallKind,
-      root: params.root,
-      shouldRestart: true,
-      jsonMode: true,
-      timeoutMs: params.timeoutMs,
-      phase: "inspect",
-      assertCurrent: params.assertCurrent,
-    });
-    if (!inspected.inspected) {
-      return unchanged;
+    let inspected: PreManagedServiceStop;
+    try {
+      inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind,
+        root: params.root,
+        shouldRestart: true,
+        jsonMode: true,
+        timeoutMs: params.timeoutMs,
+        phase: "inspect",
+        assertCurrent: params.assertCurrent,
+      });
+    } catch (cause) {
+      if (
+        hasCommandProcessCleanupError(cause) ||
+        hasGatewayServiceStopUnsafeError(cause) ||
+        findServiceOwnershipRefusal(cause) ||
+        collectNestedErrorCandidates(cause).some(
+          (error) => error instanceof GatewayServiceAuthorityError,
+        )
+      ) {
+        throw cause;
+      }
+      try {
+        params.assertCurrent();
+      } catch {
+        throw cause;
+      }
+      throw new UpdateCommandRecoveryPendingError(
+        "Inspection of the Gateway stopped by update Doctor failed; recovery remains pending. Run openclaw gateway status --deep before resuming service recovery.",
+        { cause },
+      );
+    }
+    params.assertCurrent();
+    if (!inspected.inspected || !inspected.runtimeInspected) {
+      throw new UpdateCommandRecoveryPendingError(
+        "The Gateway stopped by update Doctor could not be inspected; recovery remains pending. Run openclaw gateway status --deep before resuming service recovery.",
+      );
     }
     const current = serviceIdentity(inspected, doctorStop.stoppedAtMs);
     if (
@@ -239,10 +322,14 @@ export async function adoptCandidateManagedServiceStop(params: {
       restartRequired,
     };
   }
-  if (!needsCandidateManagedServiceStop({ ...params, preManagedServiceStop: params.transferred })) {
+  if (
+    params.status !== "ok" ||
+    !needsCandidateManagedServiceStop({ ...params, preManagedServiceStop: params.transferred })
+  ) {
     return unchanged;
   }
   let stopped = params.transferred;
+  let observedStop = false;
   const state = await maybeStopManagedServiceBeforeMutableUpdate({
     updateInstallKind,
     root: params.root,
@@ -252,6 +339,8 @@ export async function adoptCandidateManagedServiceStop(params: {
     phase: "prepare",
     onStopped: (current) => {
       stopped = current;
+      observedStop = true;
+      params.onStopped?.(current);
     },
     assertCurrent: params.assertCurrent,
   });
@@ -259,6 +348,9 @@ export async function adoptCandidateManagedServiceStop(params: {
     stopped = state;
   }
   if (stopped?.stopped) {
+    if (!observedStop) {
+      params.onStopped?.(stopped);
+    }
     params.onStep(stopStep());
   }
   return { stopped, restartRequired: false };

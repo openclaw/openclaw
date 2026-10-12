@@ -1,22 +1,19 @@
 /** Same-process custody for a followup's result across committed yield cohorts. */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { cancelFollowupCohort } from "./session-followup-cancellation.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { getFollowupCohortOwner, bindFollowupCohortOwner } from "./session-followup-cohort.js";
 import type {
   FollowupCohort as Cohort,
-  FollowupCancellation,
-  FollowupExecution,
   FollowupSettlement,
   FollowupCompletionOwner,
   FollowupReply,
@@ -71,7 +68,6 @@ export function withFollowupSuccessor<T>(successor: FollowupSuccessor, run: () =
 }
 
 export class SessionFollowupCompletion implements FollowupCompletionOwner {
-  readonly request: FollowupRequest;
   private readonly lifetime = new AbortController();
   readonly signal = this.lifetime.signal;
   private readonly lifecycleGeneration = getAgentRunLifecycleGeneration();
@@ -79,21 +75,17 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
     runId: string;
     settled: Deferred;
     yielded: boolean;
-    native?: FollowupExecution;
     admittedCohort?: Cohort;
   };
   private cohort?: Cohort;
   private readonly result = createDeferredCore<FollowupReply>();
   private terminal?: FollowupReply;
   private acceptedExecution = false;
-  private cancellationRequested = false;
-  private cancelling?: Promise<Result<FollowupCancellation, string>>;
   private taking = false;
   private consumed = false;
   private readonly revoked: () => void;
 
-  private constructor(request: FollowupRequest) {
-    this.request = request;
+  private constructor(readonly request: FollowupRequest) {
     this.execution = { runId: request.runId, settled: createDeferredCore(), yielded: false };
     this.revoked = () => this.close(new Error("Followup completion authority was revoked."));
     void this.result.promise.catch(() => {});
@@ -142,31 +134,22 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
     }
     this.execution.settled.resolve();
     if (this.terminal) {
-      this.cancelling = undefined;
       this.result.resolve(this.terminal);
     }
   }
   ownsExecution(runId: string) {
     return !this.signal.aborted && this.execution.runId === runId;
   }
-  async activate(runId: string, native: FollowupExecution) {
-    const execution = this.execution;
+  assertExecutionCurrent(runId: string): void {
     this.assertCurrent();
-    native.assertCurrent();
     if (
-      execution.runId !== runId ||
-      execution.yielded ||
+      this.execution.runId !== runId ||
+      this.execution.yielded ||
       this.terminal ||
       !this.acceptedExecution
     ) {
       throw new Error("Followup no longer owns this accepted execution.");
     }
-    execution.native = native;
-    return () => {
-      if (execution.native === native) {
-        execution.native = undefined;
-      }
-    };
   }
   promoteYield(runId: string, entries: readonly SubagentRunRecord[], generation: number) {
     this.assertCurrent();
@@ -195,13 +178,12 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   ): FollowupSuccessor {
     const cohort =
       this.cohort ?? (this.execution.runId === runId ? this.execution.admittedCohort : undefined);
-    if (this.cancellationRequested) {
-      throw new Error("Followup cancellation owns this continuation.");
-    }
     if (
       !cohort ||
       cohort.entries.length !== entries.length ||
-      !entries.every((entry) => cohort.entries.includes(entry))
+      !entries.every((entry) =>
+        cohort.entries.some((current) => isSameSubagentRunOwner(current, entry)),
+      )
     ) {
       throw new Error("Followup completion cohort was replaced.");
     }
@@ -209,17 +191,19 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
       this.assertCurrent();
       assertBatchCurrent();
       if (
-        this.cancellationRequested ||
         (this.cohort !== cohort &&
           !(this.execution.runId === runId && this.execution.admittedCohort === cohort)) ||
-        entries.some(
-          (entry) =>
+        entries.some((observed) => {
+          const entry = cohort.entries.find((current) => isSameSubagentRunOwner(current, observed));
+          return (
+            !entry ||
             getFollowupCohortOwner(entry) !== this ||
             entry.requesterSettleWake?.rearmGeneration !== cohort.generation ||
             entry.killIntent ||
             entry.killReconciliation ||
-            entry.suppressCompletionDelivery,
-        )
+            entry.suppressCompletionDelivery
+          );
+        })
       ) {
         throw new Error("Followup successor no longer owns its completion cohort.");
       }
@@ -240,7 +224,7 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
     if (!this.execution.yielded || this.terminal) {
       throw new Error("Followup predecessor is not paused.");
     }
-    if (this.cancellationRequested || this.cohort !== successor.cohort) {
+    if (this.cohort !== successor.cohort) {
       throw new Error("Followup handoff no longer permits a new execution.");
     }
     state.executions.delete(this.execution.runId);
@@ -285,135 +269,45 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
       throw new Error("Followup result already has a consumer.");
     }
     this.taking = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const reply =
         timeoutMs === undefined
           ? await this.result.promise
-          : await Promise.race([
-              this.result.promise,
-              new Promise<undefined>((resolve) => {
-                timer = setTimeout(() => resolve(undefined), timeoutMs);
-              }),
-            ]);
+          : await raceWithTimeout(this.result.promise, timeoutMs, () => undefined);
       this.assertCurrent();
       if (reply) {
         this.consumed = true;
       }
       return reply;
     } finally {
-      clearTimeout(timer);
       this.taking = false;
     }
   }
-  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): () => void {
+  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     const cohorts = [this.cohort, this.execution.admittedCohort].filter(
-      (cohort): cohort is Cohort => Boolean(cohort?.entries.includes(previous)),
+      (cohort): cohort is Cohort =>
+        Boolean(cohort?.entries.some((entry) => isSameSubagentRunOwner(entry, previous))),
     );
     if (
-      (previous.taskRunId ?? previous.runId) !== (next.taskRunId ?? next.runId) ||
-      previous.childSessionKey !== next.childSessionKey ||
-      previous.requesterSessionKey !== next.requesterSessionKey ||
-      previous.requesterAgentId !== next.requesterAgentId ||
-      !next.requesterSettleWake
+      !isSameSubagentRunOwner(previous, next) &&
+      ((previous.taskRunId ?? previous.runId) !== (next.taskRunId ?? next.runId) ||
+        previous.childSessionKey !== next.childSessionKey ||
+        previous.requesterSessionKey !== next.requesterSessionKey ||
+        previous.requesterAgentId !== next.requesterAgentId ||
+        !next.requesterSettleWake)
     ) {
-      return () => {};
+      return;
     }
-    const changes = cohorts.map((cohort) => {
-      const before = cohort.entries;
-      const after = before.map((entry) => (entry === previous ? next : entry));
-      cohort.entries = after;
-      return { cohort, before, after };
-    });
-    return () => {
-      for (const { cohort, before, after } of changes) {
-        if (cohort.entries === after) {
-          cohort.entries = before;
-        }
-      }
-    };
-  }
-  cancel(
-    reason: string,
-    assertCallerCurrent: () => void,
-  ): Promise<Result<FollowupCancellation, string>> {
-    if (this.cancelling) {
-      return this.cancelling;
-    }
-    const execution = this.execution;
-    const cohort = this.cohort;
-    const assertCurrent = () => {
-      assertCallerCurrent();
-      this.assertCurrent();
-      if (this.execution !== execution || this.cohort !== cohort) {
-        throw new Error("Followup changed while cancellation was in progress.");
-      }
-    };
-    try {
-      assertCurrent();
-    } catch (error) {
-      return Promise.resolve(err(formatErrorMessage(error)));
-    }
-    const cancelNative = execution.native?.cancel;
-    if (cancelNative) {
-      return cancelNative(reason, assertCurrent).then((result) =>
-        result.ok ? ok({ kind: "settled" as const }) : result,
+    for (const cohort of cohorts) {
+      cohort.entries = cohort.entries.map((entry) =>
+        isSameSubagentRunOwner(entry, previous) ? next : entry,
       );
     }
-    if (!execution.yielded || !cohort || this.terminal) {
-      return Promise.resolve(err("Followup has no cancellable paused execution."));
-    }
-    const entries = [...cohort.entries];
-    const assertCohortCurrent = () => {
-      assertCurrent();
-      if (
-        entries.length !== cohort.entries.length ||
-        !entries.every((entry) => cohort.entries.includes(entry))
-      ) {
-        throw new Error("Followup cohort changed while cancellation was in progress.");
-      }
-    };
-    this.cancellationRequested = true;
-    const cancellation = (async (): Promise<Result<FollowupCancellation, string>> => {
-      try {
-        assertCohortCurrent();
-        await cancelFollowupCohort({
-          request: this.request,
-          entries,
-          assertCurrent: assertCohortCurrent,
-        });
-        assertCohortCurrent();
-        const outcome = await this.settle(
-          execution.runId,
-          { status: "error", stopReason: "rpc", error: reason, endedAt: Date.now() },
-          assertCohortCurrent,
-        );
-        if (outcome.kind !== "terminal") {
-          throw new Error("Followup cancellation has no terminal result.");
-        }
-        return ok({
-          kind: "terminal",
-          runId: execution.runId,
-          reply: outcome.reply,
-          assertCurrent: assertCohortCurrent,
-        });
-      } catch (error) {
-        return err(formatErrorMessage(error));
-      }
-    })();
-    this.cancelling = cancellation;
-    void cancellation.then((result) => {
-      if (!result.ok && this.cancelling === cancellation) {
-        this.cancelling = undefined;
-      }
-    });
-    return cancellation;
   }
   close(error?: unknown) {
     if (this.signal.aborted) {
       return;
     }
-    this.cancelling = undefined;
     this.lifetime.abort(error ?? new Error("Followup completion custody ended."));
     if (state.executions.get(this.execution.runId) === this) {
       state.executions.delete(this.execution.runId);

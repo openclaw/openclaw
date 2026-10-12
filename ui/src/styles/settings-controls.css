@@ -11,7 +11,9 @@
 .settings-row__control .btn,
 .settings-section__actions .btn,
 .settings-section__actions .agent-select__trigger,
-.settings-group .data-table-search input {
+.settings-group .data-table-search input,
+input.settings-input,
+select.settings-select:not([multiple]) {
   height: var(--settings-control-height);
   padding-block: 0;
   box-sizing: border-box;
@@ -74,10 +76,6 @@
   background: var(--bg-elevated);
 }
 
-:root[data-theme-mode="light"] .settings-segmented--primary {
-  background: white;
-}
-
 .settings-segmented--compact {
   --settings-control-height: 24px;
 
@@ -94,14 +92,6 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-wa-radio-group.settings-segmented::part(form-control-label) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
 }
 
 /* The parent selector also wins over the shared .btn hover/active chrome. */
@@ -227,13 +217,6 @@ wa-radio-group.settings-segmented::part(form-control-label) {
   }
 }
 
-input.settings-input,
-select.settings-select:not([multiple]) {
-  height: var(--settings-control-height);
-  padding-block: 0;
-  box-sizing: border-box;
-}
-
 .settings-input,
 .settings-select {
   width: 100%;
@@ -277,7 +260,18 @@ select.settings-select:not([multiple]) {
   padding-right: 36px;
   background-image: var(--select-chevron);
   background-repeat: no-repeat;
-  background-position: right 10px center;
+  background-position:
+    right 18px center,
+    right 14px center;
+  background-size: 5px 5px;
+}
+
+@media (forced-colors: active) {
+  select.settings-select:not([multiple]) {
+    appearance: auto;
+    padding-inline-end: 10px;
+    background-image: none;
+  }
 }
 
 .settings-input::placeholder {

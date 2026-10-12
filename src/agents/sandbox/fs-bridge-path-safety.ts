@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PathAliasPolicy } from "@openclaw/fs-safe/advanced";
+import { openRootFile, type RootFileOpenResult } from "../../infra/boundary-file-read.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
-import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import {
   resolveSandboxFsMount,
   type SandboxResolvedFsPath,
@@ -10,6 +12,7 @@ import {
 } from "./fs-paths.js";
 import {
   getSandboxHostPathPolicyKey,
+  normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
 import {
@@ -64,8 +67,6 @@ type RunCommand = (
   script: string,
   options?: {
     args?: string[];
-    stdin?: Buffer | string;
-    allowFailure?: boolean;
     signal?: AbortSignal;
   },
 ) => Promise<{ stdout: Buffer }>;
@@ -116,13 +117,23 @@ export class SandboxFsPathGuard {
   async openReadableFile(
     target: SandboxResolvedFsPath,
     signal?: AbortSignal,
-  ): Promise<RootFileOpenResult & { ok: true }> {
+    expectedPolicyPath?: string,
+    allowedType?: BoundaryAllowedType,
+  ): Promise<RootFileOpenResult & { ok: true; containerPath: string }> {
     const resolved = await this.resolveCanonicalReadTarget(target, "read files", signal);
-    const opened = await this.openBoundaryWithinRequiredMount(resolved.target, "read files");
+    const opened = await this.openBoundaryWithinRequiredMount(resolved.target, "read files", {
+      allowedType:
+        allowedType === "file-or-directory"
+          ? this.pathIsExistingDirectory(resolved.target.hostPath)
+            ? "directory"
+            : "file"
+          : allowedType,
+    });
     if (!opened.ok) {
       throw sandboxBoundaryError("read files", target.containerPath, opened.error);
     }
     try {
+      this.assertExpectedPolicyPath(resolved.target, opened.path, expectedPolicyPath);
       // Resolve aliases in the container before opening host bytes: an
       // intermediate hop can cross mounts even when its host endpoint does not.
       // Reject a host alias changed after that resolution; keep the same FD.
@@ -138,7 +149,7 @@ export class SandboxFsPathGuard {
       fs.closeSync(opened.fd);
       throw error;
     }
-    return opened;
+    return { ...opened, containerPath: resolved.target.containerPath };
   }
 
   private async resolveCanonicalEndpoint(
@@ -181,6 +192,40 @@ export class SandboxFsPathGuard {
     return resolved.canonicalHostPath ?? `container:${resolved.containerPath}`;
   }
 
+  async resolveReadPolicyPath(
+    target: SandboxResolvedFsPath,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const resolved = await this.resolveCanonicalReadTarget(target, "authorize file reads", signal);
+    return this.policyPathForCanonicalHostIdentity(
+      resolved.target,
+      resolveIdentityPathViaExistingAncestorSync(resolved.canonicalHostPath),
+    );
+  }
+
+  private policyPathForCanonicalHostIdentity(
+    target: SandboxResolvedFsPath,
+    observedPath: string,
+  ): string {
+    const canonicalHostPath = normalizeSandboxHostPath(observedPath);
+    const requestedMount = this.resolveMountByContainerPath(target.containerPath);
+    const selected =
+      requestedMount && isPathInside(requestedMount.canonicalHostRoot, canonicalHostPath)
+        ? requestedMount
+        : this.mountsByContainer
+            .toSorted((a, b) => b.canonicalHostRoot.length - a.canonicalHostRoot.length)
+            .find((mount) => isPathInside(mount.canonicalHostRoot, canonicalHostPath));
+    if (!selected) {
+      throw new Error(`Sandbox path escapes allowed mounts: ${target.containerPath}`);
+    }
+    const relativeHost = path.relative(selected.canonicalHostRoot, canonicalHostPath);
+    return normalizeContainerPathCore(
+      relativeHost
+        ? path.posix.join(selected.containerRoot, ...relativeHost.split(path.sep))
+        : selected.containerRoot,
+    );
+  }
+
   async resolveCanonicalReadTarget(
     target: SandboxResolvedFsPath,
     action: string,
@@ -209,26 +254,6 @@ export class SandboxFsPathGuard {
       throw new Error(`Sandbox path escapes allowed mounts; cannot ${action}: ${containerPath}`);
     }
     return lexicalMount;
-  }
-
-  private finalizePinnedEntry(params: {
-    mount: SandboxFsMount;
-    parentPath: string;
-    basename: string;
-    targetPath: string;
-    action: string;
-  }): PinnedSandboxEntry {
-    const relativeParentPath = path.posix.relative(params.mount.containerRoot, params.parentPath);
-    if (relativePathEscapesContainerRoot(relativeParentPath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.targetPath}`,
-      );
-    }
-    return {
-      mountRootPath: params.mount.containerRoot,
-      relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
-      basename: params.basename,
-    };
   }
 
   private async assertGuardedPathSafety(
@@ -311,14 +336,12 @@ export class SandboxFsPathGuard {
       throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
     }
     const parentPath = normalizeContainerPathCore(path.posix.dirname(target.containerPath));
-    const mount = this.resolveRequiredMount(parentPath, action);
-    return this.finalizePinnedEntry({
-      mount,
+    const { mountRootPath, relativePath } = this.resolvePinnedDirectory(
       parentPath,
-      basename,
-      targetPath: target.containerPath,
       action,
-    });
+      target.containerPath,
+    );
+    return { mountRootPath, relativeParentPath: relativePath, basename };
   }
 
   async resolveAnchoredSandboxEntry(
@@ -347,14 +370,12 @@ export class SandboxFsPathGuard {
     action: string,
   ): Promise<PinnedSandboxEntry> {
     const anchoredTarget = await this.resolveAnchoredSandboxEntry(target, action);
-    const mount = this.resolveRequiredMount(anchoredTarget.canonicalParentPath, action);
-    return this.finalizePinnedEntry({
-      mount,
-      parentPath: anchoredTarget.canonicalParentPath,
-      basename: anchoredTarget.basename,
-      targetPath: target.containerPath,
+    const { mountRootPath, relativePath } = this.resolvePinnedDirectory(
+      anchoredTarget.canonicalParentPath,
       action,
-    });
+      target.containerPath,
+    );
+    return { mountRootPath, relativeParentPath: relativePath, basename: anchoredTarget.basename };
   }
 
   /**
@@ -400,12 +421,18 @@ export class SandboxFsPathGuard {
     target: SandboxResolvedFsPath,
     action: string,
   ): PinnedSandboxDirectoryEntry {
-    const mount = this.resolveRequiredMount(target.containerPath, action);
-    const relativePath = path.posix.relative(mount.containerRoot, target.containerPath);
+    return this.resolvePinnedDirectory(target.containerPath, action);
+  }
+
+  private resolvePinnedDirectory(
+    containerPath: string,
+    action: string,
+    displayPath = containerPath,
+  ): PinnedSandboxDirectoryEntry {
+    const mount = this.resolveRequiredMount(containerPath, action);
+    const relativePath = path.posix.relative(mount.containerRoot, containerPath);
     if (relativePathEscapesContainerRoot(relativePath)) {
-      throw new Error(
-        `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
-      );
+      throw new Error(`Sandbox path escapes allowed mounts; cannot ${action}: ${displayPath}`);
     }
     return {
       mountRootPath: mount.containerRoot,
@@ -418,6 +445,22 @@ export class SandboxFsPathGuard {
       return fs.statSync(hostPath).isDirectory();
     } catch {
       return false;
+    }
+  }
+
+  private assertExpectedPolicyPath(
+    target: SandboxResolvedFsPath,
+    observedPolicyPath: string,
+    expectedPolicyPath: string | undefined,
+  ): void {
+    if (
+      expectedPolicyPath !== undefined &&
+      // openRootFile already bound this admitted path to the returned FD.
+      // Re-resolving it here would observe a later pathname replacement.
+      this.policyPathForCanonicalHostIdentity(target, observedPolicyPath) !==
+        normalizeContainerPathCore(expectedPolicyPath)
+    ) {
+      throw new Error(`Sandbox file changed after authorization: ${target.containerPath}`);
     }
   }
 

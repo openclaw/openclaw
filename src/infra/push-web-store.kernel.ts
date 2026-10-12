@@ -18,6 +18,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { normalizeWebPushDevicePreferences } from "./push-web-preferences.js";
+import { boundWebPushSubscriptionsAdmission } from "./push-web-store.cache.js";
 import {
   WEB_PUSH_VAPID_STATE_KEY,
   WebPushSubscriptionBindingError,
@@ -32,14 +33,22 @@ import {
   type WebPushMutationProfiles,
   type WebPushMutationProfileFacts,
 } from "./push-web-store.records.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  readSqliteDatabaseWriteRevision,
+} from "./sqlite-database-admission.js";
+import { parseSqliteTableDefinition } from "./sqlite-schema-contract-assembly.js";
+import { getAdmittedSqliteSchemaFacts, type SqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS = 1_024;
 
-const ensuredWebPushBindingDatabases = new WeakSet<DatabaseSync>();
+const webPushBindingSchemas = new WeakSet<SqliteSchemaFacts>();
 const ensureWebPushApprovalDeliveryStateSchema = createOpenClawStateSchemaEnsurer({
   table: "web_push_approval_deliveries",
+  indexes: ["idx_web_push_approval_deliveries_subscription"],
   endMarker: "  ON web_push_approval_deliveries(subscription_id, approval_id);\n",
   operationLabel: "web-push.approval-delivery.schema.ensure",
 });
@@ -56,50 +65,87 @@ export function ensureWebPushSubscriptionBindingColumns(db: DatabaseSync): void 
 }
 
 function ensureWebPushSubscriptionBindingSchema(database: OpenClawStateDatabase): void {
-  const options = webPushDatabaseOptions(database);
-  if (ensuredWebPushBindingDatabases.has(database.db)) {
-    return;
+  const schema = getAdmittedSqliteSchemaFacts(database.db);
+  if (schema) {
+    if (webPushBindingSchemas.has(schema)) {
+      return;
+    }
+    const table = schema.tableSql.get("web_push_subscriptions");
+    const columns = table
+      ? parseSqliteTableDefinition(table, "web_push_subscriptions").columns
+      : undefined;
+    if (
+      columns?.has("device_id") &&
+      columns.has("user_profile_id") &&
+      columns.has("preferences_json")
+    ) {
+      webPushBindingSchemas.add(schema);
+      return;
+    }
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => ensureWebPushSubscriptionBindingColumns(db),
-    options,
+    webPushDatabaseOptions(database),
     { operationLabel: "web-push.subscription-binding.schema.ensure" },
   );
-  ensuredWebPushBindingDatabases.add(database.db);
+  const installed = getAdmittedSqliteSchemaFacts(database.db);
+  if (installed) {
+    webPushBindingSchemas.add(installed);
+  }
 }
 
 function ensureWebPushApprovalDeliverySchema(database: OpenClawStateDatabase): void {
   ensureWebPushApprovalDeliveryStateSchema(webPushDatabaseOptions(database));
 }
 
-function requestWebPushMutationAdmission(
-  db: DatabaseSync,
-  profiles: WebPushMutationProfiles | undefined,
+type WebPushSubscriptionMutation = {
+  database: OpenClawStateDatabase;
+  requestProfiles?: WebPushMutationProfiles;
+  assertCurrent?: () => void;
+};
+
+function runWebPushSubscriptionMutation<T>(
+  params: WebPushSubscriptionMutation,
   boundProfile: string | null | undefined,
-): void {
-  let facts: WebPushMutationProfileFacts | undefined;
-  if (profiles) {
-    const resolve = (reference: string | null | undefined) =>
-      reference ? selectResolvedUserProfileMetadataById(db, reference)?.id : undefined;
-    const original = resolve(profiles.original);
-    const current = profiles.current === profiles.original ? original : resolve(profiles.current);
-    const bound =
-      boundProfile === profiles.original
-        ? original
-        : boundProfile === profiles.current
-          ? current
-          : resolve(boundProfile);
-    facts = {
-      profileId: current ?? null,
-      bindingCurrent:
-        (!profiles.original || original !== undefined) &&
-        (!profiles.current || current !== undefined) &&
-        (!boundProfile || bound !== undefined) &&
-        original === current &&
-        bound === current,
-    };
+  mutate: (db: DatabaseSync) => T,
+): T {
+  ensureWebPushSubscriptionBindingSchema(params.database);
+  const options = webPushDatabaseOptions(params.database);
+  if (params.requestProfiles?.original || params.requestProfiles?.current) {
+    ensureUserProfilesSchema(options);
   }
-  requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    if (params.assertCurrent) {
+      params.assertCurrent();
+    } else {
+      const profiles = params.requestProfiles;
+      let facts: WebPushMutationProfileFacts | undefined;
+      if (profiles) {
+        const resolve = (reference: string | null | undefined) =>
+          reference ? selectResolvedUserProfileMetadataById(db, reference)?.id : undefined;
+        const original = resolve(profiles.original);
+        const current =
+          profiles.current === profiles.original ? original : resolve(profiles.current);
+        const bound =
+          boundProfile === profiles.original
+            ? original
+            : boundProfile === profiles.current
+              ? current
+              : resolve(boundProfile);
+        facts = {
+          profileId: current ?? null,
+          bindingCurrent:
+            (!profiles.original || original !== undefined) &&
+            (!profiles.current || current !== undefined) &&
+            (!boundProfile || bound !== undefined) &&
+            original === current &&
+            bound === current,
+        };
+      }
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
+    }
+    return mutate(db);
+  }, options);
 }
 
 export function findBoundWebPushSubscriptionByEndpointInDatabase(params: {
@@ -119,26 +165,15 @@ export function findBoundWebPushSubscriptionByEndpointInDatabase(params: {
   return row ? boundWebPushSubscriptionFromRow(row) : null;
 }
 
-export function setWebPushSubscriptionPreferencesInDatabase(params: {
-  endpoint: string;
-  preferences: WebPushDevicePreferences;
-  expectedDeviceId: string;
-  expectedUserProfileId: string | null;
-  requestProfiles?: WebPushMutationProfiles;
-  assertCurrent?: () => void;
-  database: OpenClawStateDatabase;
-}): boolean {
-  ensureWebPushSubscriptionBindingSchema(params.database);
-  const options = webPushDatabaseOptions(params.database);
-  if (params.requestProfiles?.original || params.requestProfiles?.current) {
-    ensureUserProfilesSchema(options);
-  }
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    if (params.assertCurrent) {
-      params.assertCurrent();
-    } else {
-      requestWebPushMutationAdmission(db, params.requestProfiles, params.expectedUserProfileId);
-    }
+export function setWebPushSubscriptionPreferencesInDatabase(
+  params: WebPushSubscriptionMutation & {
+    endpoint: string;
+    preferences: WebPushDevicePreferences;
+    expectedDeviceId: string;
+    expectedUserProfileId: string | null;
+  },
+): boolean {
+  return runWebPushSubscriptionMutation(params, params.expectedUserProfileId, (db) => {
     const result = executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<WebPushDatabase>(db)
@@ -157,7 +192,7 @@ export function setWebPushSubscriptionPreferencesInDatabase(params: {
         ),
     );
     return Number(result.numAffectedRows ?? 0) === 1;
-  }, options);
+  });
 }
 
 export function listWebPushSubscriptionsInDatabase(
@@ -178,7 +213,12 @@ export function listWebPushSubscriptionsInDatabase(
 export function hasBoundWebPushSubscriptionsInDatabase(database: OpenClawStateDatabase): boolean {
   ensureWebPushSubscriptionBindingSchema(database);
   const { db } = database;
-  return Boolean(
+  const admitted = getSqliteDatabaseAdmission(db, boundWebPushSubscriptionsAdmission);
+  if (admitted !== undefined) {
+    return admitted;
+  }
+  const revision = readSqliteDatabaseWriteRevision(db);
+  const hasBound = Boolean(
     executeSqliteQueryTakeFirstSync(
       db,
       getNodeSqliteKysely<WebPushDatabase>(db)
@@ -189,6 +229,10 @@ export function hasBoundWebPushSubscriptionsInDatabase(database: OpenClawStateDa
         .limit(1),
     ),
   );
+  if (revision !== undefined && revision === readSqliteDatabaseWriteRevision(db)) {
+    publishSqliteDatabaseAdmission(db, boundWebPushSubscriptionsAdmission, hasBound);
+  }
+  return hasBound;
 }
 
 /** Lists only subscriptions reconciled by an authenticated browser device. */
@@ -421,27 +465,17 @@ export function listTerminalWebPushApprovalDeliveryIdsInDatabase(params: {
 }
 
 /** Reread the endpoint row inside the write transaction before creating or updating it. */
-export function upsertWebPushSubscriptionInDatabase(params: {
-  endpointHash: string;
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
-  binding?: { deviceId: string; userProfileId: string | null };
-  candidateSubscriptionId: string;
-  nowMs: number;
-  requestProfiles?: WebPushMutationProfiles;
-  assertCurrent?: () => void;
-  database: OpenClawStateDatabase;
-}): WebPushSubscription {
-  ensureWebPushSubscriptionBindingSchema(params.database);
-  if (params.requestProfiles?.original || params.requestProfiles?.current) {
-    ensureUserProfilesSchema(webPushDatabaseOptions(params.database));
-  }
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    if (params.assertCurrent) {
-      params.assertCurrent();
-    } else {
-      requestWebPushMutationAdmission(db, params.requestProfiles, params.binding?.userProfileId);
-    }
+export function upsertWebPushSubscriptionInDatabase(
+  params: WebPushSubscriptionMutation & {
+    endpointHash: string;
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+    binding?: { deviceId: string; userProfileId: string | null };
+    candidateSubscriptionId: string;
+    nowMs: number;
+  },
+): WebPushSubscription {
+  return runWebPushSubscriptionMutation(params, params.binding?.userProfileId, (db) => {
     const stateDb = getNodeSqliteKysely<WebPushDatabase>(db);
     const existingRow = executeSqliteQueryTakeFirstSync(
       db,
@@ -501,29 +535,24 @@ export function upsertWebPushSubscriptionInDatabase(params: {
           }),
         ),
     );
+    publishSqliteDatabaseAdmission(
+      db,
+      boundWebPushSubscriptionsAdmission,
+      row.device_id ? true : undefined,
+    );
     return subscription;
-  }, webPushDatabaseOptions(params.database));
+  });
 }
 
-export function deleteBoundWebPushSubscriptionInDatabase(params: {
-  endpointHash: string;
-  endpoint: string;
-  expectedDeviceId: string;
-  expectedUserProfileId: string | null;
-  requestProfiles?: WebPushMutationProfiles;
-  assertCurrent?: () => void;
-  database: OpenClawStateDatabase;
-}): boolean {
-  ensureWebPushSubscriptionBindingSchema(params.database);
-  if (params.requestProfiles?.original || params.requestProfiles?.current) {
-    ensureUserProfilesSchema(webPushDatabaseOptions(params.database));
-  }
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    if (params.assertCurrent) {
-      params.assertCurrent();
-    } else {
-      requestWebPushMutationAdmission(db, params.requestProfiles, params.expectedUserProfileId);
-    }
+export function deleteBoundWebPushSubscriptionInDatabase(
+  params: WebPushSubscriptionMutation & {
+    endpointHash: string;
+    endpoint: string;
+    expectedDeviceId: string;
+    expectedUserProfileId: string | null;
+  },
+): boolean {
+  return runWebPushSubscriptionMutation(params, params.expectedUserProfileId, (db) => {
     const result = executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<WebPushDatabase>(db)
@@ -537,8 +566,12 @@ export function deleteBoundWebPushSubscriptionInDatabase(params: {
           params.expectedUserProfileId,
         ),
     );
-    return Number(result.numAffectedRows ?? 0) > 0;
-  }, webPushDatabaseOptions(params.database));
+    const deleted = Number(result.numAffectedRows ?? 0) > 0;
+    if (deleted) {
+      publishSqliteDatabaseAdmission(db, boundWebPushSubscriptionsAdmission, undefined);
+    }
+    return deleted;
+  });
 }
 
 /** Delete an expired send target only if no newer registration replaced it in flight. */
@@ -561,7 +594,11 @@ export function deleteWebPushSubscriptionIfCurrentInDatabase(params: {
         .where("auth", "=", subscription.keys.auth)
         .where("updated_at_ms", "=", subscription.updatedAtMs),
     );
-    return Number(result.numAffectedRows ?? 0) > 0;
+    const deleted = Number(result.numAffectedRows ?? 0) > 0;
+    if (deleted) {
+      publishSqliteDatabaseAdmission(db, boundWebPushSubscriptionsAdmission, undefined);
+    }
+    return deleted;
   }, webPushDatabaseOptions(params.database));
 }
 
@@ -574,7 +611,6 @@ export function readPersistedVapidKeyPairInDatabase(
 /** First committed keypair wins so concurrent gateway bootstraps share one signing identity. */
 export function insertVapidKeyPairIfAbsentInDatabase(params: {
   candidate: VapidKeyPair;
-  nowMs: number;
   database: OpenClawStateDatabase;
 }): VapidKeyPair {
   return updateConfigMachineState<VapidKeyPair>(

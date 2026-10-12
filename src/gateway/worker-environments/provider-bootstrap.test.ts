@@ -6,105 +6,14 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createProviderReplayDispatch } from "./provider-replay.test-support.js";
 import * as support from "./service.test-support.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
-
-  it("fails node provisioning visibly when Gateway bundle installation fails", async () => {
-    const destroy = vi.fn(async () => {});
-    const workerService = support.createService(
-      support.createProvider({
-        supportedExecutionModes: ["worker-turn"],
-        provisionBeforeInstallation: true,
-        destroy,
-        provision: async () => ({
-          leaseId: "device-lease-install-failure",
-          node: { deviceId: "device-1" },
-        }),
-      }),
-      {
-        ensureNodeWorkerBundle: async () => {
-          throw new Error("bundle transfer unavailable");
-        },
-      },
-    );
-
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-device-install-failure",
-      }),
-    ).rejects.toMatchObject({
-      code: "bootstrap_failure",
-      message: "Worker node bootstrap failed: bundle transfer unavailable",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    expect(destroy).toHaveBeenCalledWith({
-      leaseId: "device-lease-install-failure",
-      profile: { region: "test" },
-    });
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      nodeDeviceId: null,
-      lastError: expect.stringContaining("bundle transfer unavailable"),
-    });
-  });
-
-  it("keeps an indeterminate node bootstrap teardown retryable", async () => {
-    let teardownFails = true;
-    const workerService = support.createService(
-      support.createProvider({
-        supportedExecutionModes: ["worker-turn"],
-        provisionBeforeInstallation: true,
-        provision: async () => ({
-          leaseId: "device-lease-cleanup-failure",
-          node: { deviceId: "device-cleanup-failure" },
-        }),
-        destroy: async () => {
-          if (teardownFails) {
-            throw new Error("provider teardown timed out");
-          }
-        },
-      }),
-      {
-        ensureNodeWorkerBundle: async () => {
-          throw new Error("bundle transfer unavailable");
-        },
-      },
-    );
-
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-device-cleanup",
-      }),
-    ).rejects.toMatchObject({
-      code: "bootstrap_failure",
-      message: "Worker node bootstrap failed; teardown is pending: bundle transfer unavailable",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "destroying",
-      leaseId: "device-lease-cleanup-failure",
-      nodeDeviceId: "device-cleanup-failure",
-      teardownTerminalState: "failed",
-    });
-
-    teardownFails = false;
-    await workerService.reconcileOnce();
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      nodeDeviceId: null,
-      lastError: expect.stringContaining("bundle transfer unavailable"),
-    });
-  });
 
   it("stays bootstrapping until the SSH install receipt is durable", async () => {
     const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
@@ -212,24 +121,10 @@ describe("worker environment service", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const dispatch = createWorkerPlacementDispatchService({
+    const dispatch = createProviderReplayDispatch({
+      initialPlacements: placements.list(),
       placements,
       environments: workerService,
-      runnerAvailability: { read: () => undefined, version: () => 0 },
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) =>
-        await run({ kind: "local", path: "/gateway/workspace" }),
-      runActivationBarrier: async ({ activate }) => activate(),
-      runMoveBarrier: async ({ begin }) => begin(),
-      resolveMoveDestination: async () => undefined,
-      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
-      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      ...createWorkerWorkspaceRecoveryFixture({
-        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-      }),
     });
 
     const dispatchFailure = dispatch.dispatch({

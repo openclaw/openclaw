@@ -64,6 +64,12 @@ runners and registries. These helpers reuse their core owners; register the
 session fixture lifecycle explicitly. Use published runtime subpaths when
 they already expose the needed operation.
 
+After closing retained plugin runtime handles, call `resetPluginRuntimeStateForTest()`
+and await `waitForPluginCacheRetirement(true)` from `plugin-test-runtime` to include
+borrowed cache generations. Assert that
+its `failures` array is empty before deleting fixture files or restoring the
+environment. A rejected or failed retirement must leave the fixture intact.
+
 Await `listChannelIngressQueueAccountIdsForTests` from
 `channel-ingress-test-runtime` or `plugin-state-test-runtime`. It uses the shared
 read-only worker and leaves missing state uncreated. Join asynchronous database
@@ -72,6 +78,12 @@ cleanup before removing a fixture's state directory.
 For direct worker fixtures, pair `resolveRuntimeWorkerUrl` from `process-runtime`
 with `resolveRuntimeWorkerThreadExecArgv` from `test-env`. This keeps source and
 built workers on the runtime owner's startup arguments.
+
+When a test or hook lazily loads a compiled-subprocess declaration, preload it
+at collection with `import "openclaw/plugin-sdk/compiled-subprocess-testing";`.
+This repo-local, non-production subpath has no exports and keeps worker
+preparation outside test deadlines without binding the subject before its mocks
+or module resets. Use it only in tests that already load a declaration.
 
 ### Available exports
 
@@ -100,7 +112,6 @@ built workers on the runtime owner's startup arguments.
 | `createPluginRuntimeMock`                                                 | Build a mocked plugin runtime surface. Import from `plugin-sdk/plugin-test-runtime`                                                         |
 | `createPluginSetupWizardStatus`                                           | Build setup status helpers for channel plugins. Import from `plugin-sdk/plugin-test-runtime`                                                |
 | `createTestWizardPrompter`                                                | Build a mocked setup wizard prompter. Import from `plugin-sdk/plugin-test-runtime`                                                          |
-| `createRuntimeTaskFlow`                                                   | Create isolated runtime task-flow state. Import from `plugin-sdk/plugin-test-runtime`                                                       |
 | `runProviderCatalog`                                                      | Execute a provider catalog hook with test dependencies. Import from `plugin-sdk/plugin-test-runtime`                                        |
 | `resolveProviderModelPickerEntries`                                       | Resolve provider model-picker entries in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                       |
 | `buildProviderPluginMethodChoice`                                         | Build provider wizard choice ids for assertions. Import from `plugin-sdk/plugin-test-runtime`                                               |

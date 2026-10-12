@@ -1,11 +1,20 @@
+import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionMaintenancePreservationSnapshot = {
-  providerKeys: string[];
-  workIdentities: string[];
-  lifecycleIdentities: string[];
-};
+export function addSessionMaintenancePreserveKeys(
+  keys: Set<string>,
+  values: Iterable<string | undefined> | undefined,
+): void {
+  for (const value of values ?? []) {
+    const normalized = normalizeStoreSessionKey(value ?? "");
+    if (normalized) {
+      keys.add(normalized);
+    }
+  }
+}
 
 export function collectSessionWorkAdmissionKeysFromSnapshot(
   store: Record<string, SessionEntry>,
@@ -34,12 +43,7 @@ export function resolveSessionMaintenancePreserveKeys(params: {
   baseKeys?: Iterable<string | undefined>;
 }): Set<string> {
   const keys = new Set(params.snapshot.providerKeys);
-  for (const key of params.baseKeys ?? []) {
-    const normalized = normalizeStoreSessionKey(key ?? "");
-    if (normalized) {
-      keys.add(normalized);
-    }
-  }
+  addSessionMaintenancePreserveKeys(keys, params.baseKeys);
   for (const key of collectSessionWorkAdmissionKeysFromSnapshot(
     params.store,
     params.snapshot.workIdentities,
@@ -61,4 +65,41 @@ export function resolveSessionMaintenancePreserveKeys(params: {
     }
   }
   return keys;
+}
+
+export function assertMaintenancePreservationCompatible(
+  sent: SessionMaintenancePreservationSnapshot,
+  current: SessionMaintenancePreservationSnapshot,
+  plans?: readonly SessionEntryMaintenancePlan[],
+): void {
+  const added = new Set(
+    (["providerKeys", "workIdentities", "lifecycleIdentities"] as const).flatMap((kind) => {
+      const previous = new Set(sent[kind].map((id) => id.trim()));
+      return current[kind]
+        .flatMap((id) => (previous.has(id.trim()) ? [] : [id.trim(), normalizeStoreSessionKey(id)]))
+        .filter(Boolean);
+    }),
+  );
+  // Lost protection only over-preserves the sent plan, so it cannot invalidate a commit.
+  if (added.size === 0) {
+    return;
+  }
+  // Matching provider keys against session IDs only makes rare conflicts more conservative.
+  const protectsRow = (sessionKey: string, sessionId?: string) =>
+    added.has(sessionKey.trim()) ||
+    added.has(normalizeStoreSessionKey(sessionKey)) ||
+    (sessionId && added.has(sessionId.trim()));
+  if (
+    !plans ||
+    plans.some(
+      (plan) =>
+        plan.entryRemovals.some((row) =>
+          protectsRow(row.sessionKey, row.expectedEntry?.sessionId),
+        ) ||
+        plan.archivedEntries.some((row) => protectsRow(row.sessionKey, row.sessionId)) ||
+        plan.stateDeletePlans.some((row) => protectsRow("", row.sessionId)),
+    )
+  ) {
+    throw new SqliteSessionMutationConflictError("session maintenance");
+  }
 }

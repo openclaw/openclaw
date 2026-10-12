@@ -14,6 +14,7 @@ import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
+import ai.openclaw.app.node.readAndroidPermissionSnapshot
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.MascotMood
 import android.Manifest
@@ -233,14 +234,9 @@ class InitialOnboardingLayoutTest {
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun setupOffersFourOptionalPermissionsAndCanSkipThem() {
     withOnboarding(permissionsStep = true) { model, _ ->
-      System.getenv("OPENCLAW_PERMISSION_PROOF_DIR")?.let { directory ->
-        val bitmap = composeRule.onNodeWithTag(OnboardingViewportTag).captureToImage().asAndroidBitmap()
-        File(directory, "setup.png").apply { checkNotNull(parentFile).mkdirs() }.outputStream().use {
-          assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
-        }
-      }
+      capturePermissions("setup")
       listOf("Notifications", "Microphone", "Camera", "Location").forEach {
-        composeRule.onNodeWithText(it).assertIsDisplayed()
+        composeRule.onNodeWithText(it).performScrollTo().assertIsDisplayed()
       }
       composeRule.onNodeWithText("Contacts").assertDoesNotExist()
       composeRule.onNodeWithText("Additional features").performScrollTo().performClick()
@@ -289,6 +285,11 @@ class InitialOnboardingLayoutTest {
                 .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_NAMES", request.requestedPermissions)
                 .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_RESULTS", IntArray(permissions.size) { PackageManager.PERMISSION_DENIED }),
             )
+            requester.onRequestPermissionsResult(
+              request.requestCode,
+              request.requestedPermissions,
+              IntArray(permissions.size) { PackageManager.PERMISSION_DENIED },
+            )
           }
           composeRule.runOnIdle {
             val dialog = ShadowDialog.getLatestDialog() as? AlertDialog
@@ -320,6 +321,15 @@ class InitialOnboardingLayoutTest {
     shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, true)
     shadowOf(app).grantPermissions(Manifest.permission.READ_SMS)
     withOnboarding(permissionsStep = true) { model, activity ->
+      val disclosure =
+        composeRule
+          .onNodeWithText("Includes additional permissions:", substring = true)
+          .performScrollTo()
+          .fetchSemanticsNode()
+          .config[SemanticsProperties.Text]
+          .joinToString { it.text }
+      assertEquals(SensitiveFeatureConfig.smsEnabled, disclosure.contains("SMS"))
+      assertEquals(SensitiveFeatureConfig.callLogEnabled, disclosure.contains("Call Log"))
       composeRule.onNodeWithText("Additional features").performScrollTo().performClick()
       if (!SensitiveFeatureConfig.smsEnabled) {
         composeRule.onNodeWithText("SMS").assertDoesNotExist()
@@ -351,6 +361,7 @@ class InitialOnboardingLayoutTest {
               .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_NAMES", request.requestedPermissions)
               .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_RESULTS", intArrayOf(PackageManager.PERMISSION_DENIED)),
           )
+          assertTrue(requester.onRequestPermissionsResult(request.requestCode, request.requestedPermissions, intArrayOf(PackageManager.PERMISSION_DENIED)))
         }
         val recoveryMessage =
           composeRule.runOnIdle {
@@ -387,6 +398,194 @@ class InitialOnboardingLayoutTest {
         assertTrue("Partial access must be visible: $partialStatus", partialStatus.contains("Partial"))
       } finally {
         requester.detach(activity)
+      }
+    }
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h720dp-mdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun setupBatchAllowsAllWithoutEnablingCameraOrLocation() = checkSetupBatch("allowed")
+
+  @Test
+  @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h720dp-mdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun setupBatchKeepsPartialGrantsAndCanContinue() = checkSetupBatch("partial")
+
+  @Test
+  @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h720dp-mdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun setupBatchCanDenyAllAndContinueOnAndroid12() = checkSetupBatch("denied")
+
+  @Test
+  @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h720dp-mdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun setupBatchCanCancelAndContinue() = checkSetupBatch("canceled")
+
+  @Test
+  @Config(sdk = [34])
+  fun setupCanContinueWhileWaitingForPermissionHostWithoutLateDialogs() {
+    withOnboarding(permissionsStep = true) { model, activity ->
+      val requester = ApplicationProvider.getApplicationContext<NodeApp>().permissionRequester
+      composeRule.runOnIdle { requester.attach(activity) }
+      try {
+        composeRule.onNodeWithText("Request all").performScrollTo().performClick()
+        composeRule.onNodeWithText("Requesting permissions…").assertIsNotEnabled()
+        composeRule.onNodeWithText("Continue").performClick()
+        composeRule.runOnIdle {
+          assertTrue(model.onboardingCompleted.value)
+          requester.activate(activity)
+        }
+        composeRule.runOnIdle {
+          assertTrue(shadowOf(activity).nextStartedActivity == null)
+          assertFalse(model.cameraEnabled.value)
+          assertEquals(ai.openclaw.app.LocationMode.Off, model.locationMode.value)
+        }
+      } finally {
+        requester.detach(activity)
+      }
+    }
+  }
+
+  private fun checkSetupBatch(outcome: String) {
+    withOnboarding(permissionsStep = true) { model, activity ->
+      val app = ApplicationProvider.getApplicationContext<NodeApp>()
+      val requester = app.permissionRequester
+      composeRule.runOnIdle {
+        activity.setTheme(androidx.appcompat.R.style.Theme_AppCompat_DayNight)
+        requester.attach(activity)
+        requester.activate(activity)
+      }
+      try {
+        composeRule.onNodeWithText("Request all").performScrollTo().performClick()
+        composeRule.onNodeWithText("Requesting permissions…").assertIsNotEnabled().performClick()
+        composeRule.onNodeWithText("Continue").assertIsEnabled()
+        composeRule.runOnIdle {
+          val request = checkNotNull(shadowOf(activity).lastRequestedPermission)
+          val permissions = request.requestedPermissions.toList()
+          assertTrue(
+            permissions.containsAll(
+              listOf(
+                Manifest.permission.RECORD_AUDIO,
+                Manifest.permission.CAMERA,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.READ_CONTACTS,
+                Manifest.permission.WRITE_CONTACTS,
+                Manifest.permission.READ_CALENDAR,
+                Manifest.permission.WRITE_CALENDAR,
+              ),
+            ),
+          )
+          assertEquals(permissions.size, permissions.distinct().size)
+          assertFalse(permissions.contains(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+          assertEquals(android.os.Build.VERSION.SDK_INT >= 33, permissions.contains(Manifest.permission.POST_NOTIFICATIONS))
+          assertEquals(SensitiveFeatureConfig.callLogEnabled, permissions.contains(Manifest.permission.READ_CALL_LOG))
+          assertEquals(SensitiveFeatureConfig.photosEnabled, permissions.any { it in ai.openclaw.app.photoReadPermissionsForRequest() })
+          assertEquals(
+            SensitiveFeatureConfig.smsEnabled && app.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY),
+            permissions.contains(Manifest.permission.SEND_SMS),
+          )
+          assertFalse(model.cameraEnabled.value)
+          assertEquals(ai.openclaw.app.LocationMode.Off, model.locationMode.value)
+
+          val granted =
+            when (outcome) {
+              "allowed" -> permissions
+              "partial" -> listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_COARSE_LOCATION)
+              else -> emptyList()
+            }
+          shadowOf(app).grantPermissions(*granted.toTypedArray())
+          val results = permissions.map { if (it in granted) PackageManager.PERMISSION_GRANTED else PackageManager.PERMISSION_DENIED }.toIntArray()
+          val callbackPermissions = if (outcome == "canceled") emptyArray() else request.requestedPermissions
+          val callbackResults = if (outcome == "canceled") intArrayOf() else results
+          val intent = checkNotNull(shadowOf(activity).nextStartedActivity)
+          assertEquals("android.content.pm.action.REQUEST_PERMISSIONS", intent.action)
+          assertTrue("Repeated taps must not start another system request", shadowOf(activity).nextStartedActivity == null)
+          shadowOf(activity).receiveResult(
+            intent,
+            if (outcome == "canceled") Activity.RESULT_CANCELED else Activity.RESULT_OK,
+            Intent()
+              .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_NAMES", callbackPermissions)
+              .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_RESULTS", callbackResults),
+          )
+          assertTrue(requester.onRequestPermissionsResult(request.requestCode, callbackPermissions, callbackResults))
+        }
+        composeRule.onNodeWithText("Request all").performScrollTo().assertIsDisplayed()
+        composeRule.runOnIdle {
+          assertTrue("Optional batch denial must not force a Settings dialog", ShadowDialog.getLatestDialog()?.isShowing != true)
+          assertTrue(shadowOf(activity).nextStartedActivity == null)
+          val snapshot =
+            readAndroidPermissionSnapshot(
+              app,
+              SensitiveFeatureConfig.smsEnabled,
+              SensitiveFeatureConfig.callLogEnabled,
+              SensitiveFeatureConfig.photosEnabled,
+              SensitiveFeatureConfig.backgroundLocationEnabled,
+            )
+          assertEquals(outcome == "allowed", snapshot.camera)
+          assertEquals(outcome == "allowed" || outcome == "partial", snapshot.microphone)
+          assertEquals(outcome == "allowed" || outcome == "partial", snapshot.location)
+          assertFalse(snapshot.locationBackground)
+        }
+        if (outcome == "allowed") {
+          composeRule.onNodeWithText("Request all").assertIsNotEnabled()
+          composeRule.onNode(hasText("Camera") and hasText("Off")).performScrollTo().performClick()
+          composeRule.onNode(hasText("Camera") and hasText("Enabled")).performClick()
+          composeRule.onNode(hasText("Camera") and hasText("Off")).assertIsDisplayed()
+        } else {
+          composeRule.onNodeWithText("Request all").assertIsEnabled()
+        }
+        if (outcome == "partial") {
+          composeRule.onNode(hasText("Microphone") and hasText("Allowed")).performScrollTo().assertIsDisplayed()
+          composeRule.onNode(hasText("Location") and hasText("Off")).performScrollTo().assertIsDisplayed()
+        }
+        composeRule.onNode(hasScrollAction()).performScrollToIndex(0)
+        capturePermissions(outcome)
+        if (outcome == "partial") {
+          composeRule.onNodeWithText("Request all").performScrollTo().performClick()
+          composeRule.runOnIdle {
+            val request = checkNotNull(shadowOf(activity).lastRequestedPermission)
+            assertFalse(request.requestedPermissions.contains(Manifest.permission.RECORD_AUDIO))
+            assertFalse(request.requestedPermissions.contains(Manifest.permission.ACCESS_FINE_LOCATION))
+            assertFalse(request.requestedPermissions.contains(Manifest.permission.ACCESS_COARSE_LOCATION))
+            val intent = checkNotNull(shadowOf(activity).nextStartedActivity)
+            shadowOf(activity).receiveResult(
+              intent,
+              Activity.RESULT_CANCELED,
+              Intent()
+                .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_NAMES", emptyArray<String>())
+                .putExtra("android.content.pm.extra.REQUEST_PERMISSIONS_RESULTS", intArrayOf()),
+            )
+            assertTrue(requester.onRequestPermissionsResult(request.requestCode, emptyArray(), intArrayOf()))
+          }
+          composeRule.onNodeWithText("Request all").assertIsEnabled()
+        }
+        if (outcome == "allowed") {
+          composeRule.onNodeWithText("Additional features").performScrollTo().performClick()
+          composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("Special access"))
+          composeRule.onNodeWithText("Special access").assertIsDisplayed()
+          composeRule.onNodeWithText("Notification listener").performScrollTo().assertIsDisplayed()
+          capturePermissions("special-access")
+        }
+        composeRule.onNodeWithText("Continue").performClick()
+        composeRule.runOnIdle {
+          assertTrue(model.onboardingCompleted.value)
+          assertFalse(model.cameraEnabled.value)
+          assertEquals(ai.openclaw.app.LocationMode.Off, model.locationMode.value)
+          assertFalse(model.notificationForwardingEnabled.value)
+        }
+      } finally {
+        requester.detach(activity)
+      }
+    }
+  }
+
+  private fun capturePermissions(name: String) {
+    System.getenv("OPENCLAW_PERMISSION_PROOF_DIR")?.let { directory ->
+      val bitmap = composeRule.onNodeWithTag(OnboardingViewportTag).captureToImage().asAndroidBitmap()
+      File(directory, "$name.png").apply { checkNotNull(parentFile).mkdirs() }.outputStream().use {
+        assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
       }
     }
   }

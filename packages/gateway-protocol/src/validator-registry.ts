@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { lazyCompile as compile } from "./protocol-validator.js";
 import * as S from "./schema-modules.js";
 import type {
@@ -11,7 +12,7 @@ import type {
   WebPushVapidPublicKeyParams,
 } from "./schema-modules.js";
 import { WorkerComputerParamsSchema } from "./schema/worker-computer.js";
-import { checkProtocolJson } from "./validation-errors.js";
+import { checkWorkerProtocolJson } from "./schema/worker-protocol-primitives.js";
 export { validateApprovalPresentation } from "./approval-result-validators.js";
 export {
   validateDecisionReceiptV1,
@@ -24,6 +25,10 @@ export {
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = compile(S.CommandsListParamsSchema);
+export const validateBackupStatusParams = compile(S.BackupStatusParamsSchema);
+export const validateBackupRecordOutcomeParams = compile(S.BackupRecordOutcomeParamsSchema);
+export const validateStorageLocationsListParams = compile(S.StorageLocationsListParamsSchema);
+export const validateStorageLocationsProbeParams = compile(S.StorageLocationsProbeParamsSchema);
 export const validateComputerStatusParams = compile(S.ComputerStatusParamsSchema);
 export const validateComputerInvokeParams = compile(S.ComputerInvokeParamsSchema);
 export const validateCanvasDocumentPreviewParams = compile(S.CanvasDocumentPreviewParamsSchema);
@@ -37,10 +42,6 @@ export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendPara
 export const validateWorkerPortalParams = compile(S.WorkerPortalParamsSchema);
 export const validateWorkerPresenceParams = compile(S.WorkerPresenceParamsSchema);
 export const validateWorkerComputerParams = compile(WorkerComputerParamsSchema);
-
-function checkWorkerProtocolJson(data: unknown) {
-  return checkProtocolJson(data, S.WORKER_TRANSCRIPT_MAX_JSON_DEPTH);
-}
 
 export const validateWorkerTranscriptCommitParams = compile(
   S.WorkerTranscriptCommitParamsSchema,
@@ -79,6 +80,9 @@ export const validateMentionsListParams = compile(S.MentionsListParamsSchema);
 export const validateMentionsDismissParams = compile(S.MentionsDismissParamsSchema);
 export const validateMentionsListResult = compile(S.MentionsListResultSchema);
 export const validateMentionsChangedEvent = compile(S.MentionsChangedEventSchema);
+export const validateUsersBackgroundGetParams = compile(S.UsersBackgroundGetParamsSchema);
+export const validateUsersBackgroundUploadParams = compile(S.UsersBackgroundUploadParamsSchema);
+export const validateUsersBackgroundRemoveParams = compile(S.UsersBackgroundRemoveParamsSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
 export const validateUsersPrefsSetParams = compile(S.UsersPrefsSetParamsSchema);
 export const validateUsersPersonalFileGetParams = compile(S.UsersPersonalFileGetParamsSchema);
@@ -98,6 +102,8 @@ export const validateUsersGitHubDisconnectParams = compile(S.UsersGitHubDisconne
 export const validateUsersSelfResult = compile(S.UsersSelfResultSchema);
 export const validateUsersLinkEmailParams = compile(S.UsersLinkEmailParamsSchema);
 export const validateUsersLinkEmailResult = compile(S.UsersLinkEmailResultSchema);
+export const validateUsersMergeParams = compile(S.UsersMergeParamsSchema);
+export const validateUsersMergeResult = compile(S.UsersMergeResultSchema);
 export const validateUsersLinkChannelIdentityParams = compile(
   S.UsersLinkChannelIdentityParamsSchema,
 );
@@ -159,6 +165,8 @@ export const validateWorktreesCreateParams = compile(S.WorktreesCreateParamsSche
 export const validateWorktreesRemoveParams = compile(S.WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = compile(S.WorktreesRestoreParamsSchema);
 export const validateWorktreesGcParams = compile(S.WorktreesGcParamsSchema);
+export const validateWorktreesRecoverRemovalParams = compile(S.WorktreesRecoverRemovalParamsSchema);
+export const validateWorktreesRetireSnapshotParams = compile(S.WorktreesRetireSnapshotParamsSchema);
 export const validateWorktreesBranchesParams = compile(S.WorktreesBranchesParamsSchema);
 export const validateFsListDirParams = compile(S.FsListDirParamsSchema);
 export const validateFsListDirResult = compile(S.FsListDirResultSchema);
@@ -249,12 +257,30 @@ export const validateSecretsStoreListParams = compile(S.SecretsStoreListParamsSc
 export const validateSecretsStoreListResult = compile(S.SecretsStoreListResultSchema);
 export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSchema);
 export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
+export const validateSecretsStoreImportParams = compile(S.SecretsStoreImportParamsSchema);
+export const validateSecretsStoreAllowedHostsParams = compile(
+  S.SecretsStoreAllowedHostsParamsSchema,
+);
 export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
-export const validateSessionsListParams = compile(S.SessionsListParamsSchema);
+// Runs before the schema: compare only numeric boundaries and leave type errors to the schema.
+function checkPulseBoundaries(data: unknown) {
+  const boundaries = asNullableRecord(data)?.activityPulseBoundaries;
+  return Array.isArray(boundaries) &&
+    boundaries.every((boundary): boundary is number => typeof boundary === "number") &&
+    boundaries.some((boundary, index) => boundary <= (boundaries[index - 1] ?? -Infinity))
+    ? {
+        keyword: "ascending",
+        instancePath: "/activityPulseBoundaries",
+        message: "must be strictly ascending",
+      }
+    : undefined;
+}
+export const validateSessionsListParams = compile(S.SessionsListParamsSchema, checkPulseBoundaries);
 export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRouteSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
+export const validateSessionsCatalogImportParams = compile(S.SessionsCatalogImportParamsSchema);
 export const validateSessionsCatalogArchiveParams = compile(S.SessionsCatalogArchiveParamsSchema);
 export const validateSessionsCatalogStartTerminalParams = compile(
   S.SessionsCatalogStartTerminalParamsSchema,
@@ -267,6 +293,7 @@ export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSc
 export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
 export const validateSessionsFilesListParams = compile(S.SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = compile(S.SessionsFilesGetParamsSchema);
+export const validateSessionsFilesAssetsParams = compile(S.SessionsFilesAssetsParamsSchema);
 export const validateSessionsFilesSetParams = compile(S.SessionsFilesSetParamsSchema);
 export const validateSessionsFilesRevealParams = compile(S.SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = compile(S.SessionsDiffParamsSchema);
@@ -290,6 +317,9 @@ export const validateSessionSuggestionsResolveParams = compile(
   S.SessionSuggestionsResolveParamsSchema,
 );
 export const validateSessionTypingParams = compile(S.SessionTypingParamsSchema);
+export const validateSessionReactionsSetParams = compile(S.SessionReactionsSetParamsSchema);
+export const validateSessionReactionsListParams = compile(S.SessionReactionsListParamsSchema);
+export const validateSessionReactionEvent = compile(S.SessionReactionEventSchema);
 export const validateSessionsCreateParams = compile(S.SessionsCreateParamsSchema);
 export const validateSessionsTitlePrepareParams = compile(S.SessionsTitlePrepareParamsSchema);
 export const validateSessionsRecoverParams = compile(S.SessionsRecoverParamsSchema);
@@ -343,11 +373,6 @@ export const validateTaskSuggestionsListParams = compile(S.TaskSuggestionsListPa
 export const validateTaskSuggestionsCreateParams = compile(S.TaskSuggestionsCreateParamsSchema);
 export const validateTaskSuggestionsAcceptParams = compile(S.TaskSuggestionsAcceptParamsSchema);
 export const validateTaskSuggestionsDismissParams = compile(S.TaskSuggestionsDismissParamsSchema);
-export const validateTasksListParams = compile(S.TasksListParamsSchema);
-export const validateTasksGetParams = compile(S.TasksGetParamsSchema);
-export const validateTasksHistoryParams = compile(S.TasksHistoryParamsSchema);
-export const validateTasksCancelParams = compile(S.TasksCancelParamsSchema);
-export const validateTasksRecoveryParams = compile(S.TasksRecoveryParamsSchema);
 export const validateConfigGetParams = compile(S.ConfigGetParamsSchema);
 export const validateConfigSetParams = compile(S.ConfigSetParamsSchema);
 export const validateConfigApplyParams = compile(S.ConfigApplyParamsSchema);
@@ -456,23 +481,12 @@ export const validateSkillsUploadCommitParams = compile(S.SkillsUploadCommitPara
 export const validateSkillsUpdateParams = compile(S.SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = compile(S.SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = compile(S.SkillsDetailParamsSchema);
-export const validateSkillsCuratorStatusParams = compile(S.SkillsCuratorStatusParamsSchema);
-export const validateSkillsCuratorActionParams = compile(S.SkillsCuratorActionParamsSchema);
-export const validateSkillsProposalsListParams = compile(S.SkillsProposalsListParamsSchema);
+export const validateSkillsWorkshopListParams = compile(S.SkillsWorkshopListParamsSchema);
+export const validateSkillsWorkshopChangesParams = compile(S.SkillsWorkshopChangesParamsSchema);
 export const validateSkillsWorkshopReadParams = compile(S.SkillsWorkshopReadParamsSchema);
-export const validateSkillsProposalInspectParams = compile(S.SkillsProposalInspectParamsSchema);
-export const validateSkillsProposalCreateParams = compile(S.SkillsProposalCreateParamsSchema);
-export const validateSkillsProposalUpdateParams = compile(S.SkillsProposalUpdateParamsSchema);
-export const validateSkillsProposalReviseParams = compile(S.SkillsProposalReviseParamsSchema);
-export const validateSkillsProposalRequestRevisionParams = compile(
-  S.SkillsProposalRequestRevisionParamsSchema,
-);
-export const validateSkillsProposalDecisionParams = compile(S.SkillsProposalDecisionParamsSchema);
-export const validateSkillsProposalActionParams = compile(S.SkillsProposalActionParamsSchema);
-export const validateSkillsProposalEvaluateParams = compile(S.SkillsProposalEvaluateParamsSchema);
-export const validateSkillsProposalEventsListParams = compile(
-  S.SkillsProposalEventsListParamsSchema,
-);
+export const validateSkillsWorkshopArchiveParams = compile(S.SkillsWorkshopArchiveParamsSchema);
+export const validateSkillsWorkshopRestoreParams = compile(S.SkillsWorkshopRestoreParamsSchema);
+export const validateSkillsWorkshopUndoParams = compile(S.SkillsWorkshopUndoParamsSchema);
 export const validateSkillsSecurityVerdictsParams = compile(S.SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = compile(S.SkillsSkillCardParamsSchema);
 export const validateCronListParams = compile(S.CronListParamsSchema);
@@ -578,3 +592,6 @@ export const validateTranscriptsSummarizeParams = compile(S.TranscriptsSummarize
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
 export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
 export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);
+
+export const validateCatalogBrowseParams = compile(S.CatalogBrowseParamsSchema);
+export const validateCatalogSearchKeywordsParams = compile(S.CatalogSearchKeywordsParamsSchema);

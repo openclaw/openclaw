@@ -1,4 +1,5 @@
 // Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -32,7 +33,8 @@ vi.mock("../../config/io.js", async (importOriginal) => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
 
-vi.mock("../../config/runtime-snapshot.js", () => ({
+vi.mock("../../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-snapshot.js")>()),
   getRuntimeConfigAppliedHash: () => "internal-applied-hash",
   getRuntimeConfigSourceSnapshot: () => null,
 }));
@@ -92,6 +94,7 @@ function createHealthSummary(): HealthSummary {
 const revisionProjector = {
   projectRawHash: (hash: string) => `raw-token:${hash}`,
   projectResolvedHash: (hash: string) => `resolved-token:${hash}`,
+  hashResponseSessionBearer: () => "unused-test-scope",
 };
 
 async function loadHealthState() {

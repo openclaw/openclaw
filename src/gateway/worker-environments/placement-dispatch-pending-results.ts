@@ -1,25 +1,23 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
-  isCurrentActiveWorkerEnvironment,
   workerDisappearanceError,
-  type PlacementFailureActions,
-  type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
-  type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
-import type {
-  WithPreparedWorkerWorkspaceRecovery,
-  PreparedWorkerWorkspaceRecovery,
-} from "./placement-reclaim-contract.js";
-import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
+import { createPendingGatewayMovePreparation } from "./placement-dispatch-pending-move.js";
+import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
+import { placementTurnOwner } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
+import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
 import { completeRecoveredWorkspaceTeardown } from "./placement-teardown.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import {
-  findPendingWorkerWorkspaceResult,
+  matchesWorkspaceResultClaim,
   isCurrentWorkerWorkspacePendingResultOwner,
-  type WorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import {
   createWorkerWorkspaceReconcileRequest,
   recoverSessionWorkspaceCheckpoint,
@@ -27,19 +25,18 @@ import {
   type WorkerSessionWorkspace,
 } from "./session-workspace.js";
 import { boundedWorkerError } from "./worker-error.js";
-import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
-import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
+  resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
 } from "./workspace-result-settlement.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
   deleteStagedWorkerWorkspaceResult,
-  deleteWorkerWorkspaceResultCleanupRefs,
   hasWorkerWorkspaceResultRef,
   isWorkerWorkspaceResultCleanupRef,
   preparedWorkerWorkspaceResultRef,
@@ -47,48 +44,7 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
-export type PlacementRecoveryDeps = {
-  placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
-  failure: PlacementFailureActions;
-  workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  resolveWorkspace: (params: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
-  withPreparedRecovery: WithPreparedWorkerWorkspaceRecovery;
-  recoverPlacementMoves?: (environmentId?: string) => Promise<Set<string>>;
-  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
-  prepareGatewayMove?: (
-    params: WorkerSessionPlacementIdentity & { assertCurrent: () => void },
-  ) => Promise<void>;
-};
-
 const log = createSubsystemLogger("gateway/worker-placement");
-
-export async function resolvePriorWorkspaceResultConflict(
-  resolve: PreparedWorkerWorkspaceRecovery["resolveConflict"],
-  placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    workspaceResultConflict?: WorkerWorkspaceResultConflict;
-  },
-): Promise<WorkerWorkspaceResultConflict | undefined> {
-  if (placement.workspaceResultConflict) {
-    return placement.workspaceResultConflict;
-  }
-  const lookup = await resolve();
-  if (lookup.kind === "conflict") {
-    return lookup.conflict;
-  }
-  if (lookup.kind === "unknown") {
-    log.warn(
-      `Cloud workspace conflict state unknown sessionId=${boundedWorkerError(placement.sessionId, 128)} reason=${lookup.reason}; preserving prior conflict state`,
-    );
-    // Undefined means no prior knowledge to finalizeWorkspaceResultConflicts: it cannot
-    // clear the retained report or delete its unseen staged ref. The warning signals this.
-  }
-  return undefined;
-}
 
 type WorkerOwnedPendingPlacement = Extract<
   WorkerDispatchPlacement,
@@ -99,14 +55,12 @@ async function prepareAcceptedPublication(
   deps: PlacementRecoveryDeps,
   claim: WorkerSessionTurnClaim,
 ): Promise<void> {
-  if (deps.prepareAcceptedWorkspacePublication) {
-    await deps.prepareAcceptedWorkspacePublication(claim).catch(() => undefined);
-  }
+  await deps.prepareAcceptedWorkspacePublication?.(claim).catch(() => undefined);
 }
 
 export async function recoverPendingWorkspaceResults(
   deps: PlacementRecoveryDeps,
-  cleanupOrphans: boolean,
+  projection: WorkerSessionPlacementProjection,
   environmentId?: string,
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
@@ -119,7 +73,9 @@ export async function recoverPendingWorkspaceResults(
     if (!pending.repositoryWorkspaceId) {
       return workspace;
     }
-    const repository = getSessionRepositoryWorkspaceStore().get(pending.repositoryWorkspaceId);
+    const repository = await getSessionRepositoryWorkspaceStore().get(
+      pending.repositoryWorkspaceId,
+    );
     if (
       !repository ||
       repository.agentId !== placement.agentId ||
@@ -133,30 +89,7 @@ export async function recoverPendingWorkspaceResults(
     // result's recorded source still owns its immutable artifact until settlement.
     return { kind: "repository", repository };
   };
-  const prepareGatewayMove = async (
-    placement: WorkerOwnedPendingPlacement,
-    turnClaim: WorkerSessionTurnClaim,
-    assertCurrent: () => void,
-  ) => {
-    const move = placements.getPlacementMove(placement.sessionId);
-    if (move?.target.kind !== "gateway") {
-      return;
-    }
-    await deps.prepareGatewayMove?.({
-      sessionId: placement.sessionId,
-      sessionKey: placement.sessionKey,
-      agentId: placement.agentId,
-      assertCurrent: () => {
-        assertCurrent();
-        if (
-          !placements.validateWorkspaceResultClaim(turnClaim) ||
-          placements.getPlacementMove(placement.sessionId)?.operationId !== move.operationId
-        ) {
-          throw new Error("Recovered Gateway move lost its workspace result owner");
-        }
-      },
-    });
-  };
+  const prepareGatewayMove = createPendingGatewayMovePreparation(deps);
   const destroyPendingEnvironment = async (
     placement: WorkerOwnedPendingPlacement,
     assertCurrent: () => void,
@@ -174,20 +107,22 @@ export async function recoverPendingWorkspaceResults(
     }
   };
   const stagedResultOwners = new Set<string>();
-  for (const pending of placements.listPendingWorkspaceResults()) {
+  for (const pending of projection.pendingResults.values()) {
     if (pending.stagedResultRef) {
       stagedResultOwners.add(pending.sessionId);
     }
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
+    const reclaimResult =
+      pending.claimId === pending.runId && pending.claimId.startsWith("reclaim-");
     if (sameGatewayInstance && pending.recoveryRequestedAtMs === null) {
       continue;
     }
-    const placement = placements.get(pending.sessionId);
+    const placement = projection.placements.get(pending.sessionId);
     if (environmentId !== undefined && placement?.environmentId !== environmentId) {
       continue;
     }
-    if (placements.getPlacementMove(pending.sessionId)?.abandonSource) {
+    if (projection.moves.get(pending.sessionId)?.abandonSource) {
       // Move recovery owns forced abandonment for this session. Preserve the
       // pending result fence so recoverPlacementMoves can retire it under
       // FORCED_WORKER_ABANDONMENT_ERROR and return to local placement.
@@ -208,7 +143,11 @@ export async function recoverPendingWorkspaceResults(
               owner: placementTurnOwner(pendingPlacement),
             }
           : undefined;
-      if (!pendingPlacement || !turnClaim || !placements.validateWorkspaceResultClaim(turnClaim)) {
+      if (
+        !pendingPlacement ||
+        !turnClaim ||
+        !matchesWorkspaceResultClaim(pendingPlacement, pending, turnClaim)
+      ) {
         if (pending.stagedResultRef && pending.workspaceAcceptedAtMs === null) {
           // A staged unaccepted result outlives stale placement ownership. Only
           // explicit operator abandonment may delete its durable Git ref.
@@ -229,7 +168,7 @@ export async function recoverPendingWorkspaceResults(
           }
         }
         if (placement?.state === "active" || placement?.state === "draining") {
-          const failed = placements.failWorkspaceResultAndReleaseTurn(
+          const failed = await placements.failWorkspaceResultAndReleaseTurn(
             pending,
             new Error(`Pending cloud workspace result has no active claim: ${pending.sessionId}`),
           );
@@ -237,10 +176,11 @@ export async function recoverPendingWorkspaceResults(
             await failure.retryFailedTeardown(failed);
           }
         } else {
-          placements.abandonWorkspaceResult(pending);
+          await placements.abandonWorkspaceResult(pending);
         }
         continue;
       }
+      await placements.prepareWorkspaceResultClaim(turnClaim);
       await deps.withPreparedRecovery(
         pendingPlacement,
         () => {
@@ -252,6 +192,7 @@ export async function recoverPendingWorkspaceResults(
           try {
             let active: WorkerOwnedPendingPlacement = pendingPlacement;
             const workspace = await resolveWorkspace(active, pending, recovery.workspace);
+            recovery.assertCurrent();
             const root = sessionWorkspaceRoot(workspace);
             const priorWorkspaceResultConflict = await resolvePriorWorkspaceResultConflict(
               recovery.resolveConflict,
@@ -267,11 +208,13 @@ export async function recoverPendingWorkspaceResults(
               }))
             ) {
               recovery.assertCurrent();
-              placements.recordStagedWorkspaceResult(
+              await placements.recordStagedWorkspaceResult(
                 turnClaim,
                 canonicalStagedResultRef,
                 workspace.kind === "repository" ? workspace.repository.workspaceId : undefined,
+                recovery.assertCurrent,
               );
+              recovery.assertCurrent();
               stagedResultRef = canonicalStagedResultRef;
               stagedResultOwners.add(pending.sessionId);
             }
@@ -307,9 +250,40 @@ export async function recoverPendingWorkspaceResults(
               // exclusively to this session. Preserve the fence until ownership is exact.
               return;
             }
-            const canPreserveEnvironment = () => {
-              const current = placements.get(pending.sessionId);
+            const blockedMove = projection.moves.get(pending.sessionId);
+            const preserveBlockedMove =
+              blockedMove?.target.kind === "gateway" &&
+              Boolean(getRuntimeConfig().cloudWorkers?.requiredProfile);
+            // Source destruction is committed; settle its accepted result without
+            // authorizing the rejected destination or reopening local placement.
+            const finishBlockedMove =
+              preserveBlockedMove &&
+              pending.workspaceAcceptedAtMs !== null &&
+              environment?.state === "destroyed";
+            const canPreserveEnvironment = (
+              current: Parameters<PlacementTurnClaimCurrentCheck["assertPlacementCurrent"]>[0],
+              move: Parameters<PlacementTurnClaimCurrentCheck["assertPlacementCurrent"]>[1],
+            ) => {
               const currentEnvironment = environments.get(pending.environmentId);
+              if (preserveBlockedMove) {
+                // Result acceptance does not authorize its persisted Move destination.
+                // Release the claim without teardown; the Move or serialized Stop
+                // still owns the exact drained source and its accepted checkpoint.
+                return (
+                  current?.state === "draining" &&
+                  isCurrentWorkerWorkspacePendingResultOwner(current, pending) &&
+                  current.environmentId === pending.environmentId &&
+                  current.activeOwnerEpoch === pending.ownerEpoch &&
+                  move?.operationId === blockedMove?.operationId &&
+                  move?.source.generation + 1 === current.generation &&
+                  move.source.environmentId === current.environmentId &&
+                  move.source.ownerEpoch === current.activeOwnerEpoch &&
+                  (finishBlockedMove
+                    ? currentEnvironment?.state === "destroyed"
+                    : Boolean(getRuntimeConfig().cloudWorkers?.requiredProfile) &&
+                      isCurrentActiveWorkerEnvironment(current, currentEnvironment))
+                );
+              }
               return (
                 current?.state === "active" &&
                 current.generation === pending.placementGeneration &&
@@ -319,25 +293,89 @@ export async function recoverPendingWorkspaceResults(
                 currentEnvironment?.nodeDeviceId === environment?.nodeDeviceId &&
                 currentEnvironment?.leaseId === environment?.leaseId &&
                 isCurrentActiveWorkerEnvironment(current, currentEnvironment) &&
-                !placements.getPlacementMove(pending.sessionId) &&
-                !(pending.claimId === pending.runId && pending.claimId.startsWith("reclaim-"))
+                move === null &&
+                !reclaimResult
               );
             };
-            const preserveEnvironment = canPreserveEnvironment();
+            const preserveEnvironment =
+              !finishBlockedMove && canPreserveEnvironment(active, blockedMove ?? null);
+            const currentCheck: PlacementTurnClaimCurrentCheck = {
+              assertPlacementCurrent(current, move) {
+                if (
+                  (preserveEnvironment || finishBlockedMove) &&
+                  !canPreserveEnvironment(current, move)
+                ) {
+                  throw new Error("Recovered workspace result lost its active environment owner");
+                }
+              },
+            };
             const assertPreservedEnvironment = () => {
               recovery.assertCurrent();
               if (
                 preserveEnvironment &&
-                (!canPreserveEnvironment() || !placements.validateWorkspaceResultClaim(turnClaim))
+                (!canPreserveEnvironment(active, blockedMove ?? null) ||
+                  !placements.validateWorkspaceResultClaim(turnClaim))
               ) {
                 throw new Error("Recovered workspace result lost its active environment owner");
+              }
+            };
+            const destroyResultEnvironment = async () => {
+              if (!preserveEnvironment && !finishBlockedMove) {
+                const assertMoveCurrent = await prepareGatewayMove(
+                  active,
+                  turnClaim,
+                  recovery.assertCurrent,
+                );
+                await destroyPendingEnvironment(
+                  active,
+                  assertMoveCurrent ?? recovery.assertCurrent,
+                );
               }
             };
             const completeResult = () => {
               assertPreservedEnvironment();
               return preserveEnvironment
-                ? placements.completeWorkspaceResultAndReleaseTurn(turnClaim)
-                : completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim });
+                ? placements.completeWorkspaceResultAndReleaseTurn(
+                    turnClaim,
+                    recovery.assertCurrent,
+                    currentCheck,
+                  )
+                : completeRecoveredWorkspaceTeardown({
+                    placements,
+                    placement: active,
+                    turnClaim,
+                    ...(finishBlockedMove ? { destination: "reclaimed", currentCheck } : {}),
+                  });
+            };
+            const settleRecoveredResult = async (
+              result: Pick<
+                Parameters<typeof finalizeWorkspaceResultConflicts>[0],
+                "stagedResultRef" | "conflictPaths" | "retainPriorConflict"
+              >,
+              completion: Pick<
+                Parameters<typeof settleStagedWorkspaceResult>[0],
+                "beforeComplete" | "complete" | "afterComplete"
+              > = { beforeComplete: destroyResultEnvironment, complete: completeResult },
+            ) => {
+              const finalized = await finalizeWorkspaceResultConflicts({
+                assertCurrent: recovery.assertCurrent,
+                placements,
+                turnClaim,
+                ...result,
+                priorConflict: priorWorkspaceResultConflict,
+                workspace,
+                report: recovery.reportConflict,
+              });
+              await deps.publishAcceptedWorkspace?.(turnClaim);
+              await settleStagedWorkspaceResult({
+                assertCurrent: recovery.assertCurrent,
+                placements,
+                turnClaim,
+                workspace,
+                stagedResultRef: result.stagedResultRef,
+                conflictRetained: finalized.conflictRetained,
+                ...completion,
+              });
             };
             if (preserveEnvironment && !sameGatewayInstance) {
               // Restart revokes the previous turn, not its machine. Confirm the old
@@ -349,11 +387,16 @@ export async function recoverPendingWorkspaceResults(
             const teardownRequired =
               !preserveEnvironment &&
               (!sameGatewayInstance ||
+                reclaimResult ||
                 Boolean(stagedResultRef) ||
-                (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed"));
+                (pending.workspaceAcceptedAtMs !== null &&
+                  (workspace.kind === "local" || environment?.state === "destroyed")));
             if (active.state === "active" && teardownRequired) {
               recovery.assertCurrent();
-              const draining = placements.startWorkspaceResultDrain(turnClaim);
+              const draining = await placements.startWorkspaceResultDrain(
+                turnClaim,
+                recovery.assertCurrent,
+              );
               if (draining.state !== "draining") {
                 throw new Error(
                   `Pending workspace result did not drain session ${active.sessionId}`,
@@ -364,7 +407,11 @@ export async function recoverPendingWorkspaceResults(
             const stagedResultExists = stagedResultRef
               ? await hasWorkerWorkspaceResultRef({ root, stagedResultRef })
               : false;
-            if (stagedResultRef && !stagedResultExists) {
+            const acceptedUnstaged =
+              workspace.kind === "local" &&
+              !stagedResultRef &&
+              pending.workspaceAcceptedAtMs !== null;
+            if (acceptedUnstaged || (stagedResultRef && !stagedResultExists)) {
               if (workspace.kind === "repository") {
                 throw new Error(
                   "Repository checkpoint is missing; restore its artifact before retrying recovery",
@@ -377,17 +424,23 @@ export async function recoverPendingWorkspaceResults(
               }
               // Clean refs are deleted while their accepted fence still exists. A
               // crash after deletion resumes here and can safely finish ownership.
-              if (turnClaim.owner.kind === "worker") {
-                recovery.assertCurrent();
-                await placements.closeWorkerTurnToolState(turnClaim);
+              if (acceptedUnstaged) {
+                await prepareAcceptedPublication(deps, turnClaim);
+                await settleRecoveredResult({
+                  stagedResultRef: null,
+                  conflictPaths: [],
+                  retainPriorConflict: reclaimResult,
+                });
+              } else {
+                if (turnClaim.owner.kind === "worker") {
+                  recovery.assertCurrent();
+                  await placements.closeWorkerTurnToolState(turnClaim);
+                }
+                await destroyResultEnvironment();
+                await prepareAcceptedPublication(deps, turnClaim);
+                await deps.publishAcceptedWorkspace?.(turnClaim);
+                await completeResult();
               }
-              if (!preserveEnvironment) {
-                await prepareGatewayMove(active, turnClaim, recovery.assertCurrent);
-                await destroyPendingEnvironment(active, recovery.assertCurrent);
-              }
-              await prepareAcceptedPublication(deps, turnClaim);
-              await deps.publishAcceptedWorkspace?.(turnClaim);
-              completeResult();
               if (!preserveEnvironment) {
                 await environments
                   .stopTunnel(active.environmentId, active.activeOwnerEpoch)
@@ -395,27 +448,14 @@ export async function recoverPendingWorkspaceResults(
               }
               return;
             }
-            const owner = {
-              sessionId: active.sessionId,
-              environmentId: active.environmentId,
-              ownerEpoch: active.activeOwnerEpoch,
-              placementGeneration: pending.placementGeneration,
-            };
-            const journal = {
-              load: () => placements.loadWorkspaceReconciliation(owner),
-              begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) => {
-                recovery.assertCurrent();
-                return placements.beginWorkspaceReconciliation(owner, next);
-              },
-              commit: (manifestRef: string) => {
-                assertPreservedEnvironment();
-                return placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef });
-              },
-              abort: () => {
-                recovery.assertCurrent();
-                return placements.abortWorkspaceReconciliation(owner);
-              },
-            };
+            const { adapter: journal } = createWorkspaceResultJournal({
+              placement: { ...active, generation: pending.placementGeneration },
+              placements,
+              turnClaim,
+              assertCurrent: recovery.assertCurrent,
+              assertCommitCurrent: assertPreservedEnvironment,
+              current: currentCheck,
+            });
             if (stagedResultRef) {
               let ownedStagedResultRef = stagedResultRef;
               // A staged result must never be destroyed by environment lifecycle.
@@ -439,7 +479,7 @@ export async function recoverPendingWorkspaceResults(
                     onAccepted: journal.commit,
                   });
                 } else {
-                  const interrupted = journal.load();
+                  const interrupted = await journal.load();
                   const alreadyApplied = interrupted?.appliedManifestRef !== undefined;
                   if (interrupted && !alreadyApplied) {
                     await recoverWorkerWorkspaceReconciliation({
@@ -447,7 +487,7 @@ export async function recoverPendingWorkspaceResults(
                       journal: interrupted,
                       assertCurrent: recovery.assertCurrent,
                     });
-                    journal.abort();
+                    await journal.abort();
                   }
                   const reconciliation = await applyStagedWorkerWorkspaceResult({
                     root,
@@ -463,7 +503,7 @@ export async function recoverPendingWorkspaceResults(
                 if (pending.workspaceAcceptedAtMs === null) {
                   await prepareAcceptedPublication(deps, turnClaim);
                   assertPreservedEnvironment();
-                  placements.acceptWorkspaceResult(turnClaim);
+                  await placements.acceptWorkspaceResult(turnClaim, recovery.assertCurrent);
                 }
                 if (
                   conflictPaths.length > 0 &&
@@ -477,31 +517,9 @@ export async function recoverPendingWorkspaceResults(
                   });
                   ownedStagedResultRef = canonicalStagedResultRef;
                 }
-                const finalized = await finalizeWorkspaceResultConflicts({
-                  assertCurrent: recovery.assertCurrent,
-                  placements,
-                  turnClaim,
+                await settleRecoveredResult({
+                  stagedResultRef: ownedStagedResultRef,
                   conflictPaths,
-                  priorConflict: priorWorkspaceResultConflict,
-                  stagedResultRef: ownedStagedResultRef,
-                  workspace,
-                  report: recovery.reportConflict,
-                });
-                await deps.publishAcceptedWorkspace?.(turnClaim);
-                await settleStagedWorkspaceResult({
-                  assertCurrent: recovery.assertCurrent,
-                  placements,
-                  turnClaim,
-                  workspace,
-                  stagedResultRef: ownedStagedResultRef,
-                  conflictRetained: finalized.conflictRetained,
-                  beforeComplete: async () => {
-                    if (!preserveEnvironment) {
-                      await prepareGatewayMove(active, turnClaim, recovery.assertCurrent);
-                      await destroyPendingEnvironment(active, recovery.assertCurrent);
-                    }
-                  },
-                  complete: completeResult,
                 });
                 if (!preserveEnvironment) {
                   await environments
@@ -520,16 +538,19 @@ export async function recoverPendingWorkspaceResults(
               if (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed") {
                 await prepareAcceptedPublication(deps, turnClaim);
                 await deps.publishAcceptedWorkspace?.(turnClaim);
-                await prepareGatewayMove(active, turnClaim, recovery.assertCurrent);
-                recovery.assertCurrent();
-                completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim });
+                const assertMoveCurrent = finishBlockedMove
+                  ? recovery.assertCurrent
+                  : await prepareGatewayMove(active, turnClaim, recovery.assertCurrent);
+                (assertMoveCurrent ?? recovery.assertCurrent)();
+                await completeResult();
                 return;
               }
               recovery.assertCurrent();
-              const failed = placements.failWorkspaceResultAndReleaseTurn(
+              const failed = await placements.failWorkspaceResultAndReleaseTurn(
                 pending,
                 workerDisappearanceError(environment) ??
                   new Error(`Pending cloud workspace result lost its worker: ${pending.sessionId}`),
+                recovery.assertCurrent,
               );
               if (failed.state === "failed") {
                 await failure.retryFailedTeardown(failed);
@@ -560,12 +581,13 @@ export async function recoverPendingWorkspaceResults(
                       ref: canonicalStagedResultRef,
                       record: (ref) => {
                         recovery.assertCurrent();
-                        placements.recordStagedWorkspaceResult(
+                        return placements.recordStagedWorkspaceResult(
                           turnClaim,
                           ref,
                           workspace.kind === "repository"
                             ? workspace.repository.workspaceId
                             : undefined,
+                          recovery.assertCurrent,
                         );
                       },
                     },
@@ -580,61 +602,57 @@ export async function recoverPendingWorkspaceResults(
                 const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
                 await prepareAcceptedPublication(deps, turnClaim);
                 assertPreservedEnvironment();
-                placements.acceptWorkspaceResult(turnClaim);
-                const recordedStagedResultRef = findPendingWorkerWorkspaceResult(
-                  placements,
-                  turnClaim,
-                )?.stagedResultRef;
+                await placements.acceptWorkspaceResult(turnClaim, recovery.assertCurrent);
+                const recordedPending = (
+                  await placements.readProjection([turnClaim.sessionId], { current: true })
+                ).pendingResults.get(turnClaim.sessionId);
+                const recordedStagedResultRef =
+                  recordedPending?.sessionId === turnClaim.sessionId &&
+                  recordedPending.claimId === turnClaim.claimId &&
+                  recordedPending.runId === turnClaim.runId
+                    ? recordedPending.stagedResultRef
+                    : undefined;
                 const conflictPaths = applied?.conflictPaths ?? [];
                 if (conflictPaths.length > 0 && !recordedStagedResultRef) {
                   throw new Error(
                     "Recovered cloud workspace conflict has no staged result reference",
                   );
                 }
-                const finalized = await finalizeWorkspaceResultConflicts({
-                  assertCurrent: recovery.assertCurrent,
-                  placements,
-                  turnClaim,
-                  conflictPaths,
-                  priorConflict: priorWorkspaceResultConflict,
-                  stagedResultRef: recordedStagedResultRef,
-                  workspace,
-                  report: recovery.reportConflict,
-                });
-                await deps.publishAcceptedWorkspace?.(turnClaim);
-                await settleStagedWorkspaceResult({
-                  assertCurrent: recovery.assertCurrent,
-                  placements,
-                  turnClaim,
-                  workspace,
-                  stagedResultRef: recordedStagedResultRef,
-                  conflictRetained: finalized.conflictRetained,
-                  beforeComplete: async () => {
-                    if (!preserveEnvironment) {
-                      await prepareGatewayMove(active, turnClaim, recovery.assertCurrent);
-                    }
-                    if (sameGatewayInstance || preserveEnvironment) {
-                      assertPreservedEnvironment();
-                      await quiescence.resume();
-                    } else {
-                      recovery.assertCurrent();
-                      await environments.destroy(active.environmentId);
-                    }
-                    quiescenceHandled = true;
+                await settleRecoveredResult(
+                  {
+                    stagedResultRef: recordedStagedResultRef,
+                    conflictPaths,
+                    retainPriorConflict: reclaimResult && !reconciliation.changed,
                   },
-                  ...(sameGatewayInstance && !preserveEnvironment
-                    ? {}
-                    : {
-                        complete: completeResult,
-                      }),
-                  afterComplete: async () => {
-                    if (!sameGatewayInstance && !preserveEnvironment) {
-                      await environments
-                        .stopTunnel(active.environmentId, active.activeOwnerEpoch)
-                        .catch(() => undefined);
-                    }
+                  {
+                    beforeComplete: async () => {
+                      const assertMoveCurrent = !preserveEnvironment
+                        ? await prepareGatewayMove(active, turnClaim, recovery.assertCurrent)
+                        : undefined;
+                      if ((sameGatewayInstance && !reclaimResult) || preserveEnvironment) {
+                        assertPreservedEnvironment();
+                        await quiescence.resume();
+                      } else {
+                        recovery.assertCurrent();
+                        assertMoveCurrent?.();
+                        await environments.destroy(active.environmentId);
+                      }
+                      quiescenceHandled = true;
+                    },
+                    ...(sameGatewayInstance && !reclaimResult && !preserveEnvironment
+                      ? {}
+                      : {
+                          complete: completeResult,
+                        }),
+                    afterComplete: async () => {
+                      if ((!sameGatewayInstance || reclaimResult) && !preserveEnvironment) {
+                        await environments
+                          .stopTunnel(active.environmentId, active.activeOwnerEpoch)
+                          .catch(() => undefined);
+                      }
+                    },
                   },
-                });
+                );
               } finally {
                 if (!quiescenceHandled) {
                   await quiescence.resume();
@@ -643,19 +661,22 @@ export async function recoverPendingWorkspaceResults(
             });
           } catch (error) {
             try {
-              const current = placements.get(pending.sessionId);
-              const currentPending = placements
-                .listPendingWorkspaceResults(pending.sessionId)
-                .find(
-                  (candidate) =>
-                    candidate.sessionId === pending.sessionId &&
-                    candidate.environmentId === pending.environmentId &&
-                    candidate.ownerEpoch === pending.ownerEpoch &&
-                    candidate.placementGeneration === pending.placementGeneration &&
-                    candidate.claimId === pending.claimId &&
-                    candidate.runId === pending.runId &&
-                    candidate.gatewayInstanceId === pending.gatewayInstanceId,
-                );
+              const currentFacts = await placements.readProjection([pending.sessionId], {
+                current: true,
+              });
+              const current = currentFacts.placements.get(pending.sessionId);
+              const candidate = currentFacts.pendingResults.get(pending.sessionId);
+              const currentPending =
+                candidate &&
+                candidate.sessionId === pending.sessionId &&
+                candidate.environmentId === pending.environmentId &&
+                candidate.ownerEpoch === pending.ownerEpoch &&
+                candidate.placementGeneration === pending.placementGeneration &&
+                candidate.claimId === pending.claimId &&
+                candidate.runId === pending.runId &&
+                candidate.gatewayInstanceId === pending.gatewayInstanceId
+                  ? candidate
+                  : undefined;
               if (
                 currentPending &&
                 isCurrentWorkerWorkspacePendingResultOwner(current, currentPending)
@@ -672,39 +693,5 @@ export async function recoverPendingWorkspaceResults(
       log.warn(`Cloud workspace recovery deferred: ${boundedWorkerError(error)}`);
     }
   }
-  if (cleanupOrphans) {
-    const retainedRefs = () =>
-      new Set(
-        placements
-          .listPendingWorkspaceResults()
-          .flatMap((pending) =>
-            pending.stagedResultRef
-              ? [cleanupWorkerWorkspaceResultRef(pending.stagedResultRef)]
-              : [],
-          ),
-      );
-    const cleanedWorkspaceRoots = new Set<string>();
-    for (const placement of placements.list()) {
-      try {
-        const workspace = await deps.resolveWorkspace(placement);
-        if (workspace.kind === "repository") {
-          continue;
-        }
-        const root = workspace.path;
-        if (!cleanedWorkspaceRoots.has(root)) {
-          cleanedWorkspaceRoots.add(root);
-          await deleteWorkerWorkspaceResultCleanupRefs({
-            root,
-            retainedRefs,
-          });
-        }
-      } catch {
-        // Cleanup refs are independently retryable after the next restart.
-      }
-    }
-  }
-  return new Set([
-    ...stagedResultOwners,
-    ...placements.listPendingWorkspaceResults().map((pending) => pending.sessionId),
-  ]);
+  return stagedResultOwners;
 }

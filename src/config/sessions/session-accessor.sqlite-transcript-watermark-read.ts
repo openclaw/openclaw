@@ -1,19 +1,28 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
+import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
 
-type WatermarkDatabase = Pick<DB, "transcript_events" | "transcript_rewrite_watermarks">;
+export type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 
-export type SessionTranscriptWatermark = {
-  generation: string | null;
-  maxSeq: number | null;
-};
+type WatermarkDatabase = Pick<
+  DB,
+  "transcript_events" | "transcript_rewrite_watermarks" | "session_transcript_cold_archives"
+>;
 
-function prepareHotWatermarkQuery(database: DatabaseSync) {
+// Retain compiled SQL per native handle; the shared executor still owns statements
+// and reads current rows with fresh bindings on every call.
+const hotWatermarkQuery = createSqliteQueryCache((database) => {
   const db = getNodeSqliteKysely<WatermarkDatabase>(database);
   return prepareSqliteQueryTakeFirstSync<
     string,
-    { generation: string | null; max_seq: number | null }
+    { generation: string | null; max_seq: number | null; is_cold: number }
   >(database, (parameter) => {
     const sessionId = parameter((value) => value);
     return db.selectNoFrom((eb) => [
@@ -27,27 +36,31 @@ function prepareHotWatermarkQuery(database: DatabaseSync) {
         .select("generation")
         .where("session_id", "=", sessionId)
         .as("generation"),
+      eb
+        .exists(
+          eb
+            .selectFrom("session_transcript_cold_archives")
+            .select("session_id")
+            .where("session_id", "=", sessionId),
+        )
+        .as("is_cold"),
     ]);
   });
-}
-
-// Retain compiled SQL per native handle; the shared executor still owns statements
-// and reads current rows with fresh bindings on every call.
-const hotWatermarkQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareHotWatermarkQuery>
->();
+});
 
 /** Reads hot append and rewrite tokens together on the caller's admitted connection. */
 export function readSessionTranscriptHotWatermark(
   database: { db: DatabaseSync },
   sessionId: string,
+  options: { requireHot?: boolean } = {},
 ): SessionTranscriptWatermark {
-  let query = hotWatermarkQueries.get(database.db);
-  if (!query) {
-    query = prepareHotWatermarkQuery(database.db);
-    hotWatermarkQueries.set(database.db, query);
+  const context = readTranscriptContextFacts(database, sessionId);
+  if (context?.cold === false) {
+    return { generation: context.version.generation, maxSeq: context.version.rawSeq };
   }
-  const row = query(sessionId);
+  const row = hotWatermarkQuery(database.db)(sessionId);
+  if (options.requireHot && row?.is_cold) {
+    throw new SessionTranscriptColdError(sessionId);
+  }
   return { generation: row?.generation ?? null, maxSeq: row?.max_seq ?? null };
 }

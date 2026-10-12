@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   createQaBusState,
   createQaChannelTransport,
@@ -19,6 +20,7 @@ import { createSolidPngBuffer, createTinyJpegBuffer } from "../../../helpers/ima
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const SESSION_KEY = "agent:qa:main";
+const userEventIdentitySchema = z.object({ messageId: z.string().min(1) });
 const FIXTURES = [
   ["artifact.json", "application/json", "attachment", "artifact"],
   ["table.csv", "text/csv", "attachment", "artifact"],
@@ -380,7 +382,19 @@ describe("WebChat managed media artifact matrix", () => {
         (event) =>
           (event.payload as { message?: { role?: string } } | undefined)?.message?.role === "user",
       );
-      expect(userEvents).toHaveLength(1);
+      const userMessageIds = userEvents.map(
+        (event) => userEventIdentitySchema.parse(event.payload).messageId,
+      );
+      expect(userMessageIds.length).toBeGreaterThan(0);
+      expect(new Set(userMessageIds).size, JSON.stringify(userMessageIds)).toBe(1);
+      const history = await client.request<{ messages?: Array<{ role?: string }> }>(
+        "chat.history",
+        {
+          sessionKey: SESSION_KEY,
+          limit: 20,
+        },
+      );
+      expect(history.messages?.filter((message) => message.role === "user")).toHaveLength(1);
       expect(JSON.stringify(userEvents)).toContain("MEDIA:./artifact.json");
       const displayEvents = sessionEvents.filter((event) => !userEvents.includes(event));
       expect(

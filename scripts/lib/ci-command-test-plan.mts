@@ -136,7 +136,7 @@ export function estimateCommandWorkerSeconds(
       (fallbackSeconds * Math.max(1, Math.min(2, files.length))) /
         Math.max(1, Math.min(maxWorkers, files.length)),
       commandFileSecondsFloor(files, runnerBackend),
-      measured * (runnerBackend === "hybrid" ? COMPACT_HYBRID_GROUP_SECONDS_SCALE : 1),
+      measured,
     ),
   };
 }
@@ -145,22 +145,17 @@ export function estimateCommandWorkerSeconds(
 // retain their existing sessions/cron timing owner.
 const doctorSessionSqliteCorpusFiles = new Set([
   "doctor-session-sqlite.test.ts",
-  "doctor-session-sqlite.archive-safety.test.ts",
   "doctor-session-sqlite.compaction.test.ts",
-  "doctor-session-sqlite.compaction-recovery.test.ts",
   "doctor-session-sqlite.failure-reports.test.ts",
-  "doctor-session-sqlite.inspection.test.ts",
   "doctor-session-sqlite.manifests.test.ts",
   "doctor-session-sqlite.publication-recovery.test.ts",
   "doctor-session-sqlite.recovery.test.ts",
   "doctor-session-sqlite.recovery-generations.test.ts",
   "doctor-session-sqlite.recovery-shared-owners.test.ts",
-  "doctor-session-sqlite.restore-history.test.ts",
   "doctor-session-sqlite.restore-paths.test.ts",
   "doctor-session-sqlite.restore-publication.test.ts",
   "doctor-session-sqlite.retirement-disposal.test.ts",
   "doctor-session-sqlite.retirement-mutations.test.ts",
-  "doctor-session-sqlite.retirement-verification.test.ts",
   "doctor-session-sqlite.targets.test.ts",
 ]);
 
@@ -173,7 +168,7 @@ function resolveCommandShardName(file: string): string {
     return "agentic-commands-doctor-auth";
   }
   if (name.startsWith("doctor")) {
-    if (name.startsWith("doctor/shared/") || name.startsWith("doctor/")) {
+    if (name.startsWith("doctor/")) {
       return "agentic-commands-doctor-shared";
     }
     if (name.startsWith("doctor-auth")) {
@@ -255,7 +250,7 @@ function resolveCommandShardName(file: string): string {
 
 let commandFilesByOwner: Map<string, string[]> | undefined;
 
-function getCommandFilesByOwner(): Map<string, string[]> {
+export function getCommandFilesByOwner(): Map<string, string[]> {
   if (commandFilesByOwner) {
     return commandFilesByOwner;
   }

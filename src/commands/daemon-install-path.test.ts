@@ -36,202 +36,221 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 let tmpDir: string;
 beforeEach(() => {
   tmpDir = dirs.make("daemon-install-path-");
+  mocks.resolveGatewayProgramArguments.mockResolvedValue({
+    programArguments: ["node", "gateway"],
+    workingDirectory: "/Users/me",
+  });
+  mocks.buildServiceEnvironment.mockReturnValue({
+    HOME: "/from-service",
+    OPENCLAW_PORT: "3000",
+    PATH: "/managed/bin:/usr/bin",
+    TMPDIR: "/tmp",
+  });
 });
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetAllMocks();
 });
 
-function mockNodeGatewayPlanFixture(params: { serviceEnvironment: Record<string, string> }) {
-  mocks.resolveGatewayProgramArguments.mockResolvedValue({
-    programArguments: ["node", "gateway"],
-    workingDirectory: "/Users/me",
+function buildPlan(params: Partial<Parameters<typeof buildGatewayInstallPlan>[0]>) {
+  return buildGatewayInstallPlan({
+    env: { HOME: tmpDir },
+    port: 3000,
+    runtime: "node",
+    platform: "linux",
+    ...params,
   });
-  mocks.buildServiceEnvironment.mockReturnValue(params.serviceEnvironment);
 }
 
 describe("Gateway install PATH preservation", () => {
-  it("preserves safe custom vars from an existing service env and merges PATH", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: [
-          ".",
-          "/tmp/evil",
-          "/proc/self/cwd/evil-bin",
-          "/proc/thread-self/cwd/evil-bin",
-          "/proc/12345/cwd/evil-bin",
-          "/proc/self/root/evil-bin",
-          `${process.cwd()}/evil-bin`,
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-        GOBIN: "/Users/test/.local/gopath/bin",
-        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
-        NODE_OPTIONS: "--require /tmp/evil.js",
-        GOPATH: "/Users/test/.local/gopath",
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/custom/go/bin:/usr/bin");
-    expect(plan.environment.GOBIN).toBe("/Users/test/.local/gopath/bin");
-    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
-    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
-    expect(plan.environment.GOPATH).toBeUndefined();
-    expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-  });
-
-  it("drops stale non-minimal PATH entries from an existing service env", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/usr/local/bin:/usr/bin:/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    // Avoid macOS /home autofs lookups while exercising the same user-tool paths.
-    const home = "/Users/testuser";
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: [
-          `${home}/.volta/bin`,
-          `${home}/.asdf/shims`,
-          `${home}/.nvm/current/bin`,
-          `${home}/.local/share/fnm/aliases/default/bin`,
-          `${home}/.local/share/fnm/current/bin`,
-          `${home}/.fnm/aliases/default/bin`,
-          `${home}/.fnm/current/bin`,
-          `${home}/.local/share/pnpm`,
-          "/opt/pnpm/bin",
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/usr/local/bin:/bin:/custom/go/bin:/usr/bin");
-  });
-
-  it("drops existing PATH entries that resolve through symlinks into temp dirs", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
-      const value = String(candidate);
-      if (value === "/opt/safe/bin") {
-        return "/tmp/evil/bin";
+  it.skipIf(process.platform === "win32")(
+    "derives a restored CLI plan from its retained package",
+    async () => {
+      const programArgs = await vi.importActual<typeof import("../daemon/program-args.js")>(
+        "../daemon/program-args.js",
+      );
+      const serviceEnv = await vi.importActual<typeof import("../daemon/service-env.js")>(
+        "../daemon/service-env.js",
+      );
+      mocks.resolveGatewayProgramArguments.mockImplementation(
+        programArgs.resolveGatewayProgramArguments,
+      );
+      mocks.buildServiceEnvironment.mockImplementation(serviceEnv.buildServiceEnvironment);
+      const root = fs.realpathSync(tmpDir);
+      for (const name of ["installer", "retained"]) {
+        const packageRoot = path.join(root, name);
+        fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
+        fs.mkdirSync(path.join(packageRoot, "bin"));
+        fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+        fs.writeFileSync(path.join(packageRoot, "openclaw.mjs"), "");
+        fs.writeFileSync(path.join(packageRoot, "dist", "index.js"), "");
+        fs.symlinkSync(
+          path.join(packageRoot, "openclaw.mjs"),
+          path.join(packageRoot, "bin", "openclaw"),
+        );
       }
-      if (value === "/opt/safe") {
-        return "/tmp/evil";
+      const executable = path.join(root, "runtime", "node");
+      const entrypoint = path.join(root, "retained", "openclaw.mjs");
+      const originalArgv = process.argv;
+      process.argv = [process.execPath, path.join(root, "installer", "src", "entry.ts")];
+      try {
+        const plan = await buildPlan({
+          env: {
+            HOME: root,
+            PATH: [path.join(root, "installer", "bin"), path.join(root, "retained", "bin")].join(
+              path.delimiter,
+            ),
+          },
+          runtimePath: executable,
+          serviceCli: { executable, entrypoint },
+          platform: "darwin",
+        });
+        expect(plan.programArguments[0]).toBe(executable);
+        expect(plan.programArguments).toContain(path.join(root, "retained", "dist", "index.js"));
+        expect(plan.programArguments.join(" ")).not.toContain(path.join(root, "installer"));
+        const pathDirs = plan.environment.PATH?.split(":");
+        expect(pathDirs).toContain(path.join(root, "retained", "bin"));
+        expect(pathDirs).toContain(path.dirname(executable));
+        expect(pathDirs).not.toContain(path.join(root, "installer", "bin"));
+      } finally {
+        process.argv = originalArgv;
       }
-      if (value === "/opt/safe/missing-bin") {
-        throw Object.assign(new Error("missing"), { code: "ENOENT" });
-      }
-      return value;
-    });
+    },
+  );
 
-    try {
-      const plan = await buildGatewayInstallPlan({
-        env: { HOME: tmpDir },
-        port: 3000,
-        runtime: "node",
-        platform: "linux",
+  it.each([false, true])(
+    "preserves custom vars excluding managed keys (tracked=%s)",
+    async (managed) => {
+      if (managed) {
+        mocks.buildServiceEnvironment.mockReturnValue({
+          HOME: "/from-service",
+          OPENCLAW_PORT: "3000",
+          PATH: "/managed/bin:/usr/bin",
+        });
+      }
+      const plan = await buildPlan({
         existingEnvironment: {
-          PATH: "/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin",
+          PATH: managed
+            ? "/custom/go/bin:/usr/bin"
+            : [
+                ".",
+                "/tmp/evil",
+                "/proc/self/cwd/evil-bin",
+                "/proc/thread-self/cwd/evil-bin",
+                "/proc/12345/cwd/evil-bin",
+                "/proc/self/root/evil-bin",
+                `${process.cwd()}/evil-bin`,
+                "/custom/go/bin",
+                "/usr/bin",
+              ].join(path.delimiter),
+          GOBIN: "/Users/test/.local/gopath/bin",
+          BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
+          GOPATH: "/Users/test/.local/gopath",
+          ...(managed
+            ? { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "GOBIN,GOPATH" }
+            : { NODE_OPTIONS: "--require /tmp/evil.js", OPENCLAW_SERVICE_MARKER: "openclaw" }),
         },
       });
 
       expect(plan.environment.PATH).toBe("/managed/bin:/custom/go/bin:/usr/bin");
-    } finally {
-      realpathNative.mockRestore();
-    }
-  });
+      expect(plan.environment.GOBIN).toBe(managed ? undefined : "/Users/test/.local/gopath/bin");
+      expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
+      expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+      expect(plan.environment.GOPATH).toBeUndefined();
+      expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+      expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    },
+  );
 
-  it("drops workspace-derived PATH entries even when HOME equals the install cwd", async () => {
-    const cwd = process.cwd();
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: cwd,
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
+  it.each<{
+    name: string;
+    existingPath: string;
+    nextPath: string;
+    expectedPath: string;
+    home?: string;
+    platform?: NodeJS.Platform;
+    setup?: () => void;
+  }>([
+    {
+      name: "stale version-manager paths",
+      nextPath: "/usr/local/bin:/usr/bin:/bin",
+      existingPath: [
+        ...[
+          ".volta/bin",
+          ".asdf/shims",
+          ".nvm/current/bin",
+          ".local/share/fnm/aliases/default/bin",
+          ".local/share/fnm/current/bin",
+          ".fnm/aliases/default/bin",
+          ".fnm/current/bin",
+          ".local/share/pnpm",
+        ].map((suffix) => `/Users/testuser/${suffix}`),
+        "/opt/pnpm/bin",
+        "/custom/go/bin",
+        "/usr/bin",
+      ].join(path.delimiter),
+      expectedPath: "/usr/local/bin:/bin:/custom/go/bin:/usr/bin",
+    },
+    {
+      name: "symlinks into temporary directories",
+      nextPath: "/managed/bin:/usr/bin",
+      existingPath: "/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin",
+      expectedPath: "/managed/bin:/custom/go/bin:/usr/bin",
+      setup: () => {
+        vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+          const value = String(candidate);
+          if (value === "/opt/safe/bin") {
+            return "/tmp/evil/bin";
+          }
+          if (value === "/opt/safe") {
+            return "/tmp/evil";
+          }
+          if (value === "/opt/safe/missing-bin") {
+            throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          }
+          return value;
+        });
       },
+    },
+    {
+      name: "workspace paths when HOME equals the install cwd",
+      home: process.cwd(),
+      nextPath: "/managed/bin:/usr/bin",
+      existingPath: `${process.cwd()}/evil-bin:/custom/go/bin:/usr/bin`,
+      expectedPath: "/managed/bin:/custom/go/bin:/usr/bin",
+    },
+    {
+      name: "existing paths for macOS LaunchAgents",
+      platform: "darwin",
+      nextPath: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      existingPath: [
+        "/Users/test/.volta/bin",
+        "/Users/test/.asdf/shims",
+        "/Users/test/Library/Application Support/fnm/aliases/default/bin",
+        "/Users/test/Library/pnpm",
+        "/custom/go/bin",
+        "/usr/bin",
+      ].join(path.delimiter),
+      expectedPath:
+        "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    },
+  ])("drops $name", async ({ setup, home, platform, nextPath, existingPath, expectedPath }) => {
+    setup?.();
+    mocks.buildServiceEnvironment.mockReturnValue({
+      HOME: home ?? "/from-service",
+      OPENCLAW_PORT: "3000",
+      PATH: nextPath,
+      TMPDIR: "/tmp",
     });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: cwd },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: `${cwd}/evil-bin:/custom/go/bin:/usr/bin`,
-      },
+    const plan = await buildPlan({
+      env: { HOME: home ?? tmpDir },
+      platform: platform ?? "linux",
+      existingEnvironment: { PATH: existingPath },
     });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/custom/go/bin:/usr/bin");
-  });
-
-  it("drops keys that were previously tracked as managed service env", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: "/custom/go/bin:/usr/bin",
-        GOBIN: "/Users/test/.local/gopath/bin",
-        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
-        GOPATH: "/Users/test/.local/gopath",
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "GOBIN,GOPATH",
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/custom/go/bin:/usr/bin");
-    expect(plan.environment.GOBIN).toBeUndefined();
-    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
-    expect(plan.environment.GOPATH).toBeUndefined();
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    expect(plan.environment.PATH).toBe(expectedPath);
   });
 
   it.each([
-    {
-      name: "custom tools before shared system tools",
-      existingPath: "/custom/go/bin:/usr/bin",
-      nextPath: "/managed/bin:/usr/bin",
-      expectedPath: "/managed/bin:/custom/go/bin:/usr/bin",
-    },
     {
       name: "repeated safe entries",
       existingPath: "/custom/go/bin:/usr/bin:/custom/go/bin",
@@ -252,21 +271,15 @@ describe("Gateway install PATH preservation", () => {
       expectedPath: "/usr/bin:/tmp/service-home/.local/bin",
     },
     {
-      name: "equivalent regenerated entries retaining existing precedence",
-      existingPath: "/custom/go/bin:/usr/bin",
-      nextPath: "/usr//bin:/usr/bin",
-      expectedPath: "/custom/go/bin:/usr/bin",
-    },
-    {
       name: "distinct POSIX directories containing backslashes",
       existingPath: "/custom/go/bin:/opt/a\\b:/opt/a/b",
       nextPath: "/opt/a\\b:/opt/a/b",
       expectedPath: "/custom/go/bin:/opt/a\\b:/opt/a/b",
     },
     {
-      name: "generated trailing-slash aliases retaining existing precedence",
+      name: "generated path aliases retaining existing precedence",
       existingPath: "/custom/go/bin:/usr/bin",
-      nextPath: "/usr/bin/:/usr/bin",
+      nextPath: "/usr//bin/:/usr/bin",
       expectedPath: "/custom/go/bin:/usr/bin",
     },
     {
@@ -276,8 +289,9 @@ describe("Gateway install PATH preservation", () => {
       expectedPath: "/custom/go/bin:/usr/bin/:/usr/bin",
     },
   ])("preserves existing PATH order through install-plan audit: $name", async (testCase) => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: { PATH: testCase.nextPath, TMPDIR: "/tmp" },
+    mocks.buildServiceEnvironment.mockReturnValue({
+      PATH: testCase.nextPath,
+      TMPDIR: "/tmp",
     });
     mocks.resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: ["/opt/node/bin/node", "/opt/openclaw-b/dist/index.js", "gateway"],
@@ -286,11 +300,7 @@ describe("Gateway install PATH preservation", () => {
       programArguments: ["/opt/node/bin/node", "/opt/openclaw-a/dist/index.js", "gateway"],
       environment: { PATH: testCase.existingPath },
     };
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
+    const plan = await buildPlan({
       existingCommand,
       existingEnvironment: existingCommand.environment,
     });
@@ -299,37 +309,5 @@ describe("Gateway install PATH preservation", () => {
 
     expect(findings).toEqual([]);
     expect(plan.environment.PATH).toBe(testCase.expectedPath);
-  });
-
-  it("does not preserve existing PATH entries for macOS LaunchAgents", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "darwin",
-      existingEnvironment: {
-        PATH: [
-          "/Users/test/.volta/bin",
-          "/Users/test/.asdf/shims",
-          "/Users/test/Library/Application Support/fnm/aliases/default/bin",
-          "/Users/test/Library/pnpm",
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-      },
-    });
-
-    expect(plan.environment.PATH).toBe(
-      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-    );
   });
 });

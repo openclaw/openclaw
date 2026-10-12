@@ -1,8 +1,10 @@
 name: Plugin Prerelease
 
-run-name: ${{ inputs.dispatch_id != '' && format('Plugin Prerelease {0}', inputs.dispatch_id) || 'Plugin Prerelease' }}
+run-name: ${{ github.event_name == 'schedule' && 'Hourly Extension Tests' || inputs.dispatch_id != '' && format('Plugin Prerelease {0}', inputs.dispatch_id) || 'Plugin Prerelease' }}
 
 on:
+  schedule:
+    - cron: "37 * * * *"
   workflow_dispatch:
     inputs:
       target_ref:
@@ -49,6 +51,11 @@ on:
         required: false
         default: "[]"
         type: string
+      qualification_baselines_json:
+        description: Captured exact upgrade and survivor baselines from the qualification request
+        required: false
+        default: ""
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -64,8 +71,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}-${{ inputs.phase }}
-  cancel-in-progress: ${{ inputs.target_ref == 'main' }}
+  group: ${{ github.event_name == 'schedule' && 'plugin-prerelease-hourly-main' || format('plugin-prerelease-{0}-{1}-{2}', inputs.target_ref, github.sha, inputs.phase) }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' && inputs.target_ref == 'main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -73,6 +80,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
+    if: github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
@@ -93,8 +101,8 @@ jobs:
       - name: Resolve target SHA
         id: resolve
         env:
-          TARGET_REF: ${{ inputs.target_ref }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          TARGET_REF: ${{ github.event_name == 'schedule' && github.sha || inputs.target_ref }}
+          EXPECTED_SHA: ${{ github.event_name == 'schedule' && github.sha || inputs.expected_sha }}
           OPENCLAW_REF_REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           bash workflow/scripts/github/resolve-openclaw-ref.sh \
@@ -120,13 +128,15 @@ jobs:
       run_plugin_prerelease_inspector: ${{ steps.manifest.outputs.run_plugin_prerelease_inspector }}
       run_plugin_prerelease_docker: ${{ steps.manifest.outputs.run_plugin_prerelease_docker }}
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
+      upgrade_baseline: ${{ steps.qualification_baselines.outputs.baseline }}
+      upgrade_baselines: ${{ steps.qualification_baselines.outputs.baselines }}
     steps:
       - name: Validate phase inputs
         env:
           CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
-          PHASE: ${{ inputs.phase }}
+          PHASE: ${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}
         shell: bash
         run: |
           set -euo pipefail
@@ -189,16 +199,35 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .frv-tooling
-          sparse-checkout: scripts/frv-test-exclusions.mjs
+          sparse-checkout: |
+            scripts/frv-test-exclusions.mjs
+            scripts/lib/release-upgrade-baseline.mjs
+            scripts/lib/release-version.mjs
+            scripts/lib/canonical-json.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Validate captured qualification baselines
+        id: qualification_baselines
+        env:
+          QUALIFICATION_BASELINES_JSON: ${{ inputs.qualification_baselines_json }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$QUALIFICATION_BASELINES_JSON" ]]; then exit 0; fi
+          captured="$(node .frv-tooling/scripts/lib/release-upgrade-baseline.mjs \
+            --candidate-version "$(node -p 'require("./package.json").version')" \
+            --target-context-ref "$TARGET_CONTEXT_REF" \
+            --qualification-baselines-json "$QUALIFICATION_BASELINES_JSON")"
+          printf 'baseline=%s\n' "$(jq -er .upgradeBaseline <<< "$captured")" >> "$GITHUB_OUTPUT"
+          printf 'baselines=%s\n' "$(jq -er '.upgradeSurvivorBaselines | join(" ")' <<< "$captured")" >> "$GITHUB_OUTPUT"
 
       - name: Validate frozen-target Node exclusions
         id: node_test_exclusions
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
-          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ inputs.node_test_exclude_patterns_json }}
-          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ inputs.extension_test_exclude_patterns_json }}
+          NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ github.event_name == 'schedule' && '[]' || inputs.node_test_exclude_patterns_json }}
+          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ github.event_name == 'schedule' && '[]' || inputs.extension_test_exclude_patterns_json }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
@@ -230,7 +259,7 @@ jobs:
         id: manifest
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
-          PHASE: ${{ inputs.phase }}
+          PHASE: ${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}
           NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.extension_patterns_json }}
         run: |
@@ -241,6 +270,7 @@ jobs:
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
           const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
+          const hourly = process.env.GITHUB_EVENT_NAME === "schedule";
           const phase = process.env.PHASE ?? "all";
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
@@ -251,6 +281,7 @@ jobs:
           const targetPlanPaths = {
             "plugin-prerelease-test-plan": "./scripts/lib/plugin-prerelease-test-plan.mts",
             "extension-test-plan": "./scripts/lib/extension-test-plan.mts",
+            "bundled-plugin-source-utils": "./scripts/lib/bundled-plugin-source-utils.mts",
             "ci-node-test-plan": "./scripts/lib/ci-node-test-plan.mts",
           };
           const targetPlanPath = (name) => {
@@ -292,15 +323,45 @@ jobs:
             const allExtensionShards = planner.createExtensionTestShards({
               shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
             });
+            const batchedExtensionIds = new Set(allExtensionShards.flatMap((shard) => shard.extensionIds));
             const hasJobSplitter = typeof planner.splitExtensionTestJobTargets === "function";
-            const telegramPlanGroups = hasJobSplitter
-              ? planner.createExtensionTestShards({ extensionIds: ["telegram"], shardCount: 1 })
-                  .flatMap((shard) => shard.planGroups)
+            // Codex alone took 36-60 min on hosted release runners (FRV 36644909314 timed out),
+            // so it gets file-bounded jobs like Telegram instead of one batch job.
+            const fileSplitExtensionIds = ["telegram", "codex"].filter((id) => batchedExtensionIds.has(id));
+            const fileSplitPlanGroups = hasJobSplitter
+              ? fileSplitExtensionIds.flatMap((extensionId) =>
+                  planner.createExtensionTestShards({ extensionIds: [extensionId], shardCount: 1 })
+                    .flatMap((shard) => shard.planGroups)
+                    .map((group) => ({ ...group, family: extensionId })),
+                )
               : [];
+            const sourcePlanGroups = new Map();
+            if (hasJobSplitter) {
+              const sources = await import(targetPlanPath("bundled-plugin-source-utils"));
+              // August frozen targets expose the public collector but not its tracked projection.
+              const candidates = typeof sources.collectTrackedBundledPluginSourceCandidates === "function"
+                ? sources.collectTrackedBundledPluginSourceCandidates(process.cwd())
+                : sources.collectBundledPluginSources({ repoRoot: process.cwd() });
+              if (!candidates) throw new Error("Cannot enumerate bundled plugin source metadata");
+              // Older planners omit manifest-only plugins; supplement only their missing owners.
+              const sourceRoots = candidates.filter((entry) => entry.manifestPath && !entry.packageJsonPath && !batchedExtensionIds.has(entry.dirName))
+                .map((entry) => `extensions/${entry.dirName}`);
+              const sourceFiles = [
+                ...planner.listExtensionTestFilesForRoots(sourceRoots),
+                ...planner.listExtensionTestFilesForRoots(["extensions"])
+                  .filter((file) => path.posix.dirname(file) === "extensions"),
+              ];
+              for (const file of sourceFiles) {
+                const config = planner.resolveExtensionTestConfig(file);
+                const group = sourcePlanGroups.get(config) ?? { config, roots: [] };
+                group.roots.push(file);
+                sourcePlanGroups.set(config, group);
+              }
+            }
             const genericExtensionIds = hasJobSplitter
               ? allExtensionShards
                   .flatMap((shard) => shard.extensionIds)
-                  .filter((extensionId) => extensionId !== "telegram")
+                  .filter((extensionId) => !fileSplitExtensionIds.includes(extensionId))
               : [];
             const batchShards = await Promise.all((
               hasJobSplitter
@@ -336,7 +397,10 @@ jobs:
               }),
             })));
             const telegramShards = [];
-            for (const group of telegramPlanGroups) {
+            for (const group of [
+              ...fileSplitPlanGroups,
+              ...[...sourcePlanGroups.values()].map((group) => ({ ...group, family: "source" })),
+            ]) {
               const vitestConfig = (await import(`./${group.config}`)).default;
               const testConfig = vitestConfig.test ?? {};
               const testDir = testConfig.dir ?? process.cwd();
@@ -360,8 +424,8 @@ jobs:
                 }
                 const index = telegramShards.length;
                 telegramShards.push({
-                  check_name: `checks-node-extensions-telegram-shard-${index + 1}`,
-                  extensions_csv: "telegram",
+                  check_name: `checks-node-extensions-${group.family}-shard-${index + 1}`,
+                  extensions_csv: [...new Set(includePatterns.map((file) => file.split("/")[1]))].join(","),
                   includePatterns,
                   vitest_config: group.config,
                   exclusion_configs: [{ config: group.config, includePatterns }],
@@ -369,6 +433,9 @@ jobs:
                   runner: "blacksmith-8vcpu-ubuntu-2404",
                   shard_index: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
                   task: "extension-file-shard",
+                  // Plain pnpm test does not consume the batch dual-runtime policy.
+                  test_runtime_policy: "node",
+                  requires_bun: false,
                 });
               }
             }
@@ -432,10 +499,13 @@ jobs:
           const dockerLanes = pluginPrereleasePlan.dockerLanes;
           const runIndependent = phase !== "candidate";
           const runCandidate = phase !== "independent";
-          const runStatic = runIndependent && staticChecks.length > 0;
-          const runNode = runIndependent && nodeShards.length > 0;
+          const runStatic = runIndependent && !hourly && staticChecks.length > 0;
+          const runNode = runIndependent && !hourly && nodeShards.length > 0;
           const runExtensions = runIndependent && extensionShards.length > 0;
-          const runInspector = runIndependent && (runStatic || runNode || runExtensions);
+          if (hourly && !runExtensions) {
+            throw new Error("Hourly plugin validation requires the complete extension test inventory");
+          }
+          const runInspector = runIndependent && !hourly && (runStatic || runNode || runExtensions);
           if (runIndependent && ((process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON || "[]") !== "[]" || (process.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON || "[]") !== "[]")) {
             const { parseTestExclusions, validateTestExclusions } = await import("./.frv-tooling/scripts/frv-test-exclusions.mjs");
             await validateTestExclusions({
@@ -471,152 +541,6 @@ jobs:
             );
           }
           EOF
-
-  plugin-npm-security-plan:
-    permissions:
-      contents: read
-    name: Plan plugin npm security artifacts
-    needs: [resolve_target]
-    if: inputs.phase != 'candidate'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
-    timeout-minutes: 10
-    outputs:
-      packages_json: ${{ steps.plan.outputs.packages_json }}
-    steps:
-      - name: Checkout trusted scanner tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup trusted scanner TypeScript runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.x"
-
-      - name: Setup trusted scanner pnpm
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: restore
-          node-version: "24.x"
-
-      - name: Install trusted scanner dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
-
-      - name: Checkout candidate as inert data
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
-          path: .release-candidate
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
-
-      - name: Build trusted plugin package plan
-        id: plan
-        run: |
-          node --import tsx scripts/plugin-npm-security-prepare.mts plan \
-            --candidate-root .release-candidate \
-            --github-output "$GITHUB_OUTPUT"
-
-  plugin-npm-security-scan:
-    permissions:
-      contents: read
-    name: plugin-npm-security-scan
-    needs: [resolve_target, plugin-npm-security-plan]
-    if: ${{ !cancelled() && always() && needs.resolve_target.result == 'success' && needs.plugin-npm-security-plan.result == 'success' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
-    timeout-minutes: 45
-    steps:
-      - name: Checkout trusted scanner tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup trusted scanner TypeScript runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.x"
-
-      - name: Setup trusted scanner pnpm
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: restore
-          node-version: "24.x"
-
-      - name: Install trusted scanner dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
-
-      - name: Checkout candidate as inert package input
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
-          path: .release-candidate
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
-
-      - name: Pack supplemental inert plugin inputs
-        env:
-          CANDIDATE_SHA: ${{ needs.resolve_target.outputs.checkout_revision }}
-          EXPECTED_PACKAGES_JSON: ${{ needs.plugin-npm-security-plan.outputs.packages_json }}
-          TOOLING_SHA: ${{ github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          artifact_root="$RUNNER_TEMP/plugin-npm-security-packages"
-          mkdir -p "$artifact_root"
-          while IFS=$'\t' read -r extension_id package_dir package_name; do
-            output_dir="$artifact_root/plugin-npm-security-package-${CANDIDATE_SHA}-${extension_id}"
-            if ! node --import tsx scripts/plugin-npm-security-prepare.mts prepare \
-                --candidate-root .release-candidate \
-                --candidate-sha "$CANDIDATE_SHA" \
-                --extension-id "$extension_id" \
-                --output-dir "$output_dir" \
-                --package-dir "$package_dir" \
-                --package-name "$package_name" \
-                --tooling-sha "$TOOLING_SHA"; then
-              printf 'Package preparation failed for %s\n' "$package_name" >&2
-            fi
-          done < <(jq -r '.[] | [.extensionId, .packageDir, .packageName] | @tsv' <<< "$EXPECTED_PACKAGES_JSON")
-
-      - name: Scan supplemental inert plugin inputs
-        env:
-          CANDIDATE_SHA: ${{ needs.resolve_target.outputs.checkout_revision }}
-          EXPECTED_PACKAGES_JSON: ${{ needs.plugin-npm-security-plan.outputs.packages_json }}
-          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          TOOLING_SHA: ${{ github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          report="$RUNNER_TEMP/plugin-npm-security-scan.json"
-          mkdir -p "$RUNNER_TEMP/plugin-npm-security-packages"
-          status=0
-          node scripts/plugin-npm-security-scan-runner.mjs \
-            --artifact-root "$RUNNER_TEMP/plugin-npm-security-packages" \
-            --candidate-sha "$CANDIDATE_SHA" \
-            --expected-packages-json "$EXPECTED_PACKAGES_JSON" \
-            --target-context-ref "$TARGET_CONTEXT_REF" \
-            --tooling-sha "$TOOLING_SHA" \
-            --report "$report" || status=$?
-          exit "$status"
-
-      - name: Upload plugin npm security scan report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: plugin-npm-security-scan
-          path: ${{ runner.temp }}/plugin-npm-security-scan.json
-          if-no-files-found: error
 
   plugin-prerelease-static-shard:
     permissions:
@@ -801,14 +725,14 @@ jobs:
               node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" "${exclusion_options[@]}" -- "${exclude_args[@]}"
               ;;
             extension-file-shard)
-              include_file="${RUNNER_TEMP}/telegram-test-include-${GITHUB_JOB}.json"
+              include_file="${RUNNER_TEMP}/extension-test-include-${GITHUB_JOB}.json"
               trap 'rm -f -- "$include_file"' EXIT
               INCLUDE_FILE="$include_file" node --input-type=module <<'EOF'
               import { writeFileSync } from "node:fs";
 
               const patterns = JSON.parse(process.env.OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON);
               if (!Array.isArray(patterns) || patterns.length === 0) {
-                throw new Error("Invalid Telegram extension file shard");
+                throw new Error("Invalid extension file shard");
               }
               writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(patterns), "utf8");
           EOF
@@ -1026,6 +950,8 @@ jobs:
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       include_live_suites: false
       live_models_only: false
+      published_upgrade_survivor_baseline: ${{ needs.preflight.outputs.upgrade_baseline || 'openclaw@latest' }}
+      published_upgrade_survivor_baselines: ${{ needs.preflight.outputs.upgrade_baselines }}
       shared_image_artifact_namespace: plugin-prerelease
       package_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName || '' }}
       package_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}
@@ -1057,7 +983,6 @@ jobs:
     name: plugin-prerelease-suite
     needs:
       - preflight
-      - plugin-npm-security-scan
       - plugin-prerelease-static-shard
       - plugin-prerelease-node-shard
       - plugin-prerelease-extension-shard
@@ -1073,8 +998,6 @@ jobs:
           RUN_NODE: ${{ needs.preflight.outputs.run_plugin_prerelease_node }}
           RUN_EXTENSIONS: ${{ needs.preflight.outputs.run_plugin_prerelease_extensions }}
           RUN_DOCKER: ${{ needs.preflight.outputs.run_plugin_prerelease_docker }}
-          RUN_NPM_SECURITY: ${{ inputs.phase != 'candidate' && 'true' || 'false' }}
-          SECURITY_RESULT: ${{ needs.plugin-npm-security-scan.result }}
           STATIC_RESULT: ${{ needs.plugin-prerelease-static-shard.result }}
           NODE_RESULT: ${{ needs.plugin-prerelease-node-shard.result }}
           EXTENSIONS_RESULT: ${{ needs.plugin-prerelease-extension-shard.result }}
@@ -1097,7 +1020,6 @@ jobs:
             fi
           }
 
-          check_required "plugin-npm-security-scan" "$RUN_NPM_SECURITY" "$SECURITY_RESULT"
           check_required "plugin-prerelease-static" "$RUN_STATIC" "$STATIC_RESULT"
           check_required "plugin-prerelease-node" "$RUN_NODE" "$NODE_RESULT"
           check_required "plugin-prerelease-extensions" "$RUN_EXTENSIONS" "$EXTENSIONS_RESULT"
@@ -1110,8 +1032,6 @@ jobs:
     needs:
       - resolve_target
       - preflight
-      - plugin-npm-security-plan
-      - plugin-npm-security-scan
       - plugin-prerelease-static-shard
       - plugin-prerelease-node-shard
       - plugin-prerelease-extension-shard

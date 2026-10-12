@@ -1,26 +1,8 @@
-/* @vitest-environment jsdom */
-
-import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CostDailyEntry } from "./types.ts";
-import { renderUsageHeatmap } from "./view-heatmap.ts";
-
-function dailyEntry(date: string, totalTokens: number): CostDailyEntry {
-  return {
-    date,
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { dailyEntry } from "./usage-chart.test-support.ts";
+import { renderUsageHeatmap } from "./view-heatmap.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -29,14 +11,16 @@ afterEach(() => {
 describe("renderUsageHeatmap", () => {
   it("renders the selected activity range from usage cost data", () => {
     const container = document.createElement("div");
-    render(
-      renderUsageHeatmap(
-        [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
-        "2025-07-11",
-        "2026-07-09",
-      ),
-      container,
+    mountSolid(
+      () =>
+        renderUsageHeatmap(
+          [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
+          "2025-07-11",
+          "2026-07-09",
+        ),
+      { container },
     );
+    flush();
 
     expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
       "Token Activity",
@@ -51,10 +35,11 @@ describe("renderUsageHeatmap", () => {
 
   it("keeps short ranges at their natural cell width", () => {
     const container = document.createElement("div");
-    render(
-      renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
-      container,
+    mountSolid(
+      () => renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
+      { container },
     );
+    flush();
 
     expect(
       container

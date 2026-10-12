@@ -104,6 +104,7 @@ export type StatusScanOverviewResult = {
         | "degradedPlugins"
         | "startupMigrationWarning"
         | "installationReplacementWarning"
+        | "childRuntime"
         | "secretEgressProxy"
         | "sqliteWal"
       > &
@@ -120,11 +121,10 @@ export type StatusScanOverviewResult = {
 export async function collectStatusScanOverview(params: {
   env?: NodeJS.ProcessEnv;
   commandName: string;
-  opts: StatusGatewayProbeBudget & { all?: boolean };
+  opts: StatusGatewayProbeBudget & { all?: boolean; deep?: boolean };
   showSecrets: boolean;
   runtime?: RuntimeEnv;
   allowMissingConfigFastPath?: boolean;
-  skipUpdateCheck?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
   resolveHasConfiguredChannels?: (
@@ -153,9 +153,13 @@ export async function collectStatusScanOverview(params: {
   };
 }): Promise<StatusScanOverviewResult> {
   const env = params.env ?? process.env;
-  if (params.labels?.loadingConfig) {
-    params.progress?.setLabel(params.labels.loadingConfig);
-  }
+  const setProgressLabel = (key: keyof NonNullable<typeof params.labels>) => {
+    const label = params.labels?.[key];
+    if (label) {
+      params.progress?.setLabel(label);
+    }
+  };
+  setProgressLabel("loadingConfig");
   const { snapshot } = await measureCliCommandStartup(
     "status.config",
     async () =>
@@ -218,7 +222,6 @@ export async function collectStatusScanOverview(params: {
     env,
     hasConfiguredChannels,
     opts: params.opts,
-    skipUpdateCheck: params.skipUpdateCheck,
     fetchGitUpdate: params.fetchGitUpdate,
     includeRegistryUpdate: params.includeRegistryUpdate,
     includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
@@ -254,27 +257,19 @@ export async function collectStatusScanOverview(params: {
       ),
   });
 
-  if (params.labels?.checkingTailscale) {
-    params.progress?.setLabel(params.labels.checkingTailscale);
-  }
+  setProgressLabel("checkingTailscale");
   const tailscaleDns = await bootstrap.tailscaleDnsPromise;
   params.progress?.tick();
 
-  if (params.labels?.checkingForUpdates) {
-    params.progress?.setLabel(params.labels.checkingForUpdates);
-  }
+  setProgressLabel("checkingForUpdates");
   const update = await bootstrap.updatePromise;
   params.progress?.tick();
 
-  if (params.labels?.resolvingAgents) {
-    params.progress?.setLabel(params.labels.resolvingAgents);
-  }
+  setProgressLabel("resolvingAgents");
   const agentStatus = await bootstrap.agentStatusPromise;
   params.progress?.tick();
 
-  if (params.labels?.probingGateway) {
-    params.progress?.setLabel(params.labels.probingGateway);
-  }
+  setProgressLabel("probingGateway");
   const gatewaySnapshot = await bootstrap.gatewayProbePromise;
   params.progress?.tick();
   let runtimeDegradation: StatusScanOverviewResult["runtimeDegradation"] = null;
@@ -304,6 +299,7 @@ export async function collectStatusScanOverview(params: {
           degradedPlugins: status.degradedPlugins ?? [],
           startupMigrationWarning: status.startupMigrationWarning,
           installationReplacementWarning: status.installationReplacementWarning,
+          ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
           sqliteWal: status.sqliteWal,
           // The Gateway owns route readiness; CLI channel runtimes stay unloaded.
@@ -325,54 +321,38 @@ export async function collectStatusScanOverview(params: {
           }),
         )
       : undefined;
-  const includeChannelsData = params.includeChannelsData !== false;
-  const includeLiveChannelStatus = params.includeLiveChannelStatus !== false;
-  const { channelsStatus, channelIssues, channels } = includeChannelsData
-    ? await (async () => {
-        if (params.labels?.queryingChannelStatus) {
-          params.progress?.setLabel(params.labels.queryingChannelStatus);
-        }
-        const channelsStatusLocal = includeLiveChannelStatus
-          ? await resolveStatusChannelsStatus({
-              cfg,
-              configPath: snapshot.path,
-              gatewayReachable: gatewaySnapshot.gatewayReachable,
-              opts: params.opts,
-              gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
-              useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
-            })
-          : null;
-        params.progress?.tick();
-        // Runtime channel helpers stay lazy because JSON fast paths can skip channel data entirely.
-        const { collectChannelStatusIssues, buildChannelsTable } =
-          await statusScanRuntimeModuleLoader
-            .load()
-            .then(({ statusScanRuntime }) => statusScanRuntime);
-        const channelIssuesLocal = channelsStatusLocal
-          ? collectChannelStatusIssues(channelsStatusLocal)
-          : [];
-        if (params.labels?.summarizingChannels) {
-          params.progress?.setLabel(params.labels.summarizingChannels);
-        }
-        const channelsLocal = await buildChannelsTable(cfg, {
-          showSecrets: params.showSecrets,
-          sourceConfig,
-          includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
-          liveChannelStatus: channelsStatusLocal,
-        });
-        params.progress?.tick();
-        return {
-          channelsStatus: channelsStatusLocal,
-          channelIssues: channelIssuesLocal,
-          channels: channelsLocal,
-        };
-      })()
-    : {
-        // Some JSON/fast scans only need gateway/config fields; keep channel output structurally empty.
-        channelsStatus: null,
-        channelIssues: [],
-        channels: { rows: [], details: [] },
-      };
+  // Some JSON/fast scans only need gateway/config fields; keep channel output structurally empty.
+  let channelsStatus: Awaited<ReturnType<typeof resolveStatusChannelsStatus>> = null;
+  let channelIssues: StatusScanOverviewResult["channelIssues"] = [];
+  let channels: StatusScanOverviewResult["channels"] = { rows: [], details: [] };
+  if (params.includeChannelsData !== false) {
+    setProgressLabel("queryingChannelStatus");
+    channelsStatus =
+      params.includeLiveChannelStatus !== false
+        ? await resolveStatusChannelsStatus({
+            cfg,
+            configPath: snapshot.path,
+            gatewayReachable: gatewaySnapshot.gatewayReachable,
+            opts: params.opts,
+            gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
+            useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
+          })
+        : null;
+    params.progress?.tick();
+    // Runtime channel helpers stay lazy because JSON fast paths can skip channel data entirely.
+    const {
+      statusScanRuntime: { collectChannelStatusIssues, buildChannelsTable },
+    } = await statusScanRuntimeModuleLoader.load();
+    channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
+    setProgressLabel("summarizingChannels");
+    channels = await buildChannelsTable(cfg, {
+      showSecrets: params.showSecrets,
+      sourceConfig,
+      includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
+      liveChannelStatus: channelsStatus,
+    });
+    params.progress?.tick();
+  }
 
   return {
     env,

@@ -3,6 +3,7 @@ import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   cancelChatScroll,
+  canAutoFollowChat,
   type ChatScrollToEndOptions,
   getChatSessionScrollPosition,
   handleChatScroll,
@@ -474,7 +475,7 @@ describe("scheduleChatScroll", () => {
     expect(host.chatReadingHistory).toBe(false);
   });
 
-  it.each(["commit", "resize", "schedule", "remote-input"] as const)(
+  it.each(["commit", "resize", "schedule"] as const)(
     "preserves a pending manual jump across an automatic %s",
     (update) => {
       const frames = installAnimationFrameQueue();
@@ -484,9 +485,7 @@ describe("scheduleChatScroll", () => {
       host.chatUserNearBottom = false;
 
       scheduleChatScroll(host, true, false, { source: "manual" });
-      if (update === "remote-input") {
-        lockChatScroll(host, "remote-input");
-      } else if (update === "schedule") {
+      if (update === "schedule") {
         scheduleChatScroll(host);
       } else {
         scheduleCommittedChatScroll(host, false, false, {
@@ -586,7 +585,13 @@ describe("programmatic scroll ownership", () => {
 
     scheduleChatScroll(host, true, true, { source: "manual" });
     await host.updateComplete;
+    expect(canAutoFollowChat(host)).toBe(false);
     frames.runNext();
+    expect(canAutoFollowChat(host)).toBe(false);
+    expect(host.chatScrollToEnd).not.toHaveBeenCalled();
+    scheduleCommittedChatScroll(host, false, false, { source: "resize" });
+    frames.runNext();
+    expect(canAutoFollowChat(host)).toBe(true);
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "smooth", source: "manual" });
     expect(frames.callbacks).toHaveLength(0);
     handleChatScroll(host, createScrollEvent(2000, 900, 400));
@@ -614,6 +619,9 @@ describe("programmatic scroll ownership", () => {
     const { host, container } = createScrollHost({ scrollTop: 500 + delta });
     host.chatLastScrollTop = 500;
     scheduleChatScroll(host, true, true, { source: "manual" });
+    // Reader input can arrive while the command waits for measured layout.
+    frames.runNext();
+    expect(canAutoFollowChat(host)).toBe(false);
 
     handleChatScrollTakeover(host);
     expect(frames.callbacks).toHaveLength(0);
@@ -640,6 +648,23 @@ describe("programmatic scroll ownership", () => {
 
     expect(host.chatUserNearBottom).toBe(false);
   });
+
+  it.each([false, true])(
+    "clears the latest affordance at a measured end without changing reader policy (locked=%s)",
+    (locked) => {
+      const { host } = createScrollHost();
+      host.chatIsProgrammaticScroll = () => true;
+      host.chatNewMessagesBelow = true;
+      host.chatFollowLocked = locked;
+      host.chatReadingHistory = locked;
+
+      handleChatScroll(host, createScrollEvent(3000, 2600, 400));
+
+      expect(host.chatNewMessagesBelow).toBe(false);
+      expect(host.chatFollowLocked).toBe(locked);
+      expect(host.chatReadingHistory).toBe(locked);
+    },
+  );
 });
 
 describe("reader-controlled panel takeover", () => {

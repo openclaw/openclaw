@@ -3,6 +3,15 @@ import path from "node:path";
 import type { FileSystem } from "typescript/unstable/fs";
 import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
 
+export type DeclarationLookup =
+  | { kind: "readFile" | "fileExists" | "directoryExists"; path: string; result: boolean }
+  | {
+      kind: "getAccessibleEntries";
+      path: string;
+      result: { files: string[]; directories: string[] };
+    }
+  | { kind: "realpath"; path: string; result: string };
+
 /** Record compiler reads and apply the caller's checkout policy when supplied. */
 export function createDeclarationFileSystem(
   cwd: string,
@@ -13,9 +22,42 @@ export function createDeclarationFileSystem(
   const boundary = admit ? createDeclarationInputBoundary(cwd) : undefined;
   const resolve = (file: string) => boundary?.resolve(file) ?? path.resolve(cwd, file);
   const inputs = new Set<string>();
+  const lookups = new Map<string, DeclarationLookup>();
   let failure: Error | undefined;
   const reject = (error: unknown) => {
     failure ??= error instanceof Error ? error : new Error(String(error));
+  };
+  const assertValid = () => {
+    if (failure) {
+      throw failure;
+    }
+  };
+  const observe = (lookup: DeclarationLookup) => {
+    if (!boundary) {
+      return;
+    }
+    const absolute = resolve(lookup.path);
+    const relative = path.relative(boundary.root, absolute);
+    // Virtual configs derive from sealed options; outside candidates are always denied.
+    if (
+      virtualFiles.has(absolute) ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      return;
+    }
+    const file = relative.split(path.sep).join("/") || ".";
+    const recorded: DeclarationLookup =
+      lookup.kind === "realpath"
+        ? {
+            ...lookup,
+            path: file,
+            result: path.relative(boundary.root, lookup.result).split(path.sep).join("/") || ".",
+          }
+        : { ...lookup, path: file };
+    const key = `${recorded.kind}\0${recorded.path}`;
+    lookups.set(key, recorded);
   };
   const local = (file: string) => {
     const absolute = resolve(file);
@@ -52,7 +94,7 @@ export function createDeclarationFileSystem(
       return undefined;
     }
   };
-  const filesystem = {
+  const physical = {
     readFile(file) {
       const accepted = local(file);
       if (accepted === undefined) {
@@ -99,7 +141,7 @@ export function createDeclarationFileSystem(
           const isDirectory = file === undefined ? entry.isDirectory() : stat(file)?.isDirectory();
           (isDirectory ? entries.directories : entries.files).push(entry.name);
         }
-        return entries;
+        return { files: entries.files.toSorted(), directories: entries.directories.toSorted() };
       } catch (error) {
         if (missing(error)) {
           return entries;
@@ -125,17 +167,61 @@ export function createDeclarationFileSystem(
         return accepted;
       }
     },
-    writeFile() {
+    writeFile(this: void) {
       reject(new Error("Native declarations must be emitted in memory"));
     },
+  } satisfies FileSystem;
+  const filesystem = {
+    readFile(file: string) {
+      const result = physical.readFile(file);
+      observe({ kind: "readFile", path: file, result: result !== null });
+      return result;
+    },
+    fileExists(file: string) {
+      const result = physical.fileExists(file);
+      observe({ kind: "fileExists", path: file, result });
+      return result;
+    },
+    directoryExists(directory: string) {
+      const result = physical.directoryExists(directory);
+      observe({ kind: "directoryExists", path: directory, result });
+      return result;
+    },
+    getAccessibleEntries(directory: string) {
+      const result = physical.getAccessibleEntries(directory);
+      observe({ kind: "getAccessibleEntries", path: directory, result });
+      return result;
+    },
+    realpath(file: string) {
+      const result = physical.realpath(file);
+      observe({ kind: "realpath", path: file, result });
+      return result;
+    },
+    writeFile: physical.writeFile,
   } satisfies FileSystem;
   return {
     filesystem,
     inputs,
-    assertValid(this: void) {
-      if (failure) {
-        throw failure;
-      }
+    getLookups() {
+      assertValid();
+      return [...lookups]
+        .toSorted(([left], [right]) => (left < right ? -1 : 1))
+        .map(([, lookup]) => lookup);
     },
+    assertValid,
   };
+}
+
+/** Replay the same bounded operations, including negative resolution candidates. */
+export function replayDeclarationLookups(
+  cwd: string,
+  admit: (file: string) => string,
+  lookups: readonly DeclarationLookup[],
+  readText: (file: string) => string,
+) {
+  const view = createDeclarationFileSystem(cwd, admit, new Map(), readText);
+  for (const lookup of lookups) {
+    view.filesystem[lookup.kind](lookup.path);
+  }
+  return view.getLookups();
 }

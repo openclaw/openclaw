@@ -1,4 +1,3 @@
-/** Installed systemd scope discovery and dueling-manager diagnostics. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +19,11 @@ import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { GATEWAY_SERVICE_KIND, isGatewayServiceEnv } from "./constants.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
+import {
+  getServiceInspectionClock,
+  runServiceInspectionGuard,
+  withServiceInspectionBudget,
+} from "./service-inspection-budget.js";
 import { findServiceOwnershipRefusal, ServiceInspectionError } from "./service-inspection-error.js";
 import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./service-layout.js";
 import type {
@@ -37,12 +41,10 @@ import {
   resolveSystemdUnitPathForName,
 } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
-
-const SYSTEM_SYSTEMD_UNIT_DIRS = [
-  "/etc/systemd/system",
-  "/usr/lib/systemd/system",
-  "/lib/systemd/system",
-] as const;
+import {
+  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
+  resolveSystemdUnitLoadPaths,
+} from "./systemd-unit-load-paths.js";
 
 type SystemdDiscoveryOptions = Pick<
   GatewayServiceReadOptions,
@@ -89,43 +91,32 @@ export async function isSystemdServiceAbsent(
     return false;
   }
   const home = resolveDaemonHomeDir(env);
-  const runtimeDirs = new Set(
-    [`/run/user/${process.geteuid()}`, env.XDG_RUNTIME_DIR].filter((value): value is string =>
-      Boolean(value),
-    ),
+  const { runtimeRoots, userRoots, systemRoots } = resolveSystemdUnitLoadPaths(
+    env,
+    home,
+    process.geteuid(),
   );
-  const configHome = env.XDG_CONFIG_HOME || path.posix.join(home, ".config");
-  const dataHome = env.XDG_DATA_HOME || path.posix.join(home, ".local/share");
-  const userRoots = [
-    path.posix.join(home, ".config"),
-    configHome,
-    dataHome,
-    ...(env.XDG_CONFIG_DIRS || "/etc/xdg").split(":"),
-    ...(env.XDG_DATA_DIRS || "/usr/local/share:/usr/share").split(":"),
-    "/etc",
-    "/usr/local/lib",
-    "/usr/lib",
-    "/lib",
-  ];
   const unitName = `${resolveSystemdServiceName(env)}.service`;
-  if (![...runtimeDirs, ...userRoots].every((dir) => path.posix.isAbsolute(dir))) {
+  if (![...runtimeRoots, ...userRoots].every((dir) => path.posix.isAbsolute(dir))) {
     return false;
   }
   // sd_booted() uses /run/systemd/system; user managers own runtime/systemd/private.
   // Require the complete runtime directory absent so transient/generated units cannot hide.
   const absentPaths = [
     "/run/systemd",
-    ...[...runtimeDirs].map((dir) => path.posix.join(dir, "systemd")),
+    ...runtimeRoots.map((dir) => path.posix.join(dir, "systemd")),
     ...userRoots.flatMap((dir) =>
       ["user", "user.control", "user.attached"].map((scope) =>
         path.posix.join(dir, "systemd", scope, unitName),
       ),
     ),
-    ...["/etc", "/usr/local/lib", "/usr/lib", "/lib"].flatMap((dir) =>
-      ["system", "system.control", "system.attached"].map((scope) =>
-        path.posix.join(dir, "systemd", scope, unitName),
+    ...systemRoots
+      .filter((dir) => dir !== "/run")
+      .flatMap((dir) =>
+        ["system", "system.control", "system.attached"].map((scope) =>
+          path.posix.join(dir, "systemd", scope, unitName),
+        ),
       ),
-    ),
   ];
   for (const candidate of absentPaths) {
     try {
@@ -140,10 +131,6 @@ export async function isSystemdServiceAbsent(
   return (await findInstalledSystemdGatewayScope(env)) === null;
 }
 
-function unitBaseName(label: string): string {
-  return label.endsWith(".service") ? label.slice(0, -".service".length) : label;
-}
-
 function systemdTemplatePrefix(base: string): { template: string; instance: string } | null {
   const cut = base.indexOf("@");
   if (cut <= 0) {
@@ -153,24 +140,14 @@ function systemdTemplatePrefix(base: string): { template: string; instance: stri
 }
 
 function systemdInstalledNameProbes(names: string[]): string[] {
-  const probes: string[] = [];
-  const seen = new Set<string>();
-  const add = (name: string) => {
-    if (!seen.has(name)) {
-      seen.add(name);
-      probes.push(name);
-    }
-  };
-  for (const name of names) {
-    add(name);
-  }
+  const probes = new Set(names);
   for (const name of names) {
     const parsed = systemdTemplatePrefix(name);
     if (parsed?.instance) {
-      add(`${parsed.template}@`);
+      probes.add(`${parsed.template}@`);
     }
   }
-  return probes;
+  return [...probes];
 }
 
 function systemdUnitMatchesIdentity(
@@ -178,7 +155,7 @@ function systemdUnitMatchesIdentity(
   allowedNames: Set<string>,
   explicit: boolean,
 ): boolean {
-  const base = unitBaseName(label);
+  const base = label.endsWith(".service") ? label.slice(0, -".service".length) : label;
   if (allowedNames.has(base)) {
     return true;
   }
@@ -205,7 +182,10 @@ function systemdUnitMatchesIdentity(
   return false;
 }
 
-function resolveSystemdTemplateInstanceName(unitName: string, env: GatewayServiceEnv): string {
+export function resolveSystemdTemplateInstanceName(
+  unitName: string,
+  env: GatewayServiceEnv,
+): string {
   if (!unitName.endsWith("@.service")) {
     return unitName;
   }
@@ -217,25 +197,6 @@ function resolveSystemdTemplateInstanceName(unitName: string, env: GatewayServic
       ? parsed.instance
       : os.userInfo().username;
   return `${template}@${instance}.service`;
-}
-
-async function findSystemSystemdUnitPath(
-  env: GatewayServiceEnv,
-): Promise<{ unitName: string; unitPath: string } | null> {
-  const candidates = systemdInstalledNameProbes(resolveInstalledSystemdServiceNameCandidates(env));
-  for (const name of candidates) {
-    const serviceFile = `${name}.service`;
-    for (const dir of SYSTEM_SYSTEMD_UNIT_DIRS) {
-      const candidate = path.posix.join(dir, serviceFile);
-      try {
-        await fs.access(candidate);
-        return { unitName: serviceFile, unitPath: candidate };
-      } catch {
-        continue;
-      }
-    }
-  }
-  return null;
 }
 
 export async function assertNoSystemGatewayOwnership(
@@ -409,11 +370,12 @@ async function systemdUnitsShareInstallation(
   options: SystemdDiscoveryOptions | undefined,
   deadline: number | undefined,
 ): Promise<boolean> {
+  const now = getServiceInspectionClock();
   const inspection = options?.loadForInspection;
   const assertInspectionCurrent = inspection?.assertReadCurrent ?? inspection?.assertCurrent;
   const assertCurrent = () => {
-    assertInspectionCurrent?.();
-    if (deadline !== undefined && performance.now() >= deadline) {
+    runServiceInspectionGuard(assertInspectionCurrent);
+    if (deadline !== undefined && now() >= deadline) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
   };
@@ -423,7 +385,7 @@ async function systemdUnitsShareInstallation(
   let port: number | null | undefined;
   for (const target of [system, user]) {
     assertCurrent();
-    const remaining = deadline === undefined ? undefined : deadline - performance.now();
+    const remaining = deadline === undefined ? undefined : deadline - now();
     if (remaining !== undefined && remaining <= 0) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
@@ -458,8 +420,9 @@ async function findMarkerOwnedSystemSystemdUnit(
   options: SystemdDiscoveryOptions | undefined,
   discoverCustom: boolean,
 ): Promise<SystemdServiceReadTarget | null> {
+  const now = getServiceInspectionClock();
   const deadline =
-    options?.timeoutMs && options.timeoutMs > 0 ? performance.now() + options.timeoutMs : undefined;
+    options?.timeoutMs && options.timeoutMs > 0 ? now() + options.timeoutMs : undefined;
   const allowedNames = new Set(resolveInstalledSystemdServiceNameCandidates(env));
   const allowCustom =
     discoverCustom &&
@@ -469,12 +432,7 @@ async function findMarkerOwnedSystemSystemdUnit(
   const custom = new Map<string, SystemdServiceReadTarget>();
 
   const { findSystemGatewayServices } = await import("./inspect.js");
-  let services: Awaited<ReturnType<typeof findSystemGatewayServices>>;
-  try {
-    services = await findSystemGatewayServices();
-  } catch {
-    return null;
-  }
+  const services = await findSystemGatewayServices();
   for (const svc of services) {
     if (
       svc.platform !== "linux" ||
@@ -484,8 +442,7 @@ async function findMarkerOwnedSystemSystemdUnit(
     ) {
       continue;
     }
-    const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());
-    const unitPath = match?.[1]?.trim();
+    const unitPath = svc.sourcePath;
     if (unitPath) {
       const target: SystemdServiceReadTarget = {
         scope: "system",
@@ -508,7 +465,7 @@ async function findMarkerOwnedSystemSystemdUnit(
   }
   let found: SystemdServiceReadTarget | null = null;
   for (const target of custom.values()) {
-    const remaining = deadline === undefined ? undefined : deadline - performance.now();
+    const remaining = deadline === undefined ? undefined : deadline - now();
     if (remaining !== undefined && remaining <= 0) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
@@ -534,36 +491,36 @@ async function findMarkerOwnedSystemSystemdUnit(
   return found;
 }
 
-async function findUserSystemdGatewayScope(
+async function findSystemdGatewayScope(
   env: GatewayServiceEnv,
+  scope: "user" | "system",
+  options?: SystemdDiscoveryOptions,
+  discoverCustom = true,
 ): Promise<SystemdServiceReadTarget | null> {
   const candidates = resolveInstalledSystemdServiceNameCandidates(env);
-  for (const name of candidates) {
-    try {
-      const userPath = resolveSystemdUnitPathForName(env, name);
-      await fs.access(userPath);
-      return { scope: "user", unitName: `${name}.service`, unitPath: userPath };
-    } catch {
-      continue;
+  const names = scope === "system" ? systemdInstalledNameProbes(candidates) : candidates;
+  const directories = scope === "system" ? DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS : [undefined];
+  for (const name of names) {
+    const unitName = `${name}.service`;
+    for (const dir of directories) {
+      let unitPath: string;
+      try {
+        unitPath =
+          dir === undefined
+            ? resolveSystemdUnitPathForName(env, name)
+            : path.posix.join(dir, unitName);
+        await fs.access(unitPath);
+      } catch {
+        continue;
+      }
+      return {
+        scope,
+        unitName: scope === "system" ? resolveSystemdTemplateInstanceName(unitName, env) : unitName,
+        unitPath,
+      };
     }
   }
-  return null;
-}
-
-async function findSystemSystemdGatewayScope(
-  env: GatewayServiceEnv,
-  options: SystemdDiscoveryOptions | undefined,
-  discoverCustom: boolean,
-): Promise<SystemdServiceReadTarget | null> {
-  const systemUnit = await findSystemSystemdUnitPath(env);
-  if (systemUnit) {
-    return {
-      scope: "system",
-      unitName: resolveSystemdTemplateInstanceName(systemUnit.unitName, env),
-      unitPath: systemUnit.unitPath,
-    };
-  }
-  if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
+  if (scope === "user" || env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
     return null;
   }
   // System-scope installs may use a non-canonical unit name for the default
@@ -577,21 +534,27 @@ export async function findSystemdGatewayInstallation(
   env: GatewayServiceEnv,
   options?: SystemdDiscoveryOptions,
 ): Promise<SystemdGatewayInstallation> {
-  const deadline =
-    options?.timeoutMs && options.timeoutMs > 0 ? performance.now() + options.timeoutMs : undefined;
-  const user = await findUserSystemdGatewayScope(env);
-  // With a user unit present, only this profile's known system aliases compete.
-  const system = await findSystemSystemdGatewayScope(env, options, !user);
-  if (user) {
-    if (system && (await systemdUnitsShareInstallation(env, user, system, options, deadline))) {
-      return { kind: "dueling", user, system };
-    }
-    return { kind: "user", user };
-  }
-  if (system) {
-    return { kind: "system", system };
-  }
-  return { kind: "none" };
+  return await withServiceInspectionBudget<Promise<SystemdGatewayInstallation>>(
+    async (inspectionBudget) => {
+      const deadline =
+        options?.timeoutMs && options.timeoutMs > 0
+          ? inspectionBudget.now() + options.timeoutMs
+          : undefined;
+      const user = await findSystemdGatewayScope(env, "user");
+      // With a user unit present, only this profile's known system aliases compete.
+      const system = await findSystemdGatewayScope(env, "system", options, !user);
+      if (user) {
+        if (system && (await systemdUnitsShareInstallation(env, user, system, options, deadline))) {
+          return { kind: "dueling", user, system };
+        }
+        return { kind: "user", user };
+      }
+      if (system) {
+        return { kind: "system", system };
+      }
+      return { kind: "none" };
+    },
+  );
 }
 
 /** Lifecycle stays user-first; Doctor separately resolves matching dueling units. */
@@ -599,11 +562,13 @@ export async function findInstalledSystemdGatewayScope(
   env: GatewayServiceEnv,
   options?: SystemdDiscoveryOptions,
 ): Promise<SystemdServiceReadTarget | null> {
-  const user = await findUserSystemdGatewayScope(env);
-  if (user) {
-    return user;
-  }
-  return await findSystemSystemdGatewayScope(env, options, true);
+  return await withServiceInspectionBudget<Promise<SystemdServiceReadTarget | null>>(async () => {
+    const user = await findSystemdGatewayScope(env, "user");
+    if (user) {
+      return user;
+    }
+    return await findSystemdGatewayScope(env, "system", options, true);
+  });
 }
 
 /** Doctor may remove a duplicate only when the system unit runs now and survives reboot. */

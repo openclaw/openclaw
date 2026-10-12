@@ -2,11 +2,20 @@ import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
 import type { CapturedAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
-import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import {
+  prepareGatewaySessionLifecycleEvent,
+  type persistGatewaySessionLifecycleEvent,
+} from "./session-lifecycle-state.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 type LifecyclePersistenceParams = Parameters<typeof persistGatewaySessionLifecycleEvent>[0];
 type TerminalPersistenceAuthority = {
@@ -27,7 +36,7 @@ type PreparedPersistence = {
   expired: boolean;
   promise: Promise<void>;
   settled: boolean;
-  timer: ReturnType<typeof setTimeout>;
+  cancelExpiry: () => void;
 };
 
 function assertTerminalAuthority(authority: TerminalPersistenceAuthority): void {
@@ -67,9 +76,38 @@ function terminalEventKey(event: {
 }
 
 /** Owns each definitive lifecycle write before optional chat presentation code runs. */
-export function createSessionLifecyclePersistenceOwner() {
+export function createSessionLifecyclePersistenceOwner(scheduler: GatewayScheduler) {
   const prepared = new Map<string, PreparedPersistence>();
-  const inFlight = new Set<Promise<void>>();
+  const work = new AsyncWorkScope();
+  const pendingBySession = new Map<string, Promise<void>>();
+  let closing = false;
+  const track = (persist: () => Promise<void>) => {
+    if (closing) {
+      return Promise.reject(createAgentRunStaleLifecycleError());
+    }
+    return runWithRetainedGatewayRootWork(() =>
+      runOutsideAsyncWorkScope(() => work.track(persist)),
+    );
+  };
+  const enqueue = (params: LifecyclePersistenceParams) => {
+    const target = resolveSessionStoreIdentity({
+      cfg: getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+    const persist = prepareGatewaySessionLifecycleEvent(params);
+    const key = JSON.stringify([target.agentId, target.canonicalKey]);
+    const previous = pendingBySession.get(key);
+    const promise = previous ? previous.then(persist, persist) : persist();
+    pendingBySession.set(key, promise);
+    const release = () => {
+      if (pendingBySession.get(key) === promise) {
+        pendingBySession.delete(key);
+      }
+    };
+    void promise.then(release, release);
+    return promise;
+  };
 
   const observe = (params: ObservedTerminalPersistenceParams) => {
     const key = terminalEventKey(params.event);
@@ -77,9 +115,12 @@ export function createSessionLifecyclePersistenceOwner() {
     if (existing) {
       return existing;
     }
+    if (closing) {
+      return Promise.reject(createAgentRunStaleLifecycleError());
+    }
     const authority = params.authority;
     const persist = () =>
-      persistGatewaySessionLifecycleEvent({
+      enqueue({
         sessionKey: params.sessionKey,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         event: {
@@ -100,20 +141,18 @@ export function createSessionLifecyclePersistenceOwner() {
         },
         ...(authority || params.writeContext
           ? {
-              assertCommitAllowed: () => {
-                if (authority) {
-                  assertTerminalAuthority(authority);
-                }
-                params.writeContext?.assertCurrent();
-              },
+              assertCommitAllowed: composeSessionSourceAssertion([
+                authority ? () => assertTerminalAuthority(authority) : undefined,
+                params.writeContext?.assertCurrent,
+              ]),
             }
           : {}),
       });
-    const promise = params.writeContext ? params.writeContext.run(persist) : persist();
-    inFlight.add(promise);
+    const promise = track(() =>
+      params.writeContext ? params.writeContext.run(persist) : persist(),
+    );
     let entry: PreparedPersistence | undefined;
     const settle = () => {
-      inFlight.delete(promise);
       if (!entry) {
         return;
       }
@@ -130,18 +169,21 @@ export function createSessionLifecyclePersistenceOwner() {
         expired: false,
         promise,
         settled: false,
-        timer: setTimeout(() => {
-          if (prepared.get(key) !== preparedEntry) {
-            return;
-          }
-          preparedEntry.expired = true;
-          if (preparedEntry.settled) {
-            prepared.delete(key);
-          }
-        }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS),
+        cancelExpiry: scheduler.schedule({
+          id: `session-lifecycle-persistence:${key}`,
+          delayMs: AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+          run: () => {
+            if (prepared.get(key) !== preparedEntry) {
+              return;
+            }
+            preparedEntry.expired = true;
+            if (preparedEntry.settled) {
+              prepared.delete(key);
+            }
+          },
+        }).cancel,
       };
       entry = preparedEntry;
-      preparedEntry.timer.unref?.();
       prepared.set(key, preparedEntry);
     }
     return promise;
@@ -156,7 +198,7 @@ export function createSessionLifecyclePersistenceOwner() {
     if (!entry) {
       return undefined;
     }
-    clearTimeout(entry.timer);
+    entry.cancelExpiry();
     prepared.delete(key);
     return entry.promise;
   };
@@ -177,15 +219,29 @@ export function createSessionLifecyclePersistenceOwner() {
         return Promise.reject(createAgentRunStaleLifecycleError());
       }
       const authority = terminalEventAuthority(params.event);
-      return persistGatewaySessionLifecycleEvent({
-        ...params,
-        ...(authority ? { assertCommitAllowed: () => assertTerminalAuthority(authority) } : {}),
-      });
+      return track(() =>
+        enqueue({
+          ...params,
+          ...(authority
+            ? {
+                assertCommitAllowed: composeSessionSourceAssertion([
+                  () => assertTerminalAuthority(authority),
+                  params.assertCommitAllowed,
+                ]),
+              }
+            : {}),
+        }),
+      );
     },
     async drain(): Promise<void> {
-      await Promise.allSettled(inFlight);
+      closing = true;
+      // Accepted persistence owns its cancellation scope until its cleanup has joined.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [work],
+        () => work.drain(),
+      );
       for (const entry of prepared.values()) {
-        clearTimeout(entry.timer);
+        entry.cancelExpiry();
       }
       prepared.clear();
     },

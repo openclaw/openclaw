@@ -1,22 +1,16 @@
 import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
 
-// Mechanical request retries stay continuous for one run owner. Only typed
-// semantic progress or owner teardown can clear the clock that recovery reads.
+// The first retry starts the clock; one long initial request is not a loop.
+// Later retries share that clock until semantic progress or owner teardown.
 type RepeatedRequestOwner = { runId: string; sequence: number };
 
 export type DiagnosticRepeatedRequestActivity = {
   repeatedRequestOwnerRunId?: string;
   repeatedRequestFirstStartedAt?: number;
-  repeatedRequestCount?: number;
   repeatedRequestMutationSequence?: number;
 };
 
 let mutationSequence = 0;
-
-function nextMutationSequence(): number {
-  mutationSequence += 1;
-  return mutationSequence;
-}
 
 export function recordRepeatedRequestObservation(
   activity: DiagnosticRepeatedRequestActivity,
@@ -37,12 +31,11 @@ export function recordRepeatedRequestObservation(
   }
   if (activity.repeatedRequestOwnerRunId !== runId) {
     activity.repeatedRequestOwnerRunId = runId;
-    activity.repeatedRequestFirstStartedAt = params.now ?? Date.now();
-    activity.repeatedRequestCount = 1;
+    activity.repeatedRequestFirstStartedAt = undefined;
   } else {
-    activity.repeatedRequestCount = (activity.repeatedRequestCount ?? 0) + 1;
+    activity.repeatedRequestFirstStartedAt ??= params.now ?? Date.now();
   }
-  activity.repeatedRequestMutationSequence = nextMutationSequence();
+  activity.repeatedRequestMutationSequence = ++mutationSequence;
 }
 
 export function clearRepeatedRequestActivity(
@@ -56,14 +49,13 @@ export function clearRepeatedRequestActivity(
   ) {
     return false;
   }
-  const cleared = activity.repeatedRequestCount !== undefined;
+  const cleared = activity.repeatedRequestOwnerRunId !== undefined;
   if (!cleared && params.runId !== undefined) {
     return false;
   }
   activity.repeatedRequestOwnerRunId = undefined;
   activity.repeatedRequestFirstStartedAt = undefined;
-  activity.repeatedRequestCount = undefined;
-  activity.repeatedRequestMutationSequence = nextMutationSequence();
+  activity.repeatedRequestMutationSequence = ++mutationSequence;
   return cleared;
 }
 
@@ -79,7 +71,6 @@ export function mergeRepeatedRequestActivity(
   }
   target.repeatedRequestOwnerRunId = source.repeatedRequestOwnerRunId;
   target.repeatedRequestFirstStartedAt = source.repeatedRequestFirstStartedAt;
-  target.repeatedRequestCount = source.repeatedRequestCount;
   target.repeatedRequestMutationSequence = source.repeatedRequestMutationSequence;
 }
 
@@ -91,7 +82,6 @@ export function resolveRepeatedRequestNoProgressAgeMs(
   if (
     currentOwnerRunId === undefined ||
     currentOwnerRunId !== activity.repeatedRequestOwnerRunId ||
-    (activity.repeatedRequestCount ?? 0) < 2 ||
     activity.repeatedRequestFirstStartedAt === undefined
   ) {
     return undefined;

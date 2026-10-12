@@ -1,12 +1,7 @@
 import {
   asPositiveFiniteNumber,
-  parseStrictFiniteNumber,
+  resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-/**
- * Shared compact tool-call display helpers.
- * Redacts and summarizes arguments into short labels/details for chat and UI
- * tool update streams.
- */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -23,7 +18,6 @@ type ToolDisplayActionSpec = {
   detailKeys?: string[];
 };
 
-/** Display metadata for a tool and optional per-action labels/details. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -31,25 +25,14 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-/** Normalized display target for code/search bridge tools. */
-type ToolSearchCodeDisplayTarget = {
-  toolName: string;
-  displayToolName?: string;
-  displayArgs?: Record<string, unknown>;
-  detail?: string;
-  bridgeVerb?: "call" | "describe" | "search";
-};
-
 type CoerceDisplayValueOptions = {
   includeFalsy?: boolean;
 };
 
-/** Normalize a tool name for fallback display. */
 export function normalizeToolDisplayName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
-/** Convert a tool identifier into a human-readable title. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
   if (!cleaned) {
@@ -141,8 +124,7 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
-/** Format a detail path/key into a short display label. */
-export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
+export function formatDetailKey(raw: string, overrides: Record<string, string>): string {
   const last = raw.split(".").findLast(Boolean) || raw;
   const override = overrides[last];
   if (override) {
@@ -163,28 +145,14 @@ function resolvePathArg(record: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function resolveReadDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveReadDetail(record: Record<string, unknown>): string | undefined {
   const path = resolvePathArg(record);
   if (!path) {
     return undefined;
   }
 
-  const offsetRaw =
-    typeof record.offset === "number" && Number.isFinite(record.offset)
-      ? Math.floor(record.offset)
-      : undefined;
-  const limitRaw =
-    typeof record.limit === "number" && Number.isFinite(record.limit)
-      ? Math.floor(record.limit)
-      : undefined;
-
-  const offset = offsetRaw !== undefined ? Math.max(1, offsetRaw) : undefined;
-  const limit = limitRaw !== undefined ? Math.max(1, limitRaw) : undefined;
+  const offset = resolveOptionalIntegerOption(record.offset, { min: 1 });
+  const limit = resolveOptionalIntegerOption(record.limit, { min: 1 });
 
   if (offset !== undefined && limit !== undefined) {
     const unit = limit === 1 ? "line" : "lines";
@@ -200,12 +168,7 @@ function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWriteDetail(toolKey: string, record: Record<string, unknown>): string | undefined {
   const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
     return undefined;
@@ -232,12 +195,7 @@ function resolveWriteDetail(toolKey: string, args: unknown): string | undefined 
   return `${destinationPrefix} ${path}`;
 }
 
-function resolveWebSearchDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWebSearchDetail(record: Record<string, unknown>): string | undefined {
   const queries = collectWebSearchQueries(record);
   const count =
     asPositiveFiniteNumber(record.count) ??
@@ -260,15 +218,12 @@ function resolveWebSearchDetail(args: unknown): string | undefined {
 }
 
 function collectWebSearchQueries(record: Record<string, unknown>): string[] {
-  const queries: string[] = [];
-  const seen = new Set<string>();
+  const queries = new Set<string>();
   const add = (value: unknown) => {
     const normalized = normalizeOptionalString(value);
-    if (!normalized || seen.has(normalized)) {
-      return;
+    if (normalized) {
+      queries.add(normalized);
     }
-    seen.add(normalized);
-    queries.push(normalized);
   };
 
   add(record.query);
@@ -301,261 +256,10 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
     }
   }
 
-  return queries;
+  return [...queries];
 }
 
-function parseToolSearchCall(code: string): { target: string; args?: string } | undefined {
-  // This is a bounded summary parser for display only; execution still uses the
-  // real tool-search bridge and schema validation.
-  const prefixMatch = code.match(/openclaw\.tools\.call\s*\(\s*/s);
-  if (!prefixMatch || prefixMatch.index === undefined) {
-    return undefined;
-  }
-  const rest = code.slice(prefixMatch.index + prefixMatch[0].length);
-  const targetMatch = rest.match(/^("[^"]{1,240}"|'[^']{1,240}'|[^,)\s]{1,240})/s);
-  if (!targetMatch?.[1]) {
-    return undefined;
-  }
-  const afterTarget = rest.slice(targetMatch[0].length);
-  const commaIndex = afterTarget.indexOf(",");
-  if (commaIndex < 0) {
-    return { target: targetMatch[1] };
-  }
-  const args = afterTarget.slice(commaIndex + 1);
-  return { target: targetMatch[1], args };
-}
-
-function normalizeToolSearchDisplayToolName(toolName: string | undefined): string | undefined {
-  const value = normalizeOptionalString(toolName);
-  if (!value) {
-    return undefined;
-  }
-  const catalogIdMatch = value.match(/^(?:openclaw|mcp|client):[^:]+:(.+)$/s);
-  return normalizeOptionalString(catalogIdMatch?.[1]) ?? value;
-}
-
-function collectToolSearchDescribeBindings(code: string): Map<string, string> {
-  const bindings = new Map<string, string>();
-  const bindingPattern =
-    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?openclaw\.tools\.describe\s*\(\s*("[^"]{1,240}"|'[^']{1,240}')\s*(?:,|\))/gs;
-  for (const match of code.matchAll(bindingPattern)) {
-    const variableName = match[1];
-    const target = summarizeToolSearchTarget(match[2]);
-    if (variableName && target) {
-      bindings.set(variableName, target);
-    }
-  }
-  return bindings;
-}
-
-function resolveToolSearchCallTarget(
-  code: string,
-  rawTarget: string | undefined,
-): string | undefined {
-  const target = normalizeOptionalString(rawTarget);
-  if (!target) {
-    return undefined;
-  }
-  const idReference = target.match(/^([A-Za-z_$][\w$]*)\.id\b/s);
-  if (idReference?.[1]) {
-    const describedTarget = collectToolSearchDescribeBindings(code).get(idReference[1]);
-    if (describedTarget) {
-      return describedTarget;
-    }
-  }
-  return summarizeToolSearchTarget(target);
-}
-
-function summarizeToolSearchTarget(raw: string | undefined): string | undefined {
-  const value = normalizeOptionalString(raw);
-  if (!value) {
-    return undefined;
-  }
-  const literalMatch = value.match(/^[\s]*["']([^"']{1,160})["'][\s]*$/s);
-  if (literalMatch?.[1]) {
-    return normalizeOptionalString(literalMatch[1]);
-  }
-  const idPropertyMatch = value.match(/\.id\b/);
-  if (idPropertyMatch) {
-    return normalizeOptionalString(value.replace(/\.id\b.*/s, ""));
-  }
-  const namePropertyMatch = value.match(/name\s*:\s*["']([^"']{1,120})["']/s);
-  if (namePropertyMatch?.[1]) {
-    return normalizeOptionalString(namePropertyMatch[1]);
-  }
-  const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length <= 80 ? compact : undefined;
-}
-
-function parseToolSearchCallArgs(raw: string | undefined): Record<string, unknown> | undefined {
-  const source = extractObjectLiteralSource(raw);
-  if (!source) {
-    return undefined;
-  }
-  const args: Record<string, unknown> = {};
-  const propertyPattern =
-    /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?)/gi;
-  for (const match of source.matchAll(propertyPattern)) {
-    const key = match[1];
-    const value = match[2];
-    if (!key || value === undefined) {
-      continue;
-    }
-    args[key] = parseSimpleToolSearchArgValue(value);
-  }
-  return Object.keys(args).length > 0 ? args : undefined;
-}
-
-function extractObjectLiteralSource(raw: string | undefined): string | undefined {
-  const value = normalizeOptionalString(raw);
-  if (!value) {
-    return undefined;
-  }
-  const start = value.indexOf("{");
-  if (start < 0) {
-    return undefined;
-  }
-  let depth = 0;
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
-  for (let i = start; i < value.length; i += 1) {
-    const char = value[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") {
-      depth += 1;
-      continue;
-    }
-    if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return value.slice(start, i + 1);
-      }
-    }
-  }
-  return undefined;
-}
-
-function parseSimpleToolSearchArgValue(raw: string): unknown {
-  if (raw === "true") {
-    return true;
-  }
-  if (raw === "false") {
-    return false;
-  }
-  if (raw === "null") {
-    return null;
-  }
-  const numeric = parseStrictFiniteNumber(raw);
-  if (numeric !== undefined) {
-    return numeric;
-  }
-  const quote = raw[0];
-  const inner = raw.slice(1, -1);
-  if (quote === '"') {
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      return inner;
-    }
-  }
-  return inner.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
-}
-
-function summarizeToolSearchCallInput(raw: string | undefined): string | undefined {
-  const value = normalizeOptionalString(raw)
-    ?.replace(/[);\s]+$/g, "")
-    .trim();
-  if (!value) {
-    return undefined;
-  }
-  const queryMatch = value.match(/query\s*:\s*["']([^"']{1,80})["']/s);
-  if (queryMatch?.[1]) {
-    return "query " + queryMatch[1].trim();
-  }
-  const actionMatch = value.match(/action\s*:\s*["']([^"']{1,80})["']/s);
-  if (actionMatch?.[1]) {
-    return normalizeOptionalString(actionMatch[1]);
-  }
-  const commandMatch = value.match(/command\s*:\s*["']([^"'\n]{1,120})["']/s);
-  if (commandMatch?.[1]) {
-    return normalizeOptionalString(commandMatch[1]);
-  }
-  const sessionMatch = value.match(/sessionId\s*:\s*["']([^"']{1,80})["']/s);
-  if (sessionMatch?.[1]) {
-    return "session " + sessionMatch[1].trim();
-  }
-  const idMatch = value.match(/id\s*:\s*["']([^"']{1,80})["']/s);
-  if (idMatch?.[1]) {
-    return idMatch[1].trim();
-  }
-  return undefined;
-}
-
-/** Infer the bridged tool target displayed for tool_search_code snippets. */
-export function resolveToolSearchCodeDisplayTarget(
-  args: unknown,
-): ToolSearchCodeDisplayTarget | undefined {
-  const record = asRecord(args);
-  if (!record || typeof record.code !== "string") {
-    return undefined;
-  }
-  const code = record.code;
-  const call = parseToolSearchCall(code);
-  if (call) {
-    const toolName = resolveToolSearchCallTarget(code, call.target);
-    if (!toolName) {
-      return { toolName: "tool_search_code", detail: "call selected tool", bridgeVerb: "call" };
-    }
-    return {
-      toolName,
-      displayToolName: normalizeToolSearchDisplayToolName(toolName),
-      displayArgs: parseToolSearchCallArgs(call.args),
-      detail: summarizeToolSearchCallInput(call.args),
-      bridgeVerb: "call",
-    };
-  }
-  const describeMatch = code.match(/openclaw\.tools\.describe\s*\(\s*([^)]+?)\s*(?:,|\))/s);
-  if (describeMatch) {
-    const toolName = summarizeToolSearchTarget(describeMatch[1]);
-    return toolName
-      ? { toolName, detail: "describe via tool search", bridgeVerb: "describe" }
-      : { toolName: "tool_search_code", detail: "describe selected tool", bridgeVerb: "describe" };
-  }
-  const searchMatch = code.match(/openclaw\.tools\.search\s*\(\s*([^)]+?)\s*(?:,|\))/s);
-  if (searchMatch) {
-    const query = summarizeToolSearchTarget(searchMatch[1]);
-    return {
-      toolName: "tool_search_code",
-      detail: query ? "search " + query : "search tools",
-      bridgeVerb: "search",
-    };
-  }
-  return { toolName: "tool_search_code", detail: "run bridge code" };
-}
-
-function resolveWebFetchDetail(args: unknown): string | undefined {
-  const record = asRecord(args);
-  if (!record) {
-    return undefined;
-  }
-
+function resolveWebFetchDetail(record: Record<string, unknown>): string | undefined {
   const url = normalizeOptionalString(record.url);
   if (!url) {
     return undefined;
@@ -580,7 +284,6 @@ function resolveDetailFromKeys(
   opts: {
     mode: "first" | "summary";
     coerce?: CoerceDisplayValueOptions;
-    maxEntries?: number;
     formatKey?: (raw: string) => string;
   },
 ): string | undefined {
@@ -604,9 +307,8 @@ function resolveDetailFromKeys(
   }
 
   const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
-  const maxEntries = opts.maxEntries ?? 8;
   const parts: string[] = [];
-  for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
+  for (let index = 0; index < unique.length && index < 8; index += 1) {
     const entry = unique[index];
     if (entry) {
       parts.push(`${entry.label} ${entry.value}`);
@@ -615,7 +317,6 @@ function resolveDetailFromKeys(
   return parts.join(", ");
 }
 
-/** Resolve display verb/detail from tool args and optional display metadata. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -625,7 +326,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
   detailMode: "first" | "summary";
   toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
-  detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
   // Card arguments belong to the card renderer; generic summaries must not expose them.
@@ -635,15 +335,8 @@ export function resolveToolVerbAndDetailForArgs(params: {
   // Keep the existing read order when caller-owned options expose accessors.
   const { toolKey, args, meta } = params;
   const action = normalizeOptionalString(asRecord(params.args)?.action);
-  const {
-    spec,
-    fallbackDetailKeys,
-    detailMode,
-    toolDetailMode,
-    detailCoerce,
-    detailMaxEntries,
-    detailFormatKey,
-  } = params;
+  const { spec, fallbackDetailKeys, detailMode, toolDetailMode, detailCoerce, detailFormatKey } =
+    params;
   const actionSpec = spec && action ? (spec.actions?.[action] ?? undefined) : undefined;
   const fallbackVerb =
     toolKey === "web_search"
@@ -660,20 +353,17 @@ export function resolveToolVerbAndDetailForArgs(params: {
   if (toolKey === "exec" || toolKey === "bash" || toolKey === "shell") {
     detail = resolveExecDetail(args, { detailMode: toolDetailMode });
   }
-  if (!detail && toolKey === "read") {
-    detail = resolveReadDetail(args);
-  }
-  if (!detail && (toolKey === "write" || toolKey === "edit" || toolKey === "attach")) {
-    detail = resolveWriteDetail(toolKey, args);
-  }
-  if (!detail && toolKey === "web_search") {
-    detail = resolveWebSearchDetail(args);
-  }
-  if (!detail && toolKey === "web_fetch") {
-    detail = resolveWebFetchDetail(args);
-  }
-  if (!detail && toolKey === "tool_search_code") {
-    detail = resolveToolSearchCodeDisplayTarget(args)?.detail;
+  const record = asRecord(args);
+  if (record && !detail) {
+    if (toolKey === "read") {
+      detail = resolveReadDetail(record);
+    } else if (toolKey === "write" || toolKey === "edit" || toolKey === "attach") {
+      detail = resolveWriteDetail(toolKey, record);
+    } else if (toolKey === "web_search") {
+      detail = resolveWebSearchDetail(record);
+    } else if (toolKey === "web_fetch") {
+      detail = resolveWebFetchDetail(record);
+    }
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallbackDetailKeys ?? [];
@@ -681,7 +371,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
     detail = resolveDetailFromKeys(args, detailKeys, {
       mode: detailMode,
       coerce: detailCoerce,
-      maxEntries: detailMaxEntries,
       formatKey: detailFormatKey,
     });
   }

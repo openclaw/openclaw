@@ -1,14 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { mcpTool, pluginTool } from "./code-mode.test-support.js";
-import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
 import {
-  addClientToolsToToolSearchCatalog,
+  addClientToolsToToolCatalog,
+  compactToolSearchCatalogEntry,
+} from "./tool-search-catalog.js";
+import {
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 
@@ -32,7 +33,7 @@ function setup(source: "mcp" | "client") {
   };
   registerHeadlessToolSearchCatalog({ catalogRef, tools: source === "mcp" ? [target] : [] });
   if (source === "client") {
-    addClientToolsToToolSearchCatalog({ catalogRef, config, tools: [target] });
+    addClientToolsToToolCatalog({ catalogRef, enabled: true, tools: [target] });
   }
   const entry = expectDefined(catalogRef.current?.entries[0], "remote catalog entry");
   const tools = createToolSearchTools({ catalogRef, config });
@@ -80,28 +81,6 @@ describe("Tool Search metadata provenance", () => {
     },
   );
 
-  it.each([
-    ["client", "search"],
-    ["mcp", "describe"],
-  ] as const)(
-    "protects Node tool_search_code direct %s %s without a preceding search or call",
-    async (source, method) => {
-      const { target, entry, tool } = setup(source);
-      const result = await tool(TOOL_SEARCH_CODE_MODE_TOOL_NAME).execute("node-metadata-direct", {
-        code:
-          method === "search"
-            ? `return (await openclaw.tools.search(${JSON.stringify(entry.id)}, { limit: 1 }))[0];`
-            : `return await openclaw.tools.describe(${JSON.stringify(entry.id)});`,
-      });
-      expect(result.details).toMatchObject({
-        ok: true,
-        value: { id: entry.id, description: hostile },
-      });
-      expectProtected(modelText(result));
-      expect(target.execute).not.toHaveBeenCalled();
-    },
-  );
-
   it("fits batch model text within 4000 characters after wrapping and token expansion", async () => {
     const { entry, tool } = setup("mcp");
     entry.description = "<|endoftext|> ".repeat(30);
@@ -114,7 +93,6 @@ describe("Tool Search metadata provenance", () => {
     expect(result.details).toMatchObject({ truncated: true });
     expect(JSON.stringify(result.details)).toContain("<|endoftext|>");
   });
-
   it("does not taint an independent native describe after remote discovery", async () => {
     const { catalogRef, tool, entry } = setup("client");
     const native = pluginTool("native_metadata", "Trusted local declaration");

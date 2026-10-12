@@ -10,6 +10,7 @@ import {
 import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 
 const loadManagerRuntime = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
 
@@ -20,12 +21,13 @@ type MemorySearchManagerParams = {
   purpose?: MemorySearchManagerPurpose;
   inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 };
 
 type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
   error?: string;
-  debug?: {
+  debug: {
     backend: "builtin";
     purpose: MemorySearchManagerPurpose;
     managerMs: number;
@@ -36,7 +38,19 @@ export async function getMemorySearchManager(
   params: MemorySearchManagerParams,
 ): Promise<MemorySearchManagerResult> {
   const startedAt = Date.now();
-  const result = await getBuiltinMemorySearchManager(params);
+  let result: Omit<MemorySearchManagerResult, "debug">;
+  try {
+    const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+    const access = settings?.sources.includes("memory")
+      ? getAgentWorkspaceAccess(resolveAgentWorkspaceDir(params.cfg, params.agentId), "memoryFiles")
+      : undefined;
+    const { MemoryIndexManager } = await loadManagerRuntime();
+    result = {
+      manager: await MemoryIndexManager.get({ ...params, memoryFiles: access?.memoryFiles }),
+    };
+  } catch (err) {
+    result = { manager: null, error: formatErrorMessage(err) };
+  }
   return {
     ...result,
     debug: {
@@ -45,23 +59,6 @@ export async function getMemorySearchManager(
       managerMs: Math.max(0, Date.now() - startedAt),
     },
   };
-}
-
-async function getBuiltinMemorySearchManager(
-  params: MemorySearchManagerParams,
-): Promise<Omit<MemorySearchManagerResult, "debug">> {
-  try {
-    const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
-    const access = settings?.sources.includes("memory")
-      ? getAgentWorkspaceAccess(resolveAgentWorkspaceDir(params.cfg, params.agentId), "memoryFiles")
-      : undefined;
-    const { MemoryIndexManager } = await loadManagerRuntime();
-    return {
-      manager: await MemoryIndexManager.get({ ...params, memoryFiles: access?.memoryFiles }),
-    };
-  } catch (err) {
-    return { manager: null, error: formatErrorMessage(err) };
-  }
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {

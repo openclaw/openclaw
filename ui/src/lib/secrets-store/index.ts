@@ -77,25 +77,59 @@ export async function loadSecretsStore(state: SecretsStoreState): Promise<boolea
   }
 }
 
+type SingleStoreMutation = (client: GatewayBrowserClient) => Promise<SecretsStoreMutationResult>;
+type BulkStoreMutation = { entries: readonly SecretsStoreBulkEntry[] };
+type BulkStoreResult = { saved: number; warningCount: number };
+
+function mutateAndReload(
+  state: SecretsStoreState,
+  mutation: SingleStoreMutation,
+): Promise<SecretsStoreMutationResult | null>;
+function mutateAndReload(
+  state: SecretsStoreState,
+  mutation: BulkStoreMutation,
+): Promise<BulkStoreResult | null>;
 async function mutateAndReload(
   state: SecretsStoreState,
-  mutate: (client: GatewayBrowserClient) => Promise<SecretsStoreMutationResult>,
-): Promise<SecretsStoreMutationResult | null> {
+  mutation: SingleStoreMutation | BulkStoreMutation,
+): Promise<SecretsStoreMutationResult | BulkStoreResult | null> {
   const client = state.client;
-  if (!client || !state.connected || state.busy) {
+  const bulk = typeof mutation !== "function";
+  if (!client || !state.connected || state.busy || (bulk && mutation.entries.length === 0)) {
     return null;
   }
   state.busy = true;
   state.error = null;
   let result: SecretsStoreMutationResult | null = null;
+  let saved = 0;
+  let warningCount = 0;
   let mutationError: unknown;
   try {
-    result = await mutate(client);
+    if (bulk) {
+      for (const entry of mutation.entries) {
+        const reply = await client.request<SecretsStoreMutationResult>("secrets.store.set", entry);
+        saved += 1;
+        warningCount = Math.max(warningCount, reply.warningCount ?? 0);
+        await refreshSnapshot(state, client);
+      }
+    } else {
+      result = await mutation(client);
+    }
   } catch (error) {
-    mutationError = error;
+    mutationError = bulk
+      ? new Error(
+          t("secretsStore.partial", {
+            saved: String(saved),
+            total: String(mutation.entries.length),
+            error: formatUiError(error),
+          }),
+        )
+      : error;
   }
   try {
-    await refreshSnapshot(state, client);
+    if (!bulk || mutationError) {
+      await refreshSnapshot(state, client);
+    }
   } catch (error) {
     mutationError ??= error;
   } finally {
@@ -104,7 +138,7 @@ async function mutateAndReload(
       state.error = mutationError ? formatUiError(mutationError) : null;
     }
   }
-  return mutationError ? null : result;
+  return mutationError ? null : bulk ? { saved, warningCount } : result;
 }
 
 export function setSecretsStoreEntry(
@@ -118,10 +152,7 @@ export function setSecretsStoreEntry(
       kind: draft.kind,
       ...(draft.kind === "secret"
         ? {
-            allowedHosts: draft.allowedHosts
-              .split(/[\s,]+/u)
-              .map((host) => host.trim())
-              .filter(Boolean),
+            allowedHosts: draft.allowedHosts.split(/[\s,]+/u).filter(Boolean),
           }
         : {}),
     }),
@@ -151,46 +182,9 @@ export function parseSecretsStoreBulkInput(
   return { entries, invalidNames };
 }
 
-export async function bulkSetSecretsStoreEntries(
+export function bulkSetSecretsStoreEntries(
   state: SecretsStoreState,
   entries: readonly SecretsStoreBulkEntry[],
 ): Promise<{ saved: number; warningCount: number } | null> {
-  const client = state.client;
-  if (!client || !state.connected || state.busy || entries.length === 0) {
-    return null;
-  }
-  state.busy = true;
-  state.error = null;
-  let saved = 0;
-  let warningCount = 0;
-  let mutationError: unknown;
-  try {
-    for (const entry of entries) {
-      const result = await client.request<SecretsStoreMutationResult>("secrets.store.set", entry);
-      saved += 1;
-      warningCount = Math.max(warningCount, result.warningCount ?? 0);
-      await refreshSnapshot(state, client);
-    }
-  } catch (error) {
-    mutationError = new Error(
-      t("secretsStore.partial", {
-        saved: String(saved),
-        total: String(entries.length),
-        error: formatUiError(error),
-      }),
-    );
-  }
-  try {
-    if (mutationError) {
-      await refreshSnapshot(state, client);
-    }
-  } catch (error) {
-    mutationError ??= error;
-  } finally {
-    if (state.client === client) {
-      state.busy = false;
-      state.error = mutationError ? formatUiError(mutationError) : null;
-    }
-  }
-  return mutationError ? null : { saved, warningCount };
+  return mutateAndReload(state, { entries });
 }

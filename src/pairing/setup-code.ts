@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
@@ -49,6 +50,9 @@ type PairingSetupPayload = {
 
 const PAIRING_SETUP_MAX_URLS = 8;
 
+export const PAIRING_GATEWAY_LOOPBACK_ERROR =
+  "Gateway is only bound to loopback. Set gateway.publicOrigin to your public HTTPS origin, configure plugins.entries.device-pair.config.publicUrl, enable tailscale serve, or set gateway.bind=lan.";
+
 type PairingSetupCommandResult = {
   code: number | null;
   stdout: string;
@@ -60,9 +64,13 @@ type PairingSetupCommandRunner = (
   opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<PairingSetupCommandResult>;
 
+type PairingPublicOriginPreference = "fallback" | "prefer";
+type PairingUrlPathMode = "preserve" | "origin-only";
+
 type ResolvePairingSetupOptions = {
   env?: NodeJS.ProcessEnv;
   publicUrl?: string;
+  publicOriginPreference?: PairingPublicOriginPreference;
   preferRemoteUrl?: boolean;
   useLocalGateway?: boolean;
   forceSecure?: boolean;
@@ -195,15 +203,16 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   return describeSecureMobilePairingFix(source);
 }
 
-type ResolveAuthLabelResult = {
-  label?: "token" | "password" | "trusted-proxy";
-  error?: string;
-};
+type ResolveAuthLabelResult = { label: "token" | "password" | "trusted-proxy" } | { error: string };
 
 const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
 const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
 
-function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
+function normalizeUrl(
+  raw: string,
+  schemeFallback: "ws" | "wss",
+  pathMode: PairingUrlPathMode = "preserve",
+): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -211,7 +220,7 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
   if (GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE.test(trimmed)) {
     return null;
   }
-  const parsedUrl = parseNormalizedGatewayUrl(trimmed);
+  const parsedUrl = parseNormalizedGatewayUrl(trimmed, pathMode);
   if (parsedUrl) {
     return parsedUrl;
   }
@@ -219,10 +228,12 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
     return null;
   }
   const withoutPath = normalizeOptionalString(trimmed.split("/", 1)[0]) ?? "";
-  return withoutPath ? parseNormalizedGatewayUrl(`${schemeFallback}://${withoutPath}`) : null;
+  return withoutPath
+    ? parseNormalizedGatewayUrl(`${schemeFallback}://${withoutPath}`, pathMode)
+    : null;
 }
 
-function parseNormalizedGatewayUrl(raw: string): string | null {
+function parseNormalizedGatewayUrl(raw: string, pathMode: PairingUrlPathMode): string | null {
   try {
     const parsed = new URL(raw);
     if (parsed.username || parsed.password) {
@@ -241,7 +252,8 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
       return null;
     }
     const port = parsed.port ? `:${parsed.port}` : "";
-    const contextPath = parsed.pathname === "/" ? "" : parsed.pathname;
+    const contextPath =
+      pathMode === "origin-only" || parsed.pathname === "/" ? "" : parsed.pathname;
     return `${resolvedScheme}://${host}${port}${contextPath}`;
   } catch {
     return null;
@@ -300,6 +312,8 @@ export async function resolvePairingGatewayUrl(
   opts: {
     env: NodeJS.ProcessEnv;
     publicUrl?: string;
+    publicOriginPreference?: PairingPublicOriginPreference;
+    urlPathMode?: PairingUrlPathMode;
     preferRemoteUrl?: boolean;
     useLocalGateway?: boolean;
     forceSecure?: boolean;
@@ -311,16 +325,29 @@ export async function resolvePairingGatewayUrl(
   const port = resolveGatewayPort(cfg, opts.env);
 
   if (typeof opts.publicUrl === "string" && opts.publicUrl.trim()) {
-    const url = normalizeUrl(opts.publicUrl, scheme);
+    const url = normalizeUrl(opts.publicUrl, scheme, opts.urlPathMode);
     if (url) {
       return { url, source: "plugins.entries.device-pair.config.publicUrl" };
     }
     return { error: "Configured publicUrl is invalid." };
   }
 
+  const publicOrigin = cfg.gateway?.publicOrigin?.trim();
+  const publicOriginUrl = publicOrigin
+    ? normalizeUrl(publicOrigin, scheme, opts.urlPathMode)
+    : null;
+  const publicOriginResult = publicOrigin
+    ? publicOriginUrl
+      ? { url: publicOriginUrl, source: "gateway.publicOrigin" }
+      : { error: "Configured gateway.publicOrigin is invalid." }
+    : undefined;
+  if (opts.publicOriginPreference === "prefer" && publicOriginResult) {
+    return publicOriginResult;
+  }
+
   const remoteUrlRaw = opts.useLocalGateway ? undefined : cfg.gateway?.remote?.url;
   const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
-  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
+  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme, opts.urlPathMode) : null;
   if (hasRemoteUrl && !remoteUrl) {
     return { error: "Configured gateway.remote.url is invalid." };
   }
@@ -368,10 +395,7 @@ export async function resolvePairingGatewayUrl(
     return bindResult;
   }
 
-  return {
-    error:
-      "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.",
-  };
+  return publicOriginResult ?? { error: PAIRING_GATEWAY_LOOPBACK_ERROR };
 }
 
 export function encodePairingSetupCode(payload: PairingSetupPayload): string {
@@ -470,12 +494,16 @@ export async function resolvePairingSetupFromConfig(
     hasPasswordFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
-  if (authLabel.error) {
+  if ("error" in authLabel) {
     return { ok: false, error: authLabel.error };
   }
+  const explicitPublicUrl = normalizeOptionalString(options.publicUrl);
   const urlResult = await resolvePairingGatewayUrl(cfgForAuth, {
     env,
-    publicUrl: options.publicUrl,
+    publicUrl:
+      explicitPublicUrl ??
+      (options.preferRemoteUrl ? undefined : resolveConfiguredPairingPublicUrl(cfgForAuth)),
+    publicOriginPreference: options.publicOriginPreference,
     preferRemoteUrl: options.preferRemoteUrl,
     useLocalGateway: options.useLocalGateway,
     forceSecure: options.forceSecure,
@@ -486,13 +514,19 @@ export async function resolvePairingSetupFromConfig(
   if (!urlResult.url) {
     return { ok: false, error: urlResult.error ?? "Gateway URL unavailable." };
   }
+  // Mobile dashboards use the paired endpoint path as their Control UI mount.
+  // Explicit overrides, remote endpoints, and configured proxy paths stay authoritative.
+  const basePath = normalizeControlUiBasePath(cfgForAuth.gateway?.controlUi?.basePath);
+  if (basePath && !explicitPublicUrl && urlResult.source !== "gateway.remote.url") {
+    const url = new URL(urlResult.url);
+    if (url.pathname === "/") {
+      url.pathname = basePath;
+      urlResult.url = url.toString();
+    }
+  }
   const mobilePairingUrlError = validateMobilePairingUrl(urlResult.url, urlResult.source);
   if (mobilePairingUrlError) {
     return { ok: false, error: mobilePairingUrlError };
-  }
-
-  if (!authLabel.label) {
-    return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
   const requestedBootstrapProfile =

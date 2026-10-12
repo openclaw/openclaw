@@ -76,7 +76,7 @@ describe.runIf(process.platform === "win32")("host-local media tool file URLs", 
 
         const config: OpenClawConfig = {
           agents: {
-            entries: { main: { default: true } },
+            entries: { main: {} },
             defaults: { pdfModel: { primary: "anthropic/claude-opus-4-6" } },
           },
         } as OpenClawConfig;
@@ -127,7 +127,7 @@ describe.runIf(process.platform === "win32")("host-local media tool file URLs", 
         ];
         vi.spyOn(
           mediaGenerationToolProviders,
-          "acquireImageGenerationToolProviders",
+          "acquireMediaGenerationToolProviders",
         ).mockResolvedValue({
           providers,
           assertOpen() {},

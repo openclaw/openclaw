@@ -90,17 +90,6 @@ describe("tool summary digest cache", () => {
     }
   });
 
-  it("keeps schema statistics independent of identical names and summaries", () => {
-    const tool = makeTool("schema_probe", "Shared schema probe summary");
-    const first = buildReport([tool]).tools.entries[0];
-    tool.parameters = Type.Object({ path: Type.String(), limit: Type.Integer() });
-    const second = buildReport([tool]).tools.entries[0];
-
-    expect(second?.summaryHash).toBe(first?.summaryHash);
-    expect(second?.schemaHash).not.toBe(first?.schemaHash);
-    expect(second?.propertiesCount).toBe(2);
-  });
-
   it("does not retain oversized summary keys", () => {
     const definition = makeTool("oversized_probe", `Oversized probe ${"x".repeat(5_000)}`);
     const first = buildReport(finalize([definition]));

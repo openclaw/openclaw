@@ -4,11 +4,11 @@ import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
-import { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
-import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
-import { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
-import { createSkillMenuState } from "./chat-composer-skill-menu.ts";
-import { createSlashMenuState } from "./chat-composer-slash-menu.ts";
+import { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
+import { clearGoalElapsedTimers } from "./chat-composer-goal.tsx";
+import { HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
+import { createSkillMenuState } from "./chat-composer-skill-menu.tsx";
+import { createSlashMenuState } from "./chat-composer-slash-menu.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
@@ -38,7 +38,7 @@ function createChatComposerState(): ChatComposerState {
     textareaRef: null,
     composerInputRef: null,
     dictation: null,
-    composerDraftScopeKey: null,
+    composerDraftScope: null,
     dictationError: null,
     dictationSelection: null,
   };
@@ -141,10 +141,6 @@ export function clearPendingClearedSubmittedDraft(state: ChatComposerState, key:
   }
 }
 
-function isExplicitComposerInsertion(event: InputEvent): boolean {
-  return event.inputType === "insertFromPaste" || event.inputType === "insertFromDrop";
-}
-
 export function suppressStaleSubmittedDraftReplay(
   target: HTMLTextAreaElement,
   event: InputEvent,
@@ -153,10 +149,13 @@ export function suppressStaleSubmittedDraftReplay(
   state: ChatComposerState,
 ): boolean {
   const pending = state.pendingClearedSubmittedDraft;
-  if (!pending) {
-    return false;
-  }
-  if (target.value !== pending.value || hasInputIntent || isExplicitComposerInsertion(event)) {
+  if (
+    !pending ||
+    target.value !== pending.value ||
+    hasInputIntent ||
+    event.inputType === "insertFromPaste" ||
+    event.inputType === "insertFromDrop"
+  ) {
     return false;
   }
 
@@ -168,7 +167,7 @@ export function suppressStaleSubmittedDraftReplay(
 function disposeChatComposerState(state: ChatComposerState) {
   state.emojiMenu.close();
   state.mentionMenu.dispose();
-  state.composerDraftScopeKey = null;
+  state.composerDraftScope = null;
   state.dictation?.dispose();
   state.microphonePicker?.dispose();
   if (state.composerInput) {

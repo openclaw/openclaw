@@ -1,10 +1,12 @@
 import { execFile, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import path, { delimiter, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
+import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
@@ -91,6 +93,7 @@ it.each([
   { scenario: "base", mode: "auto-auth" },
   { scenario: "mobile-pairing-reconnect", mode: "auto-auth" },
 ])("binds the current registry before $scenario service start ($mode)", ({ scenario, mode }) => {
+  const nativeEnabled = scenario === "legacy-operator-state" && mode === "manual";
   const source = readFileSync(runner, "utf8");
   const routing = source.slice(
     source.indexOf("companion_survivor_scenario()"),
@@ -108,7 +111,11 @@ it.each([
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$1"
 UPDATE_RESTART_MODE="$2"
-baseline_version=2026.8.1
+baseline_version=${nativeEnabled ? "2026.9.4" : "2026.8.1"}
+native_assignment_enabled=${nativeEnabled ? "1" : "0"}
+legacy_seeded=0
+CANDIDATE_SPEC=synthetic-candidate.tgz
+package_root() { printf /synthetic/published-package; }
 COMMAND_TIMEOUT=1
 plugin_registry_pid=synthetic
 NPM_CONFIG_REGISTRY=initial-registry
@@ -118,6 +125,14 @@ openclaw_e2e_stop_process() { :; }
 configure_plugin_registry() {
   NPM_CONFIG_REGISTRY="\${1:-candidate}-registry"
   printf 'registry=%s\\n' "$NPM_CONFIG_REGISTRY"
+}
+seed_legacy_operator_gateway() { legacy_seeded=1; }
+start_native_assignment_fixture() {
+  if [ "$legacy_seeded" != "1" ]; then
+    echo "native agent makes the ownerless Cron roster ambiguous" >&2
+    return 92
+  fi
+  [ "$NPM_CONFIG_REGISTRY" = baseline-registry ]
 }
 prepare_schema_expectation() { printf 'schema-snapshot\\n'; }
 install_update_restart_systemctl_shim() {
@@ -135,7 +150,7 @@ run_update_restart_probe_gateway() {
 phase() {
   shift
   case "$1" in
-    configure_plugin_registry|prepare_schema_expectation|install_update_restart_systemctl_shim|run_update_restart_probe_gateway) "$@" ;;
+    configure_plugin_registry|prepare_schema_expectation|install_update_restart_systemctl_shim|run_update_restart_probe_gateway|seed_legacy_operator_gateway|start_native_assignment_fixture) "$@" ;;
     *) : ;;
   esac
 }
@@ -174,6 +189,24 @@ it.each([
   const paths = readUpgradeSurvivorPaths(root, {
     OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
   });
+  if (scenario === "sqlite-volume") {
+    mkdirSync(paths.packageRoot, { recursive: true });
+    writeFileSync(
+      path.join(paths.packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.8.1",
+        type: "module",
+        exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.js" },
+      }),
+    );
+    // Keep real SQLite persistence behind the fixture's installed SDK boundary.
+    symlinkSync(
+      fileURLToPath(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.store)),
+      path.join(paths.packageRoot, "cron-store-runtime.js"),
+      "file",
+    );
+  }
   const authoredPath = path.join(root, "authored.json");
   const resultPath = path.join(root, "result.json");
   const probePath = path.join(root, "probe.mjs");
@@ -210,17 +243,21 @@ it.each([
     }),
   );
   const startupModule = pathToFileURL(path.resolve("src/config/sessions/startup-migration.ts"));
+  const legacyStoreModule = pathToFileURL(
+    path.resolve("src/config/sessions/legacy-store-inspection.ts"),
+  );
   writeFileSync(
     probePath,
     `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path, { delimiter, join, resolve } from "node:path";
 import { assertSessionStoreMigrationComplete } from ${JSON.stringify(startupModule.href)};
+import { readLegacySessionStoreEntries } from ${JSON.stringify(legacyStoreModule.href)};
 const state = process.env.OPENCLAW_STATE_DIR;
 const volume = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "sqlite-volume";
 const stores = volume
   ? ["agents/main/sessions/sessions.json", "agents/ops/sessions/sessions.json"]
-  : ["sessions/sessions.json"];
+  : ["agents/main/sessions/sessions.json"];
 const checkStartup = () => assertSessionStoreMigrationComplete({
   cfg: {}, env: process.env, targets: stores.map(file => ({ storePath: path.join(state, file) })),
 });
@@ -238,9 +275,18 @@ if (process.argv[2] === "startup") {
     assert.equal(fs.existsSync(process.env.PROBE_LIVE), false, "baseline must be offline before specimens and initial update");
   }
   assert.throws(checkStartup, /Legacy session store requires migration/);
-  const rows = stores.flatMap(file => Object.values(JSON.parse(fs.readFileSync(path.join(state, file), "utf8"))));
+  const rows = stores.flatMap(file => {
+    const issues = [];
+    const { entries } = readLegacySessionStoreEntries({ storePath: path.join(state, file) }, issues);
+    assert.deepEqual(issues, []);
+    return entries.map(({ entry }) => entry);
+  });
   assert.equal(rows.length, volume ? 15 : 3);
   assert.equal(new Set(rows.map(row => row.sessionId)).size, rows.length);
+  for (const row of rows) {
+    assert.equal(row.modelProvider, "openai");
+    assert.equal(row.model, "gpt-5.5");
+  }
   for (const id of ["upgrade-main-session", "upgrade-direct-session", "upgrade-group-session"]) {
     const row = rows.find(row => row.sessionId === id);
     assert.ok(row, "missing original session " + id);
@@ -324,7 +370,7 @@ ${phases}
 
 const assertions = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
 
-it("authors the default cron job before adding ops and retains both CLI creation receipts", () => {
+it.each(["2026.9.2", "2026.9.4"])("preserves Cron ownership on %s", (version) => {
   const root = tempDirs.make("survivor-operator-lifecycle-");
   const bin = join(root, "bin");
   const artifacts = join(root, "artifacts");
@@ -336,6 +382,12 @@ it("authors the default cron job before adding ops and retains both CLI creation
   mkdirSync(artifacts);
   mkdirSync(state);
   writeFileSync(configPath, "{}");
+  if (version === "2026.9.4") {
+    writeFileSync(
+      join(artifacts, "native-assignment-eligibility.json"),
+      JSON.stringify({ status: "required" }),
+    );
+  }
   const cliPath = join(bin, "openclaw");
   // Model the shipped API boundary: ownerless creation needs an unambiguous
   // roster, an explicit owner must exist, and global listing may fail later.
@@ -407,7 +459,7 @@ if (args[0] === "--help") {
       env: {
         PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.9.2",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
         OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
         OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT: "44081",
@@ -444,5 +496,10 @@ if (args[0] === "--help") {
       },
     },
   });
+  const approvals = JSON.parse(readFileSync(ledgerPath, "utf8")).approvals;
+  expect(approvals.defaults).toEqual({ security: "allowlist", ask: "off", askFallback: "deny" });
+  expect(approvals.agents["native-proof"]).toEqual(
+    version === "2026.9.4" ? { security: "full", ask: "off", askFallback: "deny" } : undefined,
+  );
   expect(JSON.parse(readFileSync(configPath, "utf8")).agents.defaults.systemAgent).toBeUndefined();
 });

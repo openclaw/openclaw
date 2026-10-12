@@ -1,4 +1,3 @@
-// Shared model catalog data contracts for provider manifests and normalized rows.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   MODEL_DATA_APIS,
@@ -14,24 +13,18 @@ import {
   type ModelRoutingSortConfig,
 } from "../../llm-core/src/model-data.js";
 
-/** Supported API protocols for model catalog entries. */
 export const MODEL_CATALOG_APIS = [...MODEL_DATA_APIS] as const;
 
-/** API protocol for a model catalog entry. */
 export type ModelCatalogApi = (typeof MODEL_CATALOG_APIS)[number];
 
-/** Supported model thinking/reasoning wire formats. */
 export const MODEL_CATALOG_THINKING_FORMATS = [...MODEL_DATA_THINKING_FORMATS] as const;
 
-/** Thinking/reasoning wire format for model compatibility. */
 export type ModelCatalogThinkingFormat = (typeof MODEL_CATALOG_THINKING_FORMATS)[number];
 
-/** Narrow a string to a supported model catalog thinking format. */
 export function isModelCatalogThinkingFormat(value: string): value is ModelCatalogThinkingFormat {
   return (MODEL_CATALOG_THINKING_FORMATS as readonly string[]).includes(value);
 }
 
-/** Compatibility flags and provider-specific routing metadata for one model. */
 export type ModelCatalogCompatConfig = {
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
@@ -91,21 +84,16 @@ export type ModelCatalogOpenRouterRouting = {
   preferred_max_latency?: number | ModelRoutingPercentiles;
 };
 
-/** Vercel AI Gateway routing preferences. */
 export type ModelCatalogVercelGatewayRouting = {
   only?: string[];
   order?: string[];
 };
 
-/** Image input limits for a model. */
 export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
 
-/** Media input limits for a model. */
 export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
 
-/** Supported input modality for a model. */
 export type ModelCatalogInput = "text" | "image" | "document";
-/** Model-level thinking settings carried by provider catalog metadata. */
 export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
 export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
@@ -153,11 +141,8 @@ export function listMappedModelThinkingLevels(model: {
   return MODEL_CATALOG_THINKING_LEVELS.filter((level) => mapped.has(level));
 }
 
-/** Discovery lifecycle for a provider catalog. */
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
-/** Availability state for a model. */
 export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
-/** Source of a model catalog row. */
 export type ModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -165,7 +150,6 @@ export type ModelCatalogSource =
   | "config"
   | "runtime-refresh";
 
-/** Unified catalog kind across text and generated media models. */
 export type UnifiedModelCatalogKind =
   | "text"
   | "voice"
@@ -173,7 +157,6 @@ export type UnifiedModelCatalogKind =
   | "video_generation"
   | "music_generation";
 
-/** Source for unified model catalog entries. */
 export type UnifiedModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -201,10 +184,8 @@ export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
   warnings?: readonly string[];
 };
 
-/** Tiered token cost row. */
 export type ModelCatalogTieredCost = ModelDataRawPricingTier;
 
-/** Token cost metadata for one model. */
 export type ModelCatalogCost = Partial<ModelDataCostRates> & {
   tieredPricing?: ModelCatalogTieredCost[];
 };
@@ -218,7 +199,6 @@ export type ModelCatalogContextWindowOption = {
 
 export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
 
-/** Provider manifest model entry. */
 export type ModelCatalogModel = {
   id: string;
   name?: string;
@@ -250,7 +230,6 @@ export type ModelCatalogModel = {
   tags?: string[];
 };
 
-/** Provider manifest catalog entry. */
 export type ModelCatalogProvider = {
   baseUrl?: string;
   api?: ModelCatalogApi;
@@ -259,12 +238,14 @@ export type ModelCatalogProvider = {
   defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
-  /** Ordered provider shortlist reserved for picker ordering; not yet used. */
+  /**
+   * Hosted catalog v2 projection of the curated global list onto this provider's
+   * model ids, best first; reserved for picker ordering and not yet used.
+   */
   recommendedModels?: string[];
   models: ModelCatalogModel[];
 };
 
-/** Provider alias entry. */
 export type ModelCatalogAlias = {
   provider: string;
   api?: ModelCatalogApi;

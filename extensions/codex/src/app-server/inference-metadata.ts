@@ -51,17 +51,10 @@ export function readCodexInferenceMetadata(
   if (!nested && !compatibility) {
     throw new Error("Codex inference request is missing bounded native metadata");
   }
-  const requestKind = reconcileMetadataStrings(
-    "request kind",
-    nested?.request_kind,
-    compatibility?.request_kind,
-  );
-  const generation = readId(
-    "parent generation",
-    nested?.[CODEX_INFERENCE_GENERATION_KEY],
-    compatibility?.[CODEX_INFERENCE_GENERATION_KEY],
-  );
-  const nativeThreadId = readId("thread", nested?.thread_id, compatibility?.thread_id);
+  const nativeField = (key: string) => [nested?.[key], compatibility?.[key]];
+  const requestKind = reconcileMetadataStrings("request kind", ...nativeField("request_kind"));
+  const generation = readId("parent generation", ...nativeField(CODEX_INFERENCE_GENERATION_KEY));
+  const nativeThreadId = readId("thread", ...nativeField("thread_id"));
   if (
     !nativeThreadId &&
     (requestKind === "turn" ||
@@ -69,66 +62,45 @@ export function readCodexInferenceMetadata(
   ) {
     throw new Error("Codex inference request has no native thread metadata");
   }
+  const readTurnId = (field: string, key: string) =>
+    readId(field, flat?.[key], ...nativeField(key));
   return Object.freeze({
     sessionId: readId(
       "session",
       flat?.session_id,
-      nested?.session_id,
-      compatibility?.session_id,
+      ...nativeField("session_id"),
       httpHeaders?.["session-id"],
     ),
     threadId: readId("thread", flat?.thread_id, nativeThreadId, httpHeaders?.["thread-id"]),
-    turnId: readId("turn", flat?.turn_id, nested?.turn_id, compatibility?.turn_id),
+    turnId: readTurnId("turn", "turn_id"),
     parentThreadId: readId(
       "parent thread",
       flat?.["x-codex-parent-thread-id"],
-      nested?.parent_thread_id,
-      compatibility?.parent_thread_id,
+      ...nativeField("parent_thread_id"),
       httpHeaders?.["x-codex-parent-thread-id"],
     ),
-    parentTurnId: readId(
-      "parent turn",
-      flat?.parent_turn_id,
-      nested?.parent_turn_id,
-      compatibility?.parent_turn_id,
-    ),
-    rootTurnId: readId(
-      "root turn",
-      flat?.root_turn_id,
-      nested?.root_turn_id,
-      compatibility?.root_turn_id,
-    ),
+    parentTurnId: readTurnId("parent turn", "parent_turn_id"),
+    rootTurnId: readTurnId("root turn", "root_turn_id"),
     requestKind,
-    threadSource: reconcileMetadataStrings(
-      "thread source",
-      nested?.thread_source,
-      compatibility?.thread_source,
-    ),
+    threadSource: reconcileMetadataStrings("thread source", ...nativeField("thread_source")),
     // SessionSource is fixed for this native model client, including across reused WS turns.
     subagent: reconcileMetadataStrings(
       "subagent",
       flat?.["x-openai-subagent"],
       headers?.["x-openai-subagent"],
     ),
-    subagentKind: reconcileMetadataStrings(
-      "subagent kind",
-      nested?.subagent_kind,
-      compatibility?.subagent_kind,
-    ),
+    subagentKind: reconcileMetadataStrings("subagent kind", ...nativeField("subagent_kind")),
     guardianClassifierSourceThreadId: readId(
       "Guardian classifier source thread",
-      nested?.guardian_classifier_source_thread_id,
-      compatibility?.guardian_classifier_source_thread_id,
+      ...nativeField("guardian_classifier_source_thread_id"),
     ),
     autoReviewEnabled: reconcileMetadataBooleans(
       "automatic review",
-      nested?.auto_review_enabled,
-      compatibility?.auto_review_enabled,
+      ...nativeField("auto_review_enabled"),
     ),
     nodeReplAutoReviewRequired: reconcileMetadataBooleans(
       "model-required review",
-      nested?.node_repl_auto_review_required,
-      compatibility?.node_repl_auto_review_required,
+      ...nativeField("node_repl_auto_review_required"),
     ),
     generation,
   });
@@ -142,35 +114,22 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
   if (encoded === undefined || Buffer.byteLength(encoded) > MAX_NATIVE_METADATA_BYTES) {
     throw new Error("Codex inference request is missing bounded native metadata");
   }
-  let value: unknown;
   try {
-    value = JSON.parse(encoded);
-  } catch {
-    throw new Error("Codex inference request has invalid native metadata");
-  }
-  if (!isRecord(value)) {
-    throw new Error("Codex inference request has invalid native metadata");
-  }
-  return value;
+    const value: unknown = JSON.parse(encoded);
+    if (isRecord(value)) {
+      return value;
+    }
+  } catch {}
+  throw new Error("Codex inference request has invalid native metadata");
 }
 
-function reconcileMetadataStrings(field: string, ...values: unknown[]): string | undefined {
-  let result: string | undefined;
-  for (const value of values) {
-    if (value == null) {
-      continue;
-    }
-    const candidate = readStringValue(value);
-    if (candidate === undefined || Buffer.byteLength(candidate) > MAX_METADATA_FIELD_BYTES) {
-      throw new Error(`Codex inference ${field} metadata is invalid or exceeds its limit`);
-    }
-    if (result !== undefined && candidate !== result) {
-      throw new Error(`Codex inference ${field} metadata disagrees`);
-    }
-    result = candidate;
-  }
-  return result;
-}
+const reconcileMetadataStrings = metadataReconciler((value) => {
+  const text = readStringValue(value);
+  return text !== undefined && Buffer.byteLength(text) <= MAX_METADATA_FIELD_BYTES
+    ? text
+    : undefined;
+}, "invalid or exceeds its limit");
+const reconcileMetadataBooleans = metadataReconciler(asBoolean, "invalid");
 
 function readId(field: string, ...values: unknown[]): string | undefined {
   const value = reconcileMetadataStrings(field, ...values);
@@ -180,20 +139,25 @@ function readId(field: string, ...values: unknown[]): string | undefined {
   return value;
 }
 
-function reconcileMetadataBooleans(field: string, ...values: unknown[]): boolean | undefined {
-  let result: boolean | undefined;
-  for (const value of values) {
-    if (value == null) {
-      continue;
+function metadataReconciler<T extends string | boolean>(
+  read: (value: unknown) => T | undefined,
+  invalid: string,
+) {
+  return (field: string, ...values: unknown[]): T | undefined => {
+    let result: T | undefined;
+    for (const value of values) {
+      if (value == null) {
+        continue;
+      }
+      const candidate = read(value);
+      if (candidate === undefined) {
+        throw new Error(`Codex inference ${field} metadata is ${invalid}`);
+      }
+      if (result !== undefined && candidate !== result) {
+        throw new Error(`Codex inference ${field} metadata disagrees`);
+      }
+      result = candidate;
     }
-    const candidate = asBoolean(value);
-    if (candidate === undefined) {
-      throw new Error(`Codex inference ${field} metadata is invalid`);
-    }
-    if (result !== undefined && candidate !== result) {
-      throw new Error(`Codex inference ${field} metadata disagrees`);
-    }
-    result = candidate;
-  }
-  return result;
+    return result;
+  };
 }

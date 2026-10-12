@@ -1,11 +1,15 @@
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import { html, nothing } from "lit";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import type { SidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
+import type {
+  SidebarContent,
+  AttachmentSidebarRuntime,
+  SessionFileSource,
+} from "./chat-sidebar-content-types.ts";
 import type { FileViewControls } from "./chat-sidebar-file-view.ts";
 
 registerFilePreviewEnglish();
@@ -21,15 +25,16 @@ export const htmlPreviewElement = {
   get label() {
     return t("chat.detailPanel.renderPreview");
   },
-  loadModule: () => import("./chat-html-preview-element.ts"),
+  loadModule: () => import("./chat-html-preview-element.tsx"),
 };
 
-export function renderHtmlPreview(
+function renderHtmlPreview(
   loader: LazyCustomElementRequestController,
   content: string,
   sourceIdentity: string,
   title: string,
   embedSandboxMode: EmbedSandboxMode,
+  sessionFileSource?: SessionFileSource,
 ) {
   loader.requestWhileActive(htmlPreviewElement, true);
   const state = loader.visibleState;
@@ -52,23 +57,23 @@ export function renderHtmlPreview(
       .sourceIdentity=${sourceIdentity}
       .title=${title}
       .embedSandboxMode=${embedSandboxMode}
+      .sessionFileSource=${sessionFileSource}
     ></openclaw-chat-html-preview>
   `;
 }
 
 /** Owns file HTML presentation while the detail panel owns its editor and draft. */
-export class FileHtmlPreviewController implements ReactiveController {
+export class FileHtmlPreviewController {
   private source = false;
   private preview: string | null = null;
   private readonly loader: LazyCustomElementRequestController;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: { requestUpdate(): void; readonly updateComplete?: Promise<unknown> },
     private readonly content: () => SidebarContent | null,
     private readonly text: () => string,
   ) {
     this.loader = new LazyCustomElementRequestController(host);
-    host.addController(this);
   }
 
   get file() {
@@ -108,7 +113,7 @@ export class FileHtmlPreviewController implements ReactiveController {
     }
   }
 
-  hostDisconnected(): void {
+  dispose(): void {
     this.loader.requestWhileActive(htmlPreviewElement, false);
   }
 
@@ -141,6 +146,7 @@ export class FileHtmlPreviewController implements ReactiveController {
                 ].join(String.fromCharCode(0)),
               file.name,
               options.mode,
+              file.sessionFileSource,
             ),
       sourceFallback: options.error
         ? html`

@@ -25,6 +25,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { assertDashboardToolPresentation } from "./dashboard-presentation.test-support.ts";
 import {
   boardSnapshot,
+  captureWidgetDetailsPlacement,
   pinnedBoardSnapshot,
   pinnedMcpAppBoardSnapshot,
   pluginWidgetBoardSnapshot,
@@ -457,8 +458,9 @@ suite.define(() => {
         },
       ],
       methodResponses: {
+        // Pin failure does not depend on widget scripting; keep the visible preview deterministic.
         "canvas.document.view": canvasView(
-          buildWidgetDocument("Stale release status", "<p>Stale release status</p>"),
+          "<!doctype html><html><body><p>Stale release status</p></body></html>",
         ),
         "board.get": boardSnapshot,
         "board.widget.put": {
@@ -491,7 +493,25 @@ suite.define(() => {
         }),
       )
       .toBe(true);
+    const detailsToggle = page.getByRole("button", { name: "Details", exact: true });
+    await captureWidgetDetailsPlacement(page, suite.artifactDir, [preview, pin, detailsToggle]);
+    const detailsBox = (await detailsToggle.boundingBox())!;
+    const pinBox = (await pin.boundingBox())!;
+    expect(
+      pinBox.x + pinBox.width <= detailsBox.x ||
+        pinBox.x >= detailsBox.x + detailsBox.width ||
+        pinBox.y + pinBox.height <= detailsBox.y ||
+        pinBox.y >= detailsBox.y + detailsBox.height,
+    ).toBe(true);
     await pin.focus();
+    expect(
+      await pin.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return element.contains(
+          document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+        );
+      }),
+    ).toBe(true);
     await pin.click();
 
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
@@ -848,13 +868,11 @@ suite.define(() => {
         "chat.startup",
         "config.get",
         "sessions.list",
-        "tasks.list",
         "workboard.cards.list",
       ],
       methodResponses: {
         "board.get": boardSnapshot,
         "config.get": workboardConfigSnapshot(),
-        "tasks.list": { nextCursor: null, tasks: [] },
         "workboard.cards.list": workboardCardsListResponse([card]),
       },
     });

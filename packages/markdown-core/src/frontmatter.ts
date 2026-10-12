@@ -137,33 +137,26 @@ function parseYamlFrontmatterOnce(
   fallback: ParsedFrontmatter,
 ): ParsedYamlFrontmatterAttempt {
   let doc: ReturnType<typeof parseDocument> | undefined;
+  const failed = (issues: FrontmatterParseIssue[]): ParsedYamlFrontmatterAttempt => ({
+    document: doc,
+    result: { frontmatter: fallback, issues },
+  });
   try {
     doc = parseDocument(block, { schema: "core", prettyErrors: false });
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
-      return {
-        document: doc,
-        result: {
-          frontmatter: fallback,
-          issues:
-            doc.errors.length > 0
-              ? doc.errors.map((error) => ({
-                  code: error.code ?? error.name,
-                  message: error.message,
-                }))
-              : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
-        },
-      };
+      return failed(
+        doc.errors.length > 0
+          ? doc.errors.map((error) => ({
+              code: error.code ?? error.name,
+              message: error.message,
+            }))
+          : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
+      );
     }
 
     const parsed = doc.toJS() as unknown;
     if (!isRecord(parsed)) {
-      return {
-        document: doc,
-        result: {
-          frontmatter: fallback,
-          issues: [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
-        },
-      };
+      return failed([{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }]);
     }
 
     const inlineColonKeys = new Set<string>();
@@ -178,13 +171,21 @@ function parseYamlFrontmatterOnce(
       const lineEnd = block.indexOf("\n", start);
       const line = block.slice(start, lineEnd === -1 ? block.length : lineEnd);
       const match = line.match(/^([\w-]+):\s*(.*)$/);
-      if (match?.[1] && match[2]?.includes(":")) {
+      const valueEnd = isNode(pair.value) ? pair.value.range?.[1] : undefined;
+      // The raw line is the authored value only when that line holds all of it.
+      // A flow that continues past the line was being replaced by its first line.
+      if (
+        match?.[1] &&
+        match[2]?.includes(":") &&
+        valueEnd !== undefined &&
+        (lineEnd === -1 || valueEnd <= lineEnd)
+      ) {
         inlineColonKeys.add(match[1]);
       }
     }
 
     const result: ParsedFrontmatter = {};
-    for (const [rawKey, value] of Object.entries(parsed as Record<string, unknown>)) {
+    for (const [rawKey, value] of Object.entries(parsed)) {
       const key = rawKey.trim();
       const coerced = key ? coerceYamlFrontmatterValue(value) : undefined;
       if (!coerced) {
@@ -205,13 +206,7 @@ function parseYamlFrontmatterOnce(
     return { document: doc, result: { frontmatter: result, issues: [] } };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      document: doc,
-      result: {
-        frontmatter: fallback,
-        issues: [{ code: "YAML_EXCEPTION", message }],
-      },
-    };
+    return failed([{ code: "YAML_EXCEPTION", message }]);
   }
 }
 

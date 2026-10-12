@@ -1,8 +1,5 @@
 import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
-import {
-  ensureConfiguredAcpBindingReadyCore,
-  ensureConfiguredAcpBindingSession,
-} from "../../acp/persistent-bindings.lifecycle.js";
+import { ensureConfiguredAcpBindingSession } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
@@ -12,15 +9,10 @@ import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/ses
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
-} from "./binding-types.js";
-import type {
-  StatefulBindingTargetDriver,
   StatefulBindingTargetResetResult,
-  StatefulBindingTargetReadyResult,
-  StatefulBindingTargetSessionResult,
-} from "./stateful-target-drivers.js";
+} from "./binding-types.js";
 
-async function toAcpStatefulBindingTargetDescriptor(params: {
+export async function resolveAcpBindingTargetBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
@@ -29,7 +21,7 @@ async function toAcpStatefulBindingTargetDescriptor(params: {
   if (!sessionKey) {
     return null;
   }
-  const target = resolveAcpSessionTarget(params);
+  const target = resolveAcpSessionTarget({ ...params, sessionKey });
   const stored = await readAcpSessionEntryAsync({ cfg: params.cfg, ...target });
   if (stored?.acp) {
     return {
@@ -65,11 +57,11 @@ async function toAcpStatefulBindingTargetDescriptor(params: {
   };
 }
 
-async function ensureAcpTargetReady(params: {
+export async function ensureConfiguredAcpBindingTargetReady(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
-}): Promise<StatefulBindingTargetReadyResult> {
+}): Promise<{ ok: true } | { ok: false; error: string }> {
   const configuredBinding = resolveConfiguredAcpBindingSpecFromRecord(
     params.bindingResolution.record,
   );
@@ -79,35 +71,15 @@ async function ensureAcpTargetReady(params: {
       error: "Configured ACP binding unavailable",
     };
   }
-  return await ensureConfiguredAcpBindingReadyCore({
+  const result = await ensureConfiguredAcpBindingSession({
     ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
-    configuredBinding: {
-      spec: configuredBinding,
-      record: params.bindingResolution.record,
-    },
+    spec: configuredBinding,
   });
+  return result.ok ? { ok: true } : { ok: false, error: result.error ?? "unknown error" };
 }
 
-async function ensureAcpTargetSession(params: {
-  cfg: OpenClawConfig;
-  bindingResolution: ConfiguredBindingResolution;
-}): Promise<StatefulBindingTargetSessionResult> {
-  const spec = resolveConfiguredAcpBindingSpecFromRecord(params.bindingResolution.record);
-  if (!spec) {
-    return {
-      ok: false,
-      sessionKey: params.bindingResolution.statefulTarget.sessionKey,
-      error: "Configured ACP binding unavailable",
-    };
-  }
-  return await ensureConfiguredAcpBindingSession({
-    cfg: params.cfg,
-    spec,
-  });
-}
-
-async function resetAcpTargetInPlace(params: {
+export async function resetConfiguredAcpBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   bindingTarget: StatefulBindingTargetDescriptor;
@@ -141,6 +113,7 @@ async function resetAcpTargetInPlace(params: {
       ok: true,
       sessionKey: result.key,
       sessionId: result.entry.sessionId,
+      lifecycleRevision: result.entry.lifecycleRevision,
       storePath: result.storePath,
     };
   }
@@ -149,11 +122,3 @@ async function resetAcpTargetInPlace(params: {
     error: result.error.message,
   };
 }
-
-export const acpStatefulBindingTargetDriver: StatefulBindingTargetDriver = {
-  id: "acp",
-  ensureReady: ensureAcpTargetReady,
-  ensureSession: ensureAcpTargetSession,
-  resolveTargetBySessionKey: toAcpStatefulBindingTargetDescriptor,
-  resetInPlace: resetAcpTargetInPlace,
-};

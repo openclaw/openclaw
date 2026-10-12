@@ -25,7 +25,6 @@ import type {
   ProviderPlugin,
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { createLazyRuntimeNamedExport } from "../../../shared/lazy-runtime.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import {
   prepareAgentModelDefaults,
@@ -38,11 +37,6 @@ import {
   CODEX_RUNTIME_PLUGIN_ID,
   ensureModelSelectionRuntimePlugins,
 } from "../../runtime-plugin-install.js";
-
-const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeNamedExport(
-  () => import("./auth-choice.plugin-providers.runtime.js"),
-  "authChoicePluginProvidersRuntime",
-);
 
 /** Applies a plugin-defined auth choice, or returns undefined when it is not plugin-backed. */
 export async function applyNonInteractivePluginProviderChoice(
@@ -106,7 +100,7 @@ export async function applyNonInteractivePluginProviderChoice(
     resolveOwningPluginIdsForProviderRef,
     resolveProviderPluginChoice,
     resolvePluginProviders,
-  } = await loadAuthChoicePluginProvidersRuntime();
+  } = (await import("./auth-choice.plugin-providers.runtime.js")).authChoicePluginProvidersRuntime;
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProviderRef({
         provider: preferredProviderId,
@@ -297,7 +291,7 @@ export async function applyNonInteractivePluginProviderChoice(
     await import("../../../system-agent/setup-inference-credentials.js");
   let result: OpenClawConfig | null;
   if (
-    isSetupCredentialReplacement({
+    await isSetupCredentialReplacement({
       provider: providerChoice.provider.id,
       baseConfig: params.baseConfig,
       agentDir,
@@ -305,10 +299,12 @@ export async function applyNonInteractivePluginProviderChoice(
   ) {
     const [
       { withAuthProfileStoreAgentDir, clearRuntimeAuthProfileStoreSnapshot },
-      { loadAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore },
+      { loadAuthProfileStoreWithoutExternalProfilesAsync, saveAuthProfileStore },
       { loadPersistedAuthProfileStore },
       { closeAuthProfileReadPool },
-      { closeOpenClawAgentDatabases },
+      { closeOpenClawAgentDatabasesAsync },
+      { closeOpenClawStateDatabaseByPathAsync },
+      { resolveOpenClawStateSqlitePath },
       { splitTrailingAuthProfile },
       { resolveSetupModel },
       { prepareCustomSetupCredentials },
@@ -318,11 +314,13 @@ export async function applyNonInteractivePluginProviderChoice(
       import("../../../agents/auth-profiles/persisted.js"),
       import("../../../agents/auth-profiles/sqlite.js"),
       import("../../../state/openclaw-agent-db.js"),
+      import("../../../state/openclaw-state-db.js"),
+      import("../../../state/openclaw-state-db.paths.js"),
       import("../../../agents/model-ref-profile.js"),
       import("../../../system-agent/setup-inference-core.js"),
       import("../../../system-agent/setup-inference-custom.js"),
     ]);
-    const realStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+    const realStore = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
     // This is preparation for the same owner, not a new agent. Preserve static
     // metadata even when cross-agent copying is disabled; never clone refresh material.
     const seeded = {
@@ -410,7 +408,10 @@ export async function applyNonInteractivePluginProviderChoice(
     } finally {
       clearRuntimeAuthProfileStoreSnapshot(stagingAgentDir);
       closeAuthProfileReadPool({ kind: "root", rootPath: stagingRoot });
-      closeOpenClawAgentDatabases(stagingRoot);
+      await closeOpenClawAgentDatabasesAsync(stagingRoot);
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stagingRoot }),
+      );
       await fs.rm(stagingRoot, { recursive: true, force: true });
     }
     if (savedProfileId) {

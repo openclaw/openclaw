@@ -1,4 +1,3 @@
-/** Lightweight reply-stage profiler for slow-turn diagnostics. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import {
@@ -26,7 +25,6 @@ type ReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams> = {
   logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 };
 
-/** Checks config/env diagnostic flags for reply profiling. */
 export function isReplyProfilerEnabled(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -42,11 +40,7 @@ export function isReplyProfilerEnabled(params?: {
 /** Keeps slow replies diagnosable; profiling lowers the warning thresholds. */
 export function createReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams>(params: {
   log: { warn: (message: string, details?: Record<string, unknown>) => void };
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  enabled?: boolean;
-  totalWarnMs?: number;
-  stageWarnMs?: number;
+  enabled: boolean;
   formatMessage?: (
     params: TLogParams,
     summary: ReplyTimingSummary,
@@ -54,12 +48,10 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
   ) => string;
   detailKeys?: (params: TLogParams) => readonly string[];
 }): ReplyTimingTracker<TLogParams> {
-  const profilerEnabled =
-    params.enabled ?? isReplyProfilerEnabled({ config: params.config, env: params.env });
   const timing = createStageTimingTracker();
   let didLog = false;
-  const totalWarnMs = params.totalWarnMs ?? (profilerEnabled ? 1_000 : 10_000);
-  const stageWarnMs = params.stageWarnMs ?? (profilerEnabled ? 500 : 5_000);
+  const totalWarnMs = params.enabled ? 1_000 : 10_000;
+  const stageWarnMs = params.enabled ? 500 : 5_000;
   return {
     measure: timing.measure,
     measureSync: timing.measureSync,
@@ -79,36 +71,34 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
         didLog = true;
       }
       const formattedSpans = formatStageTimings(summary.spans);
+      let message: string;
+      let details: Record<string, unknown>;
       if (params.formatMessage) {
         const detailParams = logParams as Record<string, unknown>;
-        const details = Object.fromEntries(
+        details = Object.fromEntries(
           (params.detailKeys?.(logParams) ?? []).map((key) => [key, detailParams[key]]),
         );
-        params.log.warn(params.formatMessage(logParams, summary, formattedSpans), {
-          ...details,
-          totalMs: summary.totalMs,
-          spans: summary.spans,
-        });
-        return;
+        message = params.formatMessage(logParams, summary, formattedSpans);
+      } else {
+        const defaults = logParams as ReplyTimingLogParams;
+        const suffix = [
+          `totalMs=${summary.totalMs}`,
+          `stages=${formattedSpans}`,
+          defaults.outcome ? `outcome=${defaults.outcome}` : undefined,
+          defaults.reason ? `reason=${defaults.reason}` : undefined,
+          defaults.error ? `error="${defaults.error}"` : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        message = `${defaults.message} ${suffix}`;
+        details = {
+          ...defaults.details,
+          outcome: defaults.outcome,
+          reason: defaults.reason,
+          error: defaults.error,
+        };
       }
-      const defaults = logParams as ReplyTimingLogParams;
-      const suffix = [
-        `totalMs=${summary.totalMs}`,
-        `stages=${formattedSpans}`,
-        defaults.outcome ? `outcome=${defaults.outcome}` : undefined,
-        defaults.reason ? `reason=${defaults.reason}` : undefined,
-        defaults.error ? `error="${defaults.error}"` : undefined,
-      ]
-        .filter(Boolean)
-        .join(" ");
-      params.log.warn(`${defaults.message} ${suffix}`, {
-        ...defaults.details,
-        outcome: defaults.outcome,
-        reason: defaults.reason,
-        error: defaults.error,
-        totalMs: summary.totalMs,
-        spans: summary.spans,
-      });
+      params.log.warn(message, { ...details, ...summary });
     },
   };
 }

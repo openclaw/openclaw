@@ -6,6 +6,7 @@ import { gatewayHealthResponse } from "../../gateway/health-response.test-suppor
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   callGateway,
+  classifyPortListener,
   hasActiveStartupMigrationLease,
   inspectPortUsage,
   monotonicClock,
@@ -22,14 +23,55 @@ const { readRuntime, readCommand, isAbsent } = vi.hoisted(() => ({
   readRuntime: vi.fn<GatewayService["readRuntime"]>(),
   isAbsent: vi.fn<NonNullable<GatewayService["isAbsent"]>>(),
 }));
+const { isDefaultInstallIdentity } = vi.hoisted(() => ({
+  isDefaultInstallIdentity: vi.fn(() => true),
+}));
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
+  isDefaultInstallIdentity,
+}));
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readRuntime, readCommand, isAbsent }),
 }));
 const { waitForGatewayDiagnosticReadiness } = await import("./diagnostic-readiness.js");
+const noAuthConfig: OpenClawConfig = { gateway: { auth: { mode: "none" } } };
+
+function foregroundOwner(owner = "fixture-owner", port = 18789) {
+  return {
+    owner,
+    pid: 8000,
+    host: "fixture-host",
+    startedAt: 1,
+    port,
+    mode: "foreground" as const,
+    supervisor: null,
+    state: "live" as const,
+    expired: false,
+  };
+}
 
 const missingServiceCases = [
-  { name: "managerless", platformAbsent: true, readyAtMs: 1_000, timeoutMs: 1_250 },
-  { name: "native missing unit", platformAbsent: false, readyAtMs: 20_000, timeoutMs: 30_000 },
+  {
+    name: "managerless",
+    platformAbsent: true,
+    serviceMode: "native",
+    readyAtMs: 1_000,
+    timeoutMs: 1_250,
+  },
+  {
+    name: "native missing unit",
+    platformAbsent: false,
+    serviceMode: "native",
+    readyAtMs: 20_000,
+    timeoutMs: 30_000,
+  },
+  {
+    name: "external supervisor",
+    platformAbsent: false,
+    serviceMode: "external",
+    readyAtMs: 1_000,
+    timeoutMs: 1_250,
+  },
 ] as const;
 
 describe("diagnostic Gateway readiness", () => {
@@ -46,6 +88,7 @@ describe("diagnostic Gateway readiness", () => {
     readCommand.mockReset();
     readCommand.mockResolvedValue({ programArguments: ["gateway", "--port", "18789"] });
     isAbsent.mockReset().mockResolvedValue(false);
+    isDefaultInstallIdentity.mockReset().mockReturnValue(true);
     vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
   });
@@ -58,22 +101,14 @@ describe("diagnostic Gateway readiness", () => {
     { url: "ws://127.0.0.1:18789" },
     { config: { gateway: { mode: "remote", remote: { url: "wss://peer.example" } } } },
     { envUrl: "wss://peer.example" },
-  ])("preserves an explicit or remote target: %j", async ({ envUrl, ...options }) => {
+    { config: { gateway: { auth: { mode: "token" } } } },
+  ])("defers explicit, remote, or unauthenticated targets: %j", async ({ envUrl, ...options }) => {
     if (envUrl) {
       vi.stubEnv("OPENCLAW_GATEWAY_URL", envUrl);
     }
     await expect(
       waitForGatewayDiagnosticReadiness({ config: {}, ...options }),
     ).resolves.toBeUndefined();
-    expect(inspectPortUsage).not.toHaveBeenCalled();
-    expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it("defers to original diagnostic authentication when no shared credential is available", async () => {
-    const result = await waitForGatewayDiagnosticReadiness({
-      config: { gateway: { auth: { mode: "token" } } },
-    });
-    expect(result).toBeUndefined();
     expect(monotonicClock.nowMs).toBe(0);
     expect(readRuntime).not.toHaveBeenCalled();
     expect(inspectPortUsage).not.toHaveBeenCalled();
@@ -107,7 +142,7 @@ describe("diagnostic Gateway readiness", () => {
 
       expect(result).toMatchObject({
         healthy: false,
-        waitOutcome: "timeout",
+        waitOutcome: authElapsedMs < 60_000 ? "still-starting" : "timeout",
         elapsedMs: Math.max(0, 60_000 - authElapsedMs),
       });
       expect(monotonicClock.nowMs).toBe(Math.max(60_000, authElapsedMs));
@@ -142,17 +177,7 @@ describe("diagnostic Gateway readiness", () => {
       resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({
         auth: { token: "fixture-token" },
       });
-      const owner = {
-        owner: "fixture-owner",
-        pid: 8000,
-        host: "fixture-host",
-        startedAt: 1,
-        port: 19091,
-        mode: "foreground" as const,
-        supervisor: null,
-        state: "live" as const,
-        expired: false,
-      };
+      const owner = foregroundOwner("fixture-owner", 19091);
       const publishOwner = () => {
         if (ownerKind === "lease") {
           readGatewayOwnerLease.mockReturnValue(owner);
@@ -215,29 +240,6 @@ describe("diagnostic Gateway readiness", () => {
     },
   );
 
-  it("caps service inspection by an explicit timeout before a later deadline", async () => {
-    isAbsent.mockImplementation(async () => {
-      monotonicClock.nowMs += 400;
-      return false;
-    });
-    readCommand.mockImplementation(async () => {
-      monotonicClock.nowMs += 300;
-      return { programArguments: ["gateway", "--port", "18789"] };
-    });
-    readRuntime.mockImplementation(async (_env, options) => {
-      monotonicClock.nowMs += options?.timeoutMs ?? 0;
-      return { status: "stopped" };
-    });
-
-    await waitForGatewayDiagnosticReadiness({
-      config: { gateway: { auth: { mode: "none" } } },
-      timeoutMs: 1_250,
-      deadlineMs: 60_000,
-    });
-
-    expect(monotonicClock.nowMs).toBe(1_250);
-  });
-
   it("waits for a legacy replacement after an observed owner lease dies", async () => {
     let leasePublished = false;
     isAbsent.mockResolvedValue(true);
@@ -245,15 +247,8 @@ describe("diagnostic Gateway readiness", () => {
     readGatewayOwnerLease.mockImplementation(() =>
       leasePublished
         ? {
-            owner: "previous-owner",
-            pid: 8000,
-            host: "fixture-host",
-            startedAt: 1,
-            port: 18789,
-            mode: "foreground",
-            supervisor: null,
+            ...foregroundOwner("previous-owner"),
             state: monotonicClock.nowMs === 0 ? "live" : "dead",
-            expired: false,
           }
         : undefined,
     );
@@ -279,7 +274,7 @@ describe("diagnostic Gateway readiness", () => {
     callGateway.mockImplementation(gatewayHealthResponse());
 
     const result = await waitForGatewayDiagnosticReadiness({
-      config: { gateway: { auth: { mode: "none" } } },
+      config: noAuthConfig,
       timeoutMs: 5_000,
     });
 
@@ -291,11 +286,31 @@ describe("diagnostic Gateway readiness", () => {
     });
   });
 
-  it.each(["service-command", "permissive command", "absence", "legacy lock", "late legacy lock"])(
-    "retains startup grace when %s lookup fails",
-    async (source) => {
+  it.each<{
+    source: string;
+    timeoutMs: number;
+    platformAbsent?: boolean;
+    serviceMode?: "native" | "external";
+  }>([
+    ...["service-command", "permissive command", "absence", "legacy lock", "late legacy lock"].map(
+      (source) => ({ source, timeoutMs: source === "late legacy lock" ? 30_000 : 1_250 }),
+    ),
+    ...missingServiceCases.map(({ name, ...options }) => ({
+      source: `startup migration (${name})`,
+      ...options,
+    })),
+  ])(
+    "retains startup grace when $source lookup fails",
+    async ({ source, timeoutMs, platformAbsent, serviceMode }) => {
       const error = new Error("owner lookup unavailable");
-      if (source === "service-command") {
+      if (platformAbsent !== undefined) {
+        isAbsent.mockResolvedValue(platformAbsent);
+        readCommand.mockResolvedValue(null);
+        readRuntime.mockResolvedValue({ status: "stopped", missingUnit: true });
+        hasActiveStartupMigrationLease.mockImplementation(() => {
+          throw new Error("startup migration owner unavailable");
+        });
+      } else if (source === "service-command") {
         readCommand.mockRejectedValue(error);
       } else if (source === "permissive command") {
         readCommand.mockImplementation(async (_env, options) => {
@@ -315,9 +330,9 @@ describe("diagnostic Gateway readiness", () => {
         readActiveGatewayLockIdentity.mockRejectedValue(error);
       }
 
-      const timeoutMs = source === "late legacy lock" ? 30_000 : 1_250;
       const result = await waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
+        config: noAuthConfig,
+        serviceMode,
         timeoutMs,
       });
 
@@ -339,49 +354,90 @@ describe("diagnostic Gateway readiness", () => {
 
       await expect(
         waitForGatewayDiagnosticReadiness({
-          config: { gateway: { auth: { mode: "none" } } },
+          config: noAuthConfig,
           timeoutMs: 1_250,
         }),
       ).rejects.toBe(error);
     },
   );
 
-  it.each([null, { programArguments: ["gateway", "--port", "18789"] }])(
-    "does not wait for an absent Gateway without a matching installed service: %j",
-    async (command) => {
-      readCommand.mockResolvedValue(command);
-      isAbsent.mockResolvedValue(command === null);
-      readRuntime.mockResolvedValueOnce({ status: "running" });
+  it.each(["missing command", "different port", "unavailable manager"])(
+    "does not wait for an absent Gateway with %s",
+    async (reason) => {
+      const unavailableManager = reason === "unavailable manager";
+      isAbsent.mockResolvedValue(reason !== "different port");
+      if (unavailableManager) {
+        readCommand.mockRejectedValue(new Error("service manager unavailable"));
+      } else {
+        readCommand.mockResolvedValue(
+          reason === "missing command"
+            ? null
+            : { programArguments: ["gateway", "--port", "18789"] },
+        );
+        readRuntime.mockResolvedValueOnce({ status: "running" });
+      }
       const result = await waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
-        localPortOverride: 19092,
-        timeoutMs: 60_000,
+        config: noAuthConfig,
+        localPortOverride: unavailableManager ? undefined : 19092,
+        timeoutMs: unavailableManager ? 1_250 : 60_000,
       });
       expect(result).toBeUndefined();
       expect(monotonicClock.nowMs).toBe(0);
       expect(readRuntime).not.toHaveBeenCalled();
+      if (unavailableManager) {
+        expect(readCommand).not.toHaveBeenCalled();
+      }
     },
   );
 
-  it("uses platform-confirmed absence without requiring a service manager", async () => {
-    isAbsent.mockResolvedValue(true);
-    readCommand.mockRejectedValue(new Error("service manager unavailable"));
+  it.each(
+    ["external", "isolated"].flatMap((context) =>
+      ["absent", "starting"].map((state) => ({ context, state })),
+    ),
+  )(
+    "avoids unrelated native inspection for a $context $state Gateway",
+    async ({ context, state }) => {
+      isDefaultInstallIdentity.mockReturnValue(context !== "isolated");
+      isAbsent.mockRejectedValue(new Error("service manager unavailable"));
+      if (state === "starting") {
+        readGatewayOwnerLease.mockReturnValue({
+          owner: "external-owner",
+          pid: 8000,
+          host: "fixture-host",
+          startedAt: 1,
+          port: 18789,
+          mode: context === "isolated" ? "foreground" : "supervised",
+          supervisor: context === "isolated" ? null : { kind: "systemd", name: "custom-gateway" },
+          state: "live",
+          expired: false,
+        });
+      }
 
-    await expect(
-      waitForGatewayDiagnosticReadiness({
+      const result = await waitForGatewayDiagnosticReadiness({
         config: { gateway: { auth: { mode: "none" } } },
+        serviceMode: context === "external" ? "external" : undefined,
         timeoutMs: 1_250,
-      }),
-    ).resolves.toBeUndefined();
+      });
 
-    expect(monotonicClock.nowMs).toBe(0);
-    expect(readCommand).not.toHaveBeenCalled();
-    expect(readRuntime).not.toHaveBeenCalled();
-  });
+      if (state === "starting") {
+        expect(result).toMatchObject({
+          waitOutcome: "still-starting",
+          elapsedMs: 1_250,
+          runtime: { status: "running", pid: 8000 },
+        });
+      } else {
+        expect(result).toBeUndefined();
+        expect(monotonicClock.nowMs).toBe(0);
+      }
+      expect(isAbsent).not.toHaveBeenCalled();
+      expect(readCommand).not.toHaveBeenCalled();
+      expect(readRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(missingServiceCases)(
     "waits for startup migration to hand off to a foreground Gateway with $name",
-    async ({ platformAbsent, readyAtMs, timeoutMs }) => {
+    async ({ platformAbsent, serviceMode, readyAtMs, timeoutMs }) => {
       isAbsent.mockResolvedValue(platformAbsent);
       readCommand.mockResolvedValue(null);
       readRuntime.mockResolvedValue({ status: "stopped", missingUnit: true });
@@ -389,19 +445,7 @@ describe("diagnostic Gateway readiness", () => {
         () => monotonicClock.nowMs < readyAtMs - 500,
       );
       readGatewayOwnerLease.mockImplementation(() =>
-        monotonicClock.nowMs < readyAtMs
-          ? undefined
-          : {
-              owner: "migrated-owner",
-              pid: 8000,
-              host: "fixture-host",
-              startedAt: 1,
-              port: 18789,
-              mode: "foreground",
-              supervisor: null,
-              state: "live",
-              expired: false,
-            },
+        monotonicClock.nowMs < readyAtMs ? undefined : foregroundOwner("migrated-owner"),
       );
       inspectPortUsage.mockImplementation(async (port) => ({
         port,
@@ -413,7 +457,8 @@ describe("diagnostic Gateway readiness", () => {
       callGateway.mockImplementation(gatewayHealthResponse());
 
       const result = await waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
+        config: noAuthConfig,
+        serviceMode,
         timeoutMs,
       });
       expect(monotonicClock.nowMs).toBe(readyAtMs);
@@ -421,97 +466,82 @@ describe("diagnostic Gateway readiness", () => {
     },
   );
 
-  it.each(missingServiceCases)(
-    "retains grace when startup migration ownership cannot be inspected with $name",
-    async ({ platformAbsent, timeoutMs }) => {
-      isAbsent.mockResolvedValue(platformAbsent);
-      readCommand.mockResolvedValue(null);
-      readRuntime.mockResolvedValue({ status: "stopped", missingUnit: true });
-      hasActiveStartupMigrationLease.mockImplementation(() => {
-        throw new Error("startup migration owner unavailable");
-      });
-
-      const result = await waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
-        timeoutMs,
-      });
-      expect(monotonicClock.nowMs).toBe(timeoutMs);
-      expect(result).toMatchObject({ waitOutcome: "timeout", elapsedMs: timeoutMs });
-    },
-  );
-
-  it.each([400, 1_500])(
-    "charges a %d ms initial owner read before service discovery",
-    async (ownerElapsedMs) => {
-      readGatewayOwnerLease.mockImplementationOnce(() => {
-        monotonicClock.nowMs += ownerElapsedMs;
-        return undefined;
-      });
-      isAbsent.mockImplementation(async (options) => {
-        monotonicClock.nowMs += options?.timeoutMs ?? 0;
-        return true;
-      });
-
-      const result = await waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
-        timeoutMs: 1_250,
-      });
-
-      expect(result).toMatchObject({
-        waitOutcome: "timeout",
-        elapsedMs: Math.max(1_250, ownerElapsedMs),
-      });
-      expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
-      if (ownerElapsedMs >= 1_250) {
-        expect(isAbsent).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("reports timeout after the final owner read consumes the remaining allowance", async () => {
-    isAbsent.mockResolvedValue(true);
-    readGatewayOwnerLease.mockReturnValueOnce(undefined).mockImplementationOnce(() => {
-      monotonicClock.nowMs += 1_500;
-      return undefined;
-    });
-
-    await expect(
-      waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
-        timeoutMs: 1_250,
-      }),
-    ).resolves.toMatchObject({ waitOutcome: "timeout", elapsedMs: 1_500 });
-  });
-
-  it.each(["initial", "late"])(
-    "passes the remaining allowance to the %s native lock inspection",
-    async (phase) => {
-      isAbsent.mockResolvedValue(true);
-      if (phase === "initial") {
+  it.each([
+    { phase: "service inspection", ownerElapsedMs: 0, deadlineMs: 60_000 },
+    { phase: "initial owner", ownerElapsedMs: 400 },
+    { phase: "initial owner", ownerElapsedMs: 1_500 },
+    { phase: "final owner", ownerElapsedMs: 1_500 },
+    { phase: "initial lock", ownerElapsedMs: 0, deadlineMs: 60_000 },
+    { phase: "late lock", ownerElapsedMs: 0, deadlineMs: 60_000 },
+  ])(
+    "charges $phase reads ($ownerElapsedMs ms owner lookup) to the remaining diagnostic budget",
+    async ({ phase, ownerElapsedMs, deadlineMs }) => {
+      if (phase === "service inspection") {
         isAbsent.mockImplementation(async () => {
-          monotonicClock.nowMs += 1_125;
+          monotonicClock.nowMs += 400;
+          return false;
+        });
+        readCommand.mockImplementation(async () => {
+          monotonicClock.nowMs += 300;
+          return { programArguments: ["gateway", "--port", "18789"] };
+        });
+        readRuntime.mockImplementation(async (_env, options) => {
+          monotonicClock.nowMs += options?.timeoutMs ?? 0;
+          return { status: "stopped" };
+        });
+      } else if (phase === "initial owner") {
+        readGatewayOwnerLease.mockImplementationOnce(() => {
+          monotonicClock.nowMs += ownerElapsedMs;
+          return undefined;
+        });
+        isAbsent.mockImplementation(async (options) => {
+          monotonicClock.nowMs += options?.timeoutMs ?? 0;
           return true;
         });
       } else {
-        readActiveGatewayLockIdentity.mockImplementationOnce(async () => {
-          monotonicClock.nowMs += 1_125;
-          return undefined;
-        });
+        isAbsent.mockResolvedValue(true);
+        if (phase === "final owner") {
+          readGatewayOwnerLease.mockReturnValueOnce(undefined).mockImplementationOnce(() => {
+            monotonicClock.nowMs += ownerElapsedMs;
+            return undefined;
+          });
+        } else {
+          if (phase === "initial lock") {
+            isAbsent.mockImplementation(async () => {
+              monotonicClock.nowMs += 1_125;
+              return true;
+            });
+          } else {
+            readActiveGatewayLockIdentity.mockImplementationOnce(async () => {
+              monotonicClock.nowMs += 1_125;
+              return undefined;
+            });
+          }
+          readActiveGatewayLockIdentity.mockImplementationOnce(
+            async (options?: { timeoutMs?: number }) => {
+              monotonicClock.nowMs += options?.timeoutMs ?? 1_000;
+              return undefined;
+            },
+          );
+        }
       }
-      readActiveGatewayLockIdentity.mockImplementationOnce(
-        async (options?: { timeoutMs?: number }) => {
-          monotonicClock.nowMs += options?.timeoutMs ?? 1_000;
-          return undefined;
-        },
-      );
-
       await expect(
         waitForGatewayDiagnosticReadiness({
-          config: { gateway: { auth: { mode: "none" } } },
+          config: noAuthConfig,
           timeoutMs: 1_250,
-          deadlineMs: 60_000,
+          deadlineMs,
         }),
-      ).resolves.toMatchObject({ waitOutcome: "timeout", elapsedMs: 1_250 });
+      ).resolves.toMatchObject({
+        waitOutcome: "timeout",
+        elapsedMs: Math.max(1_250, ownerElapsedMs),
+      });
+      expect(monotonicClock.nowMs).toBe(Math.max(1_250, ownerElapsedMs));
+      if (phase === "initial owner") {
+        expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
+        if (ownerElapsedMs >= 1_250) {
+          expect(isAbsent).not.toHaveBeenCalled();
+        }
+      }
     },
   );
 
@@ -539,7 +569,7 @@ describe("diagnostic Gateway readiness", () => {
         | { value?: Awaited<ReturnType<typeof waitForGatewayDiagnosticReadiness>>; error?: unknown }
         | undefined;
       const observed = waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
+        config: noAuthConfig,
         timeoutMs: 1_250,
         deadlineMs: 60_000,
       }).then(
@@ -574,21 +604,25 @@ describe("diagnostic Gateway readiness", () => {
     },
   );
 
-  it.each(["loaded", "unverifiable", "absent"] as const)(
-    "uses the native runtime's %s owner verdict after a strict command read finds no command",
+  it.each(["loaded", "unverifiable", "absent", "stopped", "unknown"] as const)(
+    "honors the native runtime's %s verdict within the caller's deadline",
     async (owner) => {
-      readCommand.mockResolvedValue(null);
-      readRuntime.mockResolvedValue(
-        owner === "absent"
-          ? { status: "stopped", missingUnit: true }
-          : {
-              status: "unknown",
-              systemLaunchDaemon: { status: owner, serviceTarget: "system/ai.openclaw.gateway" },
-            },
-      );
+      if (owner === "stopped" || owner === "unknown") {
+        readRuntime.mockResolvedValue({ status: owner });
+      } else {
+        readCommand.mockResolvedValue(null);
+        readRuntime.mockResolvedValue(
+          owner === "absent"
+            ? { status: "stopped", missingUnit: true }
+            : {
+                status: "unknown",
+                systemLaunchDaemon: { status: owner, serviceTarget: "system/ai.openclaw.gateway" },
+              },
+        );
+      }
 
       const result = await waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
+        config: noAuthConfig,
         timeoutMs: 1_250,
       });
 
@@ -597,6 +631,10 @@ describe("diagnostic Gateway readiness", () => {
         expect(monotonicClock.nowMs).toBe(0);
       } else {
         expect(result).toMatchObject({ waitOutcome: "timeout", elapsedMs: 1_250 });
+        if (owner === "stopped" || owner === "unknown") {
+          expect(result).toMatchObject({ healthy: false, portUsage: { status: "free" } });
+          expect(callGateway).not.toHaveBeenCalled();
+        }
       }
     },
   );
@@ -612,28 +650,104 @@ describe("diagnostic Gateway readiness", () => {
     callGateway.mockImplementation(gatewayHealthResponse());
 
     const result = await waitForGatewayDiagnosticReadiness({
-      config: { gateway: { auth: { mode: "none" } } },
+      config: noAuthConfig,
     });
 
     expect(result).toMatchObject({ healthy: true, waitOutcome: "healthy" });
     expect(monotonicClock.nowMs).toBe(0);
   });
 
-  it.each(["stopped", "unknown"])(
-    "bounds a %s installed Gateway with the caller's shorter deadline",
-    async (status) => {
-      readRuntime.mockResolvedValue({ status });
+  it.each(["missing", "stopped"])(
+    "reports a verified foreign port for a %s service without consuming the budget",
+    async (runtime) => {
+      if (runtime === "missing") {
+        readCommand.mockResolvedValue(null);
+      }
+      classifyPortListener.mockReturnValue("non_gateway");
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "socat" }],
+        hints: [],
+      });
+
       const result = await waitForGatewayDiagnosticReadiness({
-        config: { gateway: { auth: { mode: "none" } } },
+        config: noAuthConfig,
         timeoutMs: 1_250,
       });
-      expect(result).toMatchObject({
-        healthy: false,
-        waitOutcome: "timeout",
-        elapsedMs: 1_250,
-        portUsage: { status: "free" },
+
+      expect(result).toMatchObject({ healthy: false, waitOutcome: "port-held", elapsedMs: 0 });
+      expect(result?.probeError).toContain("port 18789 is held by another process");
+      expect(result?.probeError).toContain("openclaw gateway status --deep");
+      if (!result) {
+        throw new Error("Expected the port-conflict diagnostic");
+      }
+      const { formatGatewayRestartFailure } = await import("./restart-health-diagnostics.js");
+      const failure = formatGatewayRestartFailure({
+        health: result,
+        port: 18789,
+        defaultTimeoutSeconds: 60,
       });
-      expect(callGateway).not.toHaveBeenCalled();
+      expect(failure.failMessage).toContain("held by another process");
+      expect(failure.statusLine).not.toContain("Timed out");
     },
   );
+
+  it.each([
+    "unknown listener",
+    "empty attribution",
+    "mixed listeners",
+    "runtime PID",
+    "runtime PPID",
+    "live owner",
+    "unknown owner",
+    "legacy owner",
+    "startup migration",
+    "migration inspection failure",
+  ])("preserves startup grace for %s on a busy port", async (reason) => {
+    readCommand.mockResolvedValue(null);
+    classifyPortListener.mockReturnValue("non_gateway");
+    const listeners = [{ pid: 4242, ppid: 1, command: "socat" }];
+    if (reason === "unknown listener") {
+      classifyPortListener.mockReturnValue("unknown");
+    } else if (reason === "empty attribution") {
+      listeners.length = 0;
+    } else if (reason === "mixed listeners") {
+      listeners.push({ pid: 4243, ppid: 1, command: "node" });
+      classifyPortListener.mockImplementation((listener) =>
+        listener === listeners[0] ? "non_gateway" : "unknown",
+      );
+    } else if (reason === "runtime PID" || reason === "runtime PPID") {
+      readCommand.mockResolvedValue({ programArguments: ["gateway", "--port", "18789"] });
+      readRuntime.mockResolvedValue({
+        status: "stopped",
+        pid: reason === "runtime PID" ? 4242 : 1,
+      });
+    } else if (reason === "live owner" || reason === "unknown owner") {
+      readGatewayOwnerLease.mockReturnValue({
+        ...foregroundOwner(),
+        state: reason === "live owner" ? "live" : "unknown",
+      });
+    } else if (reason === "legacy owner") {
+      readActiveGatewayLockIdentity.mockResolvedValue({
+        pid: 8000,
+        port: 18789,
+        createdAt: "2026-09-01T00:00:00.000Z",
+      });
+    } else if (reason === "startup migration") {
+      hasActiveStartupMigrationLease.mockReturnValue(true);
+    } else if (reason === "migration inspection failure") {
+      hasActiveStartupMigrationLease.mockImplementation(() => {
+        throw new Error("unavailable");
+      });
+    }
+    inspectPortUsage.mockResolvedValue({ port: 18789, status: "busy", listeners, hints: [] });
+
+    const result = await waitForGatewayDiagnosticReadiness({
+      config: noAuthConfig,
+      timeoutMs: 1_250,
+    });
+
+    expect(result).toMatchObject({ healthy: false, waitOutcome: "timeout", elapsedMs: 1_250 });
+  });
 });

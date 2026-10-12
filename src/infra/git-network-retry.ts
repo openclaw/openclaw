@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sleepWithAbort } from "./backoff.js";
 
 type GitNetworkOperation = "fetch" | "ls-remote" | "clone";
+export type GitOperationStarter = <T>(operation: () => T) => Promise<Awaited<T>>;
 type GitNetworkResult = {
   termination: string;
   code: number | null;
@@ -37,7 +38,7 @@ export function retryableGitNetworkOperation(
   return undefined;
 }
 
-function isTransientGitFailure(result: GitNetworkResult): boolean {
+function isTransientGitFailure(operation: GitNetworkOperation, result: GitNetworkResult): boolean {
   if (
     result.termination !== "exit" ||
     result.code === null ||
@@ -53,11 +54,20 @@ function isTransientGitFailure(result: GitNetworkResult): boolean {
   const stderr =
     typeof result.stderr === "string" ? result.stderr : Buffer.from(result.stderr).toString("utf8");
   if (
-    /authentication failed|permission denied|access denied|repository not found|could not read username|couldn't find remote ref|not our ref|certificate|host key verification failed|no space left|disk quota|cannot lock ref|bad object|returned error: (?:401|403|404)\b/iu.test(
+    /authentication failed|permission denied|access denied|repository not found|could not read username|couldn't find remote ref|not our ref|certificate|host key verification failed|no space left|disk quota|bad object|returned error: (?:401|403|404)\b/iu.test(
       stderr,
     )
   ) {
     return false;
+  }
+  // A settled fetch is safe to repeat after an external ref writer wins its CAS or lock.
+  if (/cannot lock ref/iu.test(stderr)) {
+    return (
+      operation === "fetch" &&
+      /cannot lock ref '[^']+': (?:is at \S+ but expected \S+|Unable to create '[^']+\.lock': File exists)/iu.test(
+        stderr,
+      )
+    );
   }
   return /did not send all necessary objects|could not resolve (?:host|proxy)|temporary failure in name resolution|failed to connect|connection (?:reset|timed out|refused|closed)|remote end hung up unexpectedly|unexpected disconnect|early EOF|empty reply from server|TLS connection was non-properly terminated|SSL_ERROR_SYSCALL|HTTP\/2.*(?:stream|internal_error)|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)\b|returned error: (?:408|429|500|502|503|504)\b/iu.test(
     stderr,
@@ -67,13 +77,24 @@ function isTransientGitFailure(result: GitNetworkResult): boolean {
 /** Retry one settled network read inside its original deadline and caller-owned admission. */
 export async function withGitNetworkRetry<T extends GitNetworkResult>(
   operation: GitNetworkOperation | undefined,
-  options: { timeoutMs: number; signal?: AbortSignal; beforeRun?: () => void },
+  options: {
+    timeoutMs: number;
+    signal?: AbortSignal;
+    beforeRun?: () => void;
+    startRun?: GitOperationStarter;
+  },
   run: (timeoutMs: number) => Promise<T>,
 ): Promise<T> {
   const started = performance.now();
-  options.beforeRun?.();
-  const result = await run(options.timeoutMs);
-  if (!operation || !isTransientGitFailure(result)) {
+  const attempt = (timeoutMs: number) => {
+    const start = () => {
+      options.beforeRun?.();
+      return run(timeoutMs);
+    };
+    return options.startRun ? options.startRun(start) : start();
+  };
+  const result = await attempt(options.timeoutMs);
+  if (!operation || !isTransientGitFailure(operation, result)) {
     return result;
   }
   const cancelled = (): T => ({ ...result, code: null, signal: null, termination: "signal" });
@@ -83,7 +104,7 @@ export async function withGitNetworkRetry<T extends GitNetworkResult>(
   if (options.timeoutMs - (performance.now() - started) <= RETRY_DELAY_MS) {
     return result;
   }
-  log.warn(`Git ${operation} hit a transient transport failure; retrying once`, {
+  log.warn(`Git ${operation} hit a transient failure; retrying once`, {
     operation,
     attempt: 1,
     maxAttempts: 2,
@@ -105,6 +126,5 @@ export async function withGitNetworkRetry<T extends GitNetworkResult>(
   if (remainingMs <= 0) {
     return result;
   }
-  options.beforeRun?.();
-  return await run(remainingMs);
+  return await attempt(remainingMs);
 }

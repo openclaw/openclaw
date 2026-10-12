@@ -23,20 +23,9 @@ type CacheOperations = {
 
 const [root, owner, cachePolicy, disablePolicy] = process.argv.slice(2);
 assert.ok(root, "SQLite store compile-cache fixture requires its temporary directory");
-assert.ok(
-  owner === "openclaw" ||
-    owner === "none" ||
-    owner === "foreign" ||
-    owner === "failed" ||
-    owner === "source",
-);
+assert.ok(owner === "openclaw" || owner === "foreign" || owner === "failed" || owner === "source");
 assert.ok(cachePolicy === "unset" || cachePolicy === "explicit" || cachePolicy === "");
-assert.ok(
-  disablePolicy === "unset" ||
-    disablePolicy === "1" ||
-    disablePolicy === "0" ||
-    disablePolicy === "",
-);
+assert.ok(disablePolicy === "unset" || disablePolicy === "1" || disablePolicy === "");
 const testCase = {
   owner,
   cache: cachePolicy === "unset" ? undefined : cachePolicy,
@@ -59,7 +48,7 @@ if (testCase.owner === "failed") {
   const blocked = path.join(root, "not-a-directory");
   fs.writeFileSync(blocked, "fixture");
   enableOpenClawCompileCache({ installRoot, env: { NODE_COMPILE_CACHE: blocked } });
-} else if (testCase.owner !== "none") {
+} else {
   // Positive control goes through the real OpenClaw entry enable owner.
   enableOpenClawCompileCache({
     installRoot,

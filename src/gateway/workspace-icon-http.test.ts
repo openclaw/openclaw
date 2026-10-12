@@ -3,18 +3,35 @@ import fs from "node:fs/promises";
 // caching, and the authenticated route's scoping, limits, and headers.
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
-  resolveLocalSessionWorkspaceRoot: vi.fn(),
 }));
 
 vi.mock("./http-utils.js", () => ({
@@ -22,15 +39,9 @@ vi.mock("./http-utils.js", () => ({
     mocks.authorize(...args),
 }));
 
-vi.mock("./server-methods/sessions-files.js", () => ({
-  resolveLocalSessionWorkspaceRoot: (...args: unknown[]) =>
-    mocks.resolveLocalSessionWorkspaceRoot(...args),
-}));
-
 const {
   clearWorkspaceIconCacheForTest,
   handleWorkspaceIconHttpRequest,
-  prepareSessionWorkspaceIcon,
   resolveWorkspaceIcon,
   SVG_ICON_MAX_BYTES,
   WORKSPACE_ICON_MAX_BYTES,
@@ -46,13 +57,12 @@ const ICO_BYTES = Buffer.from([
 ]);
 const SVG_BYTES = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"></svg>');
 
-const roots: string[] = [];
+const roots = useAutoCleanupTempDirTracker(afterEach);
 
 async function makeWorkspace(files: Record<string, Buffer>): Promise<string> {
   // Canonicalize first: macOS tmp is a /var -> /private/var symlink and the
   // resolver returns realpaths, so a raw mkdtemp root would not compare equal.
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ws-icon-")));
-  roots.push(root);
+  const root = await fs.realpath(roots.make("openclaw-ws-icon-"));
   for (const [relative, body] of Object.entries(files)) {
     const absolute = path.join(root, relative);
     await fs.mkdir(path.dirname(absolute), { recursive: true });
@@ -65,9 +75,7 @@ beforeEach(() => {
   clearWorkspaceIconCacheForTest();
 });
 
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe("resolveWorkspaceIcon", () => {
   const conventions = [
@@ -144,12 +152,11 @@ describe("resolveWorkspaceIcon", () => {
     expect(await resolveWorkspaceIcon(root)).toBeNull();
   });
 
-  it("keeps both hits and misses for the process lifetime", async () => {
+  it("keeps both hits and misses while the root remains cached", async () => {
     const empty = await makeWorkspace({});
     expect(await resolveWorkspaceIcon(empty)).toBeNull();
     await fs.writeFile(path.join(empty, "favicon.png"), PNG_BYTES);
-    // Icons are process-stable metadata: a workspace that answered "no icon"
-    // must not rescan on later requests, and picks the new file up on restart.
+    // An ordinary request does not freshness-poll a resident cache entry.
     expect(await resolveWorkspaceIcon(empty)).toBeNull();
 
     const filled = await makeWorkspace({ "favicon.png": PNG_BYTES });
@@ -163,10 +170,53 @@ describe("handleWorkspaceIconHttpRequest", () => {
   let port = 0;
   let server: ReturnType<typeof createServer>;
   let authorityCurrent = true;
+  let state: OpenClawTestState;
+  let cfg: OpenClawConfig;
+  let projection: SessionRowProjection | undefined;
+  const context = bindSessionRowProjection({}, () => projection);
+
+  function seedSession(
+    root?: string,
+    key = "agent:main:one",
+    fields: Partial<InternalSessionEntry> = {},
+  ) {
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      {
+        sessionId: key,
+        updatedAt: 1,
+        ...(root ? { spawnedCwd: root } : { pendingWorktree: { titleSource: "Pending" } }),
+        ...fields,
+      },
+    );
+  }
+
+  function publishPluginMetadata() {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    setGatewayPluginMetadataSnapshot(createPluginMetadataSnapshotFixture(), {
+      config: cfg,
+      compatibleConfigs: [cfg],
+    });
+  }
 
   beforeAll(async () => {
+    state = await createOpenClawTestState({ scenario: "minimal" });
+    cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { workspace: state.workspaceDir },
+      },
+    };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    publishPluginMetadata();
+    // Gateway startup admits the physical store before serving prepared reads.
+    seedSession(undefined, "agent:main:fixture");
+    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     server = createServer((req, res) => {
       void handleWorkspaceIconHttpRequest(req, res, {
+        ...context,
         auth: { mode: "token", token: "test-token", allowTailscale: false },
       })
         .then((handled) => {
@@ -190,9 +240,16 @@ describe("handleWorkspaceIconHttpRequest", () => {
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
+    projection?.dispose();
+    projection = undefined;
+    setCurrentPluginMetadataSnapshot(undefined);
+    resetPluginRuntimeStateForTest();
+    await state?.cleanup();
   });
 
   beforeEach(() => {
+    // The shared test setup retires plugin runtime metadata after every case.
+    publishPluginMetadata();
     authorityCurrent = true;
     mocks.authorize
       .mockReset()
@@ -203,7 +260,6 @@ describe("handleWorkspaceIconHttpRequest", () => {
           () => authorityCurrent,
         ),
       );
-    mocks.resolveLocalSessionWorkspaceRoot.mockReset().mockReturnValue(undefined);
   });
 
   const iconRoute = (sessionKey: string) =>
@@ -216,13 +272,9 @@ describe("handleWorkspaceIconHttpRequest", () => {
     "serves the session workspace $label with sandboxed asset headers",
     async ({ file, body, contentType }) => {
       const root = await makeWorkspace({ [file]: body });
-      mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-      await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
+      seedSession(root);
 
       const response = await fetch(iconRoute("agent:main:one"));
-      expect(mocks.resolveLocalSessionWorkspaceRoot).toHaveBeenCalledWith({
-        sessionKey: "agent:main:one",
-      });
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toBe(contentType);
       expect(response.headers.get("content-length")).toBe(String(body.byteLength));
@@ -266,8 +318,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
     "honors $name for workspace image responses",
     async ({ method, validator, expectedStatus }) => {
       const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
-      mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-      await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
+      seedSession(root);
 
       const first = await fetch(iconRoute("agent:main:one"));
       const etag = first.headers.get("etag") ?? "";
@@ -300,43 +351,48 @@ describe("handleWorkspaceIconHttpRequest", () => {
     { label: "a workspace with no icon", hasWorkspace: true },
   ] as const;
 
-  it.each(absent)("answers an uncacheable 404 for $label", async ({ hasWorkspace }) => {
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(
-      hasWorkspace ? await makeWorkspace({}) : undefined,
-    );
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
+  it.each(absent)("briefly caches an authenticated 404 for $label", async ({ hasWorkspace }) => {
+    seedSession(hasWorkspace ? await makeWorkspace({}) : undefined);
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(404);
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe(
+      hasWorkspace ? "private, max-age=60" : "no-store",
+    );
+    expect(response.headers.get("vary")).toBe("Authorization, Cookie");
   });
 
-  it("keeps a request made before chat startup retryable", async () => {
-    const response = await fetch(iconRoute("agent:main:one"));
-    expect(response.status).toBe(503);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("retry-after")).toBe("1");
-    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
-  });
-
-  it("waits for preparation already started by chat startup", async () => {
+  it("serves a cold canonical session through its main alias without chat startup", async () => {
     const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-
-    const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:pending" });
-    const responsePromise = fetch(iconRoute("agent:main:pending"));
-
-    await preparation;
-    const response = await responsePromise;
+    seedSession(root, "agent:main:main");
+    const response = await fetch(iconRoute("main"));
     expect(response.status).toBe(200);
-    expect(Buffer.from(await response.arrayBuffer()).equals(ICO_BYTES)).toBe(true);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(ICO_BYTES);
+  });
+
+  it("keeps unavailable session preparation retryable without caching absence", async () => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    seedSession(root);
+    const ready = projection;
+    projection = undefined;
+    try {
+      const response = await fetch(iconRoute("agent:main:one"));
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("retry-after")).toBe("1");
+      await response.arrayBuffer();
+    } finally {
+      projection = ready;
+    }
+    const recovered = await fetch(iconRoute("agent:main:one"));
+    expect(recovered.status).toBe(200);
+    expect(Buffer.from(await recovered.arrayBuffer())).toEqual(PNG_BYTES);
   });
 
   it("rejects revoked authority while a workspace icon is being prepared", async () => {
     const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    seedSession(root, "agent:main:revoked");
     const reading = createDeferredCore();
     const release = createDeferredCore();
-    const authorized = createDeferredCore();
     const readFile = boundaryFileRead.readFileDescriptorBounded;
     const read = vi
       .spyOn(boundaryFileRead, "readFileDescriptorBounded")
@@ -345,25 +401,13 @@ describe("handleWorkspaceIconHttpRequest", () => {
         await release.promise;
         return await readFile(...args);
       });
-    mocks.authorize.mockImplementationOnce(({ res }: { res: ServerResponse }) => {
-      const auth = bindHttpResponseAuthority(
-        { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
-        res,
-        () => authorityCurrent,
-      );
-      queueMicrotask(authorized.resolve);
-      return auth;
-    });
-
     try {
-      const preparation = prepareSessionWorkspaceIcon({ sessionKey: "agent:main:revoked" });
-      await reading.promise;
       const pending = fetch(iconRoute("agent:main:revoked"));
-      await authorized.promise;
+      await reading.promise;
       authorityCurrent = false;
       release.resolve();
 
-      const [response] = await Promise.all([pending, preparation]);
+      const response = await pending;
       expect(response.status).toBe(401);
       expect(response.headers.get("etag")).toBeNull();
       expect(await response.json()).toEqual({
@@ -375,48 +419,146 @@ describe("handleWorkspaceIconHttpRequest", () => {
     }
   });
 
-  it("records the fallback when preparation fails", async () => {
-    mocks.resolveLocalSessionWorkspaceRoot.mockImplementation(() => {
-      throw new Error("broken workspace metadata");
-    });
-    await expect(prepareSessionWorkspaceIcon({ sessionKey: "agent:main:broken" })).rejects.toThrow(
-      "broken workspace metadata",
-    );
-
-    const response = await fetch(iconRoute("agent:main:broken"));
-    expect(response.status).toBe(404);
-  });
-
-  it("does no session-store or filesystem resolution in the HTTP request", async () => {
-    const root = await makeWorkspace({ "ui/public/favicon-32.png": PNG_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
-    mocks.resolveLocalSessionWorkspaceRoot.mockClear();
-    await fs.rm(path.join(root, "ui/public/favicon-32.png"));
-
-    const first = await fetch(iconRoute("agent:main:one"));
-    const second = await fetch(iconRoute("agent:main:one"));
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(Buffer.from(await first.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
-    expect(Buffer.from(await second.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
-    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
-  });
-
-  it("keeps a recently served session snapshot across bounded-cache eviction", async () => {
-    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:kept" });
-    for (let index = 0; index < 127; index += 1) {
-      await prepareSessionWorkspaceIcon({ sessionKey: `agent:main:filler-${index}` });
+  it("does not publish bytes from a workspace replaced during the read", async () => {
+    const original = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    const replacement = await makeWorkspace({ "favicon.svg": SVG_BYTES });
+    seedSession(original);
+    const reading = createDeferredCore();
+    const release = createDeferredCore();
+    const readFile = boundaryFileRead.readFileDescriptorBounded;
+    const read = vi
+      .spyOn(boundaryFileRead, "readFileDescriptorBounded")
+      .mockImplementationOnce(async (...args) => {
+        reading.resolve();
+        await release.promise;
+        return await readFile(...args);
+      });
+    const pending = fetch(iconRoute("agent:main:one"));
+    try {
+      await reading.promise;
+      seedSession(replacement, "agent:main:one", { sessionId: "replacement-session" });
+      release.resolve();
+      const stale = await pending;
+      expect(stale.status).toBe(503);
+      expect(stale.headers.get("etag")).toBeNull();
+      await stale.arrayBuffer();
+      const current = await fetch(iconRoute("agent:main:one"));
+      expect(current.status).toBe(200);
+      expect(Buffer.from(await current.arrayBuffer())).toEqual(SVG_BYTES);
+    } finally {
+      release.resolve();
+      await pending;
+      read.mockRestore();
     }
+  });
 
-    expect((await fetch(iconRoute("agent:main:kept"))).status).toBe(200);
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:newest" });
+  it("reads a dirty session through workers without synchronous session-store queries", async () => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    seedSession(root);
+    const reads = observeHostDataSql();
+    try {
+      const response = await fetch(iconRoute("agent:main:one"));
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(PNG_BYTES);
+      expect(reads.queries).toEqual([]);
+    } finally {
+      reads.restore();
+    }
+  });
 
-    expect((await fetch(iconRoute("agent:main:kept"))).status).toBe(200);
-    expect((await fetch(iconRoute("agent:main:filler-0"))).status).toBe(503);
+  it("never exposes a local decoy for a bound or stopped remote workspace", async () => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    seedSession(root);
+    const release = registerAgentWorkspaceAccess(root, {
+      bridge: {
+        readFile: async () => {
+          throw new Error("unexpected remote icon read");
+        },
+        writeFile: async () => {
+          throw new Error("unexpected write");
+        },
+        stat: async () => null,
+      },
+    });
+    try {
+      for (const stopped of [false, true]) {
+        if (stopped) {
+          release();
+        }
+        const response = await fetch(iconRoute("agent:main:one"));
+        expect(response.status).toBe(404);
+        expect(response.headers.get("etag")).toBeNull();
+        await response.arrayBuffer();
+      }
+    } finally {
+      release();
+    }
+  });
+
+  it("never reads a local decoy for a repository-owned workspace", async () => {
+    const key = "agent:main:repository";
+    const repository = await getSessionRepositoryWorkspaceStore().create({
+      agentId: "main",
+      sessionKey: key,
+      url: "https://example.test/project.git",
+      assertCurrent: () => {},
+    });
+    seedSession(await makeWorkspace({ "favicon.png": PNG_BYTES }), key, {
+      repositoryWorkspaceId: repository.workspaceId,
+    });
+    const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+    const response = await fetch(iconRoute(key));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("recovers a missing session after its workspace is published", async () => {
+    const key = "agent:main:new-session";
+    const missing = await fetch(iconRoute(key));
+    expect(missing.status).toBe(404);
+    await missing.arrayBuffer();
+    seedSession(await makeWorkspace({ "favicon.png": PNG_BYTES }), key);
+    const response = await fetch(iconRoute(key));
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(PNG_BYTES);
+  });
+
+  it("reuses cached bytes and recovers after root-cache eviction", async () => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    seedSession(root);
+    const first = await fetch(iconRoute("agent:main:one"));
+    expect(first.status).toBe(200);
+    expect(Buffer.from(await first.arrayBuffer())).toEqual(PNG_BYTES);
+    await fs.rm(path.join(root, "favicon.png"));
+    const cached = await fetch(iconRoute("agent:main:one"));
+    expect(cached.status).toBe(200);
+    expect(Buffer.from(await cached.arrayBuffer())).toEqual(PNG_BYTES);
+
+    for (let index = 0; index < 32; index += 1) {
+      await resolveWorkspaceIcon(await makeWorkspace({}));
+    }
+    await fs.writeFile(path.join(root, "favicon.png"), APNG_BYTES);
+    const recovered = await fetch(iconRoute("agent:main:one"));
+    expect(recovered.status).toBe(200);
+    expect(recovered.headers.get("etag")).not.toBe(first.headers.get("etag"));
+    expect(Buffer.from(await recovered.arrayBuffer())).toEqual(APNG_BYTES);
+  });
+
+  it.each([
+    { label: "exec-node", fields: { execNode: "remote-node" } },
+    {
+      label: "pending checkout",
+      fields: { spawnedCwd: undefined, pendingWorktree: { titleSource: "Pending" } },
+    },
+  ])("never substitutes local icon bytes for a $label workspace", async ({ fields }) => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    seedSession(root, "agent:main:one", fields);
+    const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+    const response = await fetch(iconRoute("agent:main:one"));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(reads).not.toHaveBeenCalled();
   });
 
   const malformed = ["/__openclaw__/workspace-icon/", "/__openclaw__/workspace-icon/a/b"];
@@ -424,7 +566,6 @@ describe("handleWorkspaceIconHttpRequest", () => {
   it.each(malformed)("claims %s as a 404 instead of falling through", async (pathname) => {
     const response = await fetch(`http://127.0.0.1:${port}${pathname}`);
     expect(response.status).toBe(404);
-    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 
   it("leaves unrelated paths to later stages", async () => {
@@ -438,19 +579,21 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(response.headers.get("allow")).toBe("GET, HEAD");
   });
 
-  it("never reads a workspace when the owner-read authorizer denies access", async () => {
+  it.each([401, 403])("never reads a workspace when authorization answers %s", async (status) => {
+    seedSession(await makeWorkspace({ "favicon.png": PNG_BYTES }), "agent:main:hidden");
+    const reads = vi.spyOn(boundaryFileRead, "openRootFile");
     // `sessions.list` hides incognito and non-owner draft sessions per client.
     // Without that filter here, the read scope alone would let a caller who
     // knows such a key pull bytes derived from a session it cannot list.
     mocks.authorize.mockImplementation(
       async (params: { res: { statusCode: number; end: () => void } }) => {
-        params.res.statusCode = 403;
+        params.res.statusCode = status;
         params.res.end();
         return null;
       },
     );
     const response = await fetch(iconRoute("agent:main:hidden"));
-    expect(response.status).toBe(403);
-    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
+    expect(response.status).toBe(status);
+    expect(reads).not.toHaveBeenCalled();
   });
 });

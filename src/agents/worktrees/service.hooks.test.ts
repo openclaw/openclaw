@@ -1,11 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import * as commandRunner from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -15,6 +21,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -28,6 +35,15 @@ describe("ManagedWorktreeService repository code isolation", () => {
   let repo: string;
   let sentinel: string;
   let service: ManagedWorktreeService;
+  let receipts: FixtureReceiptChannel;
+
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+
+  afterAll(async () => {
+    await receipts.close();
+  });
 
   beforeEach(async () => {
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-hooks-")));
@@ -52,39 +68,9 @@ describe("ManagedWorktreeService repository code isolation", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("never executes repository hooks when creating a worktree with setup enabled", async () => {
-    const created = await service.create({ repoRoot: repo, name: "default", baseRef: "HEAD" });
-
-    await expect(fs.stat(created.path)).resolves.toBeDefined();
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when creating a worktree with setup disabled", async () => {
-    await service.create({
-      repoRoot: repo,
-      name: "without-setup",
-      baseRef: "HEAD",
-      runSetupScript: false,
-    });
-
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when snapshotting and removing a worktree", async () => {
-    const created = await service.create({ repoRoot: repo, name: "remove", baseRef: "HEAD" });
-    await fs.rm(sentinel, { force: true });
-
-    await expect(service.remove({ id: created.id, reason: "test" })).resolves.toMatchObject({
-      removed: true,
-      snapshotRef: expect.any(String),
-    });
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when restoring a removed worktree", async () => {
+  it("never executes repository hooks through creation, removal and restore", async () => {
     const created = await service.create({ repoRoot: repo, name: "restore", baseRef: "HEAD" });
     await service.remove({ id: created.id, reason: "test" });
-    await fs.rm(sentinel, { force: true });
 
     await expect(service.restore({ id: created.id })).resolves.toMatchObject({ id: created.id });
     await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
@@ -107,39 +93,56 @@ describe("ManagedWorktreeService repository code isolation", () => {
     await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("still executes the explicitly enabled worktree setup script", async () => {
-    const setup = path.join(repo, ".openclaw");
-    await fs.mkdir(setup);
-    await fs.writeFile(
-      path.join(setup, "worktree-setup.sh"),
-      "#!/bin/sh\nprintf setup > setup-ran.txt\n",
-      { mode: 0o755 },
-    );
+  it.each([true, false])(
+    "executes the repository setup script only when enabled (%s)",
+    async (runSetupScript) => {
+      const setup = path.join(repo, ".openclaw");
+      await fs.mkdir(setup);
+      await fs.writeFile(
+        path.join(setup, "worktree-setup.sh"),
+        "#!/bin/sh\nprintf setup > setup-ran.txt\n",
+        { mode: 0o755 },
+      );
 
-    const progress: string[] = [];
-    const created = await service.create({
-      repoRoot: repo,
-      name: "setup",
-      baseRef: "HEAD",
-      onProgress: (phase) => progress.push(phase),
-    });
+      const progress: string[] = [];
+      const created = await service.create({
+        repoRoot: repo,
+        name: "setup",
+        baseRef: "HEAD",
+        runSetupScript,
+        onProgress: (phase) => progress.push(phase),
+      });
 
-    await expect(fs.readFile(path.join(created.path, "setup-ran.txt"), "utf8")).resolves.toBe(
-      "setup",
-    );
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(progress).toEqual(["checkout", "setup"]);
-  });
+      const setupOutput = path.join(created.path, "setup-ran.txt");
+      if (runSetupScript) {
+        await expect(fs.readFile(setupOutput, "utf8")).resolves.toBe("setup");
+      } else {
+        await expect(fs.access(setupOutput)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(progress).toEqual(runSetupScript ? ["checkout", "setup"] : ["checkout"]);
+    },
+  );
 
-  it("stops setup and removes the unbound worktree when creation is aborted", async () => {
+  it("stops setup and removes the unbound worktree when creation is aborted", async ({
+    signal,
+  }) => {
     const setup = path.join(repo, ".openclaw");
     const pidFile = path.join(setup, "setup-pid");
-    const release = path.join(setup, "release");
     await fs.mkdir(setup);
     await fs.writeFile(
       path.join(setup, "worktree-setup.sh"),
-      '#!/bin/sh\nprintf "%s" "$$" > "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/setup-pid"\nwhile [ ! -f "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/release" ]; do sleep 0.05; done\n',
+      `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' "$OPENCLAW_SOURCE_TREE_PATH/.openclaw/setup.mjs"\n`,
       { mode: 0o755 },
+    );
+    await fs.writeFile(
+      path.join(setup, "setup.mjs"),
+      `import { writeFileSync } from 'node:fs';
+      ${fixtureReceiptClientSource(receipts.endpoint)}
+      writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      sendReceipt(${JSON.stringify(pidFile)}, 'ready');
+      setInterval(() => {}, 1000);
+      `,
     );
     const controller = new AbortController();
     const creation = service.create({
@@ -153,21 +156,30 @@ describe("ManagedWorktreeService repository code isolation", () => {
       (error: unknown) => error,
     );
     try {
-      await withTimeout(
-        waitForFixtureFile(pidFile, creation),
-        SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        "setup process readiness",
+      const hasPid = () => existsSync(pidFile) && readFileSync(pidFile, "utf8").length > 0;
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(pidFile, "ready"),
+          // A child can exit before its side-channel receipt reaches the test.
+          creation.then(
+            () => {
+              if (!hasPid()) {
+                throw new Error(`Child exited before writing ${pidFile}`);
+              }
+            },
+            (error: unknown) => {
+              if (!hasPid()) {
+                throw new Error(`Child failed before writing ${pidFile}`, { cause: error });
+              }
+            },
+          ),
+        ]),
+        signal,
       );
       const pid = Number.parseInt(await fs.readFile(pidFile, "utf8"), 10);
       expect(Number.isInteger(pid) && pid > 0).toBe(true);
       controller.abort(new Error("setup cancelled"));
-      expect(
-        await withTimeout(
-          outcome,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          "worktree cancellation",
-        ),
-      ).toBeInstanceOf(Error);
+      expect(await withinTest(outcome, signal)).toBeInstanceOf(Error);
       expect(() => process.kill(pid, 0)).toThrow();
       expect(await service.list()).toEqual([]);
       const worktrees = await execFileAsync("git", ["-C", repo, "worktree", "list", "--porcelain"]);
@@ -181,7 +193,10 @@ describe("ManagedWorktreeService repository code isolation", () => {
       ]);
       expect(branches.stdout.trim()).toBe("");
     } finally {
-      await fs.writeFile(release, "release setup if the regression failed\n");
+      controller.abort(new Error("release setup if the regression failed"));
+      if (existsSync(pidFile)) {
+        killPidIfAlive(Number.parseInt(readFileSync(pidFile, "utf8"), 10));
+      }
       await outcome;
     }
   });
@@ -202,7 +217,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
     expect(await service.list()).toEqual([]);
   });
 
-  it.each(["complete", "unwind", "creation-refused"] as const)(
+  it.each(["complete", "unwind"] as const)(
     "releases setup source before process settlement (%s)",
     async (mode) => {
       const script = path.join(repo, ".openclaw", "worktree-setup.sh");
@@ -224,7 +239,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
       const aborted = createDeferredCore();
       const completion = createDeferredCore<SpawnResult>();
       const unwindFailure = new Error("source scope unwind failed");
-      const creationFailure = new Error("worktree creation refused before setup");
       const completionFailure = new Error("accepted completion failed after cancellation");
       const events: string[] = [];
       let currentSource: SourceScope | undefined;
@@ -302,11 +316,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
           name: `handoff-${mode}`,
           baseRef: "HEAD",
           withSource,
-          commitGuard: () => {
-            if (mode === "creation-refused") {
-              throw creationFailure;
-            }
-          },
         }),
       );
       const outcome = creation.then(
@@ -331,13 +340,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
           label,
         );
       try {
-        if (mode === "creation-refused") {
-          await expect(waitForSetupSignal(dispatched.promise, "setup dispatch")).rejects.toBe(
-            creationFailure,
-          );
-          expect(events).toEqual([]);
-          return;
-        }
         await waitForSetupSignal(dispatched.promise, "setup dispatch");
         await waitForSetupSignal(released.promise, "setup source release");
         expect(creationSettled).toBe(false);
@@ -403,13 +405,13 @@ describe("ManagedWorktreeService repository code isolation", () => {
       let acknowledged: ManagedWorktreeRecord | undefined;
       const withSource: WorktreeSourceStage = async (run) => {
         const result = await run({ assertCurrent: () => {} });
-        const record = service.findLiveByOwner("session", ownerId);
+        const record = await service.findLiveByOwner("session", ownerId);
         if (!record) {
           return result;
         }
         acknowledged = { ...record };
         if (mode === "changed") {
-          updateRegistryWorktree(
+          await updateRegistryWorktree(
             { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
             record.id,
             { lastActiveAt: record.lastActiveAt + 1 },
@@ -429,14 +431,14 @@ describe("ManagedWorktreeService repository code isolation", () => {
       const published = acknowledged;
       if (mode === "new") {
         expect(failure).toBe(sourceFailure);
-        expect(service.findLiveByOwner("session", ownerId)).toBeUndefined();
+        expect(await service.findLiveByOwner("session", ownerId)).toBeUndefined();
         const retained = (await service.listRegistryRecords()).find(
           (record) => record.id === published.id,
         );
         expect(retained?.removedAt).toBeDefined();
         await expect(fs.stat(published.path)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
-        const current = service.findLiveByOwner("session", ownerId);
+        const current = await service.findLiveByOwner("session", ownerId);
         expect(current).toMatchObject({
           id: published.id,
           path: published.path,

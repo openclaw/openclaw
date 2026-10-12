@@ -83,15 +83,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     activeCliTools,
     () => cliLoopbackCorrelationOverflowed,
   );
-  const messagingToolSentTexts: string[] = [];
-  const messagingToolSentTextKeys = new Set<string>();
-  const messagingToolSentMediaUrls: string[] = [];
-  const messagingToolSentMediaUrlKeys = new Set<string>();
-  const messagingToolSentTargets: MessagingToolSend[] = [];
-  const messagingToolSentTargetKeys = new Set<string>();
+  const messagingToolSentTexts = new Set<string>();
+  const messagingToolSentMediaUrls = new Set<string>();
+  const messagingToolSentTargets = new Map<string, MessagingToolSend>();
   const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
-  const toolMediaUrls: string[] = [];
-  const toolMediaUrlKeys = new Set<string>();
+  const toolMediaUrls = new Set<string>();
   let toolAudioAsVoice = false;
   let toolTrustedLocalMedia = false;
   const acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
@@ -229,16 +225,15 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const commitMessagingToolResult = (params: {
     toolName: string;
     target?: MessagingToolSend;
-    args?: Record<string, unknown>;
+    args: Record<string, unknown>;
     result?: unknown;
-    isError?: boolean;
+    isError: boolean;
   }) => {
     const deliveryFact = readEmbeddedMessageDeliveryFact(
       readToolResultDetails(params.result)?.messageDelivery,
     );
     const delivered = deliveryFact
-      ? deliveryFact.status === "settled" &&
-        (params.isError !== true || deliveryFact.partialDelivery)
+      ? deliveryFact.status === "settled" && (!params.isError || deliveryFact.partialDelivery)
       : isDeliveredMessagingToolResult(params);
     if (!delivered) {
       return;
@@ -248,7 +243,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     if (deliveryFact?.sourceReplyDelivered === true) {
       sourceReplyDelivered = true;
     }
-    const toolArgs = params.args ?? {};
+    const toolArgs = params.args;
     const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
     const confirmedTarget =
@@ -275,16 +270,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       ? resolveMessageToolSourceReplyFinal(toolArgs)
       : undefined;
     if (isMessagingSend) {
-      appendUniqueCliMessagingEvidence(
-        messagingToolSentTexts,
-        messagingToolSentTextKeys,
-        content.text ? [content.text] : [],
-      );
-      appendUniqueCliMessagingEvidence(
-        messagingToolSentMediaUrls,
-        messagingToolSentMediaUrlKeys,
-        content.mediaUrls ?? [],
-      );
+      appendUniqueCliMessagingEvidence(messagingToolSentTexts, content.text ? [content.text] : []);
+      appendUniqueCliMessagingEvidence(messagingToolSentMediaUrls, content.mediaUrls ?? []);
     }
     if (deliveredCurrentSourceReply) {
       didDeliverSourceReplyViaMessageTool = true;
@@ -310,17 +297,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     };
     const evidenceKey = buildMessagingToolSendEvidenceKey(targetWithContent);
-    if (messagingToolSentTargetKeys.has(evidenceKey)) {
+    if (messagingToolSentTargets.has(evidenceKey)) {
       return;
     }
-    if (messagingToolSentTargets.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      const removed = messagingToolSentTargets.shift();
-      if (removed) {
-        messagingToolSentTargetKeys.delete(buildMessagingToolSendEvidenceKey(removed));
+    if (messagingToolSentTargets.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+      for (const oldest of messagingToolSentTargets.keys()) {
+        messagingToolSentTargets.delete(oldest);
+        break;
       }
     }
-    messagingToolSentTargets.push(targetWithContent);
-    messagingToolSentTargetKeys.add(evidenceKey);
+    messagingToolSentTargets.set(evidenceKey, targetWithContent);
   };
   const isPreparedInternalSourceReply = async (call: McpLoopbackToolCallStart) => {
     if (
@@ -454,7 +440,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         }
         const toolName = stripOpenClawMcpToolPrefix(call.toolName);
         const acceptedSessionSpawn =
-          toolName === "sessions_spawn" && call.outcome === "completed" && "result" in call
+          toolName === "sessions_spawn" && call.outcome === "completed"
             ? normalizeAcceptedSessionSpawnResult(call.result)
             : null;
         if (
@@ -471,12 +457,12 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
             result: "result" in call ? call.result : undefined,
             isError: call.outcome !== "completed",
           });
-        } else if (call.outcome === "completed" && "result" in call) {
+        } else if (call.outcome === "completed") {
           const artifact = extractToolResultMediaArtifact(call.result);
           const mediaUrls = artifact
             ? filterToolResultMediaUrls(toolName, artifact.mediaUrls, call.result)
             : [];
-          appendUniqueCliMessagingEvidence(toolMediaUrls, toolMediaUrlKeys, mediaUrls);
+          appendUniqueCliMessagingEvidence(toolMediaUrls, mediaUrls);
           if (mediaUrls.length > 0) {
             toolAudioAsVoice ||= artifact?.audioAsVoice === true;
             toolTrustedLocalMedia ||= artifact?.trustedLocalMedia === true;
@@ -510,10 +496,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       const pending = pendingCandidates[0];
       if (hasAssociatedPeer || pendingCandidates.length > 1 || pending?.ambiguous) {
         markCliLoopbackSignatureAmbiguous(admittedCall);
-        if (pending) {
-          bindCliLoopbackCall(pending, event.toolCallId, activeTool);
-        }
-      } else if (pendingCandidates.length === 1 && pending) {
+      }
+      if (pending) {
         bindCliLoopbackCall(pending, event.toolCallId, activeTool);
       }
     }
@@ -552,9 +536,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     if (pending) {
       pendingMessagingCalls.delete(event.toolCallId);
       commitMessagingToolResult({
-        toolName: pending.toolName,
-        target: pending.target,
-        args: pending.args,
+        ...pending,
         result: event.result,
         isError: event.isError,
       });
@@ -648,11 +630,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool,
     sourceReplyDelivered,
-    messagingToolSentTexts,
-    messagingToolSentMediaUrls,
-    messagingToolSentTargets,
+    messagingToolSentTexts: [...messagingToolSentTexts],
+    messagingToolSentMediaUrls: [...messagingToolSentMediaUrls],
+    messagingToolSentTargets: [...messagingToolSentTargets.values()],
     messagingToolSourceReplyPayloads,
-    toolMediaUrls,
+    toolMediaUrls: [...toolMediaUrls],
     toolAudioAsVoice,
     toolTrustedLocalMedia,
     acceptedSessionSpawns,

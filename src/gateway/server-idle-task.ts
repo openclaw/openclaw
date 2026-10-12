@@ -1,4 +1,5 @@
-import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import { isAbortError } from "../infra/abort-signal.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
@@ -18,34 +19,18 @@ export function scheduleGatewayIdleTask(params: {
   repeatDelayMs?: number;
   isClosing: () => boolean;
   isBusy: () => boolean;
-  run: () => Promise<void>;
+  run: (signal: AbortSignal) => Promise<void>;
   log: { warn: (message: string) => void };
   errorMessage: string;
 }): GatewayIdleTaskHandle {
-  const { scheduler } = params;
-  let stopped = false;
-  let job: GatewayScheduledJob | undefined;
-  let running: Promise<void> | undefined;
-  const isClosing = () => stopped || params.isClosing() || getGatewayRestartDrainSignal().aborted;
-  const run = async () => {
-    if (isClosing()) {
-      return;
-    }
-    // Newly admitted request work takes priority over maintenance.
-    if (params.isBusy()) {
-      schedule(params.retryDelayMs);
-    } else {
-      await params.run();
-      if (params.repeatDelayMs !== undefined) {
-        schedule(params.repeatDelayMs);
-      }
-    }
-  };
+  const scheduler = params.scheduler.scope();
+  const isClosing = () =>
+    scheduler.signal.aborted || params.isClosing() || getGatewayRestartDrainSignal().aborted;
   const schedule = (delayMs: number) => {
     if (isClosing()) {
       return;
     }
-    job = scheduler.schedule({
+    scheduler.schedule({
       id: params.id,
       delayMs,
       run: () => {
@@ -61,28 +46,31 @@ export function scheduleGatewayIdleTask(params: {
           schedule(params.retryDelayMs);
           return undefined;
         }
-        // Publish the join before callbacks can synchronously initiate shutdown.
-        running = Promise.resolve()
-          .then(() => admission.run(run))
+        return admission
+          .run(() =>
+            params.run(AbortSignal.any([scheduler.signal, getGatewayRestartDrainSignal()])),
+          )
+          .then(() => {
+            if (params.repeatDelayMs !== undefined) {
+              schedule(params.repeatDelayMs);
+            }
+          })
           .catch((error: unknown) => {
-            if (!isGatewayRestartDrainError(error)) {
+            if (
+              !isGatewayRestartDrainError(error) &&
+              !(scheduler.signal.aborted && isAbortError(error))
+            ) {
               params.log.warn(`${params.errorMessage}: ${String(error)}`);
             }
           })
           .finally(() => {
             admission.release();
-            running = undefined;
           });
-        return running;
       },
     });
   };
   schedule(params.delayMs);
   return {
-    stop: () => {
-      stopped = true;
-      job?.cancel();
-      return running;
-    },
+    stop: scheduler.stop,
   };
 }

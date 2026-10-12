@@ -64,7 +64,7 @@ const buildModelsProviderDataHoisted = vi.hoisted(() =>
     modelCatalog: [],
   })),
 );
-const listSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(() => []));
+const prepareSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(async () => []));
 const createChannelMessageReplyPipelineHoisted = vi.hoisted(() =>
   vi.fn(() => ({
     responsePrefix: undefined,
@@ -99,13 +99,7 @@ const generateTopicLabelHoisted = vi.hoisted(() => vi.fn());
 const describeStickerImageHoisted = vi.hoisted(() =>
   vi.fn(async (): Promise<string | null> => null),
 );
-const loadModelCatalogHoisted = vi.hoisted(() => vi.fn(async () => ({})));
-const findModelInCatalogHoisted = vi.hoisted(() => vi.fn(() => null));
-const modelSupportsVisionHoisted = vi.hoisted(() => vi.fn(() => false));
 const resolveAgentDirHoisted = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
-const resolveDefaultModelForAgentHoisted = vi.hoisted(() =>
-  vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
-);
 const resolveHumanDelayConfigHoisted = vi.hoisted(() => vi.fn());
 const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
   vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
@@ -129,7 +123,7 @@ const readChannelAllowFromStore = readChannelAllowFromStoreHoisted;
 const upsertChannelPairingRequest = upsertChannelPairingRequestHoisted;
 const enqueueSystemEvent = enqueueSystemEventHoisted;
 const buildModelsProviderData = buildModelsProviderDataHoisted;
-const listSkillCommandsForAgents = listSkillCommandsForAgentsHoisted;
+const prepareSkillCommandsForAgents = prepareSkillCommandsForAgentsHoisted;
 const createChannelMessageReplyPipeline = createChannelMessageReplyPipelineHoisted;
 const wasSentByBot = wasSentByBotHoisted;
 export const appendAssistantMirrorMessageByIdentity = appendAssistantMirrorMessageByIdentityHoisted;
@@ -139,11 +133,7 @@ export const readLatestAssistantTextByIdentity = readLatestAssistantTextByIdenti
 const resolveStorePath = resolveStorePathHoisted;
 const generateTopicLabel = generateTopicLabelHoisted;
 const describeStickerImage = describeStickerImageHoisted;
-const loadModelCatalog = loadModelCatalogHoisted;
-const findModelInCatalog = findModelInCatalogHoisted;
-const modelSupportsVision = modelSupportsVisionHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
-const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
 const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
 const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
@@ -284,21 +274,22 @@ vi.mock("./send.js", async () => ({
   reactMessageTelegram: reactMessageTelegramHoisted,
 }));
 
+// mock-isolation: Keep session database startup outside the command fixture.
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel: generateTopicLabelHoisted,
-  getSessionEntry: getSessionEntryHoisted,
+  getSessionEntryAsync: async (...args: unknown[]) => getSessionEntryHoisted(...args),
   getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog: findModelInCatalogHoisted,
-  loadPreparedModelCatalog: loadModelCatalogHoisted,
-  modelSupportsVision: modelSupportsVisionHoisted,
   resolveAgentDir: resolveAgentDirHoisted,
-  resolveDefaultModelForAgent: resolveDefaultModelForAgentHoisted,
   resolveHumanDelayConfig: resolveHumanDelayConfigHoisted,
+}));
+
+vi.mock("./sticker-vision.runtime.js", () => ({
+  resolveStickerVisionSupportRuntime: vi.fn(async () => false),
 }));
 
 vi.mock("./sticker-cache.js", () => ({
@@ -311,7 +302,7 @@ export let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").d
 export const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
-  getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
+  getSessionEntryAsync: async (params) => getSessionEntry(params),
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -320,8 +311,8 @@ export const telegramDepsForTest: TelegramBotDeps = {
   dispatchReplyWithBufferedBlockDispatcher:
     dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
-  listSkillCommandsForAgents:
-    listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
+  prepareSkillCommandsForAgents:
+    prepareSkillCommandsForAgents as TelegramBotDeps["prepareSkillCommandsForAgents"],
   createChannelMessageReplyPipeline:
     createChannelMessageReplyPipeline as TelegramBotDeps["createChannelMessageReplyPipeline"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
@@ -360,7 +351,6 @@ async function resetTelegramDispatchTestState() {
   getSessionEntry.mockReset();
   getAgentScopedMediaLocalRoots.mockClear();
   resolveChunkMode.mockClear();
-  resolveDefaultModelForAgent.mockReset();
   loadConfig.mockReturnValue({});
   dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
     queuedFinal: false,
@@ -391,7 +381,7 @@ async function resetTelegramDispatchTestState() {
     created: true,
   });
   enqueueSystemEvent.mockReset().mockResolvedValue(undefined);
-  listSkillCommandsForAgents.mockReset().mockReturnValue([]);
+  prepareSkillCommandsForAgents.mockReset().mockResolvedValue([]);
   createChannelMessageReplyPipeline.mockReturnValue({
     responsePrefix: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),
@@ -412,14 +402,7 @@ async function resetTelegramDispatchTestState() {
   );
   generateTopicLabel.mockReset().mockResolvedValue("Topic label");
   describeStickerImage.mockReset().mockResolvedValue(null);
-  loadModelCatalog.mockReset().mockResolvedValue({});
-  findModelInCatalog.mockReset().mockReturnValue(null);
-  modelSupportsVision.mockReset().mockReturnValue(false);
   resolveAgentDir.mockReset().mockReturnValue("/tmp/agent");
-  resolveDefaultModelForAgent.mockReturnValue({
-    provider: "openai",
-    model: "gpt-test",
-  });
   resolveHumanDelayConfig.mockReset().mockReturnValue(undefined);
   getGlobalHookRunner.mockReset().mockReturnValue(null);
 }
@@ -516,7 +499,6 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     sendRecordVoice: vi.fn(),
     sendChatActionHandler: { sendChatAction: vi.fn(async () => undefined) },
     ackReactionPromise: null,
-    reactionApi: null,
   } as unknown as TelegramMessageContext;
   base.turn = {
     // Prepared turns also read pending-delivery state before entering the mocked producer.

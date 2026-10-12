@@ -1,4 +1,10 @@
 import type { App } from "@slack/bolt";
+import {
+  WebAPIHTTPError,
+  WebAPIPlatformError,
+  WebAPIRateLimitedError,
+  WebAPIRequestError,
+} from "@slack/web-api";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
@@ -30,7 +36,7 @@ import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeSlackSlug } from "./allow-list.js";
 import { createSlackAssistantThreadContextStore } from "./assistant-thread-context.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigEntries } from "./channel-config.js";
-import { normalizeSlackChannelType } from "./channel-type.js";
+import { normalizeSlackChannelType, parseSlackChannelType } from "./channel-type.js";
 import type { SlackIdentityHealth, SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
@@ -47,7 +53,6 @@ import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 export { buildSlackAssistantThreadMetadata } from "./assistant-thread-context.js";
 export type { SlackAssistantThreadContext } from "./assistant-thread-context.js";
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
-export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
 
 type SlackChannelCacheEntry = {
   info: SlackChannelInfo;
@@ -59,7 +64,41 @@ type SlackChannelInfo = {
   type?: SlackMessageEvent["channel_type"];
   topic?: string;
   purpose?: string;
+  lookupFailureCategory?: "rate_limited" | "not_found" | "permission" | "network" | "other";
 };
+
+function classifySlackChannelLookupFailure(
+  error: unknown,
+): NonNullable<SlackChannelInfo["lookupFailureCategory"]> {
+  if (error instanceof WebAPIRateLimitedError) {
+    return "rate_limited";
+  }
+  if (error instanceof WebAPIHTTPError) {
+    return error.statusCode === 429
+      ? "rate_limited"
+      : error.statusCode === 404
+        ? "not_found"
+        : "other";
+  }
+  if (error instanceof WebAPIPlatformError) {
+    if (error.data.error === "ratelimited") {
+      return "rate_limited";
+    }
+    if (error.data.error === "channel_not_found" || error.data.error === "not_found") {
+      return "not_found";
+    }
+    if (error.data.error === "missing_scope" || error.data.error === "not_in_channel") {
+      return "permission";
+    }
+  }
+  if (error instanceof WebAPIRequestError) {
+    // Slack Web API wraps an exhausted 429 retry as a request error.
+    return /^A rate limit was exceeded \(url: .+, retry-after: \d+\)$/.test(error.original.message)
+      ? "rate_limited"
+      : "network";
+  }
+  return "other";
+}
 
 type SlackChannelPolicyContext = {
   accountId: string;
@@ -181,14 +220,8 @@ function createSlackMonitorContextFields(
     eventScope?: SlackEventScope,
   ) => {
     const id = normalizeOptionalString(channelId);
-    const normalizedType = normalizeOptionalString(channelType)?.toLowerCase();
-    if (
-      !id ||
-      (normalizedType !== "im" &&
-        normalizedType !== "mpim" &&
-        normalizedType !== "channel" &&
-        normalizedType !== "group")
-    ) {
+    const normalizedType = parseSlackChannelType(channelType);
+    if (!id || !normalizedType) {
       return;
     }
     const cacheKey = scopedKey(id, eventScope);
@@ -259,8 +292,11 @@ function createSlackMonitorContextFields(
       };
       writeLruMapEntry(channelCache, cacheKey, entry, SLACK_CHANNEL_CACHE_MAX_ENTRIES);
       return entry.info;
-    } catch {
-      return cached?.info ?? {};
+    } catch (error) {
+      return {
+        ...cached?.info,
+        lookupFailureCategory: classifySlackChannelLookupFailure(error),
+      };
     }
   };
 

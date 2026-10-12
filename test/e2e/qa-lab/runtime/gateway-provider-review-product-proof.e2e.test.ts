@@ -5,6 +5,7 @@ import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { isInternalRuntimeContextCarrierText } from "../../../../extensions/qa-lab/api.js";
 import { buildDeviceAuthPayloadV3 } from "../../../../packages/gateway-client/src/device-auth.js";
 import { rawDataToString } from "../../../../packages/gateway-client/src/websocket-data.js";
 import type { ResponseFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
@@ -54,7 +55,7 @@ type SessionDescription = {
   };
 };
 
-function userTexts(body: ProviderRequest): string[] {
+function allUserTexts(body: ProviderRequest): string[] {
   return body.input
     .filter((item) => item.role === "user")
     .map((item) =>
@@ -62,6 +63,11 @@ function userTexts(body: ProviderRequest): string[] {
         ? item.content
         : (item.content ?? []).map((part) => part.text ?? "").join(""),
     );
+}
+
+function userTexts(body: ProviderRequest): string[] {
+  // The HTTP payload has serialized carrier text, not the internal carrier marker.
+  return allUserTexts(body).filter((text) => !isInternalRuntimeContextCarrierText(text));
 }
 
 async function connectOperator(gateway: OpenClawTestInstance, email: string, signal: AbortSignal) {
@@ -205,21 +211,35 @@ describe("Gateway provider review product proof", () => {
         requests.push(body);
         const text = userTexts(body).at(-1) ?? "";
         if (text.includes(SEED_ALLOWED) || text.includes(SEED_REVOKED)) {
-          response.writeHead(403, { "content-type": "application/json" }).end(
-            JSON.stringify({
-              error: {
-                code: "misalignment_policy_violation",
-                type: "invalid_request_error",
-                message: "Synthetic provider pause.",
-                misalignment: {
-                  detailed_explanation: "Synthetic review findings.",
-                  steer: {
-                    message: text.includes(SEED_REVOKED) ? REVOKED_STEER : ALLOWED_STEER,
-                  },
+          const statusCode = 403;
+          const pauseResponse = {
+            error: {
+              code: "misalignment_policy_violation",
+              type: "invalid_request_error",
+              message: "Synthetic provider pause.",
+              misalignment: {
+                detailed_explanation: "Synthetic review findings.",
+                steer: {
+                  message: text.includes(SEED_REVOKED) ? REVOKED_STEER : ALLOWED_STEER,
                 },
               },
+            },
+          };
+          console.log(
+            "[provider-review-runtime-proof]",
+            JSON.stringify({
+              phase: "provider-review-pause",
+              seed: text.includes(SEED_REVOKED) ? "revoked" : "allowed",
+              httpStatus: statusCode,
+              errorCode: pauseResponse.error.code,
+              runtimeCarriersSkipped: allUserTexts(body).filter(isInternalRuntimeContextCarrierText)
+                .length,
+              selectedSeed: text.includes(SEED_ALLOWED) || text.includes(SEED_REVOKED),
             }),
           );
+          response
+            .writeHead(statusCode, { "content-type": "application/json" })
+            .end(JSON.stringify(pauseResponse));
           return;
         }
         writeAcceptedResponse(response);
@@ -441,12 +461,26 @@ describe("Gateway provider review product proof", () => {
             idempotencyKey: randomUUID(),
           })) as { runId: string; status: string };
           expect(started.status).toBe("started");
-          await expect(wait(started.runId)).resolves.toMatchObject({ status: "error" });
+          const pauseResult = (await wait(started.runId)) as { status?: string };
+          expect(pauseResult).toMatchObject({ status: "error" });
           const { session } = await describeSession(owner, sessionKey);
           expect(session).toMatchObject({
             sharingRole: "owner",
             providerReview: { continuationMessage: steer, canContinue: true },
           });
+          console.log(
+            "[provider-review-runtime-proof]",
+            JSON.stringify({
+              phase: "gateway-review-seed-paused",
+              gatewayRunStatus: pauseResult.status,
+              reviewPersisted: Boolean(session.providerReview),
+              canContinue: session.providerReview?.canContinue,
+              expectedContinuationReceived: session.providerReview?.continuationMessage === steer,
+              runtimeCarriersSkipped: allUserTexts(requests.at(-1)!).filter(
+                isInternalRuntimeContextCarrierText,
+              ).length,
+            }),
+          );
           return {
             sessionKey,
             sessionId: session.sessionId,

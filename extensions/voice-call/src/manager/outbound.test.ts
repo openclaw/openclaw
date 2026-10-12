@@ -192,6 +192,33 @@ describe("voice-call outbound helpers", () => {
     });
   });
 
+  it("holds Twilio notify calls silently until AMD classification", async () => {
+    const initiate = vi.fn(async (_input: unknown) => ({
+      providerCallId: "CA-notify",
+      status: "initiated",
+    }));
+    const ctx = {
+      ...createDialContext({ voicemail: { detection: "twilio", onMachine: "leave-message" } }),
+      provider: { name: "twilio", initiateCall: initiate },
+    };
+    await initiateCall(ctx as never, "+14155550123", undefined, {
+      mode: "notify",
+      message: "Your parcel is ready.",
+    });
+    expect(initiate.mock.calls[0]?.[0]).toMatchObject({
+      inlineTwiml: '<Response><Pause length="60"/></Response>',
+    });
+    const call = [...ctx.activeCalls.values()][0];
+    expect(call?.metadata?.pendingNotifyAmd).toBe(true);
+    const playTts = vi.fn(async () => {});
+    getCallByProviderCallIdMock.mockReturnValue(call);
+    await speakInitialMessage(
+      { ...ctx, initialMessageInFlight: new Set(), provider: { name: "twilio", playTts } } as never,
+      "CA-notify",
+    );
+    expect(playTts).not.toHaveBeenCalled();
+  });
+
   it("initiates notify-mode calls with inline TwiML and records provider ids", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
@@ -245,6 +272,35 @@ describe("voice-call outbound helpers", () => {
     );
     expect(ctx.activeCalls.get(result.callId)?.agentId).toBe("operator");
   });
+
+  it.each(["off", "twilio"] as const)(
+    "validates a capped brief and records voicemail ownership with detection=%s",
+    async (detection) => {
+      const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-brief" }));
+      const ctx = {
+        ...createDialContext({
+          maxDurationSeconds: 300,
+          voicemail: { detection, onMachine: "leave-message" },
+        }),
+        provider: { name: "mock", initiateCall: initiateProviderCall },
+      };
+      const brief = { task: "Book a plumber", maxDurationSeconds: 600 };
+      const result = await initiateCall(ctx as never, "+14155550123", undefined, { brief });
+      expect(ctx.activeCalls.get(result.callId)?.metadata).toMatchObject({
+        brief,
+        maxDurationSeconds: 300,
+      });
+      expect(ctx.activeCalls.get(result.callId)?.metadata?.voicemailManagedByHost).toBe(
+        detection === "twilio" ? true : undefined,
+      );
+      const invalid = await initiateCall(ctx as never, "+14155550123", undefined, {
+        brief: { task: "x".repeat(2001) },
+      });
+      expect(invalid.success).toBe(false);
+      expect(invalid.error).toContain("brief");
+      expect(initiateProviderCall).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("uses the per-call agent for explicit session normalization", async () => {
     const ctx = {
@@ -642,12 +698,9 @@ describe("voice-call outbound helpers", () => {
       expect(endedAt).toBeLessThanOrEqual(afterEndMs);
     }
     expect(call.state).toBe("hangup-bot");
-    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(
-      { maxDurationTimers: ctx.maxDurationTimers },
-      "call-1",
-    );
+    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(ctx, "call-1");
     expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
-      { transcriptWaiters: ctx.transcriptWaiters },
+      ctx,
       "call-1",
       "Call ended: hangup-bot",
     );
@@ -676,11 +729,7 @@ describe("voice-call outbound helpers", () => {
       expect(endedAt).toBeLessThanOrEqual(afterEndMs);
     }
     expect(call.state).toBe("timeout");
-    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
-      { transcriptWaiters: ctx.transcriptWaiters },
-      "call-1",
-      "Call ended: timeout",
-    );
+    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(ctx, "call-1", "Call ended: timeout");
   });
 
   it("handles missing, disconnected, and already-ended calls", async () => {

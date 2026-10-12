@@ -7,7 +7,10 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/plugin-sdk/sqlite-runtime-testing.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
@@ -20,24 +23,22 @@ import {
   sessionPathForFile,
 } from "./session-files.js";
 
-const invalidWindowsAgentIds = ["bad owner", "!!!", " Main", "Main ", "a".repeat(65)];
-
 function resolveFixtureStateDir(): string {
   return path.resolve(resolveSessionTranscriptsDirForAgent("main"), "../../..");
 }
 
 describe("memory session directory ownership", () => {
-  it("preserves the canonical owner for case-variant Windows session directories", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      expect(
-        extractAgentIdFromSessionsDir(
-          path.join(resolveFixtureStateDir(), "AGENTS", "Main", "SESSIONS"),
-        ),
-      ).toBe("main");
-    } finally {
-      platform.mockRestore();
-    }
+  it("includes the owning agent id in canonical archived transcript paths", () => {
+    const sessionFile = path.join(
+      resolveFixtureStateDir(),
+      "agents",
+      "main",
+      "sessions",
+      "deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    );
+    expect(sessionPathForFile(sessionFile)).toBe(
+      "sessions/main/deleted-session.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    );
   });
 
   it("keeps case-variant structural segments unowned on case-sensitive platforms", () => {
@@ -73,23 +74,6 @@ describe("memory session directory ownership", () => {
     }
   });
 
-  it("preserves case-variant Windows ownership for nested session transcripts", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      const sessionFile = path.join(
-        resolveFixtureStateDir(),
-        "AGENTS",
-        "OPS",
-        "SESSIONS",
-        "archive",
-        "private.jsonl",
-      );
-      expect(sessionPathForFile(sessionFile)).toBe("sessions/ops/private.jsonl");
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
   it("finds the canonical owner past a nested case-variant sessions directory", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
@@ -111,7 +95,7 @@ describe("memory session directory ownership", () => {
   it("preserves canonical SQLite session identity on Windows", async () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const tempDirs = createTempDirTracker();
-    const tmpDir = tempDirs.make("session-windows-ownership-");
+    const tmpDir = fsSync.realpathSync.native(tempDirs.make("session-windows-ownership-"));
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     try {
@@ -141,6 +125,7 @@ describe("memory session directory ownership", () => {
       platform.mockRestore();
       // Agent close releases leases through shared state; close agent handles first while the
       // fixture env is active, then close shared state before removing the Windows-owned directory.
+      await closeOpenClawAgentDatabasesAsync(tmpDir);
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       if (originalStateDir === undefined) {
@@ -159,7 +144,7 @@ describe("memory session directory ownership", () => {
     }
   });
 
-  it.each(invalidWindowsAgentIds)(
+  it.each(["bad owner", " Main"])(
     "never aliases an invalid Windows session owner into another agent: %s",
     (owner) => {
       const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");

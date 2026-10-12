@@ -12,6 +12,10 @@ import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  clampPositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DEFAULT_E2E_BARE_IMAGE,
@@ -65,7 +69,6 @@ const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
 // Private QA subprocess contract. Ordinary lane/CLI failures remain 1; 130/143
 // acknowledge joined signal cleanup. Only failed owner cleanup uses 2.
 const CLEANUP_FAILURE_EXIT_CODE = 2;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const CANDIDATE_ENV_KEYS =
@@ -147,8 +150,7 @@ type ForegroundEntry = {
   command: string;
   env?: NodeJS.ProcessEnv;
   label: string;
-  phaseDetails?: Record<string, unknown>;
-  phases?: Array<Record<string, unknown>>;
+  phaseDetails: Record<string, unknown>;
 };
 
 type ShutdownSignal = "SIGINT" | "SIGKILL" | "SIGTERM";
@@ -254,38 +256,8 @@ function parseBool(raw: string | undefined, fallback: boolean) {
   return !/^(?:0|false|no)$/i.test(raw);
 }
 
-function normalizeReleaseProfileEnv(raw: string | undefined) {
-  const profile = raw?.trim();
-  if (!profile) {
-    return normalizeReleaseProfile(undefined);
-  }
-  if (profile === "minimum" || profile === "beta" || profile === "stable" || profile === "full") {
-    return normalizeReleaseProfile(profile);
-  }
-  throw new Error(
-    `release profile must be one of: beta, stable, full. Got: ${JSON.stringify(raw)}`,
-  );
-}
-
-function numericTimerValueMs(valueMs: unknown) {
-  const value = Number(valueMs);
-  return Number.isFinite(value) ? Math.floor(value) : undefined;
-}
-
-function resolveDockerSchedulerTimeoutMs(
-  valueMs: unknown,
-  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
-) {
-  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
-  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
-  const value = numericTimerValueMs(valueMs);
-  if (value === undefined || value <= 0) {
-    return undefined;
-  }
-  return resolveDockerSchedulerTimeoutMs(value);
+  return clampPositiveTimerTimeoutMs(Math.floor(Number(valueMs)));
 }
 
 function resourceLimitsSummary(resourceLimits: Record<string, number>) {
@@ -507,29 +479,16 @@ export function githubWorkflowRerunCommand(
   if (allowUnreleasedChangelog) {
     fields.push("-f", "allow_unreleased_changelog=true");
   }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
-    );
-  }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
-    );
-  }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_scenarios=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
-    );
-  }
-  if (bareImage) {
-    fields.push("-f", `docker_e2e_bare_image=${shellQuote(bareImage)}`);
-  }
-  if (functionalImage) {
-    fields.push("-f", `docker_e2e_functional_image=${shellQuote(functionalImage)}`);
+  for (const [name, value] of [
+    ["published_upgrade_survivor_baseline", env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
+    ["published_upgrade_survivor_baselines", env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
+    ["published_upgrade_survivor_scenarios", env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
+    ["docker_e2e_bare_image", bareImage],
+    ["docker_e2e_functional_image", functionalImage],
+  ]) {
+    if (value) {
+      fields.push("-f", `${name}=${shellQuote(value)}`);
+    }
   }
   if (bareImage || functionalImage) {
     fields.push("-f", "shared_image_policy=existing-only");
@@ -625,9 +584,6 @@ async function writeTimingStore(timingStore: TimingStore, results: LaneResult[])
     version: 1,
   };
   for (const result of results) {
-    if (!result || typeof result.elapsedSeconds !== "number") {
-      continue;
-    }
     next.lanes[result.name] = {
       durationSeconds: result.elapsedSeconds,
       status: result.status,
@@ -686,70 +642,24 @@ export async function writeRunSummary(
   console.log(`==> Docker run summary: ${file}`);
 }
 
-async function commitJoinedSummary(
-  logDir: string,
-  summary: () => RunSummary,
-  env: NodeJS.ProcessEnv,
-) {
+function commitJoinedSummary(logDir: string, summary: RunSummary, env: NodeJS.ProcessEnv) {
   const temporary = path.join(logDir, `.summary-${randomUUID()}.tmp`);
-  const payload = { ...runSummaryPayload(summary(), env), cleanup: { joined: true } };
-  let owned = false;
-  let failure: { error: unknown } | undefined;
+  const payload = { ...runSummaryPayload(summary, env), cleanup: { joined: true } };
+  const descriptor = fs.openSync(temporary, "wx");
   try {
-    const handle = await open(temporary, "wx");
-    owned = true;
-    const errors: unknown[] = [];
-    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`).catch((error: unknown) => {
-      errors.push(error);
-    });
-    await handle.close().catch((error: unknown) => {
-      errors.push(error);
-    });
-    if (errors.length > 0) {
-      throw errors.length === 1
-        ? errors[0]
-        : new AggregateError(errors, "Docker summary staging failed", { cause: errors[0] });
-    }
-    await activeChildrenShutdownPromise;
-    if (!requiredPublicationFailed && cleanupFailures.length === 0 && activeChildren.size === 0) {
-      // Include every handled signal before promotion without yielding between the
-      // final verdict and rename. Later signals affect exit, not the committed report.
-      const latest = runSummaryPayload(summary(), env);
-      fs.writeFileSync(
-        path.join(logDir, "failures.json"),
-        `${JSON.stringify(failureIndexPayload(latest, env), null, 2)}\n`,
-      );
-      if (latest.status !== payload.status) {
-        fs.writeFileSync(
-          temporary,
-          `${JSON.stringify({ ...latest, cleanup: { joined: true } }, null, 2)}\n`,
-        );
-      }
-      fs.renameSync(temporary, path.join(logDir, "summary.json"));
-      owned = false;
-    }
-  } catch (error) {
-    requiredPublicationFailed = true;
-    failure = { error };
-  }
-  if (owned) {
     try {
-      await fs.promises.rm(temporary, { force: true });
-    } catch (cleanupError) {
-      requiredPublicationFailed = true;
-      failure = {
-        error: failure
-          ? new AggregateError(
-              [failure.error, cleanupError],
-              "Docker summary staging cleanup failed",
-              { cause: failure.error },
-            )
-          : cleanupError,
-      };
+      fs.writeFileSync(descriptor, `${JSON.stringify(payload, null, 2)}\n`);
+    } finally {
+      fs.closeSync(descriptor);
     }
-  }
-  if (failure) {
-    throw failure.error;
+    fs.writeFileSync(
+      path.join(logDir, "failures.json"),
+      `${JSON.stringify(failureIndexPayload(payload, env), null, 2)}\n`,
+    );
+    fs.renameSync(temporary, path.join(logDir, "summary.json"));
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
   }
 }
 
@@ -933,7 +843,7 @@ export function runShellCommand({
   return new Promise<ShellCommandResult>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
     const resolvedNoOutputTimeoutMs = resolveOptionalTimerTimeoutMs(noOutputTimeoutMs);
-    const resolvedTimeoutKillGraceMs = resolveDockerSchedulerTimeoutMs(
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );
@@ -1103,7 +1013,7 @@ export function runShellCommand({
         resolve({
           signal,
           status: exitCode,
-          timedOut,
+          timedOut: timedOut || exitCode === 124,
           noOutputTimedOut,
           ...(cancelled ? { cancelled: true as const } : {}),
         });
@@ -1144,7 +1054,7 @@ export function runShellCaptureCommand({
   }
   return new Promise<ShellCaptureResult>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
-    const resolvedTimeoutKillGraceMs = resolveDockerSchedulerTimeoutMs(
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );
@@ -1220,7 +1130,7 @@ export function runShellCaptureCommand({
           stderrTruncated,
           stdout,
           stdoutTruncated,
-          timedOut,
+          timedOut: timedOut || exitCode === 124,
           ...(cancelled ? { cancelled: true as const } : {}),
         });
       };
@@ -1277,19 +1187,17 @@ export async function runCleanupSmokePhase(
   return failure;
 }
 
-async function runForegroundGroup(entries: ForegroundEntry[], env: NodeJS.ProcessEnv) {
+async function runForegroundGroup(
+  entries: ForegroundEntry[],
+  env: NodeJS.ProcessEnv,
+  phases: Array<Record<string, unknown>>,
+) {
   const failures: Array<{ entry: ForegroundEntry; error: unknown }> = [];
   for (const entry of entries) {
     try {
-      const { command, label, phaseDetails = {}, phases } = entry;
-      const entryEnv = { ...env, ...entry.env };
-      if (phases) {
-        await runPhase(phases, `build:${label}`, phaseDetails, async () => {
-          await runForeground(label, command, entryEnv);
-        });
-      } else {
-        await runForeground(label, command, entryEnv);
-      }
+      await runPhase(phases, `build:${entry.label}`, entry.phaseDetails, () =>
+        runForeground(entry.label, entry.command, { ...env, ...entry.env }),
+      );
     } catch (error) {
       if (hasUnjoinedWork(error) && failures.length === 0) {
         throw error;
@@ -1497,10 +1405,9 @@ function laneEnv(
   poolLane: DockerE2eLane,
   baseEnv: NodeJS.ProcessEnv,
   logDir: string,
-  cacheKey: string | undefined,
 ): DockerLaneEnv {
   const name = poolLane.name;
-  const cacheName = cacheKey || name;
+  const cacheName = poolLane.cacheKey || name;
   const env: DockerLaneEnv = {
     ...baseEnv,
     OPENCLAW_DOCKER_CACHE_HOME_DIR: path.resolve(
@@ -1531,7 +1438,7 @@ async function runLane(
   const timeoutMs = lane.timeoutMs ?? fallbackTimeoutMs;
   const noOutputTimeoutMs = lane.noOutputTimeoutMs;
   const logFile = path.join(logDir, `${name}.log`);
-  const env = laneEnv(lane, baseEnv, logDir, lane.cacheKey);
+  const env = laneEnv(lane, baseEnv, logDir);
   const command = prepareHarnessCommand(lane.command, env);
   await mkdir(env.OPENCLAW_DOCKER_CLI_TOOLS_DIR, { recursive: true });
   await mkdir(env.OPENCLAW_DOCKER_CACHE_HOME_DIR, { recursive: true });
@@ -1872,21 +1779,21 @@ function throwIfSchedulerStopping(result?: Pick<ShellCommandResult, "status" | "
   }
 }
 
-function shellCommandSkippedForShutdown(signal: ShutdownSignal | null = null) {
+function shellCommandSkippedForShutdown() {
   return {
     cancelled: true as const,
     noOutputTimedOut: false,
-    signal,
+    signal: null,
     status: 143,
     timedOut: false,
   };
 }
 
-function shellCaptureSkippedForShutdown(label: string, signal: ShutdownSignal | null = null) {
+function shellCaptureSkippedForShutdown(label: string) {
   return {
     cancelled: true as const,
     label,
-    signal,
+    signal: null,
     status: 143,
     stderr: "",
     stderrTruncated: false,
@@ -2099,7 +2006,7 @@ async function main() {
     cliOptions.planJson || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
-  const releaseProfile = normalizeReleaseProfileEnv(
+  const releaseProfile = normalizeReleaseProfile(
     process.env.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE || process.env.OPENCLAW_RELEASE_PROFILE,
   );
   const releaseChunk = process.env.OPENCLAW_DOCKER_ALL_CHUNK || process.env.DOCKER_E2E_CHUNK || "";
@@ -2234,8 +2141,10 @@ async function main() {
         await mkdir(logDir, { recursive: true }).catch(recordPublicationFailure);
         await writeSummary(summary());
       }
+      await activeChildrenShutdownPromise;
       if (!requiredPublicationFailed && cleanupFailures.length === 0 && activeChildren.size === 0) {
-        await commitJoinedSummary(logDir, summary, baseEnv);
+        // Publish one final snapshot without yielding. Later signals affect exit, not this report.
+        commitJoinedSummary(logDir, summary(), baseEnv);
       }
     };
   }
@@ -2355,7 +2264,6 @@ async function main() {
         command: liveDockerScriptCommand("test-live-build-docker.sh", "", { skipBuild: false }),
         label: "shared live-test image once",
         phaseDetails: { imageKind: "live" },
-        phases,
       });
     }
     for (const imageKind of ["bare", "functional"] as const) {
@@ -2371,10 +2279,9 @@ async function main() {
         },
         label: `shared ${imageKind} Docker E2E image once: ${image}`,
         phaseDetails: { image, imageKind },
-        phases,
       });
     }
-    await runForegroundGroup(buildEntries, baseEnv);
+    await runForegroundGroup(buildEntries, baseEnv, phases);
   } else {
     console.log(`==> Shared Docker image builds: skipped`);
   }

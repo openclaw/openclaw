@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -12,6 +12,7 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
@@ -45,6 +46,16 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
   const toolCaller = getGatewayToolCallerIdentity();
   const assertToolCurrent = captureGatewayToolCallerAssertion();
   const currentProfile = () => {
+    try {
+      resolveGatewayPersonalToolParticipant(client?.internal?.agentRuntimeIdentity, {
+        requireSingleParticipant: true,
+      })?.assertCurrent();
+    } catch (error) {
+      throw new PersonalFileAccessError(
+        "Personal instructions are unavailable in this turn. Ask in your own Control UI turn with a new message.",
+        { cause: error },
+      );
+    }
     options.sessionMutationCommitGuard?.();
     if (!hasMultipleSessionSharingIdentities()) {
       throw new PersonalFileAccessError(
@@ -105,10 +116,12 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     const cfg = context.getRuntimeConfig();
+    const profile = readUserProfileIdentity(canonicalId);
     const policy = resolveOperatorRolePolicyForAssignment(
       canonicalId,
-      readUserProfileIdentity(canonicalId)?.role ?? null,
+      profile?.role ?? null,
       cfg,
+      profile?.githubLogin ?? null,
     );
     if (
       ![
@@ -154,10 +167,6 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
   return { agentId, profileId, workspaceDir, name: `users/${profileId}/USER.md`, assertCurrent };
 }
 
-function hash(content: Buffer | string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 async function runPersonalFile(
   options: GatewayRequestHandlerOptions,
   params: { agentId: string },
@@ -165,12 +174,12 @@ async function runPersonalFile(
 ) {
   try {
     const target = preparePersonalFile(options, params.agentId);
+    const identity = { agentId: target.agentId, profileId: target.profileId };
     const fsRoot = await root(target.workspaceDir, {
       symlinks: "reject",
       mutationSymlinks: "reject",
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-      nonBlockingRead: true,
       assertBeforeMutation: target.assertCurrent,
     });
     const read = async (): Promise<UsersPersonalFileGetResult> => {
@@ -179,11 +188,10 @@ async function runPersonalFile(
         const loaded = await fsRoot.read(target.name);
         target.assertCurrent();
         return {
-          agentId: target.agentId,
-          profileId: target.profileId,
+          ...identity,
           missing: false,
           content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(loaded.buffer),
-          hash: hash(loaded.buffer),
+          hash: sha256Hex(loaded.buffer),
         };
       } catch (error) {
         target.assertCurrent();
@@ -191,8 +199,7 @@ async function runPersonalFile(
           throw error;
         }
         return {
-          agentId: target.agentId,
-          profileId: target.profileId,
+          ...identity,
           missing: true,
           content: "",
           hash: null,
@@ -237,11 +244,10 @@ async function runPersonalFile(
       await fsRoot.write(target.name, write.content, { mkdir: true, overwrite: !previous.missing });
       target.assertCurrent();
       options.respond(true, {
-        agentId: target.agentId,
-        profileId: target.profileId,
+        ...identity,
         missing: false,
         content: write.content,
-        hash: hash(write.content),
+        hash: sha256Hex(write.content),
       } satisfies UsersPersonalFileGetResult);
     });
   } catch (error) {

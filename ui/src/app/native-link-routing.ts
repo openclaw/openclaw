@@ -26,6 +26,7 @@ type NativeLinkRoutingOptions = {
   signal?: AbortSignal;
   onNativeUpdateDeclined?: () => void;
   shouldOpenInControlUiBrowser?: () => boolean;
+  shouldOpenExternally?: () => boolean;
   canPresentBrowserPanel?: () => boolean;
 };
 
@@ -64,12 +65,8 @@ function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; 
   if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
     return null;
   }
-  try {
-    const url = new URL(anchor.href, window.location.href);
-    return url.protocol === "mailto:" || url.protocol === "tel:" ? { anchor, url } : null;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(anchor.href, window.location.href);
+  return url && (url.protocol === "mailto:" || url.protocol === "tel:") ? { anchor, url } : null;
 }
 
 function postNativeLink(postMessage: NativeLinkPoster, url: URL): boolean {
@@ -125,7 +122,6 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     return { dispose() {} };
   }
   let menu: NativeLinkMenu | null = null;
-  let menuModule: Promise<typeof import("../components/native-link-menu.runtime.ts")> | undefined;
   let menuRequest = 0;
   let disposed = false;
   let nativeUpdatePending = false;
@@ -160,8 +156,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     closeMenu();
     const request = menuRequest;
     const path = event.composedPath();
-    const { mountNativeLinkMenu } = await (menuModule ??=
-      import("../components/native-link-menu.runtime.ts"));
+    const { mountNativeLinkMenu } = await import("../components/native-link-menu.runtime.ts");
     if (disposed || options.signal?.aborted || request !== menuRequest || !anchor.isConnected) {
       return;
     }
@@ -179,8 +174,11 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
 
   const handleClick = (event: MouseEvent) => {
     const webLink = externalHttpLinkFromEvent(event);
-    // The reader's escape hatch must bypass both native and preferred in-app browsers.
-    if (webLink?.anchor.hasAttribute("data-link-reader-external")) {
+    // Explicit external intent bypasses native panels and the Gateway browser preference.
+    if (
+      webLink &&
+      (webLink.anchor.hasAttribute("data-link-reader-external") || options.shouldOpenExternally?.())
+    ) {
       if (
         postMessage &&
         shouldHandleNavigationClick(event) &&
@@ -224,7 +222,6 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     event.preventDefault();
     event.stopPropagation();
     void showMenu(event, link.anchor, link.url).catch((error: unknown) => {
-      menuModule = undefined;
       if (!disposed) {
         console.error("[openclaw] native link menu failed to load; right-click to retry", error);
       }

@@ -1,5 +1,5 @@
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
-import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,6 +34,7 @@ export function resolveSessionToolTargetAgentId(params: {
 export async function runWithScopedSessionAccess<T>(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  storePath?: string;
   expectedSessionId?: string;
   signal?: AbortSignal;
   targetSessionKey: string;
@@ -48,14 +49,23 @@ export async function runWithScopedSessionAccess<T>(params: {
     sessionKey: params.targetSessionKey,
     agentId: params.agentId,
   });
-  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-  const assertExpectedIncarnation = () => {
-    const current = getSessionEntry({ agentId, storePath, sessionKey: params.targetSessionKey });
-    if (current?.sessionId !== expectedSessionId || current.archivedAt !== undefined) {
-      throw new Error(`Session "${params.targetSessionKey}" changed after access was granted.`);
-    }
-  };
+  const storePath =
+    params.storePath ?? resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const assertExpectedIncarnation = () =>
+    withSessionEntryReadOnlyInWorker(
+      { agentId, storePath, sessionKey: params.targetSessionKey },
+      () => params.signal?.throwIfAborted(),
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        if (read.value?.sessionId !== expectedSessionId || read.value.archivedAt !== undefined) {
+          throw new Error(`Session "${params.targetSessionKey}" changed after access was granted.`);
+        }
+      },
+    );
   const admission = await beginSessionWorkAdmission({
+    agentId,
     scope: storePath,
     identities: [params.targetSessionKey, expectedSessionId],
     assertAllowed: assertExpectedIncarnation,

@@ -1,20 +1,17 @@
 #!/usr/bin/env node
 
 // Finds hidden local runtime sidecar loaders missing tsdown entries.
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
-  collectTypeScriptFilesFromRoots,
+  collectFileViolations,
   runAsScript,
   toLine,
   unwrapExpression,
 } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
-const defaultSourceRoots = [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")];
 const localRuntimeSpecifierPattern = /^\.{1,2}\/.*\.runtime\.(?:js|ts)$/;
 
 export type RuntimeSidecarLoaderViolation = {
@@ -23,7 +20,6 @@ export type RuntimeSidecarLoaderViolation = {
   sourcePath: string;
   reason: string;
 };
-type LocatedRuntimeSidecarLoaderViolation = RuntimeSidecarLoaderViolation & { path: string };
 
 function toPosixPath(value: string): string {
   return value.split(path.sep).join("/");
@@ -72,10 +68,6 @@ function isCreateRequireCall(node: ts.Node, createRequireNames: Set<string>): bo
   );
 }
 
-function isLocalRuntimeSpecifier(specifier: string): boolean {
-  return localRuntimeSpecifierPattern.test(specifier);
-}
-
 function resolveRuntimeSpecifierSource(importerPath: string, specifier: string): string {
   const importerDir = path.posix.dirname(normalizeRelativePath(importerPath));
   const resolved = path.posix.normalize(path.posix.join(importerDir, specifier));
@@ -89,9 +81,6 @@ function readObjectEntrySources(entry: unknown): string[] {
   return Object.values(entry).filter((value): value is string => typeof value === "string");
 }
 
-/**
- * Collects explicit source entry files from tsdown configuration.
- */
 export function collectTsdownEntrySources(config: unknown): Set<string> {
   const configs = Array.isArray(config) ? config : [config];
   return new Set(
@@ -105,9 +94,6 @@ export function collectTsdownEntrySources(config: unknown): Set<string> {
   );
 }
 
-/**
- * Finds local runtime require loaders not represented as explicit tsdown entries.
- */
 export function findRuntimeSidecarLoaderViolations(
   _content: string,
   importerPath: string,
@@ -118,22 +104,12 @@ export function findRuntimeSidecarLoaderViolations(
   const requireNames = new Set<string>();
   const stringConstants = new Map<string, string>();
   const stringArrays = new Map<string, string[]>();
-  const forOfRuntimeValues: Array<Map<string, string[]>> = [];
+  const forOfRuntimeValues: Array<{ name: string; values: string[] }> = [];
   const violations: RuntimeSidecarLoaderViolation[] = [];
   const seen = new Set<string>();
 
-  const currentForOfValueMap = (): Map<string, string[]> => {
-    const merged = new Map<string, string[]>();
-    for (const scope of forOfRuntimeValues) {
-      for (const [name, values] of scope) {
-        merged.set(name, values);
-      }
-    }
-    return merged;
-  };
-
   const addSpecifier = (specifier: string, node: ts.Node): void => {
-    if (!isLocalRuntimeSpecifier(specifier)) {
+    if (!localRuntimeSpecifierPattern.test(specifier)) {
       return;
     }
     const sourcePath = resolveRuntimeSpecifierSource(importerPath, specifier);
@@ -166,7 +142,9 @@ export function findRuntimeSidecarLoaderViolations(
       return [literal];
     }
     if (ts.isIdentifier(unwrapped)) {
-      const loopValues = currentForOfValueMap().get(unwrapped.text);
+      const loopValues = forOfRuntimeValues.findLast(
+        (scope) => scope.name === unwrapped.text,
+      )?.values;
       if (loopValues) {
         return loopValues;
       }
@@ -222,7 +200,7 @@ export function findRuntimeSidecarLoaderViolations(
       ) {
         const values = stringArrays.get(expression.text);
         if (values) {
-          forOfRuntimeValues.push(new Map([[initializer.declarations[0].name.text, values]]));
+          forOfRuntimeValues.push({ name: initializer.declarations[0].name.text, values });
           node.statement.forEachChild(visit);
           forOfRuntimeValues.pop();
           return;
@@ -247,44 +225,25 @@ export function findRuntimeSidecarLoaderViolations(
   return violations;
 }
 
-/**
- * Collects runtime sidecar loader violations across configured roots.
- */
-async function collectRuntimeSidecarLoaderViolations(params: {
-  repoRoot: string;
-  sourceRoots: string[];
-  explicitEntrySources: Set<string>;
-}): Promise<LocatedRuntimeSidecarLoaderViolation[]> {
-  using parser = createNativeTypeScriptParser({ cwd: params.repoRoot });
-  const files = await collectTypeScriptFilesFromRoots(params.sourceRoots, {
-    extraTestSuffixes: [".test-support.ts", ".test-helpers.ts"],
-  });
-  const violations: LocatedRuntimeSidecarLoaderViolation[] = [];
-  for (const filePath of files) {
-    if (filePath.endsWith(".d.ts")) {
-      continue;
-    }
-    const relativePath = normalizeRelativePath(path.relative(params.repoRoot, filePath));
-    const content = await fs.readFile(filePath, "utf8");
-    for (const violation of findRuntimeSidecarLoaderViolations(
-      content,
-      relativePath,
-      params.explicitEntrySources,
-      parser.parseSourceFile(filePath, content),
-    )) {
-      violations.push({ path: relativePath, ...violation });
-    }
-  }
-  return violations;
-}
-
 async function main() {
   const { default: tsdownConfig } = await import("../tsdown.config.ts");
-  const violations = await collectRuntimeSidecarLoaderViolations({
+  const explicitEntrySources = collectTsdownEntrySources(tsdownConfig);
+  const violations = await collectFileViolations({
     repoRoot,
-    sourceRoots: defaultSourceRoots,
-    explicitEntrySources: collectTsdownEntrySources(tsdownConfig),
+    sourceRoots: [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")],
+    extraTestSuffixes: [".test-support.ts", ".test-helpers.ts"],
+    skipFile: (filePath) => filePath.endsWith(".d.ts"),
+    findViolations: (content, filePath, sourceFile) =>
+      findRuntimeSidecarLoaderViolations(
+        content,
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+        explicitEntrySources,
+        sourceFile,
+      ),
   });
+  for (const violation of violations) {
+    violation.path = normalizeRelativePath(violation.path);
+  }
   if (violations.length === 0) {
     console.log("runtime-sidecar-loaders: local runtime sidecar loaders look OK.");
     return;

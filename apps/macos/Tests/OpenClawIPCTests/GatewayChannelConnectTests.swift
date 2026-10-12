@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct GatewayChannelConnectTests {
     private actor NonCooperativeGate {
         private var isOpen = false
@@ -385,19 +385,20 @@ struct GatewayChannelConnectTests {
             Task { try await channel.connect() }
         }
         await gate.waitUntilStarted()
-        try await AsyncTimeout.withTimeout(
-            seconds: 2,
-            onTimeout: {
-                NSError(
-                    domain: "GatewayChannelConnectTests",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "retry callers did not join the shared connect attempt"])
-            },
-            operation: {
-                while await channel._test_connectWaiterCount() < retries.count {
-                    await Task.yield()
-                }
-            })
+        do {
+            try await TestWait.state("shared retry callers") {
+                await channel._test_connectWaiterCount() >= retries.count
+            }
+        } catch {
+            await gate.open()
+            retries.forEach { $0.cancel() }
+            for retry in retries {
+                _ = await retry.result
+            }
+            await channel._test_setConnectFailureBackoffWaitHandler(nil)
+            await channel.shutdown()
+            throw error
+        }
         #expect(session.snapshotMakeCount() == 1)
         await gate.open()
 
@@ -410,6 +411,46 @@ struct GatewayChannelConnectTests {
         await channel.shutdown()
 
         #expect(session.snapshotMakeCount() == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func `startup readiness clears recorded connect failure delays`(alreadyWaiting: Bool) async throws {
+        let gate = NonCooperativeGate()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { _, _ in throw URLError(.cannotConnectToHost) })
+        })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        try await self.withChannel(channel) { channel in
+            await #expect(throws: (any Error).self) { try await channel.connect() }
+            #expect(session.snapshotMakeCount() == 1)
+            await channel._test_setConnectFailureBackoffWaitHandler {
+                if !alreadyWaiting {
+                    Issue.record("Startup retry waited on stale connect-failure backoff")
+                    throw CancellationError()
+                }
+                await gate.wait()
+                try Task.checkCancellation()
+            }
+
+            let retry: Task<Void, Error>
+            if alreadyWaiting {
+                retry = Task { try await channel.connect() }
+                await gate.waitUntilStarted()
+                let wait = await channel.connectFailureBackoffWaitTask
+                await channel.clearConnectFailureBackoff()
+                #expect(wait?.isCancelled == true)
+                await gate.open()
+            } else {
+                await channel.clearConnectFailureBackoff()
+                retry = Task { try await channel.connect() }
+            }
+            await #expect(throws: (any Error).self) { try await retry.value }
+            #expect(session.snapshotMakeCount() == 2)
+        }
     }
 
     @Test func `shutdown during connect backoff does not create a socket`() async throws {

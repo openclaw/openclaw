@@ -66,7 +66,7 @@ describe("doctor Telegram General-topic conversation repair", () => {
       delivery: delivery("telegram:-1001234567890"),
     });
 
-    const before = listConversations(scope, { channel: "telegram" });
+    const before = await listConversations(scope, { channel: "telegram" });
     expect(
       before
         .map(({ target, role }) => ({ target, role }))
@@ -122,7 +122,7 @@ describe("doctor Telegram General-topic conversation repair", () => {
       "Merged 1 stale Telegram General-topic conversation identity row(s).",
     ]);
 
-    expect(listConversations(scope, { channel: "telegram" })).toEqual([
+    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
       expect.objectContaining({
         conversationRef: canonical!.conversationRef,
         target: "telegram:-1001234567890",
@@ -150,7 +150,7 @@ describe("doctor Telegram General-topic conversation repair", () => {
     );
     expect(repeated.findings).toEqual([]);
     expect(repeated.changes).toEqual([]);
-    expect(listConversations(scope, { channel: "telegram" })).toHaveLength(1);
+    expect(await listConversations(scope, { channel: "telegram" })).toHaveLength(1);
   });
 
   it("canonicalizes a legacy-only current entry before later session writes", async () => {
@@ -180,7 +180,7 @@ describe("doctor Telegram General-topic conversation repair", () => {
       { checks: [check!] },
     );
     expect(repaired.remainingFindings).toEqual([]);
-    expect(listConversations(scope, { channel: "telegram" })).toEqual([
+    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
       expect.objectContaining({
         target: "telegram:-1002223334444",
         threadId: "1",
@@ -190,7 +190,7 @@ describe("doctor Telegram General-topic conversation repair", () => {
     ]);
 
     await patchSessionEntryCore(scope, () => ({ displayName: "harmless later write" }));
-    expect(listConversations(scope, { channel: "telegram" })).toEqual([
+    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
       expect.objectContaining({
         target: "telegram:-1002223334444",
         role: "primary",

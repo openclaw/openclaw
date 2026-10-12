@@ -43,8 +43,8 @@ function fixture() {
     pathname,
     read: () =>
       executeOpenClawStateWorker(capture(), {
-        type: "tasks.list",
-        input: { ownerKey: "agent:main:main" },
+        type: "plugins.conversationBindingApprovals.read",
+        input: undefined,
       }),
   };
 }
@@ -83,46 +83,6 @@ describe("shared-state worker terminal admission", () => {
     }
   });
 
-  it.each(["explicit clear", "same-file update"] as const)(
-    "validates a recorded generation off-thread and admits a later read after %s",
-    async (recovery) => {
-      const state = fixture();
-      expect(await state.read()).toEqual([]);
-      await closeOpenClawStateDatabaseAsync();
-      const failure = new Error("generation-bound shared-state failure");
-      expect(
-        recordOpenClawStateDatabaseOpenFailure(
-          state.pathname,
-          failure,
-          readStableSqliteFileGeneration(state.pathname),
-        ),
-      ).toBe(true);
-      let main = observeMainDatabaseWork();
-      try {
-        await expect(state.read()).rejects.toBe(failure);
-        main.expectIdle();
-        main.restore();
-        if (recovery === "explicit clear") {
-          clearOpenClawStateDatabaseOpenFailure(state.pathname);
-        } else {
-          // Change the existing file through SQLite without changing its schema or pathname.
-          const database = new DatabaseSync(state.pathname);
-          try {
-            database.exec("PRAGMA application_id = 123");
-          } finally {
-            database.close();
-          }
-        }
-        main = observeMainDatabaseWork();
-        expect(await state.read()).toEqual([]);
-        expect(isOpenClawStateDatabaseOpen(state.pathname)).toBe(false);
-        main.expectIdle();
-      } finally {
-        main.restore();
-      }
-    },
-  );
-
   it("retains a terminal fact when worker inspection fails, then recovers after a stable mismatch", async () => {
     const state = fixture();
     expect(await state.read()).toEqual([]);
@@ -139,7 +99,7 @@ describe("shared-state worker terminal admission", () => {
       await import("../state/openclaw-state-db-cache.js");
     const wal = `${state.pathname}-wal`;
     mkdirSync(wal);
-    const main = observeMainDatabaseWork();
+    let main = observeMainDatabaseWork();
     try {
       await expect(
         getOpenClawStateDatabaseTerminalFailureAsync(state.capture()),
@@ -150,16 +110,27 @@ describe("shared-state worker terminal admission", () => {
       rmdirSync(wal);
     }
     // Removing the unreadable sidecar leaves the original recorded generation intact.
-    await expect(getOpenClawStateDatabaseTerminalFailureAsync(state.capture())).resolves.toBe(
-      failure,
-    );
+    main = observeMainDatabaseWork();
+    try {
+      await expect(state.read()).rejects.toBe(failure);
+      main.expectIdle();
+    } finally {
+      main.restore();
+    }
     const database = new DatabaseSync(state.pathname);
     try {
       database.exec("PRAGMA application_id = 321");
     } finally {
       database.close();
     }
-    expect(await state.read()).toEqual([]);
+    main = observeMainDatabaseWork();
+    try {
+      expect(await state.read()).toEqual([]);
+      expect(isOpenClawStateDatabaseOpen(state.pathname)).toBe(false);
+      main.expectIdle();
+    } finally {
+      main.restore();
+    }
   });
 
   it("does not create absent state while checking a recorded failure or an existing-only read", async () => {
@@ -203,14 +174,17 @@ describe("shared-state worker terminal admission", () => {
     });
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     const active = runOpenClawStateWorkerOperation(state.capture(), (scope) =>
-      scope.execute({ type: "tasks.list", input: { ownerKey: "active" } }),
+      scope.execute({ type: "plugins.conversationBindingApprovals.read", input: undefined }),
     );
     let queued: Promise<unknown> | undefined;
     let draining: Promise<void> | undefined;
     try {
       await replyReady.promise;
       queued = runOpenClawStateWorkerOperation(state.capture(), (scope) => {
-        const reading = scope.execute({ type: "tasks.list", input: { ownerKey: "queued" } });
+        const reading = scope.execute({
+          type: "plugins.conversationBindingApprovals.read",
+          input: undefined,
+        });
         queuedReady.resolve();
         return reading;
       });

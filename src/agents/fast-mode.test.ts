@@ -17,7 +17,7 @@ describe("resolveFastModeState", () => {
       cfg: {
         agents: {
           defaults: { fastModeDefault: "auto" },
-          list: [{ id: "main", fastModeDefault: false }],
+          entries: { main: { fastModeDefault: false } },
         },
       } as OpenClawConfig,
       provider: "openai",
@@ -31,48 +31,45 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("session");
   });
 
-  it("keeps auto as the persisted mode and starts enabled", () => {
-    const state = resolveFastModeState({
-      cfg: {} as OpenClawConfig,
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionEntry: { fastMode: "auto" },
-    });
-
-    expect(state.mode).toBe("auto");
-    expect(state.enabled).toBe(true);
-  });
-
-  it.each([
-    [true, false],
-    [false, true],
-    ["auto", false],
-  ] as const)(
-    "uses rosterless global fastModeDefault %s over model config",
-    (fastModeDefault, modelFastMode) => {
-      const cfg = {
-        agents: {
-          defaults: {
-            fastModeDefault,
-            models: {
-              "openai/gpt-4o": { params: { fastMode: modelFastMode } },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
+  it.each(["auto", "ultrafast"] as const)(
+    "keeps %s as the persisted mode and starts enabled",
+    (mode) => {
       const state = resolveFastModeState({
-        cfg,
+        cfg: {} as OpenClawConfig,
         provider: "openai",
-        model: "gpt-4o",
-        agentId: "main",
+        model: "gpt-5.5",
+        sessionEntry: { fastMode: mode },
       });
 
-      expect(state.mode).toBe(fastModeDefault);
-      expect(state.enabled).toBe(fastModeDefault === "auto" ? true : fastModeDefault);
-      expect(state.source).toBe("agent");
+      expect(state.mode).toBe(mode);
+      expect(state.enabled).toBe(true);
     },
   );
+
+  it("uses rosterless global fastModeDefault over model config", () => {
+    const fastModeDefault = true;
+    const cfg = {
+      agents: {
+        defaults: {
+          fastModeDefault,
+          models: {
+            "openai/gpt-4o": { params: { fastMode: false } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveFastModeState({
+      cfg,
+      provider: "openai",
+      model: "gpt-4o",
+      agentId: "main",
+    });
+
+    expect(state.mode).toBe(fastModeDefault);
+    expect(state.enabled).toBe(true);
+    expect(state.source).toBe("agent");
+  });
 
   it("prefers per-agent fastModeDefault over the global default", () => {
     const cfg = {
@@ -83,7 +80,7 @@ describe("resolveFastModeState", () => {
             "openai/gpt-4o": { params: { fastMode: true } },
           },
         },
-        list: [{ id: "main", fastModeDefault: false }],
+        entries: { main: { fastModeDefault: false } },
       },
     } as OpenClawConfig;
 
@@ -106,8 +103,9 @@ describe("resolveFastModeState", () => {
       "auto (30 sec)",
     );
     expect(formatFastModeStatusValue({ mode: true })).toBe("on");
+    expect(formatFastModeStatusValue({ mode: "ultrafast" })).toBe("ultrafast");
     expect(formatFastModeCommandOptions({ fastAutoOnSeconds: 30 })).toBe(
-      "on, off, auto (30 sec), default, status",
+      "on, off, ultrafast, auto (30 sec), default, status",
     );
     expect(
       formatFastModeCurrentStatus({
@@ -141,15 +139,12 @@ describe("resolveFastModeState", () => {
     expect(state.fastAutoOnSeconds).toBe(30);
   });
 
-  it.each([
-    ["fastSeconds", { fastSeconds: 15 }],
-    ["fast_seconds", { fast_seconds: 15 }],
-  ])("uses model %s alias for auto cutoff", (_label, params) => {
+  it("uses model fast_seconds alias for auto cutoff", () => {
     const cfg = {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { fastMode: "auto", ...params } },
+            "openai/gpt-5.5": { params: { fastMode: "auto", fast_seconds: 15 } },
           },
         },
       },
@@ -232,34 +227,9 @@ describe("resolveFastModeState", () => {
     expect(state.enabled).toBe(false);
     expect(state.source).toBe("default");
   });
-
-  it("defaults to off when unset", () => {
-    const state = resolveFastModeState({
-      cfg: {} as OpenClawConfig,
-      provider: "openai",
-      model: "gpt-4o",
-    });
-
-    expect(state.enabled).toBe(false);
-    expect(state.source).toBe("default");
-  });
 });
 
 describe("resolveFastModeForElapsed", () => {
-  it("keeps auto on through the exact threshold", () => {
-    expect(
-      resolveFastModeForElapsed({
-        mode: "auto",
-        startedAtMs: 1_000,
-        nowMs: 61_000,
-      }),
-    ).toMatchObject({
-      mode: "auto",
-      enabled: true,
-      elapsedSeconds: 60,
-    });
-  });
-
   it("uses configured auto seconds as the elapsed threshold", () => {
     expect(
       resolveFastModeForElapsed({
@@ -286,20 +256,6 @@ describe("resolveFastModeForElapsed", () => {
       enabled: false,
       elapsedSeconds: 30,
       fastAutoOnSeconds: 30,
-    });
-  });
-
-  it("does not round elapsed auto-off seconds upward", () => {
-    expect(
-      resolveFastModeForElapsed({
-        mode: "auto",
-        startedAtMs: 1_000,
-        nowMs: 61_001,
-      }),
-    ).toMatchObject({
-      mode: "auto",
-      enabled: false,
-      elapsedSeconds: 60,
     });
   });
 

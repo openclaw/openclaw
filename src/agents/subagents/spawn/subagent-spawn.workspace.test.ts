@@ -1,413 +1,502 @@
-// Subagent spawn workspace tests cover same-agent inheritance, cross-agent
-// workspace selection, sandboxed cwd rejection, and cleanup deletion calls.
+import os from "node:os";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import {
   createSubagentSpawnTestConfig,
+  expectPersistedRuntimeModel,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
 
-type TestAgentConfig = {
-  id?: string;
-  workspace?: string;
-  subagents?: {
-    allowAgents?: string[];
-  };
-};
-
-type TestConfig = {
-  agents?: {
-    list?: TestAgentConfig[];
-  };
-};
-type TestBindingRequest = {
-  targetSessionKey: string;
-  targetKind?: string;
-  conversation: {
-    channel: string;
-    accountId?: string;
-    conversationId: string;
-    parentConversationId?: string;
-  };
-  placement: "current" | "child";
-  metadata?: Record<string, unknown>;
-};
-
-const hoisted = vi.hoisted(() => ({
-  callGatewayMock: vi.fn(),
-  configOverride: {} as Record<string, unknown>,
-  loadSessionStoreMock: vi.fn(),
-  updateSessionStoreMock: vi.fn(),
-  registerSubagentRunMock: vi.fn(),
-  resolveSandboxRuntimeStatusMock: vi.fn<
-    (params: { sessionKey?: string }) => { sandboxed: boolean }
-  >(() => ({ sandboxed: false })),
-  hookRunner: {
-    hasHooks: vi.fn(() => false),
-  },
-  bindingService: {
-    getCapabilities: vi.fn(() => ({
-      adapterAvailable: true,
-      bindSupported: true,
-      placements: ["child"] as Array<"current" | "child">,
-    })),
-    bind: vi.fn(async (request: TestBindingRequest) => {
-      const conversation = request.conversation;
-      return {
-        targetSessionKey: request.targetSessionKey,
-        targetKind: request.targetKind,
-        status: "active",
-        conversation,
-      };
-    }),
-    listBySession: vi.fn(() => []),
-  },
-}));
-
+const callGatewayMock = vi.fn();
+const loadSessionStoreMock = vi.fn();
+const updateSessionStoreMock = vi.fn();
+const registerSubagentRunMock = vi.fn();
+const forkSessionFromParentMock = vi.fn();
+const ensureContextEnginesInitializedMock = vi.fn();
+const resolveContextEngineMock = vi.fn();
+let store: Record<string, Record<string, unknown>> = {};
+let depth = 0;
+let activeChildren = 0;
+const parentKey = "agent:main:subagent:parent";
+const resolveSandboxRuntimeStatusMock =
+  vi.fn<(params: { sessionKey?: string }) => { sandboxed: boolean }>();
+let config = createSubagentSpawnTestConfig("/tmp/workspace-main");
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+const context = {
+  agentSessionKey: "agent:main:main",
+  workspaceDir: "/tmp/requester-workspace",
+  agentChannel: "telegram",
+  agentAccountId: "123",
+  agentTo: "456",
+};
 
-function createConfigOverride(overrides?: Record<string, unknown>) {
-  return createSubagentSpawnTestConfig("/tmp/workspace-main", {
-    agents: {
-      list: [
-        {
-          id: "main",
-          workspace: "/tmp/workspace-main",
-        },
-      ],
-    },
-    session: {
-      threadBindings: {
-        defaultSpawnContext: "isolated",
-      },
-    },
-    ...overrides,
+function request(method: string) {
+  return callGatewayMock.mock.calls.find(([call]) => call.method === method)?.[0];
+}
+
+function limits(subagents: Record<string, unknown>) {
+  loadSessionStoreMock.mockReturnValue({
+    [parentKey]: { sessionId: "nested-parent", updatedAt: 1 },
+  });
+  config = createSubagentSpawnTestConfig("/tmp/workspace-main", {
+    agents: { defaults: { workspace: "/tmp/workspace-main", subagents } },
   });
 }
 
-function createCrossAgentConfig() {
-  return createConfigOverride({
-    agents: {
-      list: [
-        { id: "main", workspace: "/tmp/workspace-main", subagents: { allowAgents: ["ops"] } },
-        { id: "ops", workspace: "/tmp/workspace-ops" },
-      ],
-    },
+async function spawnChild(params: Parameters<typeof spawnSubagentDirect>[0] = { task: "hello" }) {
+  return spawnSubagentDirect(params, {
+    agentSessionKey: parentKey,
+    workspaceDir: "/tmp/workspace-main",
   });
 }
 
-function resolveTestAgentConfig(cfg: Record<string, unknown>, agentId: string) {
-  return (cfg as TestConfig).agents?.list?.find((entry) => entry.id === agentId);
-}
-
-function resolveTestAgentWorkspace(cfg: Record<string, unknown>, agentId: string) {
-  return resolveTestAgentConfig(cfg, agentId)?.workspace ?? `/tmp/workspace-${agentId}`;
-}
-
-function getRegisteredRun() {
-  return hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
-    | Record<string, unknown>
-    | undefined;
-}
-
-function findLastSessionDeleteCall() {
-  return hoisted.callGatewayMock.mock.calls.findLast(
-    ([request]) => (request as { method?: string }).method === "sessions.delete",
-  )?.[0] as
-    | {
-        params?: {
-          key?: string;
-          deleteTranscript?: boolean;
-          emitLifecycleHooks?: boolean;
-        };
-      }
-    | undefined;
-}
-
-async function expectAcceptedWorkspace(params: { agentId: string; expectedWorkspaceDir: string }) {
-  // Registered run workspace is the canonical child workspace; gateway params
-  // should not receive ad hoc workspace overrides for native subagent calls.
-  const result = await spawnSubagentDirect(
-    {
-      task: "inspect workspace",
-      agentId: params.agentId,
-    },
-    {
-      agentSessionKey: "agent:main:main",
-      agentChannel: "telegram",
-      agentAccountId: "123",
-      agentTo: "456",
-      workspaceDir: "/tmp/requester-workspace",
-    },
-  );
-
+function child(result: Awaited<ReturnType<typeof spawnSubagentDirect>>) {
   expect(result.status).toBe("accepted");
-  expect(getRegisteredRun()?.workspaceDir).toBe(params.expectedWorkspaceDir);
+  expect(result.runId).toBe("run-1");
+  expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
+  const entry = store[result.childSessionKey!];
+  expect(entry).toBeDefined();
+  return entry!;
 }
 
-describe("spawnSubagentDirect workspace inheritance", () => {
+describe("spawnSubagentDirect child session preparation", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
-      callGatewayMock: hoisted.callGatewayMock,
-      getRuntimeConfig: () => hoisted.configOverride,
-      loadSessionStoreMock: hoisted.loadSessionStoreMock,
-      updateSessionStoreMock: hoisted.updateSessionStoreMock,
-      registerSubagentRunMock: hoisted.registerSubagentRunMock,
-      hookRunner: hoisted.hookRunner,
-      resolveAgentConfig: resolveTestAgentConfig,
-      resolveAgentWorkspaceDir: resolveTestAgentWorkspace,
-      resolveSandboxRuntimeStatus: hoisted.resolveSandboxRuntimeStatusMock,
-      getSessionBindingService: () => hoisted.bindingService,
+      callGatewayMock,
+      getRuntimeConfig: () => config,
+      loadSessionStoreMock,
+      updateSessionStoreMock,
+      registerSubagentRunMock,
+      forkSessionFromParentMock,
+      ensureContextEnginesInitializedMock,
+      resolveContextEngineMock,
+      getSubagentDepthFromSessionStore: (key) => (key === parentKey ? depth : 0),
+      countActiveRunsForSession: (key) => (key === parentKey ? activeChildren : 0),
+      resolveSandboxRuntimeStatus: resolveSandboxRuntimeStatusMock,
       resetModules: false,
     }));
   });
 
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
-    hoisted.callGatewayMock.mockClear();
-    hoisted.loadSessionStoreMock.mockReset().mockReturnValue({});
-    hoisted.updateSessionStoreMock.mockReset();
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
-    hoisted.registerSubagentRunMock.mockClear();
-    hoisted.resolveSandboxRuntimeStatusMock.mockReset();
-    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({ sandboxed: false }));
-    hoisted.hookRunner.hasHooks.mockReset();
-    hoisted.hookRunner.hasHooks.mockImplementation(() => false);
-    hoisted.bindingService.getCapabilities.mockClear();
-    hoisted.bindingService.bind.mockClear();
-    hoisted.bindingService.listBySession.mockClear();
-    hoisted.configOverride = createConfigOverride();
-    setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    loadSessionStoreMock.mockReset().mockReturnValue({});
+    registerSubagentRunMock.mockReset();
+    updateSessionStoreMock.mockReset();
+    depth = 0;
+    activeChildren = 0;
+    store = {};
+    forkSessionFromParentMock.mockReset();
+    ensureContextEnginesInitializedMock.mockReset();
+    resolveContextEngineMock.mockReset().mockResolvedValue({});
+    installSessionStoreCaptureMock(updateSessionStoreMock, {
+      onStore: (value) => {
+        store = value;
+      },
+    });
+    setupAcceptedSubagentGatewayMock(callGatewayMock);
+    resolveSandboxRuntimeStatusMock.mockReset().mockReturnValue({ sandboxed: false });
+    config = createSubagentSpawnTestConfig("/tmp/workspace-main", {
+      session: { threadBindings: { defaultSpawnContext: "isolated" } },
+      agents: {
+        entries: {
+          main: { workspace: "/tmp/workspace-main", subagents: { allowAgents: ["main", "ops"] } },
+          ops: { workspace: "/tmp/workspace-ops" },
+        },
+      },
+    });
   });
 
-  it("inherits incognito storage ownership for direct children", async () => {
-    const requesterSessionKey = "agent:main:dashboard:incognito-parent";
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      [requesterSessionKey]: {
+  it("inherits incognito storage ownership without contributor attribution", async () => {
+    const parent = "agent:main:dashboard:incognito-parent";
+    loadSessionStoreMock.mockReturnValue({
+      [parent]: {
         sessionId: "incognito-parent-session",
         inheritedGitContributorProfileIds: ["inherited-human"],
         participants: [{ identity: { type: "profile", id: "direct-human" } }],
       },
     });
-    const sessionPatches: Record<string, unknown>[] = [];
-    const sessionStorePaths: string[] = [];
-    hoisted.updateSessionStoreMock.mockImplementation(
+    const patches: Record<string, unknown>[] = [];
+    updateSessionStoreMock.mockImplementation(
       async (
-        storePath: string,
-        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
+        _path: string,
+        mutate: (store: Record<string, Record<string, unknown>>) => unknown,
       ) => {
-        sessionStorePaths.push(storePath);
-        const store: Record<string, Record<string, unknown>> = {};
-        await mutator(store);
-        sessionPatches.push(...Object.values(store));
-        return store;
+        const updated: Record<string, Record<string, unknown>> = {};
+        await mutate(updated);
+        patches.push(...Object.values(updated));
+        return updated;
       },
     );
-
     const result = await spawnSubagentDirect(
       { task: "keep this child in memory" },
-      { agentSessionKey: requesterSessionKey },
+      { agentSessionKey: parent },
     );
-
     expect(result.status).toBe("accepted");
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:incognito-/u);
-    expect(sessionPatches).toContainEqual(expect.objectContaining({ incognito: true }));
-    for (const patch of sessionPatches) {
+    expect(patches).toContainEqual(expect.objectContaining({ incognito: true }));
+    for (const patch of patches) {
       expect(patch).not.toHaveProperty("inheritedGitContributorProfileIds");
     }
-    expect(sessionStorePaths).toContain(
+    expect(updateSessionStoreMock).toHaveBeenCalledWith(
       resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+      expect.any(Function),
     );
   });
 
-  it("uses the target agent workspace for cross-agent spawns", async () => {
-    hoisted.configOverride = createCrossAgentConfig();
-
-    await expectAcceptedWorkspace({
-      agentId: "ops",
-      expectedWorkspaceDir: "/tmp/workspace-ops",
+  it("keeps explicit cwd separate from the target agent workspace and Gateway params", async () => {
+    const result = await spawnSubagentDirect(
+      { task: "inspect cwd", agentId: "ops", cwd: "/tmp/task-repo" },
+      context,
+    );
+    expect(result.status).toBe("accepted");
+    expect(registerSubagentRunMock.mock.calls[0]?.[0].workspaceDir).toBe("/tmp/workspace-ops");
+    expect(store[result.childSessionKey!]).toMatchObject({
+      spawnedWorkspaceDir: "/tmp/workspace-ops",
+      spawnedCwd: "/tmp/task-repo",
     });
+    expect(request("agent")?.params).not.toHaveProperty("workspaceDir");
+    expect(request("agent")?.params).not.toHaveProperty("cwd");
   });
 
-  it("uses explicit cwd for cross-agent native subagent spawns without leaking it to Gateway params", async () => {
-    hoisted.configOverride = createCrossAgentConfig();
+  it.each([false, true])(
+    "keeps a restricted same-agent helper's tools and root (sandboxed=%s)",
+    async (sandboxed) => {
+      resolveSandboxRuntimeStatusMock.mockReturnValue({ sandboxed });
+      const result = await spawnSubagentDirect(
+        { task: "inspect the assigned project", agentId: "main" },
+        {
+          ...context,
+          inheritedToolPolicySource: "sender",
+          inheritedToolAllowlist: ["read", "sessions_spawn", ""],
+          inheritedToolDenylist: ["bash", "exec", "read", ""],
+          sessionPermissionPolicy: { mode: "read-only", root: "/tmp/requester-workspace/project" },
+        },
+      );
+      expect(result.status).toBe("accepted");
+      expect(store[result.childSessionKey!]).toMatchObject({
+        spawnedWorkspaceDir: "/tmp/requester-workspace",
+        ...(sandboxed ? {} : { spawnedCwd: "/tmp/requester-workspace/project" }),
+        sessionRoot: "/tmp/requester-workspace/project",
+        permissionMode: "read-only",
+        inheritedToolPolicySource: "sender",
+        inheritedToolAllow: ["read", "sessions_spawn"],
+        inheritedToolDeny: ["exec", "read"],
+        inheritedToolPolicyVersion: 1,
+      });
+      if (sandboxed) {
+        expect(store[result.childSessionKey!]).not.toHaveProperty("spawnedCwd");
+      }
+      expect(request("agent")?.params.sessionKey).toBe(result.childSessionKey);
+    },
+  );
+
+  it.each([{ agentId: "ops" }, { cwd: "/tmp" }, { worktree: true }])(
+    "refuses a restricted helper that changes its agent or root: %j",
+    async (selection) => {
+      const result = await spawnSubagentDirect(
+        { task: "inspect", ...selection },
+        { ...context, inheritedToolPolicySource: "sender" },
+      );
+      expect(result).toMatchObject({
+        status: "forbidden",
+        error: expect.stringContaining("This sender"),
+      });
+      expect(updateSessionStoreMock).not.toHaveBeenCalled();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects cwd overrides for sandboxed children before launch", async () => {
+    resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
+      sandboxed: Boolean(sessionKey?.includes(":subagent:")),
+    }));
+    const result = await spawnSubagentDirect(
+      { task: "inspect cwd", agentId: "ops", cwd: "/tmp/task-repo" },
+      context,
+    );
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("cwd override is not supported for sandboxed subagent runs"),
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps lightContext isolated spawns out of context-engine preparation", async () => {
+    config = createSubagentSpawnTestConfig();
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
 
     const result = await spawnSubagentDirect(
-      {
-        task: "inspect explicit cwd",
-        agentId: "ops",
-        cwd: "/tmp/requester-workspace",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "telegram",
-        agentAccountId: "123",
-        agentTo: "456",
-        workspaceDir: "/tmp/fallback-requester-workspace",
-      },
+      { task: "clean worker", context: "isolated", lightContext: true },
+      { agentSessionKey: "main" },
     );
 
     expect(result.status).toBe("accepted");
-    expect(getRegisteredRun()?.workspaceDir).toBe("/tmp/workspace-ops");
-    const agentCall = hoisted.callGatewayMock.mock.calls.find(
-      ([request]) => (request as { method?: string }).method === "agent",
-    )?.[0] as { params?: Record<string, unknown> } | undefined;
-    expect(agentCall?.params).not.toHaveProperty("workspaceDir");
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
+    expect(ensureContextEnginesInitializedMock).not.toHaveBeenCalled();
+    expect(resolveContextEngineMock).not.toHaveBeenCalled();
+    expect(prepareSubagentSpawn).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          bootstrapContextMode: "lightweight",
+          bootstrapContextRunKind: "default",
+        }),
+      }),
+    );
   });
 
-  it("rejects explicit cwd overrides for sandboxed native subagent spawns", async () => {
-    hoisted.configOverride = createCrossAgentConfig();
-    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
-      sandboxed: typeof sessionKey === "string" && sessionKey.includes(":subagent:"),
-    }));
+  it("caps oversized context engine subagent TTLs at the timer-safe ceiling", async () => {
+    config = createSubagentSpawnTestConfig();
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
 
     const result = await spawnSubagentDirect(
       {
-        task: "inspect explicit cwd",
-        agentId: "ops",
-        cwd: "/tmp/requester-workspace",
+        task: "clean worker",
+        runTimeoutSeconds: Number.MAX_SAFE_INTEGER,
       },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "telegram",
-        agentAccountId: "123",
-        agentTo: "456",
-        workspaceDir: "/tmp/fallback-requester-workspace",
-      },
+      { agentSessionKey: "main" },
     );
 
-    expect(result.status).toBe("forbidden");
-    expect(result.error).toContain("cwd override is not supported for sandboxed subagent runs");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
-  });
-
-  async function spawnAndReadAgentParams(task: { task: string; lightContext?: boolean }) {
-    await spawnSubagentDirect(task, {
-      agentSessionKey: "agent:main:main",
-      agentChannel: "telegram",
-      agentAccountId: "123",
-      agentTo: "456",
-      workspaceDir: "/tmp/requester-workspace",
-    });
-
-    const agentCall = hoisted.callGatewayMock.mock.calls.find(
-      ([request]) => (request as { method?: string }).method === "agent",
-    )?.[0] as { params?: Record<string, unknown> } | undefined;
-    return agentCall?.params;
-  }
-
-  it("passes lightweight bootstrap context flags for lightContext subagent spawns", async () => {
-    const agentParams = await spawnAndReadAgentParams({
-      task: "inspect workspace",
-      lightContext: true,
-    });
-
-    expect(agentParams?.bootstrapContextMode).toBe("lightweight");
-    expect(agentParams?.bootstrapContextRunKind).toBe("default");
-  });
-
-  it("omits bootstrap context flags for default subagent spawns", async () => {
-    const agentParams = await spawnAndReadAgentParams({
-      task: "inspect workspace",
-    });
-
-    expect(agentParams).not.toHaveProperty("bootstrapContextMode");
-    expect(agentParams).not.toHaveProperty("bootstrapContextRunKind");
-  });
-
-  it("deletes the provisional child session when a non-thread subagent start fails", async () => {
-    hoisted.callGatewayMock.mockImplementation(
-      async (request: {
-        method?: string;
-        params?: { key?: string; deleteTranscript?: boolean; emitLifecycleHooks?: boolean };
-      }) => {
-        if (request.method === "sessions.patch") {
-          return { ok: true };
-        }
-        if (request.method === "agent") {
-          throw new Error("spawn startup failed");
-        }
-        if (request.method === "sessions.delete") {
-          return { ok: true };
-        }
-        return {};
-      },
+    expect(result.status).toBe("accepted");
+    expect(prepareSubagentSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlMs: MAX_TIMER_TIMEOUT_MS }),
     );
+  });
 
+  it("names usable alternatives before a thread retry", async () => {
     const result = await spawnSubagentDirect(
       {
-        task: "fail after provisional session creation",
+        task: "persistent planning session",
+        mode: "session",
       },
       {
         agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
-        agentAccountId: "acct-1",
-        agentTo: "user-1",
-        workspaceDir: "/tmp/requester-workspace",
+        agentChannel: "webchat",
       },
     );
 
     expect(result.status).toBe("error");
-    expect(result.error).toBe("spawn startup failed");
-    expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
-
-    const deleteCall = findLastSessionDeleteCall();
-    expect(deleteCall?.params?.key).toBe(result.childSessionKey);
-    expect(deleteCall?.params?.deleteTranscript).toBe(true);
-    expect(deleteCall?.params?.emitLifecycleHooks).toBe(false);
+    if (result.status === "error") {
+      expect(result.error).toContain("thread: true");
+      expect(result.error).toContain('mode="run"');
+      expect(result.error).not.toContain("sessions_send");
+    }
   });
 
-  it("keeps lifecycle hooks enabled when registerSubagentRun fails after thread binding succeeds", async () => {
-    hoisted.registerSubagentRunMock.mockImplementation(() => {
-      throw new Error("registry unavailable");
-    });
-    hoisted.callGatewayMock.mockImplementation(
-      async (request: {
-        method?: string;
-        params?: { key?: string; deleteTranscript?: boolean; emitLifecycleHooks?: boolean };
-      }) => {
-        if (request.method === "sessions.patch") {
-          return { ok: true };
-        }
-        if (request.method === "agent") {
-          return { runId: "run-thread-register-fail" };
-        }
-        if (request.method === "sessions.delete") {
-          return { ok: true };
-        }
-        return {};
-      },
-    );
-
+  it("rejects thread=true with actionable guidance when no hook is registered", async () => {
     const result = await spawnSubagentDirect(
       {
-        task: "fail after register with thread binding",
-        thread: true,
+        task: "persistent planning session",
         mode: "session",
+        thread: true,
         context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
-        agentAccountId: "acct-1",
-        agentTo: "user-1",
-        workspaceDir: "/tmp/requester-workspace",
+        agentChannel: "webchat",
       },
     );
 
     expect(result.status).toBe("error");
-    expect(result.error).toBe("Failed to register subagent run: registry unavailable");
-    expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
-    expect(result.runId).toBe("run-thread-register-fail");
-
-    const deleteCall = findLastSessionDeleteCall();
-    expect(deleteCall?.params?.key).toBe(result.childSessionKey);
-    expect(deleteCall?.params?.deleteTranscript).toBe(true);
-    expect(deleteCall?.params?.emitLifecycleHooks).toBe(true);
+    if (result.status === "error") {
+      expect(result.error).toContain("not running on a channel");
+      expect(result.error).toContain('mode="run"');
+      expect(result.error).not.toContain("sessions_send");
+    }
   });
+
+  it.each([
+    {
+      name: "depth",
+      maxSpawnDepth: 1,
+      children: 0,
+      error:
+        "sessions_spawn is not allowed at this depth (current depth: 1, max: 1; agents.defaults.subagents.maxSpawnDepth).",
+    },
+    {
+      name: "child cap",
+      maxSpawnDepth: 2,
+      children: 1,
+      error:
+        "sessions_spawn has reached max active children for this session (1/1; agents.defaults.subagents.maxChildrenPerAgent).",
+    },
+  ])("rejects the $name limit before persistence", async ({ maxSpawnDepth, children, error }) => {
+    limits({ maxSpawnDepth, maxChildrenPerAgent: 1 });
+    depth = 1;
+    activeChildren = children;
+    const result = await spawnChild({ task: "hello", completionTarget: "parent" });
+    expect(result).toMatchObject({ status: "forbidden", error });
+    expect(registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("persists leaf capabilities below the depth limit independently of maxConcurrent", async () => {
+    limits({ maxSpawnDepth: 2, maxChildrenPerAgent: 5, maxConcurrent: 1 });
+    depth = 1;
+    activeChildren = 1;
+    const result = await spawnChild({ task: "hello", completionTarget: "parent" });
+    expect(result.completionTarget).toBe("parent");
+    const entry = child(result);
+    expect(entry).toMatchObject({
+      spawnedBy: parentKey,
+      spawnDepth: 2,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+    });
+    expect(entry.spawnedWorkspaceDir).toEqual(expect.any(String));
+  });
+
+  it.each(["user", "auto"] as const)(
+    "persists a %s-selected model separately from its auth profile",
+    async (source) => {
+      const model = "openai/gpt-5.6-luna@openai:test-profile";
+      if (source === "auto") {
+        config = createSubagentSpawnTestConfig(os.tmpdir(), {
+          agents: { defaults: { workspace: os.tmpdir(), subagents: { model } } },
+        });
+      }
+      const result = await spawnSubagentDirect(
+        { task: "test", ...(source === "user" ? { model } : {}) },
+        { agentSessionKey: "agent:main:main", agentChannel: "guildchat" },
+      );
+      expect(result.status).toBe("accepted");
+      expect(result.resolvedModel).toBe("openai/gpt-5.6-luna");
+      expectPersistedRuntimeModel({
+        persistedStore: store,
+        sessionKey: /^agent:main:subagent:/,
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        overrideSource: source,
+      });
+      const [, entry] = Object.entries(store)[0] ?? [];
+      expect(entry).toMatchObject({
+        authProfileOverride: "openai:test-profile",
+        authProfileOverrideSource: "user",
+      });
+      if (source === "auto") {
+        expect(entry).toMatchObject({
+          modelOverrideFallbackOriginProvider: "openai",
+          modelOverrideFallbackOriginModel: "gpt-5.6-luna",
+        });
+      }
+    },
+  );
+
+  it.each([
+    { source: "active", model: "custom/model" },
+    { source: "persisted", model: "middle" },
+  ])("preserves the $source resolved model $model in child state", async ({ source, model }) => {
+    const [{ createPluginMetadataSnapshotFixture }, { withPluginRuntimeGenerationScope }] =
+      await Promise.all([
+        import("../../../plugins/plugin-metadata.test-support.js"),
+        import("../../../plugins/runtime/generation-scope.js"),
+      ]);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "model-identity-fixture",
+          providers: ["custom"],
+          modelIdNormalization: { providers: { custom: { aliases: { middle: "final" } } } },
+        },
+      ],
+    });
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "model-identity-parent",
+        providerOverride: "custom",
+        modelOverride: model,
+        modelOverrideRouteResolution: "resolved",
+      },
+    });
+    const result = await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
+      spawnSubagentDirect(
+        { task: "preserve the selected model" },
+        {
+          agentSessionKey: "agent:main:main",
+          ...(source === "active" ? { requesterModel: { provider: "custom", model } } : {}),
+        },
+      ),
+    );
+
+    expect(result.status).toBe("accepted");
+    expectPersistedRuntimeModel({
+      persistedStore: store,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "custom",
+      model,
+      overrideSource: "auto",
+    });
+    const [, entry] = Object.entries(store)[0] ?? [];
+    expect(entry?.modelOverrideRouteResolution).toBe("resolved");
+    expect(result.resolvedModel).toBe(`custom/${model}`);
+  });
+
+  it.each([
+    { name: "different model", model: "custom/model-b", parentMode: true, expected: undefined },
+    {
+      name: "same model alias explicit off",
+      model: "same-model",
+      parentMode: false,
+      expected: false,
+    },
+    {
+      name: "explicit child off",
+      model: "custom/model-b",
+      parentMode: true,
+      override: false,
+      expected: false,
+    },
+    {
+      name: "active model differs from saved selection",
+      model: "custom/model-a",
+      savedModel: "model-b",
+      expected: true,
+    },
+  ])(
+    "scopes inherited Fast mode: $name",
+    async ({ model, parentMode, override, savedModel, expected }) => {
+      config = createSubagentSpawnTestConfig(os.tmpdir(), {
+        tools: { swarm: { enabled: true } },
+        agents: {
+          defaults: {
+            workspace: os.tmpdir(),
+            model: { primary: "custom/model-a" },
+            models: {
+              "custom/model-a": { alias: "same-model", params: { fastMode: true } },
+              "custom/model-b": { params: { fastMode: false } },
+            },
+          },
+        },
+      });
+      loadSessionStoreMock.mockReturnValue({
+        "agent:main:main": {
+          sessionId: "fast-mode-parent",
+          providerOverride: "custom",
+          modelOverride: savedModel ?? "model-a",
+          fastMode: parentMode,
+        },
+      });
+      const result = await spawnSubagentDirect(
+        { task: "test", model, fastMode: override },
+        {
+          agentSessionKey: "agent:main:main",
+          requesterModel: { provider: "custom", model: "model-a" },
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      const [, persistedEntry] = Object.entries(store)[0] ?? [];
+      expect(persistedEntry).toBeDefined();
+      expect(persistedEntry?.fastMode).toBe(expected);
+    },
+  );
 });

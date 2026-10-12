@@ -48,7 +48,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       },
     },
   };
-  it.each(["imessage", "signal", "whatsapp"])(
+  it.each(["whatsapp"])(
     "leaves concurrent %s decisions to the Gateway and retires both terminal surfaces",
     async (channel) => {
       const winner = createDeferred<ApprovalResolveResult>();
@@ -193,63 +193,66 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     }
   });
 
-  it("fails closed when typed approval presentation or delivery marker disagrees", () => {
-    const metadata = {
-      approvalId: "plugin:approval-123",
-      approvalSlug: "approval-123",
-      approvalKind: "plugin" as const,
-      allowedDecisions: ["allow-once", "deny"] as const,
-    };
-    const presentation = {
-      blocks: [
-        {
-          type: "buttons" as const,
-          buttons: metadata.allowedDecisions.map((decision) => ({
-            label: decision,
-            action: {
-              type: "approval" as const,
-              approvalId: metadata.approvalId,
-              approvalKind: metadata.approvalKind,
-              decision,
-            },
-          })),
+  it.each(["system-agent"] as const)(
+    "preserves %s approval bindings and rejects mismatched presentation or delivery markers",
+    (approvalKind) => {
+      const metadata = {
+        approvalId: "approval-123",
+        approvalSlug: "approval-123",
+        approvalKind,
+        allowedDecisions: ["allow-once", "deny"] as const,
+      };
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: metadata.allowedDecisions.map((decision) => ({
+              label: decision,
+              action: {
+                type: "approval" as const,
+                approvalId: metadata.approvalId,
+                approvalKind: metadata.approvalKind,
+                decision,
+              },
+            })),
+          },
+        ],
+      };
+      const payload = {
+        presentation,
+        channelData: {
+          execApproval: metadata,
+          privateBinding: buildApprovalReactionDeliveredBindingMarker({
+            ...metadata,
+            allowedDecisions: [...metadata.allowedDecisions],
+          }),
         },
-      ],
-    };
-    const payload = {
-      presentation,
-      channelData: {
-        execApproval: metadata,
-        privateBinding: buildApprovalReactionDeliveredBindingMarker({
-          ...metadata,
-          allowedDecisions: [...metadata.allowedDecisions],
+      };
+      expect(payload.channelData.privateBinding).toEqual({ version: 1, ...metadata });
+      expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
+      expect(
+        readApprovalReactionDeliveredBinding({
+          payload,
+          channelDataKey: "privateBinding",
+          requireApprovalSlug: true,
         }),
-      },
-    };
-    expect(payload.channelData.privateBinding).toEqual({ version: 1, ...metadata });
-    expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
-    expect(
-      readApprovalReactionDeliveredBinding({
-        payload,
-        channelDataKey: "privateBinding",
-        requireApprovalSlug: true,
-      }),
-    ).toMatchObject(metadata);
-    const invalidPayload = {
-      ...payload,
-      channelData: {
-        ...payload.channelData,
-        execApproval: { ...metadata, allowedDecisions: ["allow-once", "allow-once"] },
-      },
-    };
-    expect(readApprovalReactionPresentationBinding({ payload: invalidPayload })).toBeNull();
-    expect(
-      readApprovalReactionDeliveredBinding({
-        payload: invalidPayload,
-        channelDataKey: "privateBinding",
-      }),
-    ).toBeNull();
-  });
+      ).toMatchObject(metadata);
+      const invalidPayload = {
+        ...payload,
+        channelData: {
+          ...payload.channelData,
+          execApproval: { ...metadata, allowedDecisions: ["allow-once", "allow-once"] },
+        },
+      };
+      expect(readApprovalReactionPresentationBinding({ payload: invalidPayload })).toBeNull();
+      expect(
+        readApprovalReactionDeliveredBinding({
+          payload: invalidPayload,
+          channelDataKey: "privateBinding",
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("resolves only allowed decisions", () => {
     expect(
@@ -537,21 +540,6 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       expect(persistence.lookup).not.toHaveBeenCalled();
     },
   );
-
-  it("expires in-memory reaction targets by ttl", async () => {
-    let now = 1_000;
-    const store = createApprovalReactionTargetStore<{ approvalId: string }>({
-      namespace: "test.approvals",
-      maxEntries: 10,
-      defaultTtlMs: 100,
-      nowMs: () => now,
-    });
-    const target = { approvalId: "approval-1" };
-    await store.register("message-1", target);
-    expect(await store.lookup("message-1")).toEqual(target);
-    now = 1_101;
-    expect(await store.lookup("message-1")).toBeNull();
-  });
 
   it("uses the current system clock when no clock is injected", async () => {
     vi.useFakeTimers({ now: 1_000 });

@@ -13,6 +13,7 @@ const owner = {
   id: "profile-alex",
   identity: { type: "profile" as const, id: "profile-alex" },
   label: "Alex Rivera",
+  avatarUrl: "/api/users/profile-alex/avatar?v=1",
 };
 const rows = [
   {
@@ -49,6 +50,15 @@ suite.define(() => {
       await suite.withPage({ viewport: { width, height }, colorScheme: mode }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
+            "agent.identity.get": {
+              cases: [
+                {
+                  match: { agentId: "main" },
+                  response: { agentId: "main", name: "Lobster", avatar: "/avatar/main" },
+                },
+                { response: { agentId: "reviewer", name: "Review bot", avatar: "" } },
+              ],
+            },
             "sessions.list": {
               cases: [
                 {
@@ -100,7 +110,7 @@ suite.define(() => {
         await page.route("**/avatar/main", (route) =>
           route.fulfill({ contentType: "image/svg+xml", body: agentAvatar }),
         );
-        await page.route("**/api/users/profile-alex/avatar", (route) =>
+        await page.route("**/api/users/profile-alex/avatar*", (route) =>
           route.fulfill({ contentType: "image/svg+xml", body: ownerAvatar }),
         );
         await page.goto(suite.server.baseUrl + "chat");
@@ -140,6 +150,7 @@ suite.define(() => {
             excludeSubagents: true,
             excludeCron: true,
             excludeSystem: true,
+            excludeDock: true,
           },
         });
         expect(await results.locator(".cmd-palette__avatar").count()).toBe(3);
@@ -184,7 +195,7 @@ suite.define(() => {
         await expect.poll(() => results.getByRole("option").count()).toBe(3);
         expect(
           await page.locator(".cmd-palette__search").getByRole("status").allTextContents(),
-        ).toEqual(["Some models could not be refreshed. Open Models to try again."]);
+        ).toEqual([]);
         expect(
           await page.getByText(/Search notices|Indexing older messages|may be incomplete/).count(),
         ).toBe(0);

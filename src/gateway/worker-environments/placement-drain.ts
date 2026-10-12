@@ -2,12 +2,19 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
-  assertRecordShape,
+  isCurrentPlacementTurnClaim,
   normalizeEpoch,
   required,
   type WorkerSessionPlacementRecord,
+  type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { getRequired, query, transitionValues } from "./placement-row-codec.js";
+import {
+  fromRow,
+  getRequired,
+  query,
+  transitionValues,
+  turnClaimValues,
+} from "./placement-row-codec.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
@@ -19,8 +26,11 @@ export function drainWorkerSessionPlacement(
     environmentId: string;
     ownerEpoch: number;
     expectedGeneration: number;
+    expectedUpdatedAtMs?: number;
     workspaceBaseManifestRef?: string;
     allowPendingWorkspaceResult?: boolean;
+    requireUnclaimed?: true;
+    expectedTurnClaim?: WorkerSessionTurnClaim;
   },
   nowMs: number,
 ): WorkerSessionPlacementRecord {
@@ -36,8 +46,20 @@ export function drainWorkerSessionPlacement(
   ) {
     throw new Error(`Cannot drain stale worker placement for session ${sessionId}`);
   }
+  if (
+    input.expectedUpdatedAtMs !== undefined &&
+    current.updatedAtMs !== input.expectedUpdatedAtMs
+  ) {
+    throw new Error(`Cannot drain changed worker placement activity for session ${sessionId}`);
+  }
   if (!input.allowPendingWorkspaceResult && hasWorkerWorkspacePendingResult(db, sessionId)) {
     throw new Error(`Cannot drain session ${sessionId} with a pending cloud workspace result`);
+  }
+  if (input.requireUnclaimed && current.turnClaim) {
+    throw new Error(`Cannot drain session ${sessionId} during an active turn`);
+  }
+  if (input.expectedTurnClaim && !isCurrentPlacementTurnClaim(current, input.expectedTurnClaim)) {
+    throw new Error(`Cannot drain stale worker turn for session ${sessionId}`);
   }
   // Draining closes new admission first. The already-admitted worker may
   // finish under its old claim before reconciliation advances ownership.
@@ -49,29 +71,7 @@ export function drainWorkerSessionPlacement(
       : { workspaceBaseManifestRef: input.workspaceBaseManifestRef },
     nowMs,
   );
-  const turnClaim = current.turnClaim;
-  if (turnClaim) {
-    values.turn_claim_owner = turnClaim.owner;
-    values.turn_claim_id = turnClaim.claimId;
-    values.turn_claim_run_id = turnClaim.runId;
-    values.turn_claim_generation = turnClaim.generation;
-    values.turn_claim_owner_epoch = turnClaim.ownerEpoch;
-  }
-  assertRecordShape({
-    state: "draining",
-    executionMode: current.executionMode,
-    environmentId,
-    activeOwnerEpoch: ownerEpoch,
-    workspaceBaseManifestRef: values.workspace_base_manifest_ref,
-    remoteWorkspaceDir: values.remote_workspace_dir,
-    workerBundleHash: values.worker_bundle_hash,
-    lastTranscriptAckCursor: values.last_transcript_ack_cursor,
-    lastLiveEventAckCursor: values.last_live_event_ack_cursor,
-    recoveryError: values.recovery_error,
-    terminalReason: values.terminal_reason,
-    terminalAtMs: values.terminal_at_ms,
-    turnClaim,
-  });
+  Object.assign(values, turnClaimValues(current.turnClaim));
   const result = executeSqliteQuerySync(
     db,
     query(db)
@@ -81,16 +81,18 @@ export function drainWorkerSessionPlacement(
       .where("state", "=", "active")
       .where("transition_generation", "=", current.generation)
       .where("environment_id", "=", environmentId)
-      .where("active_owner_epoch", "=", ownerEpoch),
+      .where("active_owner_epoch", "=", ownerEpoch)
+      .returningAll(),
   );
-  if (result.numAffectedRows !== 1n) {
+  const row = result.rows[0];
+  if (!row) {
     throw new Error(`Worker session placement ${sessionId} changed during drain`);
   }
   if (input.workspaceBaseManifestRef !== undefined) {
     clearWorkerWorkspaceReconciliation(db, sessionId, input.workspaceBaseManifestRef);
     sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
   }
-  const record = getRequired(db, sessionId);
+  const record = fromRow(row);
   publishPlacementTurnClaimState(db, record);
   return record;
 }

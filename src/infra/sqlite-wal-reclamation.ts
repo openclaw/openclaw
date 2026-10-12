@@ -93,8 +93,14 @@ export function reclaimSqliteWalFreePages(
       result.queryMs += performance.now() - startedAt;
     }
   };
+  // PASSIVE never invokes SQLite's busy handler; checkpoint-only ticks need no policy change.
+  if (options.maxPages === 0 && options.checkpointMode === "PASSIVE") {
+    checkpoint();
+    return result;
+  }
   return runWithSqliteBusyTimeout(database, 0, () => {
-    if (!checkpoint()) {
+    // A zero page budget is a checkpoint-only pass; vacuum keeps its own cadence.
+    if (!checkpoint() || options.maxPages === 0) {
       return result;
     }
     const before = freePages();

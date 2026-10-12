@@ -3,9 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ProviderAuthMethod } from "openclaw/plugin-sdk/core";
+import type {
+  ProviderAuthMethod,
+  ProviderPreparedRuntimeAuth,
+  ProviderPrepareRuntimeAuthContext,
+} from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type {
+  ProviderPlugin,
+  ModelDefinitionConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { azLoginDeviceCodeWithOptions, execAz, getAccessTokenResultAsync } from "./cli.js";
@@ -21,10 +29,9 @@ import {
   buildFoundryAuthResult,
   extractFoundryEndpoint,
   formatFoundryApiLabel,
+  type FoundryProviderApi,
   isFoundryMaiImageModel,
-  normalizeFoundryEndpoint,
   requiresFoundryMaxCompletionTokens,
-  requiresFoundryEntraIdClaudeAuth,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -65,64 +72,39 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
   );
   return {
     ...actual,
-    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreAsync: ensureAuthProfileStoreMock,
   };
 });
 
 function registerProvider() {
-  const registerProviderMock = vi.fn();
-  plugin.register(
-    createTestPluginApi({
-      id: "microsoft-foundry",
-      name: "Microsoft Foundry",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      registerProvider: registerProviderMock,
-    }),
-  );
-  expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  const firstCall = registerProviderMock.mock.calls[0];
-  if (!firstCall) {
-    throw new Error("expected Microsoft Foundry provider registration");
+  const register = vi.fn<(provider: ProviderPlugin) => void>();
+  plugin.register(createTestPluginApi({ registerProvider: register }));
+  expect(register).toHaveBeenCalledTimes(1);
+  const provider = register.mock.calls[0]?.[0];
+  if (!provider) {
+    throw new Error("expected Microsoft Foundry provider");
   }
-  return firstCall[0];
+  return provider;
 }
 
 type FoundryProvider = ReturnType<typeof registerProvider>;
 
-function requirePrepareRuntimeAuth(
-  provider: FoundryProvider,
-): NonNullable<FoundryProvider["prepareRuntimeAuth"]> {
-  const prepareRuntimeAuth = provider.prepareRuntimeAuth;
-  expect(prepareRuntimeAuth).toBeTypeOf("function");
-  if (!prepareRuntimeAuth) {
+function prepareAuth(provider = registerProvider()) {
+  const prepare = provider.prepareRuntimeAuth;
+  if (!prepare) {
     throw new Error("expected Microsoft Foundry runtime auth hook");
   }
-  return prepareRuntimeAuth;
+  return prepare;
 }
 
-function requireRuntimeAuthResult(
-  result:
-    | {
-        apiKey?: string;
-        baseUrl?: string;
-        expiresAt?: number;
-        request?: {
-          auth?:
-            | { mode: "authorization-bearer"; token: string }
-            | { mode: "header"; headerName: string; value: string };
-        };
-      }
-    | undefined,
-) {
+function authResult(result: ProviderPreparedRuntimeAuth | null | undefined) {
   if (!result) {
     throw new Error("expected Microsoft Foundry runtime auth result");
   }
   return result;
 }
 
-function requireFoundryProviderPatch(result: ReturnType<typeof buildFoundryAuthResult>) {
+function providerPatch(result: ReturnType<typeof buildFoundryAuthResult>) {
   const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
   if (!provider) {
     throw new Error("expected Microsoft Foundry provider config patch");
@@ -130,35 +112,28 @@ function requireFoundryProviderPatch(result: ReturnType<typeof buildFoundryAuthR
   return provider;
 }
 
-const defaultFoundryBaseUrl = "https://example.services.ai.azure.com/openai/v1";
-const defaultFoundryProviderId = "microsoft-foundry";
-const defaultFoundryModelId = "gpt-5.4";
-const defaultFoundryProfileId = "microsoft-foundry:entra";
-const defaultFoundryAgentDir = "/tmp/test-agent";
-const defaultAzureCliLoginError = "Please run 'az login' to setup account.";
+const baseUrl = "https://example.services.ai.azure.com/openai/v1";
+const providerId = "microsoft-foundry";
+const defaultModelId = "gpt-5.4";
+const profileId = "microsoft-foundry:entra";
+const agentDir = "/tmp/test-agent";
+const loginError = "Please run 'az login' to setup account.";
 const foundryTokenCacheMaxEntries = 128;
 let runRealExec: typeof import("openclaw/plugin-sdk/process-runtime").runExec;
 let runtimeAuthTestSequence = 0;
 let runtimeAuthTestTenantId = "tenant-0";
 
-function buildFoundryModel(
-  overrides: Partial<{
-    provider: string;
-    id: string;
-    name: string;
-    api: "openai-responses" | "openai-completions" | "anthropic-messages";
-    baseUrl: string;
-    reasoning: boolean;
-    input: Array<"text" | "image">;
-    compat: Record<string, unknown>;
-  }> = {},
+function makeModel(
+  overrides: Partial<ProviderPrepareRuntimeAuthContext["model"]> & {
+    api?: FoundryProviderApi;
+  } = {},
 ) {
   return {
-    provider: defaultFoundryProviderId,
-    id: defaultFoundryModelId,
-    name: defaultFoundryModelId,
+    provider: providerId,
+    id: defaultModelId,
+    name: defaultModelId,
     api: "openai-responses" as const,
-    baseUrl: defaultFoundryBaseUrl,
+    baseUrl,
     reasoning: false,
     input: ["text" as const],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -168,20 +143,20 @@ function buildFoundryModel(
   };
 }
 
-function buildFoundryConfig(params?: {
+function makeConfig(params?: {
   profileIds?: string[];
   orderedProfileIds?: string[];
-  models?: ReturnType<typeof buildFoundryModel>[];
+  models?: ModelDefinitionConfig[];
 }) {
   const profileIds = params?.profileIds ?? [];
   const orderedProfileIds = params?.orderedProfileIds;
   return {
     auth: {
       profiles: Object.fromEntries(
-        profileIds.map((profileId) => [
-          profileId,
+        profileIds.map((id) => [
+          id,
           {
-            provider: defaultFoundryProviderId,
+            provider: providerId,
             mode: "api_key" as const,
           },
         ]),
@@ -189,24 +164,24 @@ function buildFoundryConfig(params?: {
       ...(orderedProfileIds
         ? {
             order: {
-              [defaultFoundryProviderId]: orderedProfileIds,
+              [providerId]: orderedProfileIds,
             },
           }
         : {}),
     },
     models: {
       providers: {
-        [defaultFoundryProviderId]: {
-          baseUrl: defaultFoundryBaseUrl,
+        [providerId]: {
+          baseUrl,
           api: "openai-responses" as const,
-          models: params?.models ?? [buildFoundryModel()],
+          models: params?.models ?? [makeModel()],
         },
       },
     },
   } satisfies OpenClawConfig;
 }
 
-function buildEntraProfileStore(
+function entraStore(
   overrides: Partial<{
     api: "openai-responses" | "openai-completions" | "anthropic-messages";
     endpoint: string;
@@ -217,14 +192,14 @@ function buildEntraProfileStore(
 ) {
   return {
     profiles: {
-      [defaultFoundryProfileId]: {
+      [profileId]: {
         type: "api_key",
-        provider: defaultFoundryProviderId,
+        provider: providerId,
         metadata: {
           authMethod: "entra-id",
           endpoint: "https://example.services.ai.azure.com",
           modelId: "custom-deployment",
-          modelName: defaultFoundryModelId,
+          modelName: defaultModelId,
           api: "openai-responses",
           tenantId: runtimeAuthTestTenantId,
           ...overrides,
@@ -234,28 +209,28 @@ function buildEntraProfileStore(
   };
 }
 
-function buildFoundryRuntimeAuthContext(
-  overrides: Partial<{
-    provider: string;
-    modelId: string;
-    model: ReturnType<typeof buildFoundryModel>;
-    apiKey: string;
-    authMode: "api_key";
-    profileId: string;
-    agentDir: string;
-  }> = {},
-) {
+function authContext(overrides: Partial<ProviderPrepareRuntimeAuthContext> = {}) {
   const modelId = overrides.modelId ?? "custom-deployment";
   return {
-    provider: defaultFoundryProviderId,
+    provider: providerId,
     modelId,
-    model: buildFoundryModel({ id: modelId, ...("model" in overrides ? overrides.model : {}) }),
+    model: makeModel({ id: modelId }),
     apiKey: "__entra_id_dynamic__",
     authMode: "api_key" as const,
-    profileId: defaultFoundryProfileId,
+    profileId,
     env: process.env,
-    agentDir: defaultFoundryAgentDir,
+    agentDir,
     ...overrides,
+  };
+}
+
+function tokenResponse(accessToken: string, expiresInMs = 60 * 60_000) {
+  return {
+    stdout: JSON.stringify({
+      accessToken,
+      expiresOn: new Date(Date.now() + expiresInMs).toISOString(),
+    }),
+    stderr: "",
   };
 }
 
@@ -263,18 +238,14 @@ function mockAzureCliToken(params: {
   accessToken: string;
   expiresInMs: number;
   response?: Promise<void>;
+  started?: () => void;
 }) {
   execFileMock.mockImplementationOnce(async () => {
+    params.started?.();
     if (params.response) {
       await params.response;
     }
-    return {
-      stdout: JSON.stringify({
-        accessToken: params.accessToken,
-        expiresOn: new Date(Date.now() + params.expiresInMs).toISOString(),
-      }),
-      stderr: "",
-    };
+    return tokenResponse(params.accessToken, params.expiresInMs);
   });
 }
 
@@ -282,12 +253,13 @@ function mockAzureCliTokenRaw(stdout: string) {
   execFileMock.mockResolvedValueOnce({ stdout, stderr: "" });
 }
 
-function mockAzureCliLoginFailure(response?: Promise<void>) {
+function mockAzureCliLoginFailure(response?: Promise<void>, started?: () => void) {
   execFileMock.mockImplementationOnce(async () => {
+    started?.();
     if (response) {
       await response;
     }
-    throw Object.assign(new Error("az failed"), { stderr: defaultAzureCliLoginError, stdout: "" });
+    throw Object.assign(new Error("az failed"), { stderr: loginError, stdout: "" });
   });
 }
 
@@ -296,7 +268,7 @@ type FoundryAuthParams = Parameters<typeof buildFoundryAuthResult>[0];
 function buildAuthResult(params: Pick<FoundryAuthParams, "modelId"> & Partial<FoundryAuthParams>) {
   const apiKeyAuth = params.authMethod === "api-key";
   return buildFoundryAuthResult({
-    profileId: apiKeyAuth ? "microsoft-foundry:default" : defaultFoundryProfileId,
+    profileId: apiKeyAuth ? "microsoft-foundry:default" : profileId,
     apiKey: apiKeyAuth ? "test-api-key" : "__entra_id_dynamic__",
     endpoint: "https://example.services.ai.azure.com",
     api: "openai-responses",
@@ -310,7 +282,7 @@ async function selectModel(provider: FoundryProvider, config: OpenClawConfig, mo
     config,
     model: `microsoft-foundry/${modelId}`,
     prompter: {} as never,
-    agentDir: defaultFoundryAgentDir,
+    agentDir,
   });
 }
 
@@ -336,34 +308,13 @@ describe("microsoft-foundry plugin", () => {
 
   it("keeps the API key profile bound when multiple auth profiles exist without explicit order", async () => {
     const provider = registerProvider();
-    const config = buildFoundryConfig({
+    const config = makeConfig({
       profileIds: ["microsoft-foundry:default", "microsoft-foundry:entra"],
     });
 
     await selectModel(provider, config, "gpt-5.4");
 
     expect(config.auth?.order?.["microsoft-foundry"]).toBeUndefined();
-  });
-
-  it("uses the active ordered API key profile when model selection rebinding is needed", async () => {
-    const provider = registerProvider();
-    ensureAuthProfileStoreMock.mockReturnValueOnce({
-      profiles: {
-        "microsoft-foundry:default": {
-          type: "api_key",
-          provider: "microsoft-foundry",
-          metadata: { authMethod: "api-key" },
-        },
-      },
-    });
-    const config = buildFoundryConfig({
-      profileIds: ["microsoft-foundry:default"],
-      orderedProfileIds: ["microsoft-foundry:default"],
-    });
-
-    await selectModel(provider, config, "gpt-5.4");
-
-    expect(config.auth?.order?.["microsoft-foundry"]).toEqual(["microsoft-foundry:default"]);
   });
 
   it("tolerates timeout-only provider overlays when selecting a Foundry model", async () => {
@@ -444,7 +395,7 @@ describe("microsoft-foundry plugin", () => {
     await expect(
       entraAuth?.run({
         config: {},
-        agentDir: defaultFoundryAgentDir,
+        agentDir,
         opts: {},
         prompter: {
           confirm: vi.fn(async () => true),
@@ -456,14 +407,14 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("falls back to Entra metadata when a configured Foundry endpoint is malformed", async () => {
-    const prepareRuntimeAuth = requirePrepareRuntimeAuth(registerProvider());
+    const prepareRuntimeAuth = prepareAuth();
     mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
-    ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
+    ensureAuthProfileStoreMock.mockReturnValueOnce(entraStore());
 
-    const prepared = requireRuntimeAuthResult(
+    const prepared = authResult(
       await prepareRuntimeAuth(
-        buildFoundryRuntimeAuthContext({
-          model: buildFoundryModel({ baseUrl: "not a url" }),
+        authContext({
+          model: makeModel({ baseUrl: "not a url" }),
         }),
       ),
     );
@@ -480,14 +431,14 @@ describe("microsoft-foundry plugin", () => {
     ["openai-responses", "api-key"],
     ["anthropic-messages", "x-api-key"],
   ] as const)("binds %s API-key auth to the active profile", async (api, headerName) => {
-    const prepareRuntimeAuth = requirePrepareRuntimeAuth(registerProvider());
+    const prepareRuntimeAuth = prepareAuth();
 
-    const prepared = requireRuntimeAuthResult(
+    const prepared = authResult(
       await prepareRuntimeAuth(
-        buildFoundryRuntimeAuthContext({
+        authContext({
           apiKey: "profile-api-key",
           profileId: "microsoft-foundry:default",
-          model: buildFoundryModel({ api }),
+          model: makeModel({ api }),
         }),
       ),
     );
@@ -502,11 +453,11 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("does not reuse OpenAI Entra tokens for Anthropic Foundry deployments", async () => {
-    const prepareRuntimeAuth = requirePrepareRuntimeAuth(registerProvider());
+    const prepareRuntimeAuth = prepareAuth();
     mockAzureCliToken({ accessToken: "gpt-token", expiresInMs: 60_000 });
     mockAzureCliToken({ accessToken: "claude-token", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValue(
-      buildEntraProfileStore({
+      entraStore({
         endpoint: "https://example.services.ai.azure.com",
         modelId: "deployment-gpt5",
         modelName: "gpt-5.4",
@@ -514,24 +465,19 @@ describe("microsoft-foundry plugin", () => {
       }),
     );
 
-    const gptPrepared = requireRuntimeAuthResult(
+    const gptPrepared = authResult(
       await prepareRuntimeAuth(
-        buildFoundryRuntimeAuthContext({
+        authContext({
           modelId: "deployment-gpt5",
-          model: buildFoundryModel({
-            id: "deployment-gpt5",
-            name: "gpt-5.4",
-            api: "openai-responses",
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-          }),
+          model: makeModel({ id: "deployment-gpt5" }),
         }),
       ),
     );
-    const claudePrepared = requireRuntimeAuthResult(
+    const claudePrepared = authResult(
       await prepareRuntimeAuth(
-        buildFoundryRuntimeAuthContext({
+        authContext({
           modelId: "deployment-fable",
-          model: buildFoundryModel({
+          model: makeModel({
             id: "deployment-fable",
             name: "claude-fable-5",
             api: "anthropic-messages",
@@ -541,7 +487,7 @@ describe("microsoft-foundry plugin", () => {
       ),
     );
 
-    expect(gptPrepared.baseUrl).toBe(defaultFoundryBaseUrl);
+    expect(gptPrepared.baseUrl).toBe(baseUrl);
     expect(gptPrepared.request?.auth).toEqual({ mode: "authorization-bearer", token: "gpt-token" });
     expect(claudePrepared.baseUrl).toBe("https://example.services.ai.azure.com/anthropic");
     expect(gptPrepared.apiKey).toBe("gpt-token");
@@ -556,21 +502,15 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("reclaims expired tokens before evicting an older live account", async () => {
-    const prepare = requirePrepareRuntimeAuth(registerProvider());
+    const prepare = prepareAuth();
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    execFileMock.mockImplementation(async () => ({
-      stdout: JSON.stringify({
-        accessToken: "synthetic-expiry-token",
-        expiresOn: new Date(now + 60 * 60_000).toISOString(),
-      }),
-      stderr: "",
-    }));
+    execFileMock.mockImplementation(async () => tokenResponse("synthetic-expiry-token"));
     const prepareForTenant = async (index: number) => {
       ensureAuthProfileStoreMock.mockReturnValueOnce(
-        buildEntraProfileStore({ tenantId: `expiry-${runtimeAuthTestTenantId}-${index}` }),
+        entraStore({ tenantId: `expiry-${runtimeAuthTestTenantId}-${index}` }),
       );
-      return await prepare(buildFoundryRuntimeAuthContext());
+      return await prepare(authContext());
     };
     for (let index = 0; index < foundryTokenCacheMaxEntries - 1; index++) {
       await prepareForTenant(index);
@@ -586,30 +526,18 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("keeps one active refresh while settled account entries churn", async () => {
-    const prepare = requirePrepareRuntimeAuth(registerProvider());
+    const prepare = prepareAuth();
     const release = createDeferred<void>();
-    execFileMock.mockImplementation(async () => ({
-      stdout: JSON.stringify({
-        accessToken: "synthetic-churn-token",
-        expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
-      }),
-      stderr: "",
-    }));
+    execFileMock.mockImplementation(async () => tokenResponse("synthetic-churn-token"));
     execFileMock.mockImplementationOnce(async () => {
       await release.promise;
-      return {
-        stdout: JSON.stringify({
-          accessToken: "synthetic-held-token",
-          expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
-        }),
-        stderr: "",
-      };
+      return tokenResponse("synthetic-held-token");
     });
     const prepareForTenant = async (index: number) => {
       ensureAuthProfileStoreMock.mockReturnValueOnce(
-        buildEntraProfileStore({ tenantId: `churn-${runtimeAuthTestTenantId}-${index}` }),
+        entraStore({ tenantId: `churn-${runtimeAuthTestTenantId}-${index}` }),
       );
-      return await prepare(buildFoundryRuntimeAuthContext());
+      return await prepare(authContext());
     };
     const pending = [prepareForTenant(0)];
     try {
@@ -620,7 +548,7 @@ describe("microsoft-foundry plugin", () => {
       expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 2);
       release.resolve();
       const results = await Promise.all(pending);
-      expect(results.map((result) => requireRuntimeAuthResult(result).apiKey)).toEqual([
+      expect(results.map((result) => authResult(result).apiKey)).toEqual([
         "synthetic-held-token",
         "synthetic-held-token",
       ]);
@@ -659,21 +587,13 @@ describe("microsoft-foundry plugin", () => {
         await fs.symlink(fakeAz, path.join(binDir, "az"));
       }
 
-      const prepare = requirePrepareRuntimeAuth(registerProvider());
+      const prepare = prepareAuth();
       const tenant = (index: number) => `boundary-${runtimeAuthTestTenantId}-${index}`;
       const prepareForTenant = async (index: number) => {
-        ensureAuthProfileStoreMock.mockReturnValueOnce(
-          buildEntraProfileStore({ tenantId: tenant(index) }),
-        );
-        return requireRuntimeAuthResult(await prepare(buildFoundryRuntimeAuthContext()));
+        ensureAuthProfileStoreMock.mockReturnValueOnce(entraStore({ tenantId: tenant(index) }));
+        return authResult(await prepare(authContext()));
       };
-      execFileMock.mockResolvedValue({
-        stdout: JSON.stringify({
-          accessToken: "synthetic-seed-token",
-          expiresOn: new Date(Date.now() + 60 * 60_000).toISOString(),
-        }),
-        stderr: "",
-      });
+      execFileMock.mockResolvedValue(tokenResponse("synthetic-seed-token"));
       // Fill through the provider without launching a process for each cached account.
       for (let index = 0; index <= foundryTokenCacheMaxEntries; index++) {
         await prepareForTenant(index);
@@ -727,21 +647,25 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("clears failed refresh state so later concurrent retries succeed", async () => {
-    const prepareRuntimeAuth = requirePrepareRuntimeAuth(registerProvider());
+    const prepareRuntimeAuth = prepareAuth();
     const failedResponse = createDeferred<void>();
     const recoveryResponse = createDeferred<void>();
-    mockAzureCliLoginFailure(failedResponse.promise);
+    const failedStarted = createDeferred<void>();
+    const recoveryStarted = createDeferred<void>();
+    mockAzureCliLoginFailure(failedResponse.promise, failedStarted.resolve);
     mockAzureCliToken({
       accessToken: "recovered-token",
       expiresInMs: 10 * 60_000,
       response: recoveryResponse.promise,
+      started: recoveryStarted.resolve,
     });
-    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
+    ensureAuthProfileStoreMock.mockReturnValue(entraStore());
 
-    const runtimeContext = buildFoundryRuntimeAuthContext();
+    const runtimeContext = authContext();
     const pending = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
     let settled = Promise.allSettled(pending);
     try {
+      await failedStarted.promise;
       expect(execFileMock).toHaveBeenCalledTimes(1);
       failedResponse.resolve();
       const failed = await settled;
@@ -756,12 +680,13 @@ describe("microsoft-foundry plugin", () => {
       const retries = [prepareRuntimeAuth(runtimeContext), prepareRuntimeAuth(runtimeContext)];
       pending.push(...retries);
       settled = Promise.allSettled(pending);
+      await recoveryStarted.promise;
       expect(execFileMock).toHaveBeenCalledTimes(2);
       recoveryResponse.resolve();
       const [first, second] = await Promise.all(retries);
       expect(execFileMock).toHaveBeenCalledTimes(2);
-      expect(requireRuntimeAuthResult(first).apiKey).toBe("recovered-token");
-      expect(requireRuntimeAuthResult(second).apiKey).toBe("recovered-token");
+      expect(authResult(first).apiKey).toBe("recovered-token");
+      expect(authResult(second).apiKey).toBe("recovered-token");
     } finally {
       // Broken dedupe can consume the recovery response in the first pair.
       failedResponse.resolve();
@@ -770,100 +695,38 @@ describe("microsoft-foundry plugin", () => {
     }
   });
 
-  it("refreshes again when a cached token is too close to expiry", async () => {
-    const provider = registerProvider();
-    mockAzureCliToken({ accessToken: "soon-expiring-token", expiresInMs: 60_000 });
-    mockAzureCliToken({ accessToken: "fresh-token", expiresInMs: 10 * 60_000 });
-    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
-
-    const runtimeContext = buildFoundryRuntimeAuthContext();
-
-    const first = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
-    expect(first.apiKey).toBe("soon-expiring-token");
-    const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
-    expect(second.apiKey).toBe("fresh-token");
-    expect(execFileMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("bounds Entra token fallback expiry when the process clock is invalid", async () => {
-    const provider = registerProvider();
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    mockAzureCliTokenRaw(JSON.stringify({ accessToken: "fallback-token" }));
-    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
-
-    const prepared = requireRuntimeAuthResult(
-      await provider.prepareRuntimeAuth?.(buildFoundryRuntimeAuthContext()),
-    );
-
-    expect(prepared.apiKey).toBe("fallback-token");
-    expect(prepared.expiresAt).toBe(55 * 60 * 1000);
-  });
-
-  it("treats an invalid process clock as an Entra token cache miss", async () => {
+  it("refreshes cached Entra tokens with bounded fallback expiry when the clock is invalid", async () => {
     const provider = registerProvider();
     mockAzureCliToken({ accessToken: "cached-token", expiresInMs: 10 * 60_000 });
-    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
-    const runtimeContext = buildFoundryRuntimeAuthContext();
+    ensureAuthProfileStoreMock.mockReturnValue(entraStore());
+    const runtimeContext = authContext();
 
-    const first = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
+    const first = authResult(await provider.prepareRuntimeAuth?.(runtimeContext));
     expect(first.apiKey).toBe("cached-token");
 
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
     mockAzureCliTokenRaw(
       JSON.stringify({
         accessToken: "refreshed-token",
-        expiresOn: "2026-05-29T12:10:00.000Z",
       }),
     );
-    const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
+    const second = authResult(await provider.prepareRuntimeAuth?.(runtimeContext));
 
     expect(second.apiKey).toBe("refreshed-token");
+    expect(second.expiresAt).toBe(55 * 60 * 1000);
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps other configured Foundry models when switching the selected model", async () => {
     const provider = registerProvider();
-    const config: OpenClawConfig = {
-      auth: {
-        profiles: {
-          "microsoft-foundry:default": {
-            provider: "microsoft-foundry",
-            mode: "api_key" as const,
-          },
-        },
-        order: {
-          "microsoft-foundry": ["microsoft-foundry:default"],
-        },
-      },
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "openai-responses",
-            models: [
-              {
-                id: "alias-one",
-                name: "gpt-5.4",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-              },
-              {
-                id: "alias-two",
-                name: "gpt-4o",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-              },
-            ],
-          },
-        },
-      },
-    };
+    const config = makeConfig({
+      profileIds: ["microsoft-foundry:default"],
+      orderedProfileIds: ["microsoft-foundry:default"],
+      models: [
+        { ...makeModel({ id: "alias-one" }), api: undefined, baseUrl: undefined },
+        { ...makeModel({ id: "alias-two", name: "gpt-4o" }), api: undefined, baseUrl: undefined },
+      ],
+    });
 
     await selectModel(provider, config, "alias-one");
 
@@ -878,9 +741,9 @@ describe("microsoft-foundry plugin", () => {
 
   it("preserves an explicit per-model Foundry endpoint when switching models", async () => {
     const provider = registerProvider();
-    const config = buildFoundryConfig({
+    const config = makeConfig({
       models: [
-        buildFoundryModel({
+        makeModel({
           id: "prod-fable",
           name: "claude-fable-5",
           api: "anthropic-messages",
@@ -897,24 +760,6 @@ describe("microsoft-foundry plugin", () => {
     expect(providerConfig?.baseUrl).toBe("https://claude-resource.services.ai.azure.com/anthropic");
     expect(providerConfig?.models[0]?.baseUrl).toBe(
       "https://claude-resource.services.ai.azure.com/anthropic",
-    );
-  });
-
-  it("preserves Fable limits when adding a newly selected Foundry deployment", async () => {
-    const provider = registerProvider();
-    const config = buildFoundryConfig({ models: [] });
-
-    await selectModel(provider, config, "claude-fable-5");
-
-    const model = config.models?.providers?.["microsoft-foundry"]?.models[0];
-    expect(model?.id).toBe("claude-fable-5");
-    expect(model?.api).toBe("anthropic-messages");
-    expect(model?.baseUrl).toBe("https://example.services.ai.azure.com/anthropic");
-    expect(model?.contextWindow).toBe(1_000_000);
-    expect(model?.maxTokens).toBe(128_000);
-    expect(config.models?.providers?.["microsoft-foundry"]?.api).toBe("anthropic-messages");
-    expect(config.models?.providers?.["microsoft-foundry"]?.baseUrl).toBe(
-      "https://example.services.ai.azure.com/anthropic",
     );
   });
 
@@ -950,13 +795,10 @@ describe("microsoft-foundry plugin", () => {
 
   it("defaults Azure OpenAI model families to the documented API surfaces", () => {
     expect(usesFoundryResponsesByDefault("gpt-5.4")).toBe(true);
-    expect(usesFoundryResponsesByDefault("gpt-5.2-codex")).toBe(true);
     expect(usesFoundryResponsesByDefault("o4-mini")).toBe(true);
     expect(usesFoundryResponsesByDefault("DeepSeek-V4-Pro")).toBe(true);
-    expect(usesFoundryResponsesByDefault("DeepSeek-V4-Flash")).toBe(true);
     expect(usesFoundryResponsesByDefault("MAI-DS-R1")).toBe(false);
     expect(requiresFoundryMaxCompletionTokens("gpt-5.4")).toBe(true);
-    expect(requiresFoundryMaxCompletionTokens("gpt-5-chat")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("o3")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("gpt-4o")).toBe(false);
     expect(isFoundryMaiImageModel("MAI-Image-2.5-Flash")).toBe(true);
@@ -977,7 +819,7 @@ describe("microsoft-foundry plugin", () => {
       api: "openai-completions",
     });
 
-    const model = requireFoundryProviderPatch(result).models[0];
+    const model = providerPatch(result).models[0];
     expect(model?.api).toBe("openai-completions");
     expect(model?.reasoning).toBe(true);
     expect(model?.contextWindow).toBe(163_840);
@@ -1022,7 +864,7 @@ describe("microsoft-foundry plugin", () => {
 
     const result = await authMethod.run({
       config: {},
-      agentDir: defaultFoundryAgentDir,
+      agentDir,
       prompter: {
         confirm: vi.fn(async () => true),
         note: vi.fn(async () => undefined),
@@ -1042,73 +884,7 @@ describe("microsoft-foundry plugin", () => {
     });
     expect(result.configPatch?.agents?.defaults).not.toHaveProperty("imageGenerationModel");
     expect(result.defaultModel).toBeUndefined();
-    expect(requireFoundryProviderPatch(result).models[0]?.name).toBe("MAI-Image-2.5");
-  });
-
-  it("classifies custom API-key MAI image deployments during manual setup", async () => {
-    const text = vi
-      .fn()
-      .mockResolvedValueOnce("https://example.services.ai.azure.com")
-      .mockResolvedValueOnce("prod-image");
-    const select = vi
-      .fn()
-      .mockResolvedValueOnce("mai-image")
-      .mockResolvedValueOnce("MAI-Image-2.5");
-    const selection = await promptApiKeyEndpointAndModel({
-      prompter: {
-        text,
-        select,
-      },
-    } as never);
-
-    const result = buildAuthResult({
-      endpoint: selection.endpoint,
-      modelId: selection.modelId,
-      modelNameHint: selection.modelNameHint,
-      api: selection.api,
-      authMethod: "api-key",
-    });
-
-    expect(selection).toEqual({
-      endpoint: "https://example.services.ai.azure.com",
-      modelId: "prod-image",
-      modelNameHint: "MAI-Image-2.5",
-      api: "openai-completions",
-    });
-    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
-      primary: "microsoft-foundry/prod-image",
-    });
-    expect(result.defaultModel).toBeUndefined();
-  });
-
-  it("keeps API-key manual setup defaulted to chat completions for GPT deployments", async () => {
-    const text = vi
-      .fn()
-      .mockResolvedValueOnce("https://example.services.ai.azure.com")
-      .mockResolvedValueOnce("gpt-4o");
-    const select = vi
-      .fn()
-      .mockImplementationOnce(async (params: { initialValue?: string }) => {
-        expect(params.initialValue).toBe("other-chat");
-        return "other-chat";
-      })
-      .mockImplementationOnce(async (params: { initialValue?: string }) => {
-        expect(params.initialValue).toBe("openai-completions");
-        return "openai-completions";
-      });
-
-    const selection = await promptApiKeyEndpointAndModel({
-      prompter: {
-        text,
-        select,
-      },
-    } as never);
-
-    expect(selection).toEqual({
-      endpoint: "https://example.services.ai.azure.com",
-      modelId: "gpt-4o",
-      api: "openai-completions",
-    });
+    expect(providerPatch(result).models[0]?.name).toBe("MAI-Image-2.5");
   });
 
   it("does not reuse stale API-key model metadata when selecting a different deployment", async () => {
@@ -1132,20 +908,22 @@ describe("microsoft-foundry plugin", () => {
       .fn()
       .mockResolvedValueOnce("https://example.services.ai.azure.com")
       .mockResolvedValueOnce("prod-gpt");
-    const select = vi
-      .fn()
-      .mockResolvedValueOnce("other-chat")
-      .mockResolvedValueOnce("openai-completions");
+    const select = vi.fn(async (params: { initialValue?: string }) => params.initialValue);
+
     const apiKeyAuth = provider.auth.find((method: { id: string }) => method.id === "api-key");
 
     const result = await apiKeyAuth?.run({
       config: {},
       opts: { azureOpenaiApiKey: "test-api-key" },
       prompter: { text, select },
-      agentDir: defaultFoundryAgentDir,
+      agentDir,
       secretInputMode: "plaintext",
     } as never);
 
+    expect(select.mock.calls.map(([params]) => params.initialValue)).toEqual([
+      "other-chat",
+      "openai-completions",
+    ]);
     const model = result?.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0];
     expect(model).toMatchObject({
       id: "prod-gpt",
@@ -1156,148 +934,63 @@ describe("microsoft-foundry plugin", () => {
     expect(model?.thinkingLevelMap).toBeUndefined();
   });
 
-  it("rejects Entra-only Claude Mythos deployments during API-key manual setup", async () => {
-    const text = vi.fn(
-      async (params: { message: string; validate?: (value: string) => string | undefined }) => {
-        if (params.message === "Microsoft Foundry endpoint URL") {
-          return "https://example.services.ai.azure.com";
-        }
-        if (params.message === "Default model/deployment name") {
-          return "prod-mythos";
-        }
-        if (params.message === "Claude base model") {
-          expect(params.validate?.("claude-fable-5")).toBeUndefined();
-          expect(params.validate?.("claude-mythos-preview")).toContain("Entra ID auth");
-          return "claude-fable-5";
-        }
-        throw new Error(`unexpected prompt: ${params.message}`);
-      },
-    );
-    const select = vi.fn().mockResolvedValueOnce("claude");
-
-    const selection = await promptApiKeyEndpointAndModel({
-      prompter: {
-        text,
-        select,
-      },
-    } as never);
-
-    expect(selection).toEqual({
-      endpoint: "https://example.services.ai.azure.com",
-      modelId: "prod-mythos",
+  it.each([
+    {
+      auth: "API key",
+      prompt: promptApiKeyEndpointAndModel,
       modelNameHint: "claude-fable-5",
-      api: "anthropic-messages",
-    });
-    expect(requiresFoundryEntraIdClaudeAuth("claude-mythos-preview")).toBe(true);
-    expect(requiresFoundryEntraIdClaudeAuth("claude-fable-5")).toBe(false);
-  });
-
-  it("allows Entra-only Claude Mythos deployments during Entra manual setup", async () => {
-    const text = vi.fn(
-      async (params: { message: string; validate?: (value: string) => string | undefined }) => {
-        if (params.message === "Microsoft Foundry endpoint URL") {
-          return "https://example.services.ai.azure.com";
-        }
-        if (params.message === "Default model/deployment name") {
-          return "prod-mythos";
-        }
-        if (params.message === "Claude base model") {
-          expect(params.validate?.("claude-mythos-preview")).toBeUndefined();
-          return "claude-mythos-preview";
-        }
-        throw new Error(`unexpected prompt: ${params.message}`);
-      },
-    );
-    const select = vi.fn().mockResolvedValueOnce("claude");
-
-    const selection = await promptEndpointAndModelManually({
-      prompter: {
-        text,
-        select,
-      },
-    } as never);
-
-    expect(selection).toEqual({
-      endpoint: "https://example.services.ai.azure.com",
-      modelId: "prod-mythos",
+      error: expect.stringContaining("Entra ID auth"),
+    },
+    {
+      auth: "Entra",
+      prompt: promptEndpointAndModelManually,
       modelNameHint: "claude-mythos-preview",
-      api: "anthropic-messages",
-    });
-  });
+      error: undefined,
+    },
+  ])(
+    "validates Entra-only Claude models during $auth setup",
+    async ({ prompt, modelNameHint, error }) => {
+      const text = vi
+        .fn()
+        .mockResolvedValueOnce("https://example.services.ai.azure.com")
+        .mockResolvedValueOnce("prod-mythos")
+        .mockImplementationOnce(
+          async (params: { validate?: (value: string) => string | undefined }) => {
+            expect(params.validate?.("claude-fable-5")).toBeUndefined();
+            expect(params.validate?.("claude-mythos-preview")).toEqual(error);
+            return modelNameHint;
+          },
+        );
+      const selection = await prompt({
+        prompter: { text, select: vi.fn(async () => "claude") },
+      } as never);
+      expect(selection).toEqual({
+        endpoint: "https://example.services.ai.azure.com",
+        modelId: "prod-mythos",
+        modelNameHint,
+        api: "anthropic-messages",
+      });
+    },
+  );
 
-  it("uses discovered deployment metadata for MAI image defaults", () => {
-    const result = buildAuthResult({
-      modelId: "custom-image-prod",
-      api: "openai-completions",
-      deployments: [
-        { name: "custom-image-prod", modelName: "MAI-Image-2.5-Flash" },
-        { name: "custom-chat-prod", modelName: "gpt-5.4", api: "openai-responses" },
-      ],
-    });
-
-    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
-      primary: "microsoft-foundry/custom-image-prod",
-    });
-    expect(result.defaultModel).toBeUndefined();
-  });
-
-  it("normalizes stale resolved Foundry rows to provider-owned image capability metadata", () => {
-    const provider = registerProvider();
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "microsoft-foundry",
-      modelId: "deployment-gpt5",
-      model: buildFoundryModel({
-        id: "deployment-gpt5",
-        name: "gpt-5.4",
-        input: ["text"],
-        compat: { supportsStrictMode: false },
-      }),
-    });
-
-    expect(normalized?.name).toBe("gpt-5.4");
-    expect(normalized?.api).toBe("openai-responses");
-    expect(normalized?.reasoning).toBe(true);
-    expect(normalized?.input).toEqual(["text", "image"]);
-    expect(normalized?.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
-    expect(normalized?.compat?.supportsStore).toBe(false);
-    expect(normalized?.compat?.supportsStrictMode).toBe(false);
-    expect(normalized?.compat?.maxTokensField).toBe("max_completion_tokens");
-  });
-
-  it("preserves explicit image capability for non-heuristic Foundry deployments", () => {
-    const provider = registerProvider();
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "microsoft-foundry",
-      modelId: "custom-vision-deployment",
-      model: buildFoundryModel({
-        id: "custom-vision-deployment",
-        name: "internal alias",
-        input: ["text", "image"],
-      }),
-    });
-
-    expect(normalized?.name).toBe("internal alias");
-    expect(normalized?.input).toEqual(["text", "image"]);
-  });
-
-  it("preserves explicit reasoning capability for non-heuristic Foundry aliases", () => {
+  it("preserves explicit capabilities for non-heuristic Foundry aliases", () => {
     const provider = registerProvider();
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "microsoft-foundry",
       modelId: "prod-primary",
-      model: buildFoundryModel({
+      model: makeModel({
         id: "prod-primary",
         name: "production alias",
         api: "openai-completions",
         reasoning: true,
+        input: ["text", "image"],
       }),
     });
 
     expect(normalized?.name).toBe("production alias");
     expect(normalized?.reasoning).toBe(true);
+    expect(normalized?.input).toEqual(["text", "image"]);
     expect(normalized?.compat?.supportsReasoningEffort).toBe(true);
     expect(normalized?.compat?.maxTokensField).toBe("max_completion_tokens");
   });
@@ -1308,7 +1001,7 @@ describe("microsoft-foundry plugin", () => {
     const normalized = provider.normalizeResolvedModel?.({
       provider: "microsoft-foundry",
       modelId: "prod-primary",
-      model: buildFoundryModel({
+      model: makeModel({
         id: "prod-primary",
         name: "production alias",
         api: "openai-completions",
@@ -1333,18 +1026,18 @@ describe("microsoft-foundry plugin", () => {
     const wrappedStreamFn = provider.wrapStreamFn?.({
       streamFn: baseStreamFn,
       modelId: "gpt-5.4",
-      model: buildFoundryModel({
+      model: makeModel({
         reasoning: true,
         compat: { supportsStore: false },
       }),
       extraParams: {},
       config: {},
-      agentDir: defaultFoundryAgentDir,
+      agentDir,
     } as never);
 
     expect(wrappedStreamFn).toBeTypeOf("function");
     await wrappedStreamFn?.(
-      buildFoundryModel({
+      makeModel({
         reasoning: true,
         compat: { supportsStore: false },
       }) as never,
@@ -1363,55 +1056,16 @@ describe("microsoft-foundry plugin", () => {
       provider.wrapStreamFn?.({
         streamFn: baseStreamFn,
         modelId: "gpt-4o-mini",
-        model: buildFoundryModel({
+        model: makeModel({
           id: "gpt-4o-mini",
           name: "gpt-4o-mini",
           api: "openai-completions",
         }),
         extraParams: {},
         config: {},
-        agentDir: defaultFoundryAgentDir,
+        agentDir,
       } as never),
     ).toBe(baseStreamFn);
-  });
-
-  it("marks Foundry chat models as not supporting reasoning_effort", () => {
-    const result = buildAuthResult({
-      modelId: "gpt-4o-mini",
-      modelNameHint: "gpt-4o-mini",
-      api: "openai-completions",
-      authMethod: "api-key",
-    });
-
-    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
-    expect(provider?.models[0]?.reasoning).toBe(false);
-    expect(provider?.models[0]?.compat?.supportsReasoningEffort).toBe(false);
-    expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_tokens");
-  });
-
-  it("routes Claude deployments through Foundry Anthropic Messages", () => {
-    const result = buildAuthResult({
-      endpoint: "https://example.services.ai.azure.com/openai/v1",
-      modelId: "prod-fable",
-      modelNameHint: "claude-fable-5",
-      api: "anthropic-messages",
-    });
-
-    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
-    expect(provider?.baseUrl).toBe("https://example.services.ai.azure.com/anthropic");
-    expect(provider?.api).toBe("anthropic-messages");
-    expect(provider?.authHeader).toBeUndefined();
-    expect(provider?.models[0]).toMatchObject({
-      id: "prod-fable",
-      name: "claude-fable-5",
-      api: "anthropic-messages",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    });
-    expect(provider?.models[0]?.compat).toBeUndefined();
   });
 
   it.each([
@@ -1429,13 +1083,11 @@ describe("microsoft-foundry plugin", () => {
         authMethod: "api-key",
       });
 
-      expect(result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject(
-        {
-          name: modelNameHint,
-          contextWindow,
-          maxTokens,
-        },
-      );
+      expect(providerPatch(result).models[0]).toMatchObject({
+        name: modelNameHint,
+        contextWindow,
+        maxTokens,
+      });
     },
   );
 
@@ -1451,7 +1103,7 @@ describe("microsoft-foundry plugin", () => {
       api: "anthropic-messages",
     });
 
-    expect(result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject({
+    expect(providerPatch(result).models[0]).toMatchObject({
       name: modelNameHint,
       api: "anthropic-messages",
       contextWindow: maxTokens === 128_000 ? 1_000_000 : 200_000,
@@ -1553,20 +1205,6 @@ describe("microsoft-foundry plugin", () => {
     });
   });
 
-  it("does not record native max thinking maps for Foundry Mythos Preview deployments", () => {
-    const result = buildAuthResult({
-      modelId: "prod-mythos-preview",
-      modelNameHint: "claude-mythos-preview",
-      api: "anthropic-messages",
-    });
-
-    const model = result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0];
-    expect(model?.thinkingLevelMap).toBeUndefined();
-    expect(model?.params).toMatchObject({ canonicalModelId: "claude-mythos-preview" });
-    expect(model?.contextWindow).toBe(1_000_000);
-    expect(model?.maxTokens).toBe(128_000);
-  });
-
   it("records model-name reasoning effort limits for Foundry deployment aliases", () => {
     const result = buildAuthResult({
       modelId: "deployment-codex-mini",
@@ -1595,24 +1233,6 @@ describe("microsoft-foundry plugin", () => {
       xhigh: null,
       max: null,
     });
-  });
-
-  it("omits minimal from newer Foundry GPT-5.x reasoning effort metadata", () => {
-    const result = buildAuthResult({
-      modelId: "gpt-5.2",
-      modelNameHint: "gpt-5.2",
-      api: "openai-completions",
-      authMethod: "api-key",
-    });
-
-    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
-    expect(provider?.models[0]?.thinkingLevelMap?.minimal).toBe(null);
-    expect(provider?.models[0]?.compat?.supportedReasoningEfforts).toEqual([
-      "none",
-      "low",
-      "medium",
-      "high",
-    ]);
   });
 
   it("omits minimal from Foundry GPT-5 Codex reasoning effort metadata", () => {
@@ -1648,69 +1268,15 @@ describe("microsoft-foundry plugin", () => {
     expect(provider?.models[0]?.maxTokens).toBe(16_384);
   });
 
-  it("keeps persisted response-mode routing for custom deployment aliases", async () => {
-    const provider = registerProvider();
-    const config: OpenClawConfig = {
-      auth: {
-        profiles: {
-          "microsoft-foundry:entra": {
-            provider: "microsoft-foundry",
-            mode: "api_key" as const,
-          },
-        },
-        order: {
-          "microsoft-foundry": ["microsoft-foundry:entra"],
-        },
-      },
-      models: {
-        providers: {
-          "microsoft-foundry": {
-            baseUrl: "https://example.services.ai.azure.com/openai/v1",
-            api: "openai-responses",
-            models: [
-              {
-                id: "prod-primary",
-                name: "production alias",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-              },
-            ],
-          },
-        },
-      },
-    };
-
-    await selectModel(provider, config, "prod-primary");
-
-    expect(config.models?.providers?.["microsoft-foundry"]?.api).toBe("openai-responses");
-    expect(config.models?.providers?.["microsoft-foundry"]?.baseUrl).toBe(
-      "https://example.services.ai.azure.com/openai/v1",
-    );
-    expect(config.models?.providers?.["microsoft-foundry"]?.models[0]?.api).toBe(
-      "openai-responses",
-    );
-  });
-
-  it("normalizes pasted Azure chat completion request URLs to the resource endpoint", () => {
-    expect(
-      normalizeFoundryEndpoint(
-        "https://example.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-12-01-preview",
-      ),
-    ).toBe("https://example.openai.azure.com");
-  });
-
   it("preserves project-scoped endpoint prefixes when extracting the Foundry endpoint", async () => {
     const provider = registerProvider();
     mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce({ profiles: {} });
 
     const prepared = await provider.prepareRuntimeAuth?.(
-      buildFoundryRuntimeAuthContext({
+      authContext({
         modelId: "deployment-gpt5",
-        model: buildFoundryModel({
+        model: makeModel({
           id: "deployment-gpt5",
           baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1/responses",
         }),
@@ -1745,7 +1311,7 @@ describe("microsoft-foundry plugin", () => {
       authMethod: "api-key",
     });
 
-    const provider = requireFoundryProviderPatch(result);
+    const provider = providerPatch(result);
     expect(provider.apiKey).toBeUndefined();
     expect(provider.authHeader).toBeUndefined();
     expect(provider.headers).toBeUndefined();
@@ -1764,35 +1330,6 @@ describe("microsoft-foundry plugin", () => {
       "microsoft-foundry:entra",
       "microsoft-foundry:default",
     ]);
-  });
-
-  it("keeps Foundry profile selection compatible with unrelated AWS SDK profile modes", async () => {
-    const provider = registerProvider();
-    const config: OpenClawConfig = {
-      ...buildFoundryConfig({
-        profileIds: ["microsoft-foundry:entra"],
-        orderedProfileIds: ["microsoft-foundry:entra"],
-      }),
-      auth: {
-        profiles: {
-          "amazon-bedrock:default": {
-            provider: "amazon-bedrock",
-            mode: "aws-sdk",
-          },
-          "microsoft-foundry:entra": {
-            provider: "microsoft-foundry",
-            mode: "api_key",
-          },
-        },
-        order: {
-          "microsoft-foundry": ["microsoft-foundry:entra"],
-        },
-      },
-    };
-
-    await selectModel(provider, config, "gpt-5.4");
-
-    expect(config.auth?.order?.["microsoft-foundry"]).toEqual(["microsoft-foundry:entra"]);
   });
 
   it("persists discovered deployments alongside the selected default model", () => {

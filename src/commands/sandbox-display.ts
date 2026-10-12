@@ -1,11 +1,18 @@
-/**
- * Display utilities for sandbox CLI
- */
-
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import type { RuntimeEnv } from "../runtime.js";
+
+function displayUsage(container: SandboxContainerInfo, runtime: RuntimeEnv): void {
+  runtime.log(
+    `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
+  );
+  runtime.log(
+    `    Idle:    ${formatDurationCompact(Date.now() - container.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
+  );
+  runtime.log(`    Session: ${container.sessionKey}`);
+  runtime.log("");
+}
 
 export function displayContainers(containers: SandboxContainerInfo[], runtime: RuntimeEnv): void {
   if (containers.length === 0) {
@@ -21,14 +28,7 @@ export function displayContainers(containers: SandboxContainerInfo[], runtime: R
       `    ${container.configLabelKind ?? "Image"}:   ${container.image} ${container.imageMatch ? "✓" : "⚠️  mismatch"}`,
     );
     runtime.log(`    Backend: ${container.backendId ?? "docker"}`);
-    runtime.log(
-      `    Age:     ${formatDurationCompact(Date.now() - container.createdAtMs, { spaced: true }) ?? "0s"}`,
-    );
-    runtime.log(
-      `    Idle:    ${formatDurationCompact(Date.now() - container.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
-    );
-    runtime.log(`    Session: ${container.sessionKey}`);
-    runtime.log("");
+    displayUsage(container, runtime);
   }
 }
 
@@ -47,14 +47,7 @@ export function displayBrowsers(browsers: SandboxBrowserInfo[], runtime: Runtime
     if (browser.noVncPort) {
       runtime.log(`    noVNC:   ${browser.noVncPort}`);
     }
-    runtime.log(
-      `    Age:     ${formatDurationCompact(Date.now() - browser.createdAtMs, { spaced: true }) ?? "0s"}`,
-    );
-    runtime.log(
-      `    Idle:    ${formatDurationCompact(Date.now() - browser.lastUsedAtMs, { spaced: true }) ?? "0s"}`,
-    );
-    runtime.log(`    Session: ${browser.sessionKey}`);
-    runtime.log("");
+    displayUsage(browser, runtime);
   }
 }
 
@@ -79,29 +72,18 @@ export function displaySummary(
 
 export function displayRecreatePreview(
   containers: SandboxContainerInfo[],
-  browsers: SandboxBrowserInfo[],
+  browser: boolean,
   runtime: RuntimeEnv,
 ): void {
   runtime.log("\nSandbox runtimes to be recreated:\n");
-
-  if (containers.length > 0) {
-    runtime.log("📦 Sandbox Runtimes:");
-    for (const container of containers) {
-      runtime.log(
-        `  - ${container.runtimeLabel ?? container.containerName} [${container.backendId ?? "docker"}] (${container.running ? "running" : "stopped"})`,
-      );
-    }
+  runtime.log(browser ? "\n🌐 Browser Containers:" : "📦 Sandbox Runtimes:");
+  for (const container of containers) {
+    const label = browser
+      ? container.containerName
+      : `${container.runtimeLabel ?? container.containerName} [${container.backendId ?? "docker"}]`;
+    runtime.log(`  - ${label} (${container.running ? "running" : "stopped"})`);
   }
-
-  if (browsers.length > 0) {
-    runtime.log("\n🌐 Browser Containers:");
-    for (const browser of browsers) {
-      runtime.log(`  - ${browser.containerName} (${browser.running ? "running" : "stopped"})`);
-    }
-  }
-
-  const total = containers.length + browsers.length;
-  runtime.log(`\nTotal: ${total} runtime(s)`);
+  runtime.log(`\nTotal: ${containers.length} runtime(s)`);
 }
 
 export function displayRecreateResult(

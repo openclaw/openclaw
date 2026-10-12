@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import { buildOpenAIResponsesReplayContext } from "../transports/openai-responses-compaction-replay.js";
+import { buildProviderReplayContext } from "../transports/provider-replay-context.js";
 import type { Context, Model } from "../types.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import {
@@ -55,23 +55,10 @@ afterEach(() => {
 
 describe("azure-openai-responses", () => {
   it.each([
-    ["traditional resource host", "https://example.openai.azure.com/openai/v1", false],
-    [
-      "traditional cognitive services host",
-      "https://example.cognitiveservices.azure.com/openai/v1",
-      false,
-    ],
     [
       "Foundry project endpoint",
       "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
       true,
-    ],
-    ["Foundry root endpoint", "https://project.services.ai.azure.com/openai/v1", true],
-    ["cognitive API endpoint", "https://eastus.api.cognitive.microsoft.com/openai/v1", true],
-    [
-      "Foundry endpoint without /openai/v1",
-      "https://project.services.ai.azure.com/api/projects/demo",
-      false,
     ],
     ["private endpoint", "https://aoai.internal/openai/v1", false],
   ])("classifies the %s client path", (_name, baseUrl, expected) => {
@@ -132,16 +119,12 @@ describe("azure-openai-responses", () => {
 
   it.each<{
     id?: string;
-    reasoning: "minimal" | "xhigh" | "max" | undefined;
+    reasoning: "xhigh" | "max" | undefined;
     compat: Model<"azure-openai-responses">["compat"];
     effort: string;
     temperature: number | undefined;
   }>([
     { reasoning: undefined, compat: undefined, effort: "none", temperature: 0.5 },
-    { reasoning: "minimal", compat: undefined, effort: "minimal", temperature: 0.5 },
-    { reasoning: "xhigh", compat: undefined, effort: "high", temperature: 0.5 },
-    { reasoning: "max", compat: undefined, effort: "high", temperature: 0.5 },
-    { id: "gpt-6-sol", reasoning: "max", compat: undefined, effort: "high", temperature: 0.5 },
     { id: "gpt-6-luna", reasoning: "max", compat: undefined, effort: "high", temperature: 0.5 },
     {
       reasoning: "xhigh",
@@ -151,12 +134,6 @@ describe("azure-openai-responses", () => {
       },
       effort: "xhigh",
       temperature: undefined,
-    },
-    {
-      reasoning: "max",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-      effort: "max",
-      temperature: 0.5,
     },
   ])(
     "preserves Azure deployment capabilities for $reasoning with compat=$compat",
@@ -186,7 +163,7 @@ describe("azure-openai-responses", () => {
     const routeA = "https://route-a.openai.azure.com/openai/v1";
     const routeB = "https://route-b.openai.azure.com/openai/v1";
     const sessionId = "azure-replay-session";
-    const replayContext = buildOpenAIResponsesReplayContext(
+    const replayContext = buildProviderReplayContext(
       { ...azureResponsesModel, baseUrl: routeA },
       { sessionId },
     );

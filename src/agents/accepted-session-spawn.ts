@@ -8,6 +8,9 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 export type AcceptedSessionSpawn = {
   runId: string;
   childSessionKey: string;
+  sessionUrl?: string;
+  publicRead?: boolean;
+  label?: string;
   /** True only when this child owns a terminal completion for its requester. */
   expectsCompletionMessage?: boolean;
 };
@@ -47,9 +50,15 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
   if (!runId || !childSessionKey) {
     return null;
   }
+  const sessionUrl = normalizeOptionalString(details.sessionUrl);
+  const url = sessionUrl ? URL.parse(sessionUrl) : null;
+  const label = normalizeOptionalString(details.label);
   return {
     runId,
     childSessionKey,
+    ...(url?.protocol === "http:" || url?.protocol === "https:" ? { sessionUrl } : {}),
+    ...(label ? { label } : {}),
+    ...(details.publicRead === true ? { publicRead: true } : {}),
     expectsCompletionMessage: details.expectsCompletionMessage === true,
   };
 }

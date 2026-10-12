@@ -1,5 +1,5 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
+import type { CodexServerNotification, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
@@ -16,13 +16,6 @@ export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
   // boundary until its protocol provides the child's terminal status and text.
   "rawResponseItem/completed",
 ]);
-export const RECOVERY_REVISION_NOTIFICATION_METHODS = new Set([
-  "thread/started",
-  "thread/status/changed",
-  "turn/started",
-  "turn/completed",
-]);
-
 const CODEX_SUBAGENT_NOTIFICATION_START = "<subagent_notification>";
 const CODEX_SUBAGENT_NOTIFICATION_END = "</subagent_notification>";
 
@@ -45,22 +38,10 @@ function extractCodexNativeSubagentCompletions(
   notification: CodexServerNotification,
 ): CodexNativeSubagentNotificationCompletion[] {
   const params = isJsonObject(notification.params) ? notification.params : undefined;
-  if (!params) {
+  const item = isJsonObject(params?.item) ? params.item : undefined;
+  if (!item || notification.method !== "rawResponseItem/completed" || item.role !== "user") {
     return [];
   }
-  const item = isJsonObject(params.item) ? params.item : undefined;
-  if (!item) {
-    return [];
-  }
-  if (notification.method === "rawResponseItem/completed" && item.role === "user") {
-    return readTrustedContextualCompletions(item);
-  }
-  return [];
-}
-
-function readTrustedContextualCompletions(
-  item: JsonObject,
-): CodexNativeSubagentNotificationCompletion[] {
   const content = item.content;
   const metadata = item.internal_chat_message_metadata_passthrough;
   const kinds = isJsonObject(metadata) ? metadata.content_item_kinds : undefined;
@@ -89,10 +70,22 @@ function readTrustedContextualCompletions(
     ) {
       return [];
     }
-    const completion = parseCodexNativeSubagentNotificationBody(
-      text.slice(CODEX_SUBAGENT_NOTIFICATION_START.length, -CODEX_SUBAGENT_NOTIFICATION_END.length),
-    );
-    return completion ? [completion] : [];
+    let payload: JsonValue;
+    try {
+      payload = JSON.parse(
+        text
+          .slice(CODEX_SUBAGENT_NOTIFICATION_START.length, -CODEX_SUBAGENT_NOTIFICATION_END.length)
+          .trim(),
+      );
+    } catch {
+      return [];
+    }
+    if (!isJsonObject(payload)) {
+      return [];
+    }
+    const agentPath = readString(payload, "agent_path")?.trim();
+    const completion = readCompletionStatus(payload.status);
+    return agentPath && completion ? [{ agentPath, ...completion }] : [];
   });
 }
 
@@ -151,23 +144,6 @@ function readDeliveredNativeCompletionPaths(notification: CodexServerNotificatio
   )
     ? [author]
     : [];
-}
-
-function parseCodexNativeSubagentNotificationBody(
-  body: string,
-): CodexNativeSubagentNotificationCompletion | undefined {
-  let payload: JsonValue;
-  try {
-    payload = JSON.parse(body.trim());
-  } catch {
-    return undefined;
-  }
-  if (!isJsonObject(payload)) {
-    return undefined;
-  }
-  const agentPath = readString(payload, "agent_path")?.trim();
-  const completion = readCompletionStatus(payload.status);
-  return agentPath && completion ? { agentPath, ...completion } : undefined;
 }
 
 function readCompletionStatus(

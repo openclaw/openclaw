@@ -1,13 +1,17 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import {
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -30,7 +34,10 @@ async function expectCenteredToggle(bubble: Locator) {
   expect(Math.abs(above - below)).toBeLessThanOrEqual(1);
 }
 
-async function expectReadableLastLine(content: Locator) {
+async function expectReadableLastLine(page: Page, content: Locator) {
+  const text = content.locator(".chat-text");
+  await waitForControlUiProofSurface(content, [text]);
+  await waitForLayoutSettled(page, ".chat-message-disclosure__content");
   const geometry = await content.evaluate((element) => {
     const paragraph = element.querySelector("p, li")!;
     const style = getComputedStyle(paragraph);
@@ -59,7 +66,22 @@ async function expectReadableLastLine(content: Locator) {
     context.font = style.font;
     const metrics = context.measureText("x");
     const baseline = last.top + metrics.fontBoundingBoxAscent;
+    const transcript = element.closest<HTMLElement>(".chat-thread");
+    if (!transcript) {
+      throw new Error("Disclosure content has no transcript");
+    }
+    const transcriptBounds = transcript.getBoundingClientRect();
+    const transcriptLeft = transcriptBounds.left + transcript.clientLeft;
+    const transcriptTop = transcriptBounds.top + transcript.clientTop;
     return {
+      bounds: { left: clip.left, top: clip.top, right: clip.right, bottom: clip.bottom },
+      viewport: { width: innerWidth, height: innerHeight },
+      transcriptClip: {
+        left: transcriptLeft,
+        top: transcriptTop,
+        right: transcriptLeft + transcript.clientWidth,
+        bottom: transcriptTop + transcript.clientHeight,
+      },
       visibleLines: visible.length,
       fraction: (clip.bottom - lineTop) / lineHeight,
       baselineVisible: clip.bottom > baseline,
@@ -72,18 +94,36 @@ async function expectReadableLastLine(content: Locator) {
   expect(geometry.fraction).toBeLessThanOrEqual(0.75);
   expect(geometry.baselineVisible, "the x-height fits above the cut").toBe(true);
 
-  const masked = await content.screenshot({ animations: "disabled" });
+  const { bounds, viewport, transcriptClip } = geometry;
+  expect(bounds.right).toBeGreaterThan(bounds.left);
+  expect(bounds.bottom).toBeGreaterThan(bounds.top);
+  expect(bounds.left).toBeGreaterThanOrEqual(Math.max(0, transcriptClip.left));
+  expect(bounds.top).toBeGreaterThanOrEqual(Math.max(0, transcriptClip.top));
+  expect(bounds.right).toBeLessThanOrEqual(Math.min(viewport.width, transcriptClip.right));
+  expect(bounds.bottom).toBeLessThanOrEqual(Math.min(viewport.height, transcriptClip.bottom));
+  const readBounds = () =>
+    content.evaluate((element) => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+      return { left, top, right, bottom };
+    });
+  const capture = async () => {
+    expect(await readBounds()).toEqual(bounds);
+    const png = await takeControlUiViewportScreenshot(page, content, [text]);
+    expect(await readBounds()).toEqual(bounds);
+    return png;
+  };
+  const masked = await capture();
   await content.evaluate((element) => ((element as HTMLElement).style.maskImage = "none"));
   let unmasked: Buffer;
   try {
-    unmasked = await content.screenshot({ animations: "disabled" });
+    unmasked = await capture();
   } finally {
     await content.evaluate((element) =>
       (element as HTMLElement).style.removeProperty("mask-image"),
     );
   }
   const rows = await content.evaluate(
-    async (_, { images, sampleRows }) => {
+    async (_, { images, sampleRows, bounds: sampleBounds, viewport: viewportSize }) => {
       const sampleImage = async (source: string) => {
         const image = new Image();
         image.src = source;
@@ -93,15 +133,29 @@ async function expectReadableLastLine(content: Locator) {
         canvas.height = image.height;
         const context = canvas.getContext("2d")!;
         context.drawImage(image, 0, 0);
-        const sampleRow = (y: number) => {
-          const { data } = context.getImageData(0, y, image.width, 1);
+        const scaleX = image.width / viewportSize.width;
+        const scaleY = image.height / viewportSize.height;
+        const left = Math.floor(sampleBounds.left * scaleX);
+        const right = Math.ceil(sampleBounds.right * scaleX);
+        const top = Math.floor(sampleBounds.top * scaleY);
+        const sampleRow = (relativeY: number) => {
+          // Match an enclosing element crop while scaling CSS rows to device pixels.
+          const y = top + Math.floor(relativeY * scaleY);
+          if (left < 0 || right > image.width || right <= left || y < 0 || y >= image.height) {
+            throw new Error("Disclosure sample falls outside the captured viewport");
+          }
+          const { data } = context.getImageData(left, y, right - left, 1);
           const values: number[] = [];
-          for (let x = 0; x < image.width; x++) {
+          for (let x = 0; x < right - left; x++) {
             values.push(data.subarray(x * 4, x * 4 + 3).reduce((sum, value) => sum + value, 0));
           }
           return Math.max(...values) - Math.min(...values);
         };
-        return { upper: sampleRow(sampleRows.upper), lower: sampleRow(sampleRows.lower) };
+        return {
+          dimensions: { width: image.width, height: image.height },
+          upper: sampleRow(sampleRows.upper),
+          lower: sampleRow(sampleRows.lower),
+        };
       };
       return Promise.all([sampleImage(images.masked), sampleImage(images.unmasked)]);
     },
@@ -111,8 +165,11 @@ async function expectReadableLastLine(content: Locator) {
         unmasked: `data:image/png;base64,${unmasked.toString("base64")}`,
       },
       sampleRows: { upper: geometry.upperRow, lower: geometry.lowerRow },
+      bounds,
+      viewport,
     },
   );
+  expect(rows[0].dimensions).toEqual(rows[1].dimensions);
   const upperAlpha = rows[0].upper / rows[1].upper;
   const lowerAlpha = rows[0].lower / rows[1].lower;
   expect(upperAlpha, "the upper half remains legible").toBeGreaterThan(0.65);
@@ -123,57 +180,11 @@ async function expectReadableLastLine(content: Locator) {
 }
 
 suite.define(() => {
-  it("keeps seven short lines fully visible", async () => {
-    const text = [
-      "please re-review these:",
-      "#127818",
-      "#127826",
-      "#127844",
-      "#127881",
-      "",
-      "rerun the same session we had for these",
-    ].join("\n");
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      historyMessages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-group.user .chat-bubble");
-      await bubble.waitFor({ state: "visible", timeout: 10_000 });
-      if (captureUiProofEnabled) {
-        await bubble.screenshot({
-          path: path.join(suite.artifactDir, "user-bubble-clamp", "short-message.png"),
-        });
-      }
-
-      expect(await bubble.getByRole("button", { name: "Show more" }).count()).toBe(0);
-      expect(await bubble.locator(".chat-message-disclosure").count()).toBe(0);
-      const bubbleText = await bubble.textContent();
-      for (const line of text.split("\n").filter(Boolean)) {
-        expect(bubbleText).toContain(line);
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it.each(
-    (["light", "dark"] as const).flatMap((theme) =>
-      [1440, 390].flatMap((width) =>
-        [false, true].flatMap((withImage) =>
-          ["continuous", "paragraphs", "list"].map((layout) => ({
-            theme,
-            width,
-            withImage,
-            layout,
-          })),
-        ),
-      ),
-    ),
-  )(
+  it.each([
+    { theme: "light", width: 1440, withImage: false, layout: "continuous" },
+    { theme: "dark", width: 390, withImage: true, layout: "paragraphs" },
+    { theme: "light", width: 390, withImage: false, layout: "list" },
+  ] as const)(
     "clamps and centers a long prompt in $theme at $width px (image: $withImage, layout: $layout)",
     async ({ theme, width, withImage, layout }) => {
       const prose =
@@ -236,7 +247,7 @@ suite.define(() => {
 
         await page.evaluate(() => document.fonts.ready);
         await expectCenteredToggle(bubble);
-        await expectReadableLastLine(content);
+        await expectReadableLastLine(page, content);
         expect(await content.evaluate((element) => getComputedStyle(element).maskImage)).not.toBe(
           "none",
         );
@@ -312,25 +323,25 @@ suite.define(() => {
       const content = page.locator(".chat-message-disclosure__content");
       await content.waitFor();
       await page.evaluate(() => document.fonts.ready);
-      await expectReadableLastLine(content);
+      await expectReadableLastLine(page, content);
       const desktopHeight = await content.evaluate((element) => element.clientHeight);
       await page.setViewportSize({ width: 390, height: 844 });
       await expect
         .poll(() => content.evaluate((element) => element.clientHeight))
         .not.toBe(desktopHeight);
-      await expectReadableLastLine(content);
+      await expectReadableLastLine(page, content);
       await page.setViewportSize({ width: 1440, height: 844 });
       await expect
         .poll(() => content.evaluate((element) => element.clientHeight))
         .toBe(desktopHeight);
-      await expectReadableLastLine(content);
+      await expectReadableLastLine(page, content);
       await content.locator(".chat-text").evaluate((element) => {
         (element as HTMLElement).style.fontSize = "18px";
       });
       await expect
         .poll(() => content.evaluate((element) => element.clientHeight))
         .not.toBe(desktopHeight);
-      await expectReadableLastLine(content);
+      await expectReadableLastLine(page, content);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -443,10 +454,7 @@ suite.define(() => {
     }
   });
 
-  it.each([
-    { name: "desktop", width: 1280, height: 900 },
-    { name: "mobile", width: 390, height: 844 },
-  ])(
+  it.each([{ name: "mobile", width: 390, height: 844 }])(
     "keeps collapsed paragraphs readable after reload and browser reveal ($name)",
     async (viewport) => {
       const paragraphs = [

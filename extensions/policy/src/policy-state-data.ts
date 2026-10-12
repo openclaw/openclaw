@@ -1,4 +1,3 @@
-// Policy plugin data, secret, and auth evidence.
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -10,15 +9,15 @@ import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-hel
 import type {
   PolicyAuthProfileEvidence,
   PolicyDataHandlingEvidence,
+  PolicyEvidenceBuilder,
   PolicySecretEvidence,
   SecretRefDefaults,
-  SecretRefEvidence,
 } from "./policy-state-types.js";
 
 export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
-  return [...scanPolicySecretProviders(cfg), ...scanPolicySecretInputs(cfg)].toSorted((a, b) =>
-    a.source.localeCompare(b.source),
-  );
+  const entries = [...scanPolicySecretProviders(cfg)];
+  collectSecretInputs(entries, cfg, [], secretRefDefaults(asNonArrayRecord(cfg.secrets).defaults));
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
 export function scanPolicyAuthProfiles(
@@ -29,13 +28,7 @@ export function scanPolicyAuthProfiles(
   return Object.entries(profiles)
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, value]) => {
-      const entry: {
-        id: string;
-        source: string;
-        validMetadata: boolean;
-        provider?: string;
-        mode?: string;
-      } = {
+      const entry: PolicyEvidenceBuilder<PolicyAuthProfileEvidence> = {
         id,
         source: `oc://openclaw.config/auth/profiles/${ocPathSegment(id)}`,
         validMetadata: isValidAuthProfileMetadata(value),
@@ -111,13 +104,7 @@ function telemetryContentCaptureEnabled(
   if (value === true) {
     return signals.tracesEnabled || signals.logsEnabled;
   }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (!signals.tracesEnabled) {
-    return false;
-  }
-  if (value.enabled !== true) {
+  if (!isRecord(value) || !signals.tracesEnabled || value.enabled !== true) {
     return false;
   }
   return (
@@ -134,21 +121,13 @@ function pushMemorySessionTranscriptIndexing(
   entries: PolicyDataHandlingEvidence[],
   cfg: Record<string, unknown>,
 ): void {
-  const memory = asNonArrayRecord(cfg.memory);
-  const defaultsMemorySearch = asNonArrayRecord(memory.search);
-  const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaultsMemorySearch);
+  const defaults = readMemorySessionSettings(asNonArrayRecord(cfg.memory).search);
+  const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaults);
   if (defaultSessionMemory !== undefined) {
-    const defaultExperimental = isRecord(defaultsMemorySearch.experimental)
-      ? defaultsMemorySearch.experimental
-      : {};
     entries.push({
       id: "agents-defaults-memory-session-transcripts",
       kind: "memorySessionTranscriptIndexing",
-      source:
-        readBoolean(defaultsMemorySearch.rememberAcrossConversations) === undefined &&
-        readBoolean(defaultExperimental.sessionMemory) !== undefined
-          ? "oc://openclaw.config/memory/search/experimental/sessionMemory"
-          : "oc://openclaw.config/memory/search/rememberAcrossConversations",
+      source: `oc://openclaw.config/memory/search/${defaults.sourceKey}`,
       scope: "global",
       value: defaultSessionMemory,
       explicit: true,
@@ -156,111 +135,75 @@ function pushMemorySessionTranscriptIndexing(
   }
 
   const agents = asNonArrayRecord(cfg.agents);
-  const configuredAgents = collectPolicyConfiguredAgents(agents);
-  if (configuredAgents.length === 0) {
-    return;
-  }
-  configuredAgents.forEach((configured) => {
+  collectPolicyConfiguredAgents(agents).forEach((configured) => {
     const { agentId, value: rawAgent } = configured;
     if (!isRecord(rawAgent)) {
       return;
     }
-    const agentMemory = isRecord(rawAgent.memory) ? rawAgent.memory : undefined;
-    const memorySearch = isRecord(agentMemory?.search) ? agentMemory.search : undefined;
-    const agentSessionMemory =
-      memorySearch === undefined
-        ? defaultSessionMemory
-        : memorySearchSessionTranscriptIndexing(memorySearch, defaultsMemorySearch);
+    const memorySearch = asNonArrayRecord(rawAgent.memory).search;
+    const local = readMemorySessionSettings(memorySearch);
+    const agentSessionMemory = isRecord(memorySearch)
+      ? memorySearchSessionTranscriptIndexing(local, defaults)
+      : defaultSessionMemory;
     if (agentSessionMemory === undefined) {
       return;
     }
-    const explicit = memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch);
-    const experimental = asNonArrayRecord(memorySearch?.experimental);
     entries.push({
       id: `${agentId}-memory-session-transcripts`,
       kind: "memorySessionTranscriptIndexing",
-      source: explicit
-        ? readBoolean(memorySearch?.rememberAcrossConversations) === undefined &&
-          readBoolean(experimental.sessionMemory) !== undefined
-          ? `${configured.sourceBase}/memory/search/experimental/sessionMemory`
-          : `${configured.sourceBase}/memory/search/rememberAcrossConversations`
+      source: local.explicit
+        ? `${configured.sourceBase}/memory/search/${local.sourceKey}`
         : "oc://openclaw.config/memory/search/rememberAcrossConversations",
       scope: "agent",
       agentId: normalizeAgentId(agentId),
       value: agentSessionMemory,
-      explicit,
+      explicit: local.explicit,
     });
   });
 }
 
 function memorySearchSessionTranscriptIndexing(
-  memorySearch: unknown,
-  inheritedMemorySearch?: unknown,
+  local: ReturnType<typeof readMemorySessionSettings>,
+  inherited = local,
 ): boolean | undefined {
-  if (!isRecord(memorySearch)) {
+  const rememberAcrossConversations = local.remember ?? inherited.remember;
+  if (rememberAcrossConversations === undefined && !local.explicit) {
     return undefined;
-  }
-  const inherited = asNonArrayRecord(inheritedMemorySearch);
-  const enabled = readBoolean(memorySearch.enabled) ?? readBoolean(inherited.enabled) ?? true;
-  const experimental = asNonArrayRecord(memorySearch.experimental);
-  const inheritedExperimental = asNonArrayRecord(inherited.experimental);
-  const rememberAcrossConversations =
-    readBoolean(memorySearch.rememberAcrossConversations) ??
-    readBoolean(experimental.sessionMemory) ??
-    readBoolean(inherited.rememberAcrossConversations) ??
-    readBoolean(inheritedExperimental.sessionMemory);
-  const sourcesIncludeSessions =
-    memorySearchSourcesIncludeSessions(memorySearch) ??
-    memorySearchSourcesIncludeSessions(inherited) ??
-    false;
-  if (
-    rememberAcrossConversations === undefined &&
-    readBoolean(experimental.sessionMemory) === undefined &&
-    memorySearchSourcesIncludeSessions(memorySearch) === undefined &&
-    readBoolean(memorySearch.enabled) === undefined
-  ) {
-    return undefined;
-  }
-  if (!enabled) {
-    return false;
-  }
-  return rememberAcrossConversations === true && sourcesIncludeSessions;
-}
-
-function memorySearchSessionTranscriptIndexingHasLocalConfig(memorySearch: unknown): boolean {
-  if (!isRecord(memorySearch)) {
-    return false;
   }
   return (
-    readBoolean(memorySearch.enabled) !== undefined ||
-    readBoolean(memorySearch.rememberAcrossConversations) !== undefined ||
-    readBoolean(
-      isRecord(memorySearch.experimental) ? memorySearch.experimental.sessionMemory : undefined,
-    ) !== undefined ||
-    memorySearchSourcesIncludeSessions(memorySearch) !== undefined
+    (local.enabled ?? inherited.enabled ?? true) &&
+    rememberAcrossConversations === true &&
+    (local.sessions ?? inherited.sessions ?? false)
   );
 }
 
-function memorySearchSourcesIncludeSessions(memorySearch: unknown): boolean | undefined {
-  if (!isRecord(memorySearch) || memorySearch.sources === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(memorySearch.sources)) {
-    return false;
-  }
-  return memorySearch.sources.includes("sessions");
+function readMemorySessionSettings(value: unknown) {
+  const search = asNonArrayRecord(value);
+  const enabled = readBoolean(search.enabled);
+  const current = readBoolean(search.rememberAcrossConversations);
+  const legacy =
+    current === undefined
+      ? readBoolean(asNonArrayRecord(search.experimental).sessionMemory)
+      : undefined;
+  const remember = current ?? legacy;
+  const sessions =
+    search.sources === undefined
+      ? undefined
+      : Array.isArray(search.sources) && search.sources.includes("sessions");
+  return {
+    enabled,
+    remember,
+    sessions,
+    explicit: enabled !== undefined || remember !== undefined || sessions !== undefined,
+    sourceKey: legacy === undefined ? "rememberAcrossConversations" : "experimental/sessionMemory",
+  };
 }
 
 function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
   const secrets = asNonArrayRecord(cfg.secrets);
   const providers = asNonArrayRecord(secrets.providers);
   return Object.entries(providers).map(([id, value]) => {
-    const entry: {
-      id: string;
-      kind: "provider";
-      source: string;
-      providerSource?: string;
-    } = {
+    const entry: PolicyEvidenceBuilder<PolicySecretEvidence> = {
       id,
       kind: "provider",
       source: `oc://openclaw.config/secrets/providers/${ocPathSegment(id)}`,
@@ -270,13 +213,6 @@ function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly Polic
     }
     return entry;
   });
-}
-
-function scanPolicySecretInputs(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
-  const entries: PolicySecretEvidence[] = [];
-  const secrets = asNonArrayRecord(cfg.secrets);
-  collectSecretInputs(entries, cfg, [], secretRefDefaults(secrets.defaults));
-  return entries;
 }
 
 function collectSecretInputs(
@@ -296,10 +232,10 @@ function collectSecretInputs(
   }
   for (const [key, child] of Object.entries(value)) {
     const childPath = [...path, key];
-    const source = configPathSource(childPath);
+    const source = `oc://openclaw.config/${childPath.map(ocPathSegment).join("/")}`;
     const secretInputPath = isSecretInputPath(childPath);
-    const ref = secretInputPath ? secretRefEvidence(child, defaults) : undefined;
-    if (ref !== undefined) {
+    const ref = secretInputPath ? coerceSecretRef(child, defaults) : null;
+    if (ref !== null) {
       entries.push({
         id: source,
         kind: "input",
@@ -314,10 +250,6 @@ function collectSecretInputs(
   }
 }
 
-function configPathSource(path: readonly string[]): string {
-  return `oc://openclaw.config/${path.map(ocPathSegment).join("/")}`;
-}
-
 function isSecretInputPath(path: readonly string[]): boolean {
   const key = path.at(-1);
   if (key === undefined) {
@@ -328,51 +260,27 @@ function isSecretInputPath(path: readonly string[]): boolean {
   ) {
     return true;
   }
-  if (isRawEnvMapValuePath(path)) {
+  if (path.at(-2) === "env") {
     return false;
   }
   if (isSecretInputKey(key)) {
     return true;
   }
   return (
-    matchesConfigPath(path, ["models", "providers", "*", "headers", "*"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["models", "providers", "*"]) ||
-    isMediaConfiguredProviderRequestSecretPath(path) ||
-    matchesConfigPath(path, ["memory", "search", "remote", "headers", "*"]) ||
-    matchesConfigPath(path, [
-      "agents",
-      "entries",
-      "*",
-      "memory",
-      "search",
-      "remote",
-      "headers",
-      "*",
-    ]) ||
-    matchesConfigPath(path, [
-      "agents",
-      "list",
-      "#",
-      "memory",
-      "search",
-      "remote",
-      "headers",
-      "*",
-    ]) ||
-    matchesConfigPath(path, ["diagnostics", "otel", "headers", "*"])
-  );
-}
-
-function isRawEnvMapValuePath(path: readonly string[]): boolean {
-  return path.length >= 2 && path.at(-2) === "env";
-}
-
-function isMediaConfiguredProviderRequestSecretPath(path: readonly string[]): boolean {
-  return (
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "models", "#"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "audio"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "image"]) ||
-    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video"])
+    [
+      ["models", "providers", "*", "headers", "*"],
+      ["memory", "search", "remote", "headers", "*"],
+      ["agents", "entries", "*", "memory", "search", "remote", "headers", "*"],
+      ["agents", "list", "#", "memory", "search", "remote", "headers", "*"],
+      ["diagnostics", "otel", "headers", "*"],
+    ].some((pattern) => matchesConfigPath(path, pattern)) ||
+    [
+      ["models", "providers", "*"],
+      ["tools", "media", "models", "#"],
+      ["tools", "media", "audio"],
+      ["tools", "media", "image"],
+      ["tools", "media", "video"],
+    ].some((prefix) => isConfiguredProviderRequestSecretPath(path, prefix))
   );
 }
 
@@ -380,25 +288,16 @@ function isConfiguredProviderRequestSecretPath(
   path: readonly string[],
   prefix: readonly string[],
 ): boolean {
-  if (path.length < prefix.length + 3) {
+  if (!matchesConfigPathPrefix(path, prefix) || path[prefix.length] !== "request") {
     return false;
   }
-  if (!matchesConfigPathPrefix(path, prefix)) {
-    return false;
-  }
-  const requestIndex = prefix.length;
-  if (path[requestIndex] !== "request") {
-    return false;
-  }
-  const suffix = path.slice(requestIndex + 1);
-  if (suffix.length === 2 && suffix[0] === "headers") {
-    return true;
-  }
-  if (suffix.length === 2 && suffix[0] === "auth" && isConfiguredProviderAuthSecretKey(suffix[1])) {
-    return true;
-  }
-  if (suffix.length === 2 && suffix[0] === "tls" && isConfiguredProviderTlsSecretKey(suffix[1])) {
-    return true;
+  const suffix = path.slice(prefix.length + 1);
+  if (suffix.length === 2) {
+    return (
+      suffix[0] === "headers" ||
+      (suffix[0] === "auth" && (suffix[1] === "token" || suffix[1] === "value")) ||
+      (suffix[0] === "tls" && isConfiguredProviderTlsSecretKey(suffix[1]))
+    );
   }
   return (
     suffix.length === 3 &&
@@ -432,21 +331,12 @@ function isConfiguredProviderTlsSecretKey(key: string | undefined): boolean {
   return key === "ca" || key === "cert" || key === "key" || key === "passphrase";
 }
 
-function isConfiguredProviderAuthSecretKey(key: string | undefined): boolean {
-  return key === "token" || key === "value";
-}
-
 function isSecretInputKey(key: string): boolean {
   const normalized = key.toLowerCase();
   return (
-    normalized === "apikey" ||
     normalized === "keyref" ||
-    normalized === "token" ||
     normalized === "tokenref" ||
-    normalized === "password" ||
-    normalized === "secret" ||
     normalized === "encryptkey" ||
-    normalized === "webhooksecret" ||
     normalized === "serviceaccount" ||
     normalized === "serviceaccountref" ||
     normalized === "privatekey" ||
@@ -467,27 +357,12 @@ function secretRefDefaults(value: unknown): SecretRefDefaults | undefined {
     return undefined;
   }
   const defaults: SecretRefDefaults = {};
-  if (typeof value.env === "string") {
-    defaults.env = value.env;
-  }
-  if (typeof value.file === "string") {
-    defaults.file = value.file;
-  }
-  if (typeof value.exec === "string") {
-    defaults.exec = value.exec;
-  }
-  if (typeof value.store === "string") {
-    defaults.store = value.store;
+  for (const source of ["env", "file", "exec", "store"] as const) {
+    if (typeof value[source] === "string") {
+      defaults[source] = value[source];
+    }
   }
   return defaults;
-}
-
-function secretRefEvidence(
-  value: unknown,
-  defaults: SecretRefDefaults | undefined,
-): SecretRefEvidence | undefined {
-  const ref = coerceSecretRef(value, defaults);
-  return ref === null ? undefined : { source: ref.source, provider: ref.provider, id: ref.id };
 }
 
 function isValidAuthProfileMetadata(value: unknown): boolean {

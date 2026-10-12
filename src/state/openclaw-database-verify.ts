@@ -3,131 +3,187 @@ import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { hasRevokedOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import type { OpenClawDatabaseVerifyTarget } from "./openclaw-database-verify.worker.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const log = createSubsystemLogger("state/database-verify");
-const OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS = 5 * 60_000;
-const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
-type QuickCheckQueue = {
-  paths: Set<string>;
-  subscribers: Set<() => void>;
-  active?: object;
-  nextFullCheckAt: number;
+type IntegrityCheck = OpenClawDatabaseVerifyTarget["check"];
+type IntegrityCheckRequest = {
+  check: IntegrityCheck;
+  proof?: {
+    identity: string;
+    complete: (assertCurrent: () => void, signal: AbortSignal) => Promise<boolean>;
+  };
+  release?: () => Promise<void>;
 };
-const quickCheckQueues = resolveGlobalSingleton(
-  Symbol.for("openclaw.databaseIntegrityQuickChecks"),
-  () => new Map<string, QuickCheckQueue>(),
+type IntegrityCheckQueue = {
+  paths: Map<string, IntegrityCheckRequest>;
+  wake?: () => void;
+  releases: Set<Promise<void>>;
+  active?: boolean;
+};
+const integrityCheckQueues = resolveGlobalSingleton(
+  Symbol.for("openclaw.databaseIntegrityChecks"),
+  () => new Map<string, IntegrityCheckQueue>(),
 );
 
-function quickCheckQueue(env: NodeJS.ProcessEnv): QuickCheckQueue {
+function integrityCheckQueue(env: NodeJS.ProcessEnv): IntegrityCheckQueue {
   const key = path.resolve(resolveOpenClawStateSqlitePath(env));
-  let queue = quickCheckQueues.get(key);
+  let queue = integrityCheckQueues.get(key);
   if (!queue) {
-    queue = { paths: new Set(), subscribers: new Set(), nextFullCheckAt: Infinity };
-    quickCheckQueues.set(key, queue);
+    queue = { paths: new Map(), releases: new Set() };
+    integrityCheckQueues.set(key, queue);
   }
   return queue;
 }
 
-function wakeSubscribers(queue: QuickCheckQueue): void {
-  for (const wake of queue.subscribers) {
-    wake();
+/** Deferral belongs to a running verifier, never a queue without a consumer. */
+export function captureOpenClawDatabaseIntegrityVerifier(database: {
+  databasePath: string;
+  environment: NodeJS.ProcessEnv;
+}): (() => void) | undefined {
+  if (hasRevokedOpenClawAgentDatabaseValidation(database.databasePath)) {
+    return undefined;
+  }
+  const queue = integrityCheckQueues.get(
+    path.resolve(resolveOpenClawStateSqlitePath(database.environment)),
+  );
+  const owner = queue?.wake;
+  return owner && queue
+    ? () => {
+        if (queue.wake !== owner) {
+          throw new Error("Agent admission lost its background integrity verifier");
+        }
+      }
+    : undefined;
+}
+
+function enqueueCheck(
+  queue: IntegrityCheckQueue,
+  pathname: string,
+  request: IntegrityCheckRequest,
+): void {
+  if (request.check === "full" || queue.paths.get(pathname)?.check !== "full") {
+    const previous = queue.paths.get(pathname);
+    queue.paths.set(pathname, request);
+    if (previous) {
+      releaseCheck(queue, previous);
+    }
+  } else {
+    releaseCheck(queue, request);
   }
 }
 
-/** Cached opens queue work; only the listening Gateway starts the verifier. */
-export function requestOpenClawAgentDatabaseQuickCheck(options: {
-  path: string;
-  env: NodeJS.ProcessEnv;
-}): void {
-  const queue = quickCheckQueue(options.env);
-  queue.paths.add(path.resolve(options.path));
-  wakeSubscribers(queue);
+function releaseCheck(queue: IntegrityCheckQueue, request: IntegrityCheckRequest): void {
+  const release = request.release;
+  request.release = undefined;
+  if (!release) {
+    return;
+  }
+  const pending = release().catch((error: unknown) => {
+    log.error("database integrity verification cleanup failed", { error: String(error) });
+  });
+  queue.releases.add(pending);
+  void pending.finally(() => queue.releases.delete(pending));
 }
 
-/** Start the Gateway-owned delayed daily integrity verifier and queued quick checks. */
+/** Admitted opens queue work; only the listening Gateway starts the verifier. */
+export function requestOpenClawAgentDatabaseIntegrityCheck(
+  options: IntegrityCheckRequest & {
+    path: string;
+    env: NodeJS.ProcessEnv;
+  },
+): void {
+  const queue = integrityCheckQueue(options.env);
+  enqueueCheck(queue, path.resolve(options.path), {
+    check: options.check,
+    proof: options.proof,
+    release: options.release,
+  });
+  queue.wake?.();
+}
+
+/** Consume requested agent checks for the listening Gateway. */
 export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.ProcessEnv }): {
   stop: () => Promise<void>;
 } {
   const env = { ...options.env };
-  const queue = quickCheckQueue(env);
-  if (queue.subscribers.size === 0) {
-    queue.nextFullCheckAt = Date.now() + OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS;
+  const queue = integrityCheckQueue(env);
+  // One Gateway owns this queue; overlapping verifier instances are unsupported.
+  if (queue.wake) {
+    throw new Error("A database integrity verifier is already running for this state directory");
   }
-  const owner = {};
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let activeWorker: ChildProcess | undefined;
   let activeRun: Promise<void> | undefined;
-  let claimedQuickPaths: string[] = [];
   let stopPromise: Promise<void> | undefined;
   let stopped = false;
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const workerLifetime = {
+    onWorker: (worker: ChildProcess | undefined) => {
+      activeWorker = worker;
+    },
+    assertCurrent: () => {
+      if (stopped) {
+        throw new Error("database integrity verifier stopped");
+      }
+    },
+  };
 
   const schedule = () => {
-    if (stopped || queue.active) {
+    if (stopped || queue.active || queue.paths.size === 0) {
       return;
     }
     if (timer) {
       clearTimeout(timer);
     }
-    timer = setTimeout(
-      () => {
-        timer = undefined;
-        if (stopped || queue.active) {
-          return;
-        }
-        queue.active = owner;
-        activeRun = inOwnerContext(run).finally(() => {
-          activeRun = undefined;
-          queue.active = undefined;
-          wakeSubscribers(queue);
-        });
-      },
-      queue.paths.size > 0 ? 0 : Math.max(0, queue.nextFullCheckAt - Date.now()),
-    );
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (stopped || queue.active || queue.paths.size === 0) {
+        return;
+      }
+      queue.active = true;
+      activeRun = inOwnerContext(run).finally(() => {
+        activeRun = undefined;
+        queue.active = false;
+        queue.wake?.();
+      });
+    }, 0);
     timer.unref?.();
   };
   const run = async () => {
-    const full = Date.now() >= queue.nextFullCheckAt;
-    const quickPaths = [...queue.paths];
-    claimedQuickPaths = quickPaths;
+    const checks = new Map(queue.paths);
     queue.paths.clear();
     try {
-      const {
-        applyOpenClawDatabaseVerificationResults,
-        collectOpenClawDatabaseVerifyTargets,
-        runDatabaseVerifyWorker,
-      } = await import("./openclaw-database-verify.impl.js");
+      const { applyOpenClawDatabaseVerificationResults, runDatabaseVerifyWorker } =
+        await import("./openclaw-database-verify.impl.js");
       if (stopped) {
         return;
       }
-      const targetsByPath = new Map<string, OpenClawDatabaseVerifyTarget>(
-        (full ? collectOpenClawDatabaseVerifyTargets({ env }) : []).map((target) => [
-          path.resolve(target.path),
-          target,
-        ]),
-      );
-      for (const pathname of quickPaths) {
-        if (!targetsByPath.has(pathname)) {
-          targetsByPath.set(pathname, {
-            kind: "agent",
-            label: "OpenClaw agent database",
-            path: pathname,
-            check: "quick",
-          });
-        }
-      }
-      const targets = [...targetsByPath.values()];
-      if (targets.length > 0) {
-        const results = await runDatabaseVerifyWorker(targets, {
-          onWorker: (worker) => {
-            activeWorker = worker;
+      const targets: OpenClawDatabaseVerifyTarget[] = Array.from(checks, ([pathname, request]) => ({
+        kind: "agent",
+        label: "OpenClaw agent database",
+        path: pathname,
+        check: request.check,
+        ...(request.proof ? { identity: request.proof.identity } : {}),
+      }));
+      const results = await runDatabaseVerifyWorker(targets, workerLifetime);
+      if (!stopped) {
+        await applyOpenClawDatabaseVerificationResults({
+          env,
+          results,
+          targets,
+          workerLifetime,
+          onVerified: async (pathname) => {
+            const request = checks.get(pathname);
+            if (request?.check === "full") {
+              return request.proof?.complete(workerLifetime.assertCurrent, controller.signal);
+            }
+            return undefined;
           },
         });
-        if (!stopped) {
-          await applyOpenClawDatabaseVerificationResults({ env, results, targets });
-        }
       }
     } catch (error) {
       if (!stopped) {
@@ -135,16 +191,16 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       }
     } finally {
       activeWorker = undefined;
-      claimedQuickPaths = [];
-      if (full && !stopped) {
-        queue.nextFullCheckAt = Date.now() + OPENCLAW_DATABASE_VERIFY_INTERVAL_MS;
+      for (const check of checks.values()) {
+        releaseCheck(queue, check);
       }
+      await Promise.all(queue.releases);
     }
   };
 
-  // Publishers and retiring peers must not lend their request or Gateway context.
+  // Publishers must not lend their request context to the Gateway verifier.
   const wake = () => inOwnerContext(schedule);
-  queue.subscribers.add(wake);
+  queue.wake = wake;
   wake();
   return {
     stop: () => {
@@ -152,17 +208,12 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
         return stopPromise;
       }
       stopped = true;
-      queue.subscribers.delete(wake);
-      if (queue.subscribers.size === 0) {
-        queue.paths.clear();
-        queue.nextFullCheckAt = Infinity;
-      } else {
-        // Replay before yielding so a later final stop can still discard this work.
-        for (const pathname of claimedQuickPaths) {
-          queue.paths.add(pathname);
-        }
-        wakeSubscribers(queue);
+      controller.abort(new Error("database integrity verifier stopped"));
+      queue.wake = undefined;
+      for (const check of queue.paths.values()) {
+        releaseCheck(queue, check);
       }
+      queue.paths.clear();
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
@@ -178,6 +229,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
         } finally {
           // Worker exit can precede async confirmation and result application.
           await activeRun;
+          await Promise.all(queue.releases);
         }
       })();
       return stopPromise;

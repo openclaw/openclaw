@@ -1,7 +1,8 @@
-// Gateway chat attachment parser.
-// Normalizes image attachments, offloads large media, and reports unsupported payloads.
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { ChatAttachmentSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -10,25 +11,18 @@ import {
   ATTACHMENT_OFFLOAD_THRESHOLD_BYTES,
   isGenericContainerMime,
 } from "../media/attachment-processor.runtime.js";
+import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import type { MediaFact } from "../media/media-facts.js";
 import { probeMediaFilesWithinBudget } from "../media/media-probe.js";
-import { parseInboundMediaUri } from "../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
+import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
 import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
 import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { formatForLog } from "./ws-log.js";
 
-export type ChatAttachment = {
-  type?: string;
-  mimeType?: string;
-  fileName?: string;
+export type ChatAttachment = SchemaContract<Omit<Static<typeof ChatAttachmentSchema>, "origin">> & {
   origin?: MediaFact["origin"];
-  content?: unknown;
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
 };
 
 export type ChatImageContent = {
@@ -53,6 +47,28 @@ export type OffloadedRef = {
   width?: number;
   height?: number;
 };
+
+function projectOffloadedMediaFact(ref: OffloadedRef, durable: boolean): MediaFact {
+  const fact: MediaFact = {
+    ...(durable ? {} : { path: ref.path }),
+    url: durable ? buildManagedInboundMediaRef(ref.id) : ref.mediaRef,
+    contentType: ref.mimeType,
+    kind: ref.kind,
+    fileName: ref.label,
+    ...(ref.origin ? { origin: ref.origin } : {}),
+    sizeBytes: ref.sizeBytes,
+  };
+  for (const field of ["durationMs", "width", "height"] as const) {
+    // Durable facts preserve measured zeroes; parsed input retains its existing omission policy.
+    if (durable ? ref[field] !== undefined : ref[field]) {
+      fact[field] = ref[field];
+    }
+  }
+  if (durable && !ref.mimeType.startsWith("image/")) {
+    fact.hydrationSuppressed = true;
+  }
+  return fact;
+}
 
 /** Deletes prepared inbound files that never reached a durable owner. */
 export async function discardPreparedInboundMedia(
@@ -157,53 +173,58 @@ export async function persistInboundImagesForTranscript(params: {
   offloadedRefs: OffloadedRef[];
   log: Pick<AttachmentLog, "warn">;
   logContext: string;
+  assertCurrent?: () => void;
 }): Promise<PersistInboundImagesResult> {
   const entries: PersistInboundImagesResult["entries"] = [];
   let omission: PersistInboundImagesResult["omission"] = "none";
-  for (const image of params.images) {
-    try {
-      const saved = await saveMediaBuffer(
-        Buffer.from(image.data, "base64"),
-        image.mimeType,
-        "inbound",
-        undefined,
-        image.fileName,
-      );
-      const trusted = assertSavedMedia(saved, `inline image ${image.sourceIndex + 1}`);
-      entries.push({
-        id: trusted.id,
-        path: trusted.path,
-        sourceIndex: image.sourceIndex,
-        imageKind: "inline",
-        fact: {
-          url: trusted.mediaRef,
-          contentType: saved.contentType ?? image.mimeType,
-          kind: "image",
-          ...(image.fileName ? { fileName: image.fileName } : {}),
-          sizeBytes: saved.size,
-        },
-      });
-    } catch (err) {
-      omission = "inline-image-save-failed";
-      params.log.warn(
-        `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
-      );
+  try {
+    params.assertCurrent?.();
+    for (const image of params.images) {
+      try {
+        params.assertCurrent?.();
+        const saved = await saveMediaBuffer(
+          Buffer.from(image.data, "base64"),
+          image.mimeType,
+          "inbound",
+          undefined,
+          image.fileName,
+          undefined,
+          { assertCommitAllowed: params.assertCurrent },
+        );
+        entries.push({
+          id: saved.id,
+          path: saved.path,
+          sourceIndex: image.sourceIndex,
+          imageKind: "inline",
+          fact: {
+            url: buildManagedInboundMediaRef(saved.id),
+            contentType: saved.contentType ?? image.mimeType,
+            kind: "image",
+            ...(image.fileName ? { fileName: image.fileName } : {}),
+            sizeBytes: saved.size,
+          },
+        });
+      } catch (err) {
+        // An ended input admission is not a best-effort image omission.
+        if (err instanceof SessionMutationAuthorizationChangedError) {
+          throw err;
+        }
+        params.assertCurrent?.();
+        omission = "inline-image-save-failed";
+        params.log.warn(
+          `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
+        );
+      }
     }
+
+    params.assertCurrent?.();
+  } catch (error) {
+    await discardPreparedInboundMedia(entries, params.log);
+    throw error;
   }
 
   for (const ref of params.offloadedRefs) {
-    const fact: MediaFact = {
-      url: buildManagedInboundMediaRef(ref.id),
-      contentType: ref.mimeType,
-      kind: ref.kind,
-      fileName: ref.label,
-      ...(ref.origin ? { origin: ref.origin } : {}),
-      sizeBytes: ref.sizeBytes,
-      ...(ref.durationMs !== undefined ? { durationMs: ref.durationMs } : {}),
-      ...(ref.width !== undefined ? { width: ref.width } : {}),
-      ...(ref.height !== undefined ? { height: ref.height } : {}),
-      ...(ref.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
-    };
+    const fact = projectOffloadedMediaFact(ref, true);
     entries.push({
       id: ref.id,
       path: ref.path,
@@ -255,26 +276,6 @@ function buildManagedInboundMediaRef(id: string): string {
     throw new Error("Saved media ID failed canonical validation");
   }
   return parsed.normalizedSource;
-}
-
-function assertSavedMedia(
-  value: unknown,
-  label: string,
-): { id: string; mediaRef: string; path: string } {
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    !("id" in value) ||
-    typeof (value as Record<string, unknown>).id !== "string"
-  ) {
-    throw new Error(`attachment ${label}: saveMediaBuffer returned an unexpected shape`);
-  }
-  const id = (value as Record<string, unknown>).id as string;
-  const path = (value as Record<string, unknown>).path;
-  if (typeof path !== "string" || path.length === 0) {
-    throw new Error(`attachment ${label}: saveMediaBuffer returned no on-disk path`);
-  }
-  return { id, mediaRef: buildManagedInboundMediaRef(id), path };
 }
 
 function normalizeAttachment(att: ChatAttachment, idx: number): NormalizedAttachment {
@@ -343,6 +344,7 @@ export async function parseMessageWithAttachments(
   const savedMediaIds: string[] = [];
 
   try {
+    opts?.assertCurrent?.();
     for (const [idx, att] of attachments.entries()) {
       if (!att) {
         continue;
@@ -368,6 +370,7 @@ export async function parseMessageWithAttachments(
       const isImage = finalMime.startsWith("image/");
       const shouldForceImageOffload = isImage && !(await resolveSupportsImages());
       opts?.signal?.throwIfAborted();
+      opts?.assertCurrent?.();
       if (isImage && !supportsInlineImages && !shouldForceImageOffload) {
         throw new UnsupportedAttachmentError(
           "text-only-image",
@@ -393,11 +396,7 @@ export async function parseMessageWithAttachments(
         );
       }
 
-      if (
-        shouldForceImageOffload &&
-        isImage &&
-        textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT
-      ) {
+      if (shouldForceImageOffload && textOnlyImageOffloadCount >= TEXT_ONLY_OFFLOAD_LIMIT) {
         log?.warn(
           `attachment ${label}: dropping image because text-only offload limit ` +
             `${TEXT_ONLY_OFFLOAD_LIMIT} was reached`,
@@ -429,18 +428,25 @@ export async function parseMessageWithAttachments(
         ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
         : Buffer.from(b64, "base64");
 
-      let savedMedia: ReturnType<typeof assertSavedMedia>;
+      let savedMedia: SavedMedia;
+      let mediaRef: string;
       try {
         const labelWithExt = ensureExtension(label, finalMime);
-        const rawResult = await saveMediaBuffer(
+        savedMedia = await saveMediaBuffer(
           buffer,
           finalMime,
           "inbound",
           maxBytes,
           labelWithExt,
+          undefined,
+          { assertCommitAllowed: opts?.assertCurrent },
         );
-        savedMedia = assertSavedMedia(rawResult, label);
+        mediaRef = buildManagedInboundMediaRef(savedMedia.id);
       } catch (err) {
+        if (err instanceof SessionMutationAuthorizationChangedError) {
+          throw err;
+        }
+        opts?.assertCurrent?.();
         throw new MediaOffloadError(
           `[Gateway Error] Failed to save intercepted media to disk: ${formatErrorMessage(err)}`,
           { cause: err },
@@ -449,15 +455,14 @@ export async function parseMessageWithAttachments(
 
       savedMediaIds.push(savedMedia.id);
 
-      const mediaRef = savedMedia.mediaRef;
       updatedMessage += `\n[media attached: ${mediaRef}]`;
       log?.info?.(
-        shouldForceImageOffload && isImage
+        shouldForceImageOffload
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
           : `[Gateway] Offloaded attachment (${finalMime}). Saved: ${mediaRef}`,
       );
 
-      offloadedRefs.push({
+      const offloaded: OffloadedRef = {
         mediaRef,
         id: savedMedia.id,
         path: savedMedia.path,
@@ -467,18 +472,14 @@ export async function parseMessageWithAttachments(
         sizeBytes,
         sourceIndex: idx,
         ...(att.origin === "paste" || att.origin === "file" ? { origin: att.origin } : {}),
-        ...(typeof att.durationMs === "number" &&
-        Number.isFinite(att.durationMs) &&
-        att.durationMs >= 0
-          ? { durationMs: att.durationMs }
-          : {}),
-        ...(typeof att.width === "number" && Number.isFinite(att.width) && att.width >= 0
-          ? { width: att.width }
-          : {}),
-        ...(typeof att.height === "number" && Number.isFinite(att.height) && att.height >= 0
-          ? { height: att.height }
-          : {}),
-      });
+      };
+      for (const field of ["durationMs", "width", "height"] as const) {
+        const value = att[field];
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+          offloaded[field] = value;
+        }
+      }
+      offloadedRefs.push(offloaded);
       if (isImage) {
         imageOrder.push("offloaded");
         if (shouldForceImageOffload) {
@@ -486,6 +487,8 @@ export async function parseMessageWithAttachments(
         }
       }
     }
+    await enrichOffloadedMediaMetadata(offloadedRefs);
+    opts?.assertCurrent?.();
   } catch (err) {
     if (savedMediaIds.length > 0) {
       await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
@@ -502,24 +505,11 @@ export async function parseMessageWithAttachments(
     throw err;
   }
 
-  await enrichOffloadedMediaMetadata(offloadedRefs);
-
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
     imageOrder,
-    media: offloadedRefs.map((ref) => ({
-      path: ref.path,
-      url: ref.mediaRef,
-      contentType: ref.mimeType,
-      kind: ref.kind,
-      fileName: ref.label,
-      ...(ref.origin ? { origin: ref.origin } : {}),
-      sizeBytes: ref.sizeBytes,
-      ...(ref.durationMs ? { durationMs: ref.durationMs } : {}),
-      ...(ref.width ? { width: ref.width } : {}),
-      ...(ref.height ? { height: ref.height } : {}),
-    })),
+    media: offloadedRefs.map((ref) => projectOffloadedMediaFact(ref, false)),
     offloadedRefs,
   };
 }

@@ -1,7 +1,10 @@
-// Session message RPC adapters over canonical chat.send dispatch.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -13,15 +16,16 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import {
-  loadSessionEntry,
-  loadGatewaySessionEntryReadOnly,
-  resolveDeletedAgentIdFromSessionKey,
-} from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
+import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
-import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  readGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -44,7 +48,7 @@ async function createAgentMainSessionForSend(
   }
 
   let createResult:
-    | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
+    | { ok: boolean; payload?: Record<string, unknown>; error?: ReturnType<typeof errorShape> }
     | undefined;
   const createOptions = bindGatewayRequestHandlerMutationAuthority(
     options,
@@ -57,8 +61,7 @@ async function createAgentMainSessionForSend(
       respond: (ok, payload, error) => {
         createResult = {
           ok,
-          payload:
-            payload && typeof payload === "object" ? (payload as { key?: string }) : undefined,
+          payload: asOptionalObjectRecord(payload),
           error,
         };
       },
@@ -70,21 +73,25 @@ async function createAgentMainSessionForSend(
     "sessions.create handler",
   )(createOptions);
 
-  if (!createResult) {
+  if (!createResult?.ok) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
-    };
-  }
-  if (!createResult.ok) {
-    return {
-      ok: false,
-      error: createResult.error ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create session"),
+      error:
+        createResult?.error ??
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          createResult ? "failed to create session" : "sessions.create did not respond",
+        ),
     };
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? canonicalKey;
-  const loaded = loadGatewaySessionEntryReadOnly(createdKey, { agentId });
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: options.context.getRuntimeConfig(),
+    key: createdKey,
+    agentId,
+    assertActive: readGatewayRequestMutationAuthority(options).assertPreparationCurrent,
+  });
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,
@@ -118,13 +125,28 @@ async function handleSessionSend(
     return;
   }
   const requestedAgentId = requestedAgent.agentId;
-  const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg,
+    key,
+    agentId: requestedAgentId,
+    excludeInternalEffects: true,
+    assertActive: requestAuthority.assertPreparationCurrent,
+  });
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
+  const sessionAuthorization = options.sessionMutationAuthorization;
+  const deletedAgent = prepareDeletedAgentSessionCheck({
+    cfg,
+    sessionKey: canonicalKey,
+    entry,
     acpMetadataSessionKey: legacyKey ?? canonicalKey,
+    assertCurrent: requestAuthority.assertPreparationCurrent,
   });
+  const deletedAgentId = deletedAgent instanceof Promise ? await deletedAgent : deletedAgent;
+  if (deletedAgent instanceof Promise) {
+    requestAuthority.assertPreparationCurrent();
+  }
   if (deletedAgentId !== null) {
     options.respond(
       false,
@@ -174,6 +196,18 @@ async function handleSessionSend(
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return;
   }
+  if (!entry?.sessionId) {
+    const uploadError = gatewayClientUploadPolicyError({
+      method: "sessions.send",
+      requestParams: options.params,
+      client: options.client,
+      context: options.context,
+    });
+    if (uploadError) {
+      options.respond(false, undefined, uploadError);
+      return;
+    }
+  }
   if (!entry?.sessionId && queueMode !== "interrupt" && isAgentMainSessionKey(cfg, canonicalKey)) {
     // Sending to an empty agent main session should create it; steering still requires an active row.
     const created = await createAgentMainSessionForSend(options, canonicalKey);
@@ -197,18 +231,9 @@ async function handleSessionSend(
     sendAcked = ok;
     sendPayload = payload;
     sendCached = meta?.cached === true;
-    startedRunId =
-      payload &&
-      typeof payload === "object" &&
-      typeof (payload as { runId?: unknown }).runId === "string"
-        ? (payload as { runId: string }).runId
-        : undefined;
-    interruptedActiveRun =
-      ok &&
-      payload !== null &&
-      typeof payload === "object" &&
-      "interruptedActiveRun" in payload &&
-      payload.interruptedActiveRun === true;
+    const result = asOptionalObjectRecord(payload);
+    startedRunId = readStringValue(result?.runId);
+    interruptedActiveRun = ok && result?.interruptedActiveRun === true;
     respond(ok, payload, error, meta);
   });
   if (sendAcked) {
@@ -219,6 +244,14 @@ async function handleSessionSend(
           runId: startedRunId,
           task: p.message,
           gatewayContextResolver: options.context.resolveGatewayContext,
+          assertCurrent: () => {
+            if (sessionAuthorization?.assertAdmittedInputCurrent) {
+              sessionAuthorization.assertAdmittedInputCurrent();
+            } else {
+              requestAuthority.assertCurrent();
+              sessionAuthorization?.assertCurrent();
+            }
+          },
         });
       } catch (error) {
         if (startedRunId) {

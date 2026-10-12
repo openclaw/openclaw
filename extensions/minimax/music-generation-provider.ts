@@ -5,25 +5,23 @@ import {
   type GeneratedMusicAsset,
   type MusicGenerationProvider,
 } from "openclaw/plugin-sdk/music-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertMinimaxBaseResp,
-  DEFAULT_MINIMAX_MEDIA_BASE_URL,
   normalizeMinimaxHexAudio,
   fetchMinimaxResponse,
-  resolveMinimaxMediaBaseUrl,
+  resolveMinimaxMediaRequestConfig,
   type MinimaxBaseResp,
   type MinimaxRequestPolicy,
 } from "./media-provider-runtime.js";
@@ -125,12 +123,6 @@ function createGeneratedMusicTooLargeError(maxBytes: number): Error {
   return new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`);
 }
 
-function createMinimaxMusicTimeoutError(deadline: ProviderOperationDeadline): Error {
-  const timeoutLabel =
-    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
-  return new Error(`${deadline.label} timed out${timeoutLabel}`);
-}
-
 function resolveStreamEnvelopeMaxBytes(maxBytes: number): number {
   return Math.max(
     STREAM_ENVELOPE_OVERHEAD_BYTES,
@@ -145,7 +137,7 @@ async function readResponseBufferWithDeadline(
 ): Promise<Buffer> {
   return await readResponseWithLimit(response, maxBytes, {
     timeoutMs: () => resolveBodyReadTimeoutMs(deadline),
-    onTimeout: () => createMinimaxMusicTimeoutError(deadline),
+    onTimeout: () => createProviderOperationTimeoutError(deadline),
     onOverflow: ({ maxBytes: limit }) => createGeneratedMusicTooLargeError(limit),
   });
 }
@@ -212,13 +204,15 @@ async function readStreamingTrack(
   };
 }
 
-function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider {
+export function buildMinimaxMusicGenerationProvider(
+  providerId = "minimax",
+): MusicGenerationProvider {
   return {
     id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MINIMAX_MUSIC_MODEL,
     models: [DEFAULT_MINIMAX_MUSIC_MODEL, "music-2.6-free", "music-cover", "music-cover-free"],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -259,18 +253,11 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         label: "MiniMax music generation",
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxMediaBaseUrl(req.cfg, providerId),
-          defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-          },
-          provider: providerId,
+        resolveMinimaxMediaRequestConfig({
+          cfg: req.cfg,
+          providerId,
+          apiKey: auth.apiKey,
           capability: "audio",
-          transport: "http",
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg.models?.providers?.[providerId]?.request,
-          ),
         });
       const requestPolicy: MinimaxRequestPolicy = { allowPrivateNetwork, dispatcherPolicy };
       const jsonHeaders = new Headers(headers);
@@ -376,12 +363,4 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
       }
     },
   };
-}
-
-export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
-  return buildMinimaxMusicProvider("minimax");
-}
-
-export function buildMinimaxPortalMusicGenerationProvider(): MusicGenerationProvider {
-  return buildMinimaxMusicProvider("minimax-portal");
 }

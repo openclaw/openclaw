@@ -6,8 +6,8 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export function normalizeEmbeddedRunAttemptResult(
-  attempt: EmbeddedRunAttemptResult,
-): EmbeddedRunAttemptResult {
+  attempt: EmbeddedRunAttemptWithReceiptEvidence,
+): EmbeddedRunAttemptWithReceiptEvidence {
   const runtimeContinuationReplayMetadata =
     attempt.runtimeContinuationStarted === true
       ? { hadPotentialSideEffects: true, replaySafe: false }
@@ -71,21 +71,8 @@ export function buildTraceToolSummary(params: {
 export function resolveSuccessfulToolNames(
   attempt: Pick<EmbeddedRunAttemptWithReceiptEvidence, "toolMetas" | "successfulNestedToolNames">,
 ): string[] {
-  const successfulToolNames = [
-    ...new Set(
-      attempt.toolMetas
-        .filter((entry) => entry.isError === false)
-        .map((entry) => entry.toolName.trim())
-        .filter(Boolean),
-    ),
-  ];
-  const missingNestedToolNames = [
-    ...new Set(
-      (attempt.successfulNestedToolNames ?? []).map((name) => name.trim()).filter(Boolean),
-    ),
-  ]
-    .filter((name) => !successfulToolNames.includes(name))
-    .toSorted();
-  successfulToolNames.push(...missingNestedToolNames);
-  return successfulToolNames;
+  return normalizeUniqueTrimmedStringList([
+    ...attempt.toolMetas.filter((entry) => entry.isError === false).map((entry) => entry.toolName),
+    ...normalizeUniqueTrimmedStringList(attempt.successfulNestedToolNames).toSorted(),
+  ]);
 }

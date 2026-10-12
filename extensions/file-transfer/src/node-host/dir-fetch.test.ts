@@ -147,6 +147,28 @@ describe("handleDirFetch — happy path", () => {
     },
   );
 
+  it.runIf(process.platform === "linux")(
+    "returns an invalid-path error for a non-UTF-8 filename instead of a partial preflight",
+    async () => {
+      await fs.writeFile(path.join(tmpRoot, "valid.txt"), "valid sibling");
+      const nested = path.join(tmpRoot, "nested");
+      await fs.mkdir(nested);
+      await fs.writeFile(
+        Buffer.concat([Buffer.from(`${nested}/`), Buffer.from([0xff])]),
+        "unrepresentable filename",
+      );
+
+      const result = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
+
+      expect(result).toEqual({
+        ok: false,
+        code: "INVALID_PATH",
+        message: expect.stringContaining("directory entry name is not valid UTF-8"),
+        canonicalPath: tmpRoot,
+      });
+    },
+  );
+
   it.runIf(HAS_TAR)(
     "rejects a replacement at the same canonical pathname before creating an archive",
     async () => {

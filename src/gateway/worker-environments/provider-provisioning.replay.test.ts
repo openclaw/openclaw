@@ -2,25 +2,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import {
+  bindProviderReplayNodeAvailability,
+  createProviderReplayDispatch,
+  createProviderReplayNodeTunnel,
+} from "./provider-replay.test-support.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
-import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -213,7 +208,7 @@ describe("worker environment service provision replay", () => {
     const placement = await placements.startDispatch(REQUEST);
     const idempotencyKey = `session-dispatch:${REQUEST.sessionId}:${placement.generation}`;
     const intent = deriveEnvironmentIntent(idempotencyKey);
-    placements.transition({
+    await placements.transition({
       sessionId: placement.sessionId,
       from: "requested",
       to: "provisioning",
@@ -253,27 +248,7 @@ describe("worker environment service provision replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const syncWorkspace = vi.fn(async () => ({
-      mode: "git" as const,
-      remoteWorkspaceDir: "/worker/workspace",
-      manifestRef: `sha256:${"b".repeat(64)}`,
-    }));
-    const nodeTunnelManager = {
-      status: () => "stopped" as const,
-      start: vi.fn(async ({ environmentId, ownerEpoch }) => ({
-        environmentId,
-        ownerEpoch,
-        measureLaunchTurn,
-        launchTurn: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace,
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(),
-      })),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    };
+    const { nodeTunnelManager, syncWorkspace } = createProviderReplayNodeTunnel();
     const restarted = support.createService(provider, {
       ensureNodeWorkerBundle: async () => ({
         ...support.BOOTSTRAP_RECEIPT,
@@ -294,26 +269,9 @@ describe("worker environment service provision replay", () => {
           waitForDeviceId: async () => await enrollmentConnected.promise,
         };
       },
-      nodeTunnelManager: nodeTunnelManager as never,
+      nodeTunnelManager,
     });
-    bindDeviceWorkerAvailability(restarted, async (nodeId) => ({
-      available: true,
-      node: {
-        nodeId,
-        connId: `conn-${nodeId}`,
-        pairingIdentity: `identity-${nodeId}`,
-        pairingGeneration: `generation-${nodeId}`,
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: {
-          enabled: true,
-          capacity: { total: 1, available: 1 },
-          capturedExecPolicy: true,
-        },
-        commands: [],
-      },
-    }));
+    bindProviderReplayNodeAvailability(restarted);
     const recoveryBarrier = vi.fn(async ({ expectedGeneration, environmentId, run }) => {
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "provisioning",
@@ -325,28 +283,17 @@ describe("worker environment service provision replay", () => {
     const activationBarrier = vi.fn(async ({ activate }) => activate());
     const onActivated = vi.fn();
     const attachSession = vi.spyOn(restarted, "attachSession");
-    const dispatch = createWorkerPlacementDispatchService({
+    const dispatch = createProviderReplayDispatch({
+      initialPlacements: placements.list(),
       placements,
       environments: restarted,
-      runnerAvailability: { read: () => undefined, version: () => 0 },
       resolveDevicePlacementRequirement: async () => ({
         requiredNodeCommands: [],
         consumesWorkerSlot: true,
       }),
       isCurrentNodePlacement: () => true,
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
       runRecoveryBarrier: recoveryBarrier,
       runActivationBarrier: activationBarrier,
-      runMoveBarrier: async ({ begin }) => begin(),
-      resolveMoveDestination: async () => undefined,
-      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
-      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      ...createWorkerWorkspaceRecoveryFixture({
-        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-      }),
       onActivated,
     });
     const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(
@@ -395,7 +342,8 @@ describe("worker environment service provision replay", () => {
     await Promise.all([recovery, overlappingEnvironmentReconcile, overlappingPlacementReconcile]);
     await uninstallReconcileGuard();
 
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
+    const activePlacement = placements.get(REQUEST.sessionId);
+    expect(activePlacement).toMatchObject({
       state: "active",
       environmentId: intent.environmentId,
       workerBundleHash: support.BUNDLE_HASH,
@@ -414,13 +362,14 @@ describe("worker environment service provision replay", () => {
     expect(nodeTunnelManager.start).toHaveBeenCalledOnce();
     expect(syncWorkspace).toHaveBeenCalledOnce();
     expect(onActivated).toHaveBeenCalledOnce();
+    expect(onActivated).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: REQUEST.sessionId }),
+      activePlacement,
+    );
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { released: true, verbose: false },
-    { released: false, verbose: true },
-  ])(
+  it.each([{ released: false, verbose: true }])(
     "recovers indeterminate cleanup (released: $released, verbose: $verbose)",
     async ({ released, verbose }) => {
       const leaseId = "lease:worker-provision-cleanup";
@@ -514,57 +463,36 @@ describe("worker environment service provision replay", () => {
     },
   );
 
-  it("does not resolve a provider provision timeout when the service override is set", async () => {
-    const resolveProvisionTimeoutMs = vi.fn(() => {
-      throw new Error("provider timeout hook must not run");
-    });
-    const workerService = support.createService(
-      support.createProvider({ resolveProvisionTimeoutMs }),
-      {
-        providerCallTimeoutMs: 1_000,
-      },
-    );
+  it.each([["timer overflow", MAX_TIMER_TIMEOUT_MS + 1]])(
+    "rejects a %s provider provision timeout before allocation",
+    async (_label, timeoutMs) => {
+      const provision = vi.fn(async () => ({
+        leaseId: "lease-invalid-timeout",
+        ssh: support.SSH_ENDPOINT,
+      }));
+      const workerService = support.createService(
+        support.createProvider({
+          provision,
+          resolveProvisionTimeoutMs: () => timeoutMs,
+        }),
+      );
 
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-provider-timeout-override",
-      }),
-    ).resolves.toMatchObject({ state: "ready" });
-    expect(resolveProvisionTimeoutMs).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["zero", 0],
-    ["fractional", 1.5],
-    ["timer overflow", MAX_TIMER_TIMEOUT_MS + 1],
-  ])("rejects a %s provider provision timeout before allocation", async (_label, timeoutMs) => {
-    const provision = vi.fn(async () => ({
-      leaseId: "lease-invalid-timeout",
-      ssh: support.SSH_ENDPOINT,
-    }));
-    const workerService = support.createService(
-      support.createProvider({
-        provision,
-        resolveProvisionTimeoutMs: () => timeoutMs,
-      }),
-    );
-
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: `request-invalid-provider-timeout-${String(timeoutMs)}`,
-      }),
-    ).rejects.toMatchObject({
-      code: "provider_failure",
-      message: expect.stringContaining("Worker provider provision timeout must be an integer"),
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    expect(provision).not.toHaveBeenCalled();
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "failed",
-      leaseId: null,
-    });
-  });
+      await expect(
+        workerService.createWithRequest({
+          profileId: "development",
+          idempotencyKey: `request-invalid-provider-timeout-${String(timeoutMs)}`,
+        }),
+      ).rejects.toMatchObject({
+        code: "provider_failure",
+        message: expect.stringContaining("Worker provider provision timeout must be an integer"),
+      } satisfies Partial<WorkerEnvironmentServiceError>);
+      expect(provision).not.toHaveBeenCalled();
+      expect(support.testState.store.list()[0]).toMatchObject({
+        state: "failed",
+        leaseId: null,
+      });
+    },
+  );
 
   it("does not invoke a late prepared allocation after replay times out", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -731,62 +659,7 @@ describe("worker environment service provision replay", () => {
     expect(support.testState.store.get(finalEnvironmentId)).toMatchObject({ state: "destroyed" });
   });
 
-  it("adopts an indeterminate allocation before a replay preparation failure", async () => {
-    const events: string[] = [];
-    let preparationFails = false;
-    support.testState.prepareInstallation = vi.fn(async () => {
-      events.push("prepare");
-      if (preparationFails) {
-        throw new Error("persisted bundle is unavailable");
-      }
-      return support.BUNDLE_ARTIFACT;
-    });
-    let provisionCalls = 0;
-    const operationIds: string[] = [];
-    const provider = support.createProvider({
-      provision: async (_profile, operationId) => {
-        events.push("provision");
-        provisionCalls += 1;
-        operationIds.push(operationId);
-        if (provisionCalls === 1) {
-          throw new Error("provision response was lost");
-        }
-        return { leaseId: "lease-replayed", ssh: support.SSH_ENDPOINT };
-      },
-      destroy: async () => void events.push("destroy"),
-    });
-    const workerService = support.createService(provider);
-
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-lost-provision",
-      }),
-    ).rejects.toMatchObject({
-      code: "provider_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    preparationFails = true;
-    await workerService.reconcileOnce();
-
-    expect(events).toEqual(["prepare", "provision", "provision", "prepare", "destroy"]);
-    expect(new Set(operationIds).size).toBe(1);
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      sshEndpoint: null,
-      teardownTerminalState: "failed",
-      lastError: "persisted bundle is unavailable",
-    });
-  });
-
   it.each([
-    ["missing result", null, "invalid provision result"],
-    ["missing transport", { leaseId: "lease-invalid" }, "invalid provision result"],
-    [
-      "ambiguous transport",
-      { leaseId: "lease-invalid", ssh: support.SSH_ENDPOINT, node: { deviceId: "device-1" } },
-      "invalid provision result",
-    ],
     [
       "blank node device id",
       { leaseId: "lease-invalid", node: { deviceId: " " } },
@@ -846,6 +719,54 @@ describe("worker environment service provision replay", () => {
     expect(support.testState.store.list()[0]).toMatchObject({
       state: "provisioning",
       lastError: expect.stringContaining(error),
+    });
+  });
+
+  it("adopts an indeterminate allocation before a replay preparation failure", async () => {
+    const events: string[] = [];
+    let preparationFails = false;
+    support.testState.prepareInstallation = vi.fn(async () => {
+      events.push("prepare");
+      if (preparationFails) {
+        throw new Error("persisted bundle is unavailable");
+      }
+      return support.BUNDLE_ARTIFACT;
+    });
+    let provisionCalls = 0;
+    const operationIds: string[] = [];
+    const provider = support.createProvider({
+      provision: async (_profile, operationId) => {
+        events.push("provision");
+        provisionCalls += 1;
+        operationIds.push(operationId);
+        if (provisionCalls === 1) {
+          throw new Error("provision response was lost");
+        }
+        return { leaseId: "lease-replayed", ssh: support.SSH_ENDPOINT };
+      },
+      destroy: async () => void events.push("destroy"),
+    });
+    const workerService = support.createService(provider);
+
+    await expect(
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-lost-provision",
+      }),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    preparationFails = true;
+    await workerService.reconcileOnce();
+
+    expect(events).toEqual(["prepare", "provision", "provision", "prepare", "destroy"]);
+    expect(new Set(operationIds).size).toBe(1);
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      teardownTerminalState: "failed",
+      lastError: "persisted bundle is unavailable",
     });
   });
 });

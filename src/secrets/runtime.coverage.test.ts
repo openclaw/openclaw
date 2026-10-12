@@ -1,4 +1,3 @@
-/** Coverage tests for secrets runtime collector breadth and target surfaces. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,20 +10,11 @@ import type {
 } from "../plugins/types.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
+/** Coverage tests for secrets runtime collector breadth and target surfaces. */
+import { resolveSecretRefValues } from "./resolve.js";
 
 const COVERAGE_WEB_PROVIDER_PLUGIN_IDS = vi.hoisted(() => ({
-  search: [
-    "brave",
-    "exa",
-    "firecrawl",
-    "google",
-    "minimax",
-    "moonshot",
-    "parallel",
-    "perplexity",
-    "tavily",
-    "xai",
-  ],
+  search: ["brave", "exa", "firecrawl"],
   fetch: ["firecrawl"],
 }));
 const COVERAGE_CHANNEL_CONTRACTS = vi.hoisted(() => new Map<string, object>());
@@ -127,15 +117,8 @@ const COVERAGE_WEB_SEARCH_PROVIDERS = new Map<string, PluginWebSearchProviderEnt
   (
     [
       ["brave", "brave", "BRAVE_API_KEY", 10],
-      ["google", "gemini", "GEMINI_API_KEY", 20],
-      ["xai", "grok", "XAI_API_KEY", 30],
-      ["moonshot", "kimi", "MOONSHOT_API_KEY", 40],
-      ["perplexity", "perplexity", "PERPLEXITY_API_KEY", 50],
       ["firecrawl", "firecrawl", "FIRECRAWL_API_KEY", 60],
       ["exa", "exa", "EXA_API_KEY", 65],
-      ["minimax", "minimax", "MINIMAX_API_KEY", 70],
-      ["parallel", "parallel", "PARALLEL_API_KEY", 75],
-      ["tavily", "tavily", "TAVILY_API_KEY", 80],
     ] as const
   ).map(([pluginId, id, envVar, order]) => [
     pluginId,
@@ -215,7 +198,35 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
   );
 }
 
-const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
+// Representative collector paths; channel and plugin suites own their individual contracts.
+const COVERAGE_BATCH_KEYS = new Set([
+  "agents.entries.*.memory.search.remote.apiKey",
+  "agents.entries.*.tts.personas.*.providers.*.apiKey",
+  "channels.discord.accounts",
+  "channels.discord.root",
+  "channels.feishu.accounts",
+  "channels.googlechat.root",
+  "channels.mattermost.accounts",
+  "channels.msteams.root",
+  "channels.nextcloud-talk.accounts",
+  "channels.qqbot.accounts",
+  "channels.qqbot.root",
+  "channels.slack.root",
+  "gateway.auth.password",
+  "gateway.auth.token",
+  "gateway.remote.token",
+  "memory.search.remote.apiKey",
+  "models.providers",
+  "talk",
+  "plugins.entries.brave.config.webSearch.apiKey",
+  "plugins.entries.exa.config.webSearch.apiKey",
+  "plugins.entries.firecrawl.config.webFetch.apiKey",
+  "plugins.entries.typesafe.config.apiKey",
+  "plugins.entries.voice-call.config.twilio.authToken",
+]);
+const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries().filter((entry) =>
+  COVERAGE_BATCH_KEYS.has(resolveCoverageBatchKey(entry)),
+);
 const COVERAGE_BUNDLED_CHANNEL_IDS = [
   ...new Set(
     COVERAGE_REGISTRY_ENTRIES.flatMap((entry) => {
@@ -228,7 +239,6 @@ const COVERAGE_BUNDLED_CHANNEL_IDS = [
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 const RUNTIME_COVERAGE_TEST_TIMEOUT_MS = 240_000;
 const COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS = new Map([
-  ["google-meet", path.join(process.cwd(), "extensions", "google-meet")],
   ["voice-call", path.join(process.cwd(), "extensions", "voice-call")],
 ]);
 const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
@@ -240,7 +250,6 @@ const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
 let collectConfigAssignments: typeof import("./runtime-config-collectors.js").collectConfigAssignments;
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
-let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
@@ -484,7 +493,7 @@ function applyConfigForOpenClawTarget(
     }
   }
   if (entry.id === "memory.search.remote.apiKey") {
-    setPathCreateStrict(config, ["agents", "list", 0, "id"], "sample-agent");
+    setPathCreateStrict(config, ["agents", "entries", "sample-agent"], {});
   }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
@@ -493,37 +502,8 @@ function applyConfigForOpenClawTarget(
     setPathCreateStrict(config, ["gateway", "mode"], "remote");
     setPathCreateStrict(config, ["gateway", "remote", "url"], "wss://gateway.example");
   }
-  if (entry.id === "channels.telegram.webhookSecret") {
-    setPathCreateStrict(config, ["channels", "telegram", "webhookUrl"], "https://example.com/hook");
-  }
-  if (entry.id === "channels.telegram.accounts.*.webhookSecret") {
-    setPathCreateStrict(
-      config,
-      ["channels", "telegram", "accounts", wildcardToken, "webhookUrl"],
-      "https://example.com/hook",
-    );
-  }
-  if (entry.id === "channels.slack.signingSecret") {
-    setPathCreateStrict(config, ["channels", "slack", "mode"], "http");
-  }
-  if (entry.id === "channels.slack.accounts.*.signingSecret") {
-    setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "http");
-  }
   if (entry.id === "channels.slack.relay.authToken") {
     setPathCreateStrict(config, ["channels", "slack", "mode"], "relay");
-  }
-  if (entry.id === "channels.slack.accounts.*.relay.authToken") {
-    setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "relay");
-  }
-  if (entry.id === "channels.zalo.webhookSecret") {
-    setPathCreateStrict(config, ["channels", "zalo", "webhookUrl"], "https://example.com/hook");
-  }
-  if (entry.id === "channels.zalo.accounts.*.webhookSecret") {
-    setPathCreateStrict(
-      config,
-      ["channels", "zalo", "accounts", wildcardToken, "webhookUrl"],
-      "https://example.com/hook",
-    );
   }
   if (entry.id === "channels.qqbot.clientSecret") {
     setPathCreateStrict(config, ["channels", "qqbot", "appId"], "sample-app-id");
@@ -534,12 +514,6 @@ function applyConfigForOpenClawTarget(
       ["channels", "qqbot", "accounts", wildcardToken, "appId"],
       "sample-app-id",
     );
-  }
-  if (entry.id === "channels.feishu.verificationToken") {
-    setPathCreateStrict(config, ["channels", "feishu", "connectionMode"], "webhook");
-  }
-  if (entry.id === "channels.feishu.encryptKey") {
-    setPathCreateStrict(config, ["channels", "feishu", "connectionMode"], "webhook");
   }
   if (entry.id === "channels.feishu.accounts.*.verificationToken") {
     setPathCreateStrict(
@@ -557,49 +531,6 @@ function applyConfigForOpenClawTarget(
   }
   if (entry.id === "plugins.entries.brave.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");
-  }
-  if (entry.id === "plugins.entries.google.config.webSearch.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
-  }
-  if (entry.id === "plugins.entries.xai.config.webSearch.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
-  }
-  if (entry.id === "plugins.entries.moonshot.config.webSearch.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
-  }
-  if (entry.id === "plugins.entries.perplexity.config.webSearch.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
-  }
-  if (entry.id === "plugins.entries.firecrawl.config.webSearch.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "firecrawl");
-  }
-  if (entry.id === "plugins.entries.minimax.config.webSearch.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "minimax");
-  }
-  if (entry.id === "plugins.entries.parallel.config.webSearch.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
-  }
-  if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
-  }
-  if (entry.id === "models.providers.*.request.auth.token") {
-    setPathCreateStrict(
-      config,
-      ["models", "providers", wildcardToken, "request", "auth", "mode"],
-      "authorization-bearer",
-    );
-  }
-  if (entry.id === "models.providers.*.request.auth.value") {
-    setPathCreateStrict(
-      config,
-      ["models", "providers", wildcardToken, "request", "auth", "mode"],
-      "header",
-    );
-    setPathCreateStrict(
-      config,
-      ["models", "providers", wildcardToken, "request", "auth", "headerName"],
-      "x-api-key",
-    );
   }
   if (entry.id.startsWith("models.providers.*.request.proxy.tls.")) {
     setPathCreateStrict(
@@ -713,18 +644,16 @@ function toCoverageBatchCase(batch: SecretRegistryEntry[]) {
   };
 }
 
-describe("secrets runtime target coverage", () => {
+describe("secrets runtime representative target coverage", () => {
   beforeAll(async () => {
     const [
       sharedRuntime,
-      resolver,
       configCollectors,
       runtimeWebTools,
       channelContracts,
       officialExternalChannelContract,
     ] = await Promise.all([
       import("./runtime-shared.js"),
-      import("./resolve.js"),
       import("./runtime-config-collectors.js"),
       import("./runtime-web-tools.js"),
       Promise.all(
@@ -751,7 +680,6 @@ describe("secrets runtime target coverage", () => {
     }
     COVERAGE_CHANNEL_CONTRACTS.set("qqbot", qqbotContract);
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
-    ({ resolveSecretRefValues } = resolver);
     ({ collectConfigAssignments } = configCollectors);
     ({ resolveRuntimeWebTools } = runtimeWebTools);
   });

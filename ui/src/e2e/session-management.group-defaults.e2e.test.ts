@@ -11,6 +11,7 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -320,6 +321,81 @@ suite.define(() => {
     },
   );
 
+  it("shows the admin requirement when probing an outside-workspace folder is denied", async () => {
+    const outsideCwd = "/home/peter/outside-project";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+        "worktrees.branches": {
+          __mockError: {
+            code: "FORBIDDEN",
+            message: "missing scope: operator.admin",
+            details: {
+              code: "MISSING_SCOPE",
+              missingScope: "operator.admin",
+              requiredScopes: ["operator.admin"],
+            },
+          },
+        },
+      },
+      sessionGroups: ["Client work"],
+      sessionGroupDefaults: { "Client work": { cwd: outsideCwd, worktree: false } },
+      workspace: "/home/peter/openclaw",
+      workspaceGit: true,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const group = page.locator('[data-session-section="category:Client work"]');
+      await group.waitFor({ state: "visible", timeout: 10_000 });
+      await group.locator(".sidebar-recent-sessions__head").hover();
+      await group.getByRole("button", { name: "Group options for Client work" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults" }).click();
+      const dialog = page.locator(
+        `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
+      );
+      await dialog.waitFor({ state: "visible" });
+
+      const environment = dialog.locator("[data-session-group-environment]");
+      await expect
+        .poll(() => environment.getAttribute("data-session-group-environment"))
+        .toBe("restricted");
+      const save = dialog.getByRole("button", { name: "Save" });
+      await expect.poll(() => save.isDisabled()).toBe(true);
+      // The denial is an authorization problem, not a repository inspection failure.
+      await expect.poll(() => environment.textContent()).toContain("requires operator.admin");
+      await expect.poll(() => environment.textContent()).not.toContain("Couldn't verify Git");
+      expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
+
+      // Once the connection holds admin scope the same retry recovers and the
+      // saved Local default (worktree false) can be submitted unchanged.
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [{ kind: "local", name: "main" }],
+        defaultBranch: "main",
+        repositoryStatus: "git",
+      });
+      await dialog.getByRole("button", { name: "Retry" }).click();
+      await expect
+        .poll(() => environment.getAttribute("data-session-group-environment"))
+        .toBe("git");
+      await expect.poll(() => save.isEnabled()).toBe(true);
+      await save.click();
+      expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
+        name: "Client work",
+        cwd: outsideCwd,
+        worktree: false,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("omits the group category for a legacy Gateway", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
@@ -349,7 +425,7 @@ suite.define(() => {
     }
   });
 
-  it("revalidates an open group route when its defaults or identity change", async () => {
+  it("reloads changed group defaults and identity without losing its draft", async () => {
     const initialCwd = "/home/peter/client-work";
     const refreshedCwd = "/home/peter/refreshed-client-work";
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
@@ -374,6 +450,12 @@ suite.define(() => {
       const project = page.locator("#new-session-project-trigger .new-session-page__trigger-label");
       await expect.poll(() => project.textContent()).toContain("client-work");
       await page.locator(".new-session-page__message").fill("keep this draft");
+      await waitForCommittedComposerDraft(
+        page,
+        JSON.stringify(["", "", "Client work"]),
+        "keep this draft",
+        0,
+      );
 
       await page.evaluate(async (cwd) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -394,6 +476,7 @@ suite.define(() => {
         });
       }, refreshedCwd);
 
+      await page.reload();
       await expect.poll(() => project.textContent()).toContain("refreshed-client-work");
       await expect
         .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
@@ -415,6 +498,7 @@ suite.define(() => {
         await app.runtime?.context.sessions.groupsRename("Client work", "Customer work");
       });
 
+      await page.reload();
       const unavailable = page.locator(".new-session-page__catalog-unavailable");
       await expect
         .poll(() => unavailable.textContent())
@@ -422,12 +506,13 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);
+      expect(await page.locator(".new-session-page__message").inputValue()).toBe("keep this draft");
     } finally {
       await context.close();
     }
   });
 
-  it("fails an open group route closed while remote catalog invalidation is unresolved", async () => {
+  it("reloads a group draft after a background catalog failure", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -452,6 +537,12 @@ suite.define(() => {
       const start = page.getByRole("button", { name: "Start session" });
       await page.locator(".new-session-page__message").fill("wait for fresh defaults");
       await expect.poll(() => start.isEnabled()).toBe(true);
+      await waitForCommittedComposerDraft(
+        page,
+        JSON.stringify(["", "", "Client work"]),
+        "wait for fresh defaults",
+        0,
+      );
 
       // Pin each wait past earlier sessions.groups.list traffic (the route
       // load already fetched the catalog) so a slow runner can't return a
@@ -461,28 +552,20 @@ suite.define(() => {
       await gateway.deferNext("sessions.groups.list");
       await gateway.emitGatewayEvent("sessions.changed", { reason: "groups" });
       await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeInvalidation });
-      await expect.poll(() => start.isDisabled()).toBe(true);
-      await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable button").isDisabled())
-        .toBe(true);
-      const groupListsBeforeReject = (await gateway.getRequests("sessions.groups.list")).length;
-      await gateway.deferNext("sessions.groups.list");
       await gateway.rejectDeferred("sessions.groups.list", {
         code: "UNAVAILABLE",
         message: "catalog reload failed",
       });
-      await gateway.waitForRequest("sessions.groups.list", { after: groupListsBeforeReject });
-      await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable").textContent())
-        .toContain("This session target is unavailable.");
-      await expect.poll(() => start.isDisabled()).toBe(true);
-      await expect
-        .poll(() => page.locator(".new-session-page__catalog-unavailable button").isDisabled())
-        .toBe(true);
 
-      await gateway.resolveDeferred("sessions.groups.list", {
-        groups: [{ name: "Client work", position: 0 }],
-      });
+      await page.reload();
+      await gateway.waitForRequest("sessions.groups.defaults");
+      await expect
+        .poll(() => page.locator("#new-session-project-trigger").textContent())
+        .toContain("client-work");
+      expect(await page.locator(".new-session-page__message").inputValue()).toBe(
+        "wait for fresh defaults",
+      );
+      expect(await page.locator(".new-session-page__catalog-unavailable").count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
     } finally {
       await context.close();

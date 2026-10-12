@@ -5,11 +5,14 @@ import {
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
-import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
 export function runReplyDispatchHook(
   state: PrepareDispatchOperationReadyState,
-  options: { shouldSendToolSummaries: () => boolean; isTailDispatch?: true },
+  options: {
+    shouldSendToolSummaries: () => boolean;
+    shouldSendToolSummariesAsync: () => Promise<boolean>;
+    isTailDispatch?: true;
+  },
 ) {
   const { hookRunner, params } = state;
   if (
@@ -24,8 +27,10 @@ export function runReplyDispatchHook(
       return await runWithDispatchAbortSignal(
         // Reset tails have entered dispatch admission; initial takeover still owns the pre-dispatch lease.
         options.isTailDispatch ? state.getDispatchAbortSignal() : state.getPreDispatchAbortSignal(),
-        () =>
-          hookRunner.runReplyDispatch(
+        async () => {
+          const shouldSendFullToolDetails = await state.shouldEmitFullVerboseProgressAsync();
+          state.assertProgressCurrent();
+          return hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx: state.ctx,
               runId: params.replyOptions?.runId,
@@ -45,7 +50,9 @@ export function runReplyDispatchHook(
               originatingThreadId: state.routeReplyThreadId,
               originatingChatType: state.replyRoute.chatType,
               shouldSendToolSummaries: options.shouldSendToolSummaries,
-              shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
+              shouldSendToolSummariesAsync: options.shouldSendToolSummariesAsync,
+              shouldSendFullToolDetails,
+              shouldSendFullToolDetailsAsync: state.shouldEmitFullVerboseProgressAsync,
               sendPolicy: state.sendPolicy,
               ...(options.isTailDispatch ? { isTailDispatch: true } : {}),
             }),
@@ -63,30 +70,12 @@ export function runReplyDispatchHook(
                 recordProcessed: state.recordProcessed,
                 markIdle: state.markIdle,
               },
-              options.isTailDispatch ? undefined : state.assertCurrentBindingRoute,
+              options.isTailDispatch ? undefined : { prepare: state.assertCurrentBindingRoute },
             ),
-          ),
+          );
+        },
         state.trackDispatchLifecycleWork,
       );
     });
   return options.isTailDispatch ? run() : state.traceReplyPhase("reply.reply_dispatch_hooks", run);
-}
-
-export async function runReplyDispatchTakeover(
-  state: PrepareDispatchOperationReadyState,
-  shouldSendToolSummaries: () => boolean,
-): Promise<{ status: "complete"; result: DispatchFromConfigResult } | undefined> {
-  const result = await runReplyDispatchHook(state, { shouldSendToolSummaries });
-  if (!result?.handled) {
-    return undefined;
-  }
-  state.commitInboundDedupeIfClaimed();
-  state.completeDispatchReplyOperation();
-  return {
-    status: "complete",
-    result: state.attachSourceReplyDeliveryMode({
-      queuedFinal: result.queuedFinal,
-      counts: result.counts,
-    }),
-  };
 }
