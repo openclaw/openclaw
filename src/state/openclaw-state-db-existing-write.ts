@@ -165,7 +165,6 @@ function createExistingOpenClawStateWriter(
     (value) => (typeof value === "number" ? value : undefined),
   );
   let closed = false;
-  let admitted: { version: number; existingSchema: boolean } | undefined;
   return {
     run<T>(operation: ExistingWriteOperation<T>, currentOptions: ExistingWriteOptions) {
       if (closed || !db.isOpen) {
@@ -180,14 +179,10 @@ function createExistingOpenClawStateWriter(
       }
       assertSameFile();
       const existingSchema = isExistingOpenClawStateSchema(pathname);
-      if (admitted && existingSchema !== admitted.existingSchema) {
-        throw new Error("Existing-state writer schema admission changed.");
-      }
       const busyTimeoutMs =
         currentOptions.busyTimeoutMs ?? contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
       setSqliteBusyTimeout(db, busyTimeoutMs);
-      let pendingAdmission: typeof admitted;
-      const result = runManagedStateTransaction(
+      return runManagedStateTransaction(
         db,
         () => {
           assertSameFile();
@@ -198,7 +193,7 @@ function createExistingOpenClawStateWriter(
           });
           const priorVersion = admission.get(db);
           const needsAdmission = priorVersion === undefined;
-          if (needsAdmission && existingSchema) {
+          if (existingSchema) {
             assertExistingOpenClawStateRuntimeSchema(db, pathname);
           }
           const validate = () =>
@@ -245,7 +240,6 @@ function createExistingOpenClawStateWriter(
             admitSqliteSchema(db);
             admission.publish(db, version);
           }
-          pendingAdmission = { version, existingSchema };
           // Internal callers own their declared schema and only mutate its rows here.
           const value = operation({ db, path: pathname, recoveryChanges });
           assertSameFile();
@@ -261,10 +255,6 @@ function createExistingOpenClawStateWriter(
           operationLabel: contract.operationLabel,
         },
       );
-      if (pendingAdmission) {
-        admitted = pendingAdmission;
-      }
-      return result;
     },
     assertSettled() {
       assertSameFile();
