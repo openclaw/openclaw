@@ -30,6 +30,7 @@ import { withReadySessionRows, type SessionRowReadView } from "../session-row-pr
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { getSessionDefaults } from "../session-utils-model.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -85,7 +86,9 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.sessionAction": defineValidatedGatewayHandler(
     "plugins.sessionAction",
     validatePluginsSessionActionParams,
-    async ({ params, client, respond, context }) => {
+    async (options) => {
+      const { params, client, respond, context } = options;
+      const requestAuthority = readGatewayRequestMutationAuthority(options);
       const reject = (message: string) =>
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       const pluginId = normalizeOptionalString(params.pluginId);
@@ -203,6 +206,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           }
           // Start dispatch while prepared facts and authorization are current. The
           // read consumer stays synchronous; only the returned handler result is awaited.
+          requestAuthority.assertCurrent();
+          options.sessionMutationAuthorization?.assertCurrent();
           return {
             result: registration.action.handler({
               pluginId,

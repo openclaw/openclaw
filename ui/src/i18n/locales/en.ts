@@ -2331,6 +2331,21 @@ export const en: TranslationMap & {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+    loadErrorTitle: "Could not load plugin panel",
+    loadErrorHttp:
+      "The plugin route returned HTTP {status}. Retry the panel; if this continues, check the plugin's registered route.",
+    loadErrorNetwork:
+      "The plugin route could not be fetched. Check the connection and ensure the registered route does not redirect, then retry.",
+    loadErrorContent:
+      "The plugin route did not return inline HTML. Ask the plugin author to correct the registered route, then retry.",
+    loadErrorScriptPolicy:
+      "The plugin's security policy blocks the core action bridge script. Ask the plugin author to allow that script, then retry.",
+    loadErrorEmbedPolicy:
+      "The plugin's security policy blocks embedding this panel. Ask the plugin author to allow embedding in the Control UI, then retry.",
+    loadErrorBasePolicy:
+      "The plugin's security policy blocks its route-relative base URL. Ask the plugin author to correct the base URL policy, then retry.",
+    loadErrorAmbiguousPolicy:
+      "The plugin returned security policies that cannot be safely adapted for the action bridge. Ask the plugin author to review those policies, then retry.",
   },
   logbook: {
     nav: {

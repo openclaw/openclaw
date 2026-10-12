@@ -134,7 +134,7 @@ function acknowledgeDocument(id: unknown) {
 }
 
 afterEach(() => {
-  for (const cleanup of cleanups.splice(0).reverse()) {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
     cleanup();
   }
   vi.restoreAllMocks();

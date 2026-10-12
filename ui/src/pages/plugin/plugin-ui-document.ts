@@ -3,6 +3,27 @@ import pluginUiBridgeChildUrl from "./plugin-ui-bridge-child.js?url&no-inline";
 import { PluginUiBridgeController } from "./plugin-ui-bridge.ts";
 import { pluginTabKey } from "./route.ts";
 
+export type PluginUiDocumentError =
+  | { kind: "http"; status: number }
+  | {
+      kind:
+        | "network"
+        | "content"
+        | "script-policy"
+        | "embed-policy"
+        | "base-policy"
+        | "ambiguous-policy";
+    };
+
+class PluginUiDocumentLoadError extends Error {
+  constructor(
+    readonly detail: PluginUiDocumentError,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function policyDirectives(policy: string): Array<{ name: string; value: string }> {
   return policy
     .split(";")
@@ -25,7 +46,10 @@ function validateBridgeScriptPolicy(policy: string, sourceOrigin: string, bridge
   }
   const sources = scriptPolicy.value.split(/\s+/u);
   if (sources.includes("'strict-dynamic'")) {
-    throw new Error("Plugin UI CSP cannot authorize the core bridge script safely");
+    throw new PluginUiDocumentLoadError(
+      { kind: "script-policy" },
+      "Plugin UI CSP cannot authorize the core bridge script safely",
+    );
   }
   const bridge = new URL(bridgeUrl);
   const allowed = sources.some((source) => {
@@ -48,7 +72,10 @@ function validateBridgeScriptPolicy(policy: string, sourceOrigin: string, bridge
     }
   });
   if (!allowed) {
-    throw new Error("Plugin UI CSP blocks the core bridge script");
+    throw new PluginUiDocumentLoadError(
+      { kind: "script-policy" },
+      "Plugin UI CSP blocks the core bridge script",
+    );
   }
 }
 
@@ -56,7 +83,10 @@ function validateResponsePolicy(policy: string, sourceOrigin: string, bridgeUrl:
   // The Fetch Headers API comma-combines repeated CSP fields. Re-emitting that
   // value as one meta policy would weaken their intersection, so fail closed.
   if (policy.includes(",")) {
-    throw new Error("Plugin UI returned multiple or ambiguous CSP policies");
+    throw new PluginUiDocumentLoadError(
+      { kind: "ambiguous-policy" },
+      "Plugin UI returned multiple or ambiguous CSP policies",
+    );
   }
   validateBridgeScriptPolicy(policy, sourceOrigin, bridgeUrl);
   const frameAncestors = policyDirectives(policy).find(
@@ -68,7 +98,10 @@ function validateResponsePolicy(policy: string, sourceOrigin: string, bridgeUrl:
   }
   const sources = frameAncestors.value.split(/\s+/u);
   if (!sources.some((source) => source === "*" || source === "'self'" || source === sourceOrigin)) {
-    throw new Error("Plugin UI CSP does not allow the Control UI to embed it");
+    throw new PluginUiDocumentLoadError(
+      { kind: "embed-policy" },
+      "Plugin UI CSP does not allow the Control UI to embed it",
+    );
   }
   validateBasePolicy(policy, sourceOrigin);
 }
@@ -80,7 +113,10 @@ function validateBasePolicy(policy: string, sourceOrigin: string): void {
   }
   const sources = baseUri.value.split(/\s+/u);
   if (!sources.some((source) => source === "*" || source === "'self'" || source === sourceOrigin)) {
-    throw new Error("Plugin UI CSP cannot preserve its route-relative base URL");
+    throw new PluginUiDocumentLoadError(
+      { kind: "base-policy" },
+      "Plugin UI CSP cannot preserve its route-relative base URL",
+    );
   }
 }
 
@@ -98,7 +134,10 @@ function tightenIframeSandbox(sandbox: string, policy?: string): string {
     .filter((token) => token && allowed.has(token))
     .join(" ");
   if (!tightened.split(/\s+/u).includes("allow-scripts")) {
-    throw new Error("Plugin UI CSP disables the action bridge script");
+    throw new PluginUiDocumentLoadError(
+      { kind: "script-policy" },
+      "Plugin UI CSP disables the action bridge script",
+    );
   }
   return tightened;
 }
@@ -176,7 +215,7 @@ function buildPluginUiBridgeDocument(params: {
 
 class PluginUiDocumentController {
   current: { key: string; srcdoc: string; sandbox: string } | null = null;
-  errorKey: string | null = null;
+  error: { key: string; detail: PluginUiDocumentError } | null = null;
   private loadingKey = "";
   private abortController: AbortController | null = null;
 
@@ -187,18 +226,18 @@ class PluginUiDocumentController {
     this.abortController = null;
     this.loadingKey = "";
     this.current = null;
-    this.errorKey = null;
+    this.error = null;
   }
 
   ensure(key: string, path: string, nonce: string, sandbox: string) {
-    if (this.current?.key === key || this.loadingKey === key || this.errorKey === key) {
+    if (this.current?.key === key || this.loadingKey === key || this.error?.key === key) {
       return;
     }
     this.abortController?.abort();
     const abortController = new AbortController();
     this.abortController = abortController;
     this.loadingKey = key;
-    this.errorKey = null;
+    this.error = null;
     void fetch(path, {
       credentials: "include",
       redirect: "error",
@@ -206,20 +245,32 @@ class PluginUiDocumentController {
     })
       .then(async (response) => {
         if (!response.ok) {
-          throw new Error(`Plugin UI request failed (${response.status})`);
+          throw new PluginUiDocumentLoadError(
+            { kind: "http", status: response.status },
+            `Plugin UI request failed (${response.status})`,
+          );
         }
         const contentType = response.headers.get("content-type") ?? "";
         if (contentType && contentType.split(";", 1)[0]?.trim().toLowerCase() !== "text/html") {
-          throw new Error("Plugin UI route did not return HTML");
+          throw new PluginUiDocumentLoadError(
+            { kind: "content" },
+            "Plugin UI route did not return HTML",
+          );
         }
         const contentDisposition = response.headers.get("content-disposition")?.trim();
         if (contentDisposition && !/^inline(?:\s*;|$)/iu.test(contentDisposition)) {
-          throw new Error("Plugin UI route did not return inline content");
+          throw new PluginUiDocumentLoadError(
+            { kind: "content" },
+            "Plugin UI route did not return inline content",
+          );
         }
         const contentSecurityPolicy = response.headers.get("content-security-policy") ?? undefined;
         const xFrameOptions = response.headers.get("x-frame-options")?.trim().toLowerCase();
         if (xFrameOptions && xFrameOptions !== "sameorigin") {
-          throw new Error("Plugin UI response does not allow the Control UI to embed it");
+          throw new PluginUiDocumentLoadError(
+            { kind: "embed-policy" },
+            "Plugin UI response does not allow the Control UI to embed it",
+          );
         }
         return buildPluginUiBridgeDocument({
           html: await response.text(),
@@ -230,14 +281,22 @@ class PluginUiDocumentController {
           referrerPolicy: response.headers.get("referrer-policy") ?? undefined,
         });
       })
-      .then((document) => this.finish(key, abortController, { key, ...document }))
-      .catch(() => this.finish(key, abortController, null));
+      .then((document) => this.finish(key, abortController, { key, ...document }, null))
+      .catch((error: unknown) =>
+        this.finish(
+          key,
+          abortController,
+          null,
+          error instanceof PluginUiDocumentLoadError ? error.detail : { kind: "network" },
+        ),
+      );
   }
 
   private finish(
     key: string,
     abortController: AbortController,
     document: { key: string; srcdoc: string; sandbox: string } | null,
+    error: PluginUiDocumentError | null,
   ) {
     if (this.loadingKey !== key || this.abortController !== abortController) {
       return;
@@ -245,13 +304,14 @@ class PluginUiDocumentController {
     this.loadingKey = "";
     this.abortController = null;
     this.current = document;
-    this.errorKey = document ? null : key;
+    this.error = error ? { key, detail: error } : null;
     this.requestUpdate();
   }
 }
 
 export type PluginUiFrameView =
-  | { status: "loading" | "error" }
+  | { status: "loading" }
+  | { status: "error"; error: PluginUiDocumentError }
   | { status: "ready"; identity: string; src?: string; srcdoc?: string; sandbox: string };
 
 export class PluginUiFrameController {
@@ -293,8 +353,8 @@ export class PluginUiFrameController {
     }
     const documentKey = `${identity}\0${this.nonce}`;
     this.document.ensure(documentKey, params.path, this.nonce, params.sandbox);
-    if (this.document.errorKey === documentKey) {
-      return { status: "error" };
+    if (this.document.error?.key === documentKey) {
+      return { status: "error", error: this.document.error.detail };
     }
     if (this.document.current?.key !== documentKey) {
       return { status: "loading" };

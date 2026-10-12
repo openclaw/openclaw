@@ -6,7 +6,7 @@ const cleanups: Array<() => void> = [];
 
 async function loadDocument(response: Response, sandbox = "allow-scripts allow-same-origin") {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
-  const updated = createDeferred<void>();
+  const updated = createDeferred();
   const frame = new PluginUiFrameController(() => updated.resolve());
   cleanups.push(() => frame.clear());
   frame.document.ensure("document-key", "/plugins/external/panel", "document-nonce", sandbox);
@@ -32,7 +32,7 @@ describe("plugin UI documents", () => {
     );
 
     expect(controller.current).toBeNull();
-    expect(controller.errorKey).toBe("document-key");
+    expect(controller.error).toEqual({ key: "document-key", detail: { kind: "content" } });
   });
 
   it("preserves a plugin base URL and route-origin CSP inside the bridge document", async () => {
@@ -101,6 +101,6 @@ describe("plugin UI documents", () => {
     );
 
     expect(controller.current).toBeNull();
-    expect(controller.errorKey).toBe("document-key");
+    expect(controller.error?.key).toBe("document-key");
   });
 });

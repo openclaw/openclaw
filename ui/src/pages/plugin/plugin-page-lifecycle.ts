@@ -251,6 +251,16 @@ export class PluginPageLifecycle {
     }
   };
 
+  readonly retryPluginFrame = () => {
+    if (this.disposed || this.frameView?.status !== "error") {
+      return;
+    }
+    // A retry starts a new document/bridge generation and revalidates current
+    // gateway grants before loading, including after a route returned 401/403.
+    this.clearExternalTabAuth();
+    this.update();
+  };
+
   readonly update = () => {
     this.updateGatewaySource(this.context.gateway);
     if (this.disposed) {

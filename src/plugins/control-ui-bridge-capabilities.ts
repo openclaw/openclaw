@@ -18,7 +18,5 @@ export function normalizeControlUiBridgeCapabilities(
   ) {
     return null;
   }
-  return {
-    ...(sessionActions !== undefined ? { sessionActions: [...new Set(sessionActions)] } : {}),
-  };
+  return sessionActions !== undefined ? { sessionActions: [...new Set(sessionActions)] } : {};
 }

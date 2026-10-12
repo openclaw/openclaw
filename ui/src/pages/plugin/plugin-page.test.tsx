@@ -493,17 +493,87 @@ describe("PluginPage", () => {
     expect(fetchPluginDocument).toHaveBeenCalledTimes(3);
   });
 
-  it("does not mount an action bridge when the registered route redirects", async () => {
+  it("retries a failed action panel only after refreshing its current gateway grant", async () => {
+    const renewedGrant = createDeferred<ApplicationConfig | null>();
+    const refresh = vi
+      .fn<ApplicationConfigCapability["refresh"]>()
+      .mockResolvedValueOnce(externalPluginConfig())
+      .mockReturnValueOnce(renewedGrant.promise);
     const fetchPluginDocument = vi
       .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new TypeError("redirect mode is set to error"));
+      .mockResolvedValueOnce(new Response("private upstream diagnostic", { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response("<!doctype html><main>Recovered plugin panel</main>", {
+          headers: { "Content-Type": "text/html" },
+        }),
+      );
+    const { page } = createExternalPluginPage(refresh, true, "/plugins/external/panel", {
+      sessionActions: ["list-sessions"],
+    });
+
+    await waitForSolid(() => expect(page.textContent).toContain("HTTP 503"));
+    expect(page.textContent).toContain("Could not load plugin panel");
+    expect(page.textContent).not.toContain("not active");
+    expect(page.textContent).not.toContain("private upstream diagnostic");
+    expect(page.querySelector("iframe")).toBeNull();
+    const retry = page.querySelector<HTMLButtonElement>('[role="alert"] button')!;
+    expect(retry.textContent).toBe("Retry");
+    retry.click();
+
+    await waitForSolid(() => expect(refresh).toHaveBeenCalledTimes(2));
+    expect(fetchPluginDocument).toHaveBeenCalledTimes(1);
+    expect(page.querySelector("iframe")).toBeNull();
+    renewedGrant.resolve(externalPluginConfig());
+    await waitForSolid(() =>
+      expect(page.querySelector("iframe")?.srcdoc).toContain("Recovered plugin panel"),
+    );
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(fetchPluginDocument).toHaveBeenCalledTimes(2);
+    expect(probeCalls).toEqual(["/plugins/external/panel", "/plugins/external/panel"]);
+    expect(pluginUiBridgeNonce(page.querySelector("iframe"))).toMatch(/^[0-9a-f-]{36}$/u);
+  });
+
+  it("explains an action panel's security policy rejection without treating its plugin as inactive", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<!doctype html><main>Plugin panel</main>", {
+        headers: {
+          "Content-Type": "text/html",
+          "Content-Security-Policy": "script-src 'none'",
+        },
+      }),
+    );
     const { page } = createExternalPluginPage(
       vi.fn(async () => externalPluginConfig()),
       true,
       "/plugins/external/panel",
       { sessionActions: ["list-sessions"] },
     );
-    await waitForSolid(() => expect(page.textContent).toContain("Plugin panel unavailable"));
+
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("blocks the core action bridge script"),
+    );
+    expect(page.textContent).toContain("Ask the plugin author");
+    expect(page.textContent).not.toContain("not active");
+    expect(page.querySelector("iframe")).toBeNull();
+    expect(page.querySelector('[role="alert"] button')?.textContent).toBe("Retry");
+  });
+
+  it("keeps redirect failures closed and shows a sanitized next step", async () => {
+    const fetchPluginDocument = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(
+        new TypeError("redirect mode is set to error: https://private.invalid/?token=secret"),
+      );
+    const { page } = createExternalPluginPage(
+      vi.fn(async () => externalPluginConfig()),
+      true,
+      "/plugins/external/panel",
+      { sessionActions: ["list-sessions"] },
+    );
+    await waitForSolid(() => expect(page.textContent).toContain("Could not load plugin panel"));
+    expect(page.textContent).toContain("ensure the registered route does not redirect");
+    expect(page.textContent).not.toContain("private.invalid");
+    expect(page.textContent).not.toContain("secret");
     expect(fetchPluginDocument).toHaveBeenCalledWith(
       "/plugins/external/panel",
       expect.objectContaining({ redirect: "error" }),
@@ -549,7 +619,6 @@ describe("PluginPage", () => {
       context: { sessionKey: "main", revision: 1, contextTokens: 64_000 },
     });
     const response = nextPortMessage(action.port2);
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- MessagePort has no targetOrigin.
     action.port2.postMessage({
       v: 1,
       type: "openclaw.pluginUi.sessionAction",
