@@ -3,7 +3,6 @@ import {
   createStatusReactionController,
   DEFAULT_EMOJIS,
   logAckFailure,
-  logTypingFailure,
   resolveAckReaction,
   shouldAckReaction,
   type StatusReactionController,
@@ -84,7 +83,7 @@ import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
 import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
-import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
+import { sendMessageSignal, sendReadReceiptSignal } from "../send.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import {
@@ -108,6 +107,7 @@ import {
   resolveSignalStatusReactionTimestamp,
   shouldEmitSignalReactionNotification,
 } from "./reactions.js";
+import { createSignalReplyTyping } from "./typing.js";
 
 type SignalInboundDebounceParams = Parameters<
   typeof createChannelInboundDebouncer<SignalInboundEntry>
@@ -378,27 +378,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         agentId: route.agentId,
         channel: "signal",
         accountId: route.accountId,
-        typing: {
-          start: async () => {
-            if (!ctxPayload.To) {
-              return;
-            }
-            await sendTypingSignal(ctxPayload.To, {
-              cfg,
-              baseUrl: deps.baseUrl,
-              account: deps.account,
-              accountId: deps.accountId,
-            });
-          },
-          onStartError: (err) => {
-            logTypingFailure({
-              log: logVerbose,
-              channel: "signal",
-              target: ctxPayload.To ?? undefined,
-              error: err,
-            });
-          },
-        },
+        typing: createSignalReplyTyping(ctxPayload.To, {
+          cfg,
+          baseUrl: deps.baseUrl,
+          account: deps.account,
+          accountId: deps.accountId,
+        }),
       });
 
     const nativeReplyContext = {

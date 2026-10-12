@@ -847,7 +847,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       });
 
       await vi.advanceTimersByTimeAsync(3_000);
-      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+      expect(sendTypingMock).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
