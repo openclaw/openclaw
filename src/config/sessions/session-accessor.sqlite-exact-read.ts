@@ -41,7 +41,6 @@ import {
   toDatabaseOptions,
   type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
-import { readSessionWorktreeOwnerFactsInDatabase } from "./session-accessor.sqlite-worktree-owner.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
@@ -349,7 +348,7 @@ export function loadExactSessionEntryCandidates(
     | (Omit<PhysicalSessionEntryReadScope, "projection"> & { readOnly: true })
   ) & {
     sessionKeys: readonly string[];
-    projection?: SessionEntryReadScope["projection"] | "worktree";
+    projection?: SessionEntryReadScope["projection"];
     onReadSource?: (source: CapturedSessionEntryReadSource) => void;
     expectedSource?: CapturedSessionEntryReadSource;
   },
@@ -367,28 +366,11 @@ export function loadExactSessionEntryCandidates(
   if (memory) {
     assertMemoryExactReadSource(scope.expectedSource, memory.source);
     const entries = sessionKeys.flatMap((key) => {
-      const entry = memory.read(key, scope.projection === "worktree" ? "list" : scope.projection);
+      const entry = memory.read(key, scope.projection);
       if (!entry) {
         return [];
       }
-      if (scope.projection !== "worktree") {
-        return [{ sessionKey: key, entry }];
-      }
-      const { sessionId, updatedAt, archivedAt, lastInteractionAt, lifecycleRevision, worktree } =
-        entry;
-      return [
-        {
-          sessionKey: key,
-          entry: {
-            sessionId,
-            updatedAt,
-            ...(archivedAt === undefined ? {} : { archivedAt }),
-            ...(lastInteractionAt === undefined ? {} : { lastInteractionAt }),
-            ...(lifecycleRevision === undefined ? {} : { lifecycleRevision }),
-            ...(worktree === undefined ? {} : { worktree }),
-          },
-        },
-      ];
+      return [{ sessionKey: key, entry }];
     });
     if (memory.source) {
       scope.onReadSource?.(memory.source);
@@ -409,13 +391,10 @@ export function loadExactSessionEntryCandidates(
       assertCapturedSessionEntryReadSource(scope.expectedSource, database);
     }
     const projection = scope.projection;
-    const entries =
-      projection === "worktree"
-        ? readSessionWorktreeOwnerFactsInDatabase(database, sessionKeys)
-        : sessionKeys.flatMap((key) => {
-            const entry = readExactSessionEntryRow(database, key, projection, "canonical")?.entry;
-            return entry ? [{ sessionKey: key, entry }] : [];
-          });
+    const entries = sessionKeys.flatMap((key) => {
+      const entry = readExactSessionEntryRow(database, key, projection, "canonical")?.entry;
+      return entry ? [{ sessionKey: key, entry }] : [];
+    });
     scope.onReadSource?.({
       agentId: database.agentId,
       path: database.path,
@@ -428,9 +407,6 @@ export function loadExactSessionEntryCandidates(
     return read(openOpenClawAgentDatabase(options));
   }
   const result = withOpenClawAgentDatabaseReadOnly(read, options);
-  if (scope.projection === "worktree" && !result.found && result.reason !== "database-missing") {
-    throw new SessionMetadataUnavailableError(result.reason);
-  }
   return result.found ? result.value : [];
 }
 

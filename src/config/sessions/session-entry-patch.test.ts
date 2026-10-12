@@ -131,7 +131,7 @@ it("publishes participant writes accepted while an entry callback was awaiting c
   });
 });
 
-it("preserves cold serialization and snapshot revisions for synchronous SDK commit guards", async () => {
+it("preserves cold snapshots through worker writes with synchronous SDK commit guards", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const cold = {
@@ -167,11 +167,21 @@ it("preserves cold serialization and snapshot revisions for synchronous SDK comm
         .get(f.scope.sessionKey)?.snapshot_revision;
     const saved = snapshots();
     const initialRevision = revision();
-    const patch = (update: Partial<SessionEntry>) =>
-      patchInternalSessionEntry(f.scope, () => update, {
-        skipMaintenance: true,
-        assertCommitAllowed: () => expect(f.database.db.isTransaction).toBe(true),
-      });
+    const patch = async (update: Partial<SessionEntry>) => {
+      const assertCommitAllowed = vi.fn();
+      const host = observeHostDataSql();
+      try {
+        const result = await patchInternalSessionEntry(f.scope, () => update, {
+          skipMaintenance: true,
+          assertCommitAllowed,
+        });
+        expect(host.queries.filter(isSessionEntryDataSql)).toEqual([]);
+        expect(assertCommitAllowed).toHaveBeenCalledOnce();
+        return result;
+      } finally {
+        host.restore();
+      }
+    };
     await patch({ label: "metadata only", sidebarRoot: true });
     expect(snapshots()).toEqual(saved);
     expect(revision()).toBe(initialRevision);
@@ -183,6 +193,12 @@ it("preserves cold serialization and snapshot revisions for synchronous SDK comm
 
     const changedSkills = { ...cold.skillsSnapshot, prompt: "changed instructions" };
     await patch({ skillsSnapshot: changedSkills });
+    expect(await readSessionEntryInWorker(f.scope)).toMatchObject({
+      label: "metadata only",
+      skillsSnapshot: changedSkills,
+      sessionDiffBaseline: cold.sessionDiffBaseline,
+      systemPromptReport: cold.systemPromptReport,
+    });
     expect(snapshots()).toEqual(
       saved.map((row) =>
         row.field === "skillsSnapshot"
@@ -680,7 +696,6 @@ it("retains synchronous SDK entry reads inside an opaque last-route commit guard
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const assertCommitAllowed = vi.fn(() => {
-      expect(f.database.db.isTransaction).toBe(true);
       expect(getSessionEntry(f.scope)?.sessionId).toBe("original");
     });
     const entry = await updateLastRoute({

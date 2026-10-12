@@ -89,13 +89,9 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
     sessionKey,
     storePath: databasePath,
   });
-  // Released session-store callbacks retain their native synchronous transaction boundary.
+  // Offline maintenance and process-held incognito stores retain native ownership.
   const useWorker =
-    !incognitoBinding &&
-    isMainThread &&
-    !options.shouldCommit &&
-    !options.assertCommitAllowed &&
-    supportsOpenClawAgentDatabaseExecution(databaseOptions);
+    !incognitoBinding && isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const ensure = options.workerGuard?.ensureIdentitySource;
   if (
     ensure &&

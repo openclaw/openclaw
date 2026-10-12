@@ -596,21 +596,26 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(serialized).not.toContain("adapter-private-marker");
   });
 
-  it("does not transfer completion ownership to an asynchronous acknowledgement", async () => {
-    await runDispatch({
-      bodyForAgent: "audit this turn",
-      runId: "caller-run",
-      onAgentRunStart: () => Promise.resolve("reply-dispatch"),
-    });
+  it.each(["legacy", "prepared"] as const)(
+    "does not transfer completion ownership to an asynchronous %s acknowledgement",
+    async (contract) => {
+      await runDispatch({
+        bodyForAgent: "audit this turn",
+        runId: "caller-run",
+        ...(contract === "legacy"
+          ? { onAgentRunStart: () => Promise.resolve("reply-dispatch") }
+          : { onPreparedAgentRunStart: () => Promise.resolve("reply-dispatch") }),
+      });
 
-    const expected = expect.objectContaining({
-      runId: "caller-run",
-      auditOnly: false,
-      completionSource: undefined,
-    });
-    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
-    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
-  });
+      const expected = expect.objectContaining({
+        runId: "caller-run",
+        auditOnly: false,
+        completionSource: undefined,
+      });
+      expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
+      expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
+    },
+  );
 
   it("reports uncertain question input when ACP notice delivery fails", async () => {
     routeMocks.routeReply.mockRejectedValueOnce(new Error("synthetic notice delivery failure"));
@@ -932,8 +937,9 @@ describe("tryDispatchAcpReplyCore", () => {
           preparedMessages.push(structuredClone(message));
           return message;
         },
-        onAgentRunStart: (_runId, _meta, run) => {
-          dispatchedRun = run;
+        onPreparedAgentRunStart: ({ options, transcriptStart }) => {
+          expect(transcriptStart).toMatchObject(target);
+          dispatchedRun = options;
           return "reply-dispatch";
         },
       });

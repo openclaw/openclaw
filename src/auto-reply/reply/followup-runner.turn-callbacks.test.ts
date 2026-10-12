@@ -54,7 +54,7 @@ const key = "followup-turn-callback-ownership";
 function createObservers() {
   return {
     onDeliberateSilentTerminalReply: vi.fn(),
-    onAgentRunStart: vi.fn<NonNullable<FollowupRunObservers["onAgentRunStart"]>>(),
+    onPreparedAgentRunStart: vi.fn<NonNullable<FollowupRunObservers["onPreparedAgentRunStart"]>>(),
     onAgentRunTerminalOutcome:
       vi.fn<NonNullable<FollowupRunObservers["onAgentRunTerminalOutcome"]>>(),
     onModelSelected: vi.fn<NonNullable<FollowupRunObservers["onModelSelected"]>>(),
@@ -110,7 +110,7 @@ describe("queued turn callback ownership", () => {
         params.opts?.internalEventExecution?.onStarted(runId);
         await params.opts?.internalEventExecution?.onTerminal(runId, "completed");
         params.opts?.onDeliberateSilentTerminalReply?.();
-        params.opts?.onAgentRunStart?.(runId);
+        params.opts?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
         params.opts?.onModelSelected?.({ provider: "test", model: item, thinkLevel: undefined });
         params.opts?.prepareAssistantTranscriptMessage?.(message, item);
         await params.opts?.resolveReplyDelivery?.(1);
@@ -180,7 +180,10 @@ describe("queued turn callback ownership", () => {
         for (const [index, item] of ["B", "C"].entries()) {
           const own = observers[index]!;
           expect(own.onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
-          expect(own.onAgentRunStart).toHaveBeenCalledExactlyOnceWith(`execution-${item}`);
+          expect(own.onPreparedAgentRunStart).toHaveBeenCalledExactlyOnceWith({
+            runId: `execution-${item}`,
+            transcriptStart: null,
+          });
           expect(own.onModelSelected).toHaveBeenCalledExactlyOnceWith({
             provider: "test",
             model: item,

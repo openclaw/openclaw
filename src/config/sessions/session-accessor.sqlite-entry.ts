@@ -461,7 +461,10 @@ async function patchSqliteSessionEntrySnapshot(
     return result.entry;
   }
   let wrote = false;
-  const workerPatch = (preparedSource?: PreparedSessionSourceAuthority) =>
+  const workerPatch = (
+    preparedSource: PreparedSessionSourceAuthority,
+    assertSourceAtCommit?: () => void,
+  ) =>
     patchSessionEntryInWorker({
       database: { ...databaseOptions, path: databasePath },
       databaseIdentity:
@@ -470,6 +473,11 @@ async function patchSqliteSessionEntrySnapshot(
       selection: params.selection,
       assertCurrent: () => assertCurrent?.(),
       guard: options.workerGuard,
+      assertCommitAllowed: () => {
+        options.assertCommitAllowed?.();
+        assertSourceAtCommit?.();
+      },
+      shouldCommit: options.shouldCommit,
       preparedSource,
       retainedExecution: options.retainedExecution,
       reduction:
@@ -517,12 +525,11 @@ async function patchSqliteSessionEntrySnapshot(
           await source.release?.();
           throw new Error("Transaction-local entry authority differs from its writer");
         }
-        if (locality === "same-store") {
-          return workerPatch(source);
-        }
-        // Cross-store event-loop atomicity is required while the released synchronous
-        // transcript SDK bypasses async queues. Revisit at the next SDK major.
-        await source.release?.();
+        // Other stores and opaque SDK callbacks keep their live authority check at
+        // the existing commit grant; the target's write still belongs to its worker.
+        return locality === "same-store"
+          ? workerPatch(source)
+          : workerPatch({ ...source, checks: [] }, sourceAssertion);
       }
       return withDatabase(async () => {
         const database = openOpenClawAgentDatabase(databaseOptions);

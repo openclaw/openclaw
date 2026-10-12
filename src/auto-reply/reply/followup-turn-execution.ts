@@ -295,6 +295,7 @@ export async function executeFollowupTurn(params: {
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
     onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
+    onPreparedAgentRunStart: turn.queued.runObservers?.onPreparedAgentRunStart,
     onAgentRunTerminalOutcome: turn.queued.runObservers?.onAgentRunTerminalOutcome,
     onModelSelected: turn.queued.runObservers?.onModelSelected,
     prepareAssistantTranscriptMessage: turn.queued.runObservers?.prepareAssistantTranscriptMessage,

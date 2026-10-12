@@ -272,13 +272,15 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     deprecated: "2026-10-04",
     warningStarts: "2026-10-04",
     replacement:
-      "Forward every onAgentRunStart argument and its synchronous return value through the current runtime helper. Bundled producers supply prepared transcript facts in the optional fourth argument; retain the released three-argument callback and synchronous transcript-read fallback until the next Plugin SDK major and explicit breaking-release approval.",
+      "Use onPreparedAgentRunStart with a required transcriptStart field, forwarding the complete notification and synchronous return value. Bundled runtimes prepare the facts asynchronously; retain the released onAgentRunStart callback and omitted-facts synchronous read until the next Plugin SDK major and explicit breaking-release approval.",
     docsPath: "/plugins/sdk-migration/compatibility-policy#reply-run-start-transcript-facts",
     surfaces: [
       "openclaw/plugin-sdk/reply-runtime.GetReplyOptions.onAgentRunStart",
       "PluginHookReplyDispatchContext.onAgentRunStart",
     ],
-    diagnostics: ["plugin compatibility registry and migration documentation; no runtime warnings"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and one runtime DEP_SESSION_PERSISTENCE warning per plugin and callback family per process",
+    ],
     tests: [
       "src/plugin-sdk/reply-runtime.contract.test.ts",
       "src/gateway/server-methods/chat-send-reply-dispatch.test.ts",

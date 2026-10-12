@@ -362,23 +362,27 @@ unchanged. Removal still requires explicit breaking-release approval.
 
 ### Reply run-start transcript facts
 
-`GetReplyOptions.onAgentRunStart` from `openclaw/plugin-sdk/reply-runtime`, also
-provided to `reply_dispatch` hooks, retains the callback shipped in OpenClaw
-2026.9.8: `(runId, executionIdentityToken?, options?) => unknown`. Existing
-callbacks and producers that omit later arguments remain supported. Completion
-ownership still requires returning `"reply-dispatch"` synchronously.
+`GetReplyOptions.onPreparedAgentRunStart` from
+`openclaw/plugin-sdk/reply-runtime`, also provided to `reply_dispatch` hooks,
+receives one `PreparedAgentRunStart` object containing `runId`, optional
+`executionIdentityToken` and `options`, and required `transcriptStart` facts (or
+`null` when there is no transcript). Prepare the transcript boundary through the
+awaited runtime before invoking the callback. The facts describe the transcript
+boundary and do not grant session or write authority.
 
-Current runtime helpers supply prepared transcript facts in an optional fourth
-argument. Wrappers should forward every argument and the callback's return value;
-see [message hooks](/plugins/hooks/messages). The facts describe the transcript
-boundary and do not grant session or write authority. When a released producer
-omits them, the Gateway retains its synchronous transcript-read fallback.
+Bundled runtimes and callback wrappers use this contract so the Gateway does not
+read SQLite while handling the notification. Forward the complete object and
+return the callback's result synchronously. Completion ownership requires
+returning `"reply-dispatch"` synchronously; a Promise does not transfer ownership.
 
-Only that omitted-facts fallback is deprecated as of October 4, 2026; the callback
-itself remains supported. The fallback stays until the next Plugin SDK major and
-explicit breaking-release approval. The compatibility registry records the
-migration without runtime warnings. Schemas, retained data, and update behavior
-are unchanged.
+The deprecated `onAgentRunStart` retains the callback shipped in OpenClaw
+2026.9.8: `(runId, executionIdentityToken?, options?) => unknown`, including the
+optional fourth transcript-facts argument. Released callbacks and producers that
+omit later arguments remain supported. Legacy invocation emits one
+`DEP_SESSION_PERSISTENCE` warning per plugin and callback family per process.
+The Gateway's omitted-facts synchronous read stays until the next Plugin SDK
+major and explicit breaking-release approval. Schemas, retained data, and update
+behavior are unchanged.
 
 ### Agent execution preparation compatibility
 
