@@ -18,10 +18,13 @@ import {
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
-const TOMBSTONED_SESSION_NOTICE =
-  "I couldn't continue this session after a gateway restart. " +
-  "Your transcript is safe. In WebChat, use Resume in new session to continue it; " +
-  "in other channels, use /new or /reset to start a replacement session.";
+function buildTombstonedSessionNotice(reason: string): string {
+  return (
+    `I couldn't continue this session after a gateway restart: ${reason}. ` +
+    "Your transcript is safe. In WebChat, use Resume in new session to continue it; " +
+    "in other channels, use /new or /reset to start a replacement session."
+  );
+}
 
 function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
   const interruptedRunId =
@@ -44,7 +47,7 @@ async function sendRestartRecoveryTombstoneNotice(params: {
       to: params.deliveryContext.to,
       accountId: params.deliveryContext.accountId,
       threadId: params.deliveryContext.threadId,
-      text: TOMBSTONED_SESSION_NOTICE,
+      text: buildTombstonedSessionNotice(params.reason),
       idempotencyKey: buildRestartRecoveryTombstoneNoticeKey(params.entry),
     });
     mainSessionRecoveryLog.info(
@@ -64,11 +67,12 @@ async function writeRestartRecoveryTombstoneNotice(params: {
   storePath: string;
   expectedSessionState: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch: SessionTranscriptTurnLifecyclePatch;
+  reason: string;
 }): Promise<"failed" | "stale" | "written"> {
   const result = await appendAssistantMessageToSessionTranscript({
     ...params,
     expectedSessionId: params.entry.sessionId,
-    text: TOMBSTONED_SESSION_NOTICE,
+    text: buildTombstonedSessionNotice(params.reason),
     idempotencyKey: buildRestartRecoveryTombstoneNoticeKey(params.entry),
   }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!result.ok) {
