@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSubagentTaskMessage } from "../agents/subagents/spawn/subagent-system-prompt.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -71,6 +72,97 @@ function repair() {
 }
 
 describe("Doctor session title repair", () => {
+  it("preserves spawn-owned names while repairing ordinary sessions in the same scan", async () => {
+    await withSession(
+      async (params) => {
+        const task = "Reply only with 17 * 19. Do not use tools.";
+        const fixtures = [
+          ...(["run", "session"] as const).flatMap((spawnMode) => {
+            const historical = [
+              "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.",
+              ...(spawnMode === "session"
+                ? [
+                    "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages.",
+                  ]
+                : []),
+              "[Subagent Task]",
+              task,
+              "Begin. Execute the assigned task to completion.",
+            ].join("\n\n");
+            return [
+              historical,
+              buildSubagentTaskMessage({ task, spawnMode, childDepth: 1, maxSpawnDepth: 5 }),
+            ].map((message, index) => ({
+              sessionKey: `agent:main:subagent:${spawnMode}-child-${index}`,
+              message,
+              entry: { spawnedBy: params.sessionKey },
+              displayName: undefined,
+            }));
+          }),
+          {
+            sessionKey: "agent:main:dashboard:visible-child",
+            entry: { spawnedBy: params.sessionKey },
+            message: "Investigate the slow query",
+            displayName: "Investigate the slow query",
+          },
+          {
+            sessionKey: "agent:main:subagent:named-child",
+            entry: { label: "Query analysis", spawnedBy: params.sessionKey },
+            message: task,
+            displayName: undefined,
+          },
+        ];
+        const expected = new Map<string, SessionEntry>([
+          [
+            params.sessionKey,
+            { ...params.sessionEntry, displayName: "[Subagent Context] Explain this phrase" },
+          ],
+        ]);
+        for (const [index, fixture] of fixtures.entries()) {
+          const scope = {
+            agentId: params.agentId,
+            storePath: params.storePath,
+            sessionKey: fixture.sessionKey,
+            sessionId: `child-${index}`,
+          };
+          await sessionAccessor.persistSessionTranscriptTurn(scope, {
+            messages: [{ message: { role: "user", content: fixture.message } }],
+            touchSessionEntry: false,
+          });
+          await sessionAccessor.replaceSessionEntry(scope, {
+            ...params.sessionEntry,
+            sessionId: scope.sessionId,
+            lifecycleRevision: `child-lifecycle-${index}`,
+            // Keep fixture children outside automatic age-based reclamation while seeding siblings.
+            updatedAt: Date.now(),
+            ...fixture.entry,
+          });
+          const before = expectDefined(
+            sessionAccessor.loadSessionEntry(scope),
+            "seeded child entry",
+          );
+          expected.set(scope.sessionKey, {
+            ...before,
+            ...(fixture.displayName ? { displayName: fixture.displayName } : {}),
+          });
+        }
+        for (const sessionKey of expected.keys()) {
+          expect(
+            sessionAccessor.loadSessionEntry({ ...params, sessionKey }),
+            sessionKey,
+          ).toBeDefined();
+        }
+        await repair();
+        for (const [sessionKey, entry] of expected) {
+          expect
+            .soft(sessionAccessor.loadSessionEntry({ ...params, sessionKey }), sessionKey)
+            .toEqual(entry);
+        }
+      },
+      [{ role: "user", content: "[Subagent Context] Explain this phrase" }],
+    );
+  });
+
   it.each(["first user request", "oversized prefix", "user request after the first 100 messages"])(
     "derives a title only from a complete %s",
     async (kind) => {
