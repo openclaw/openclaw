@@ -97,7 +97,9 @@ export function startGitHubPublicationDiscovery(params: {
   };
   readPublished = read;
   const refreshAll = (retireCredentials = false) => {
-    for (const key of [...sessions.keys()]) {
+    // Refresh replaces LRU entries; the live iterator would revisit them.
+    const keys = [...sessions.keys()];
+    for (const key of keys) {
       refresh(key, retireCredentials);
     }
   };
