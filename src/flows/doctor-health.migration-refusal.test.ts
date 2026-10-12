@@ -453,7 +453,7 @@ describe("Doctor maintenance admission", () => {
               configHash: "unchanged",
               maintenanceRefusal: {
                 kind: "deferred",
-                reason: owner === "agent" ? "agent-database-in-use" : "coordinator-contention",
+                reason: owner === "agent" ? "agent-database-in-use" : "admission-unavailable",
               },
               warnings: [expect.stringContaining("Doctor could not enter maintenance")],
             });
@@ -473,8 +473,8 @@ describe("Doctor maintenance admission", () => {
             expect(failure).toBeInstanceOf(Error);
             expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
           }
-          // Refuse without retrying ownership; snapshot/read startup cost depends on the host.
-          expect(gatewayAcquisitions).toHaveBeenCalledOnce();
+          // Config admission sees shared maintenance before acquiring the Gateway lock.
+          expect(gatewayAcquisitions).toHaveBeenCalledTimes(owner === "agent" ? 1 : 0);
           expect(
             fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : undefined,
           ).toBe(before);
