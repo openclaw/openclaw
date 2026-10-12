@@ -313,6 +313,10 @@ async function startModel() {
       final("CHILD_REPLAY_RESULT");
     } else if (text?.includes("EXPLICIT_FOLLOWUP_AFTER_RESTART")) {
       final("EXPLICIT_FOLLOWUP_OK");
+    } else if (text?.includes("Subagent completion delivery is blocked:")) {
+      // The host may run this durable notice as its own turn or fold it into the
+      // next prompt; either way it is a notification, not a completion retry.
+      final("Completion delivery is blocked.");
     } else if (last?.type === "function_call_output") {
       // Runtime normalization may change IDs; follow the actual call/output pair.
       const call = input.findLast(
