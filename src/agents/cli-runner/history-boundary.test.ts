@@ -4,6 +4,10 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   getCliHistoryWriter,
   runWithCliHistoryWriter,
 } from "../../config/sessions/cli-history-boundary.js";
@@ -31,12 +35,20 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "cli-history-boundary-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "cli-history-boundary-",
+);
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 async function fixture(withHeader = true) {
+  setRuntimeConfigSnapshot({});
   const dir = sessionDirs.make();
   const target = {
     agentId: "main",

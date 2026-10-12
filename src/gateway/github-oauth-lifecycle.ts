@@ -20,7 +20,6 @@ import {
   deleteGitHubOAuthRecord,
   inspectGitHubOAuthRecord,
   listGitHubDeviceAuthorizationRecords,
-  listGitHubOAuthRecords,
   readGitHubDeviceAuthorizationRecord,
   type GitHubDeviceAuthorizationRecord,
   type GitHubIdentityScope,
@@ -58,6 +57,7 @@ import {
   authorizationStillOwned,
   authorizationStillOwnedAsync,
   configuredOAuthIdentities,
+  createGitHubOAuthInventoryReader,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
   REFRESH_SKEW_MS,
@@ -110,6 +110,7 @@ export function createGitHubOAuthLifecycle(params: {
   let maintenance: Promise<void> | undefined;
   let maintenanceScope: GatewaySchedulerScope | undefined;
   let stopping = false;
+  const readOAuthInventory = createGitHubOAuthInventoryReader();
   const warnMaintenanceError = (error: unknown) => {
     params.warn(`GitHub OAuth maintenance failed; will retry: ${formatErrorMessage(error)}`);
   };
@@ -441,12 +442,13 @@ export function createGitHubOAuthLifecycle(params: {
     );
 
   const reconcileRecords = async (): Promise<void> => {
-    for (const { requestId, record } of await listGitHubDeviceAuthorizationRecords()) {
+    const { deviceRecords, oauthRecords } = await readOAuthInventory();
+    for (const { requestId, record } of deviceRecords) {
       if (!record || record.expiresAtMs <= Date.now()) {
         await queueDeviceCleanup(requestId);
       }
     }
-    for (const { profileId, record } of await listGitHubOAuthRecords()) {
+    for (const { profileId, record } of oauthRecords) {
       if (!record) {
         await queueOAuthCleanup(profileId);
         continue;

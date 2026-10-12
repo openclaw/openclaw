@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   replaceSessionEntrySync,
@@ -9,6 +10,7 @@ import { prepareSessionPatchSidebarAncestors } from "./sessions-patch-sidebar-an
 
 it("checks retained ancestor placement without host SQL and rejects archival and promotion", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const root = "agent:main:dashboard:guard-root";
     const child = "agent:main:dashboard:guard-child";
     const scope = (key: string) => ({ agentId: "main", sessionKey: key });
@@ -53,6 +55,7 @@ it("checks retained ancestor placement without host SQL and rejects archival and
 
 it("rejects an unrelated supplied ancestor without looking it up", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const child = "agent:main:dashboard:guard-child";
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: child },

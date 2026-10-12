@@ -360,7 +360,7 @@ async function writeThreadBindingFromResponse(
   let retained = false;
   let sameOwner = false;
   try {
-    const current = params.bindingStore.read(params.identity);
+    const current = await params.bindingStore.readAsync(params.identity);
     assertCodexBindingMayBeReplaced(current, "storing a conversation-bound Codex thread");
     const trackSubscription = !resolved.incognito && isCodexAppServerClientRuntimeLive(client);
     sameOwner = isSameCodexAppServerThreadOwner(current, {

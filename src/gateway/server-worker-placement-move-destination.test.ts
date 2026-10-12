@@ -1,12 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { bindDeviceWorkerAvailability } from "./worker-environments/device-provider.js";
 import { createWorkerPlacementMoveService } from "./worker-environments/placement-move-service.js";
+
+afterEach(clearRuntimeConfigSnapshot);
 
 const SESSION_KEY = "agent:main:move-source";
 const CODEX_COMMAND = "codex.exec-server.stdio.v1";
@@ -67,6 +73,7 @@ describe("worker placement move destination owner", () => {
       },
       gateway: { nodes: { commands: { allow: [CODEX_COMMAND] } } },
     };
+    setRuntimeConfigSnapshot(config);
     const supportsExecutionMode = vi.fn((profileId: string) => profileId === "compatible");
     const environments = { supportsExecutionMode };
     bindDeviceWorkerAvailability(environments, async (deviceId) => ({

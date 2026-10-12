@@ -343,14 +343,17 @@ export function selectSkillLibraryEntries(
   const ownerIds = [
     ...new Set(rows.flatMap((row) => (row.owner_profile_id ? [row.owner_profile_id] : []))),
   ];
-  const readOwners = (ids: string[]) =>
-    new Map(
-      tableExists(db, "user_profiles")
-        ? chunkItems(ids, 500).flatMap((batch) =>
-            Array.from(selectUserProfileDisplaysInDatabase(db, batch)),
-          )
-        : [],
-    );
+  function readOwners(ids: string[]) {
+    const owners: ReturnType<typeof selectUserProfileDisplaysInDatabase> = new Map();
+    if (tableExists(db, "user_profiles")) {
+      for (const batch of chunkItems(ids, 500)) {
+        for (const [id, owner] of selectUserProfileDisplaysInDatabase(db, batch)) {
+          owners.set(id, owner);
+        }
+      }
+    }
+    return owners;
+  }
   const owners = readOwners(ownerIds);
   // Canonical identity and display each retain their existing one-hop, missing-target fallback.
   const labels = readOwners([

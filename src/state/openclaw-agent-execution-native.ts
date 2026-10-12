@@ -109,6 +109,13 @@ export function createAgentDatabaseNativeGeneration(
   let assertIntegrityVerifierCurrent: (() => void) | undefined;
   let preparationPublished = false;
 
+  // The actor retains this observer; keep it outside the opening caller's scope.
+  const onNativeLost = () => {
+    // Before the lease handoff this generation has borrowed no validation.
+    if (lease) {
+      invalidateOpenClawAgentDatabaseValidation(pathname);
+    }
+  };
   const assertCurrent = () => {
     assertLogicalCurrent();
     if (retiring) {
@@ -416,12 +423,7 @@ export function createAgentDatabaseNativeGeneration(
               readCloseReceipt = readReceipt;
               readOpenRefused = readRefused;
             },
-            onNativeLost: () => {
-              // Before the lease handoff this generation has borrowed no validation.
-              if (lease) {
-                invalidateOpenClawAgentDatabaseValidation(pathname);
-              }
-            },
+            onNativeLost,
           },
         );
         return openedStore;
@@ -656,7 +658,8 @@ export function createAgentDatabaseNativeGeneration(
             errors.push(error);
           }
         }
-        if (nativeStopped && lease) {
+        // A failed close can leave the Worker running; its retry owns lease cleanup.
+        if (errors.length === 0 && nativeStopped && lease) {
           try {
             await cleanupRetiredAgentDatabaseLease({
               context,

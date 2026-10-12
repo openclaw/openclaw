@@ -15,7 +15,10 @@ import {
 import { getFreePort } from "../../../src/test-utils/ports.js";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   startControlUiE2eServer,
@@ -543,11 +546,19 @@ async function captureChromiumScreenshot(
   fileName: string,
   surface: Locator,
   content: readonly Locator[],
+  scrollTo?: Locator,
 ): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  const image = await takeControlUiViewportScreenshot(surface.page(), surface, content);
+  const image = scrollTo
+    ? (
+        await takeControlUiScreenshotFrame(surface.page(), surface, content, {
+          scrollTo,
+          animations: "disabled",
+        })
+      ).png
+    : await takeControlUiViewportScreenshot(surface.page(), surface, content);
   await writeFile(path.join(artifactDir, fileName), image);
 }
 
@@ -706,11 +717,11 @@ suite.define(() => {
           .poll(() => rawEditorBefore.inputValue())
           .toContain(`"${configProofIdentifier}"`);
         await expect.poll(() => rawEditorBefore.inputValue()).toContain(configProofPrefixBefore);
-        await rawEditorBefore.scrollIntoViewIfNeeded();
         await captureChromiumScreenshot(
           "01-real-config-id-before.png",
           connected.page.locator(".shell"),
           [rawEditorBefore],
+          rawEditorBefore,
         );
 
         const settingsUrl = new URL("settings/communications", gateway.httpUrl);
@@ -754,7 +765,6 @@ suite.define(() => {
         await rawEditor.waitFor();
         await expect.poll(() => rawEditor.inputValue()).toContain(`"${configProofIdentifier}"`);
         await expect.poll(() => rawEditor.inputValue()).toContain(configProofPrefixAfter);
-        await rawEditor.scrollIntoViewIfNeeded();
 
         const proof = {
           configSetRequests: configSetCount() - configSetCountBefore,
@@ -778,6 +788,7 @@ suite.define(() => {
           "02-real-config-id-after.png",
           connected.page.locator(".shell"),
           [rawEditor],
+          rawEditor,
         );
         expect(connected.errors).toEqual([]);
         await suite.closeBrowserContext(connected.context);

@@ -21,7 +21,6 @@ import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
   settlePendingPackageActivation,
-  settleRemountedPackageActivation,
 } from "./package-update-activation.js";
 import { legacyPackageFingerprint } from "./package-update-legacy.test-support.js";
 
@@ -171,6 +170,20 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     await fixture.lifetime.cleanup();
   });
 
+  it("keeps separate-helper settlement from retiring an ordinary prepared operation", async () => {
+    fixture.setup();
+    const f = await fixture.prepare();
+    const journalPath = resolvePackageActivationJournalPath(f.anchor);
+    const before = fs.readFileSync(journalPath);
+    await expect(
+      settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+        operationId: f.operationId,
+      }),
+    ).rejects.toThrow("requires a verified device remount");
+    expect(fs.readFileSync(journalPath)).toEqual(before);
+    expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
+  });
+
   it.each(["settle", "archive-interrupted"] as const)(
     "verifies and preserves the installed candidate: %s",
     async (scenario) => {
@@ -201,9 +214,6 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       await expect(readPackageActivationStatus(f.anchor, f.operationId)).rejects.toThrow(
         "does not match its installation",
       );
-      await expect(settlePendingPackageActivation(f.packageRoot)).rejects.toThrow(
-        "does not match its installation",
-      );
       expect(fs.readFileSync(f.journalPath)).toEqual(before);
       const rename = fs.renameSync;
       const cut =
@@ -215,7 +225,12 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
               return rename(source, destination);
             })
           : undefined;
-      const result = await settleRemountedPackageActivation(f.anchor, f.operationId);
+      const result =
+        scenario === "settle"
+          ? await settlePendingPackageActivation(f.packageRoot)
+          : await settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+              operationId: f.operationId,
+            });
       expect(result).toMatchObject({ reason: "publication-settled-external-change" });
       cut?.mockRestore();
       if (scenario === "archive-interrupted") {
@@ -292,7 +307,9 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
           },
         );
       }
-      const refusal = await settleRemountedPackageActivation(f.anchor, f.operationId).then(
+      const refusal = await settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+        operationId: f.operationId,
+      }).then(
         () => undefined,
         (error: unknown) => error,
       );
@@ -324,6 +341,8 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     "rewritten-original-launcher",
     "inode",
     "device-map",
+    "journal-inode",
+    "journal-device-map",
     "helper",
     "journal-mode",
     "journal-hardlink",
@@ -373,13 +392,21 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     if (scenario === "journal-hardlink") {
       fs.linkSync(f.journalPath, `${f.journalPath}.link`);
     }
-    if (["inode", "device-map", "rollback"].includes(scenario)) {
+    if (
+      ["inode", "device-map", "journal-inode", "journal-device-map", "rollback"].includes(scenario)
+    ) {
       const d = structuredClone(f.historical);
       if (scenario === "inode") {
         d.binIdentity = d.binIdentity.replace(/\d+$/u, (n) => String(BigInt(n) + 1n));
       }
       if (scenario === "device-map") {
         d.binIdentity = d.binIdentity.replace(/^\d+/u, (n) => String(BigInt(n) + 1n));
+      }
+      if (scenario === "journal-inode") {
+        d.journalIdentity = d.journalIdentity.replace(/\d+$/u, (n) => String(BigInt(n) + 1n));
+      }
+      if (scenario === "journal-device-map") {
+        d.journalIdentity = d.journalIdentity.replace(/^\d+/u, (n) => String(BigInt(n) + 1n));
       }
       const db = new DatabaseSync(f.journalPath);
       try {
@@ -394,10 +421,9 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     const before = fs.readFileSync(f.journalPath);
     const refuse = () =>
       expect(
-        settleRemountedPackageActivation(
-          f.anchor,
-          scenario === "operation" ? randomUUID() : f.operationId,
-        ),
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+          operationId: scenario === "operation" ? randomUUID() : f.operationId,
+        }),
       ).rejects.toThrow();
     if (scenario === "active-lease") {
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -143,6 +144,7 @@ it.each(["realpath", "mkdir"] as const)(
 
 it("reports the selected sandbox policy without duplicate workspace creation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:optional";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
@@ -174,6 +176,7 @@ it("reports the selected sandbox policy without duplicate workspace creation", a
 
 it("enforces required sandboxing for an independent policy session even when mode is off", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:required";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },

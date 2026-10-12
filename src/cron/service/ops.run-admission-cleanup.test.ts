@@ -58,7 +58,7 @@ async function activationFixture(trigger: ActivationTrigger, priorFailure = true
 }
 
 describe("cron service run admission cleanup", () => {
-  it("does not trust an unavailable-agent execution error as a settlement guard", async () => {
+  it("records an admitted execution error after its agent becomes unavailable", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const startedAt = Date.parse("2026-02-06T10:05:01.750Z");
     const job = createDueIsolatedJob({
@@ -92,14 +92,15 @@ describe("cron service run admission cleanup", () => {
     await expect(activeRun).resolves.toEqual({ ok: true, ran: true });
 
     const persisted = (await loadCronStore(store.storePath)).jobs[0];
-    expect(persisted?.state.lastRunStatus).toBeUndefined();
+    expect(persisted?.state.lastRunStatus).toBe("error");
+    expect(persisted?.state.lastError).toBe("cron job agent is unavailable: main");
     expect(persisted?.state.runningAtMs).toBeUndefined();
     const receipt = openOpenClawStateDatabase()
       .db.prepare(
         "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
       )
       .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
-    expect(receipt?.status).toBe("superseded");
+    expect(receipt?.status).toBe("error");
   });
 
   it.each(["enqueue"] as const)("rejects %s preflight effects after authority closes", async () => {

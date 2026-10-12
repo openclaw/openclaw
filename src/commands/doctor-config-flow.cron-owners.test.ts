@@ -412,6 +412,8 @@ it.each([
             original.map(({ job_json, agent_id }) => ({ job_json, agent_id })),
           );
           expect(await backups()).toEqual([]);
+          cron.stop();
+          await cron.waitForIdle();
           const beforeDoctor = rows(storePath);
 
           const ctx = await repair(state);

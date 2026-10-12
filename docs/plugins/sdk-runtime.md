@@ -332,6 +332,15 @@ temporary changes. The connection owner retains the current timeout, skips
 unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
 connection would bypass that policy.
 
+Engine-aware stores keep host secret resolution and operation settlement in
+`openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
+recipes in the worker/admission-only
+`openclaw/plugin-sdk/database-engine-worker-runtime`. The existing
+`sqlite-worker-runtime` entrypoint retains SQLite helpers; PostgreSQL connections
+are opened through `openEngineStore`, without a public connection constructor.
+See [Database engine adapters](/plugins/sdk-overview/infrastructure#database-engine-adapters-experimental)
+for the contracts and boundary.
+
 `readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
 reads the existing physical database identity and in-process writer receipt without
 issuing SQL or a worker request. Retained row caches may reuse results only when

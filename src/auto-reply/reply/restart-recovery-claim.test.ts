@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,6 +9,10 @@ import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
@@ -141,6 +145,9 @@ async function createAcknowledgedClaim() {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
+
   it.each(["absent", "persisted"] as const)(
     "leaves source-less lifecycle admission to its existing writer when the recorder is %s",
     async (mode) => {
@@ -192,6 +199,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     "settles source-less execution custody through $completion for $owner without claiming delivery authority",
     ({ completion, owner, metadata }) =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const scope = {
           agentId: "main",
           storePath: path.join(state.sessionsDir(), "sessions.json"),

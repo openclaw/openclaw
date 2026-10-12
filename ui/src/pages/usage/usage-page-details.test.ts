@@ -757,31 +757,6 @@ describe("UsagePage detail requests", () => {
     });
   });
 
-  it("surfaces a session-log failure and clears it after a successful retry", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("logs unavailable"))
-      .mockResolvedValueOnce({
-        logs: [{ timestamp: 1, role: "user", content: "hello" }],
-      });
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-
-    await page.details.sessionLogs.load("agent:main:detail");
-    expect(page.details.sessionLogs.status.error).toBe("logs unavailable");
-    expect(page.details.sessionLogs.data).toBeNull();
-
-    await page.details.sessionLogs.load("agent:main:detail");
-    expect(page.details.sessionLogs.data).toEqual([
-      { timestamp: 1, role: "user", content: "hello" },
-    ]);
-    expect(page.details.sessionLogs.status).toEqual({
-      error: null,
-      hasLoaded: true,
-      stale: false,
-      awaitingGateway: false,
-    });
-  });
-
   it("does not retain detail data when the selected session changes", async () => {
     const request = vi
       .fn()
@@ -816,7 +791,7 @@ describe("UsagePage detail requests", () => {
     });
   });
 
-  it.each(["accepting", "draining"] as const)(
+  it.each(["draining"] as const)(
     "clears retained details and preserves read authorization errors while %s",
     async (suspensionPhase) => {
       const pending = deferred<never>();

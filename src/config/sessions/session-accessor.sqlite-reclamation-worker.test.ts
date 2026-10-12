@@ -131,7 +131,6 @@ test("retains one archive Worker across refused and interleaved reclamation oper
             refusalPoint = point;
             await expect(
               runSqliteSessionReclamation({
-                forceInProcess: false,
                 plan: operation,
                 assertCommitAllowed: () => {
                   if (superseded) {
@@ -145,9 +144,9 @@ test("retains one archive Worker across refused and interleaved reclamation oper
             refusalPoint = undefined;
             superseded = false;
           }
-          await expect(
-            runSqliteSessionReclamation({ forceInProcess: false, plan: operation }),
-          ).resolves.toMatchObject({ kind: operation.kind });
+          await expect(runSqliteSessionReclamation({ plan: operation })).resolves.toMatchObject({
+            kind: operation.kind,
+          });
           expect(spawn).toHaveBeenCalledTimes(1);
         }
         expect(loadSessionEntry(scope)).toBeUndefined();
@@ -182,7 +181,6 @@ test.each(["root"] as const)(
       );
       try {
         await runSqliteSessionReclamation({
-          forceInProcess: false,
           plan,
         });
         expect(spawned).toHaveLength(1);
@@ -243,7 +241,6 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
       const fixture = entries[index];
       assert.ok(fixture);
       await runSqliteSessionReclamation({
-        forceInProcess: false,
         plan: fixture.plan,
         diagnostics,
       });
@@ -327,7 +324,6 @@ test.each(["established", "first-created"] as const)(
       try {
         await expect(
           runSqliteSessionReclamation({
-            forceInProcess: false,
             plan,
           }),
         ).rejects.toThrow("OpenClaw state database read admission changed");
@@ -385,7 +381,6 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
       try {
         await expect(
           runSqliteSessionReclamation({
-            forceInProcess: false,
             plan,
           }),
         ).rejects.toThrow("synthetic reclamation crash");
@@ -627,7 +622,6 @@ test("retains a selected maintenance row protected after native preparation", as
     try {
       await expect(
         runSqliteSessionReclamation({
-          forceInProcess: false,
           plan,
           refreshMaintenanceProtection: refreshed,
         }),

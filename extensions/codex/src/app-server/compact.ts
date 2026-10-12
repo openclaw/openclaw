@@ -453,7 +453,7 @@ export async function maybeCompactCodexAppServerSession(
             const guardedResult = await options.bindingStore.withLease(
               bindingIdentity,
               async () => {
-                const currentBinding = options.bindingStore.read(bindingIdentity);
+                const currentBinding = await options.bindingStore.readAsync(bindingIdentity);
                 if (attempt.abortSignal.aborted) {
                   if (!options.allowNonManualNativeRequest) {
                     attempt.abortSignal.throwIfAborted();
@@ -525,6 +525,7 @@ export async function maybeCompactCodexAppServerSession(
                     modelSource && !configurationQualification ? true : undefined,
                   onUnqualifiedModelCancelled: (reason) => modelCancellation.abort(reason),
                   requesterSessionKey: attempt.sessionKey,
+                  requesterTurnRunId: attempt.runId,
                   agentId: bindingIdentity.agentId,
                   assertCurrent: assertAdmissionCurrent,
                   retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),

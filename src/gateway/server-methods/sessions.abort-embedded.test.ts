@@ -650,10 +650,13 @@ async function seedChild(id: string, turn: string, queued = true, requester = pa
     agentId: "main",
     sessionKey: childKey(id),
     defaultSessionId: id,
+    lifecycleRevision: `${id}-original`,
   });
   await registerSubagentRun({
     runId: id,
     childSessionKey: childKey(id),
+    childAgentId: "main",
+    sessionEntry: sessions.loadSessionEntry({ agentId: "main", sessionKey: childKey(id) }),
     requesterSessionKey: requester,
     requesterAgentId: "main",
     requesterDisplayKey: requester,

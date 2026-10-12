@@ -223,7 +223,10 @@ export function appendTranscriptEventInTransaction(
         actor.hot.transcript.version.rawSeq = seq;
         actor.hot.transcript.watermark.maxSeq = seq;
         const stored: unknown = JSON.parse(eventJson);
-        actor.transcript.payloads.set(seq, stored);
+        actor.transcript.payloads.set(seq, {
+          event: stored,
+          serializedBytes: Buffer.byteLength(eventJson) + 1,
+        });
         // SAFETY: The same canonical event feeds the existing projection and tree codecs.
         actor.transcript.navigation.push({ ...(stored as SessionTreeEntry), seq });
       }

@@ -60,6 +60,8 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.before-agent-reply-cron" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {

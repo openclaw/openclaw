@@ -309,6 +309,8 @@ export type ReplyPayloadMetadata = {
     sessionKey: string;
     storePath: string;
   };
+  /** The final-dispatch owner joins cleanup to the core dispatcher's settled receipt. */
+  pendingFinalDeliveryCleanup?: { preserveActivity?: boolean };
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
   /** The host's single-use reply policy already consumed its target. */

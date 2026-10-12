@@ -7,6 +7,7 @@ import { convertMessages } from "../../../packages/ai/src/openai-completions-mes
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputReceipts,
@@ -82,6 +83,7 @@ async function withAdmission(
   } = {},
 ) {
   await withOpenClawTestState({ label: "admission-annotation" }, async (state) => {
+    setRuntimeConfigSnapshot(options.config ?? {}, options.config);
     const fixture = await prepareAdmission(
       path.join(state.sessionsDir(), "sessions.json"),
       options,

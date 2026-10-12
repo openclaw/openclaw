@@ -441,6 +441,25 @@ export function collectCoreConfigAssignments(params: {
   context: ResolverContext;
   agentId?: string;
 }): void {
+  const database = params.config.database;
+  if (database?.postgres) {
+    createConfigSecretInputCollector(params)(
+      database.postgres,
+      "connection",
+      "database.postgres.connection",
+      {
+        active: database.engine === "postgres",
+        inactiveReason: "database.engine is not postgres.",
+        owner: {
+          ownerKind: "gateway",
+          ownerId: "database",
+          requiredForGateway: true,
+          disposition: "fail-closed",
+          contract: database,
+        },
+      },
+    );
+  }
   const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
   if (providers) {
     collectModelOrSkillAssignments({

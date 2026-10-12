@@ -24,6 +24,9 @@ would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
+Storage-engine PRs and scheduled main runs include a hosted PostgreSQL 17
+[conformance job](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
+
 Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
 Default fork first attempts run their existing core lint stripes on Blacksmith16, retaining the same core and extension chunk assignments and restore-only caches. Retries and the GitHub override remain hosted; see [runner placement](/ci/runners#runners).
@@ -103,13 +106,20 @@ The extension package boundary row has a 30-minute job budget for SDK preparatio
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
 command alone; one completed compile and canary but exceeded the former
-20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+20-minute whole-job deadline.
 Optional hybrid hosted overflow retains this row on Blacksmith: compiled receipt
 archives include checkout-specific paths and links, and hosted cold runs exceeded
 22 minutes. Explicit hosted overrides, retry and trust fallbacks remain available.
 Other jobs keep their existing admission thresholds; the hosted row total counts
 only the rows actually offloaded. Compiler concurrency, coverage and cache guards
 are unchanged.
+
+The Plugin SDK API diff row also has a 30-minute job budget. Two hosted runs took
+722 and 725 seconds to render the base revision, then reached the former
+20-minute deadline while rendering the candidate. The budget allows both full
+revision renders plus setup and cleanup. Rendering stays serial below eight CPUs
+or 24 GiB of memory; larger hosts retain two render workers. Other
+additional-check rows retain 20 minutes.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 

@@ -39,6 +39,7 @@ import { captureAcpSessionEntryBinding } from "./session-meta-entry.kernel.js";
 import {
   acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
+  deleteAcpSessionMetaRows,
   getAcpSessionKysely,
   parseAcpDatabaseSessionKey,
   selectAcpSessionRow,
@@ -276,15 +277,9 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
               if (!destination) {
                 upsertAcpSessionMetaRow(shared.db, { ...source, session_key: destinationKey });
               }
-              executeSqliteQuerySync(
+              deleteAcpSessionMetaRows(
                 shared.db,
-                getAcpSessionKysely(shared.db)
-                  .deleteFrom("acp_sessions")
-                  .where(
-                    "session_key",
-                    "in",
-                    consumed.map((row) => row.session_key),
-                  ),
+                consumed.map((row) => row.session_key),
               );
               sessionChanges.emit(
                 { agentId: owner.agentId, sessionKey: owner.storeSessionKey },
@@ -439,19 +434,14 @@ export function updateAcpSessionIdentityForDoctor(
             "ACP ownership or metadata changed during Doctor repair; source retained",
           );
         }
-        executeSqliteQuerySync(
-          database.db,
-          getAcpSessionKysely(database.db)
-            .updateTable("acp_sessions")
-            .set({
-              runtime_session_name: input.runtimeSessionName,
-              identity_json: JSON.stringify({
-                ...claim.meta.identity,
-                acpxRecordId: input.acpxRecordId,
-              }),
-            })
-            .where("session_key", "=", key),
-        );
+        upsertAcpSessionMetaRow(database.db, {
+          ...row,
+          runtime_session_name: input.runtimeSessionName,
+          identity_json: JSON.stringify({
+            ...claim.meta.identity,
+            acpxRecordId: input.acpxRecordId,
+          }),
+        });
         sessionChanges.emit({ agentId: claim.agentId, sessionKey: claim.sessionKey }, database.db);
       },
       { env: scope.env },

@@ -24,9 +24,8 @@ export async function suppressPendingFinalDelivery(
       { kind: "pending-final", ...completion },
       "suppressed",
       ["prepared"],
-      options,
+      { ...options, clearAfterSettled: { recoveryRunId: completion.recoveryRunId } },
     );
-    await clearPendingFinalDeliveryAfterSuccess(completion, options);
   }
 }
 

@@ -1,5 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { HarnessCompletionRecovery } from "../../../config/sessions/restart-recovery-types.js";
 import {
   loadSessionEntry,
@@ -60,6 +64,8 @@ describe("embedded run durable writer admission", () => {
   });
 
   it("supersedes the live prior writer, claims the row, and rejects its late append", async () => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
       activeWriterRunId: "run-a",

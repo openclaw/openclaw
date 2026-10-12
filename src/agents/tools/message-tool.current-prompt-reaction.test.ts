@@ -6,6 +6,10 @@ import {
   mintReplyMessageActionTurnCapability,
 } from "../../auto-reply/reply/agent-runner-utils.js";
 import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   listSessionReactions,
@@ -28,9 +32,11 @@ import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createCodeModeTools, applyCodeModeCatalog } from "../code-mode.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { createToolSearchCatalogRef } from "../tool-search.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -68,6 +74,7 @@ describe("admitted WebChat prompt reactions", () => {
       sessionId: runId + "-session",
     };
     config = { agents: { entries: { main: { identity: { name: "Test Agent" } } } } };
+    setRuntimeConfigSnapshot(config);
     sourceCurrent = true;
     broadcast.mockClear();
     external.mockReset().mockResolvedValue({
@@ -95,6 +102,7 @@ describe("admitted WebChat prompt reactions", () => {
   afterEach(() => {
     revokeMessageActionTurnCapability(token);
     run.close();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
   });
 
@@ -189,6 +197,37 @@ describe("admitted WebChat prompt reactions", () => {
     }
     return receipt.entryId;
   }
+
+  it.each(["webchat", "discord"])(
+    "keeps native and Code Mode definitions stable across runs with a %s delivery route",
+    (currentChannelProvider) => {
+      const definition = (selected: ReturnType<typeof tool>) => {
+        const context = { config, catalogRef: createToolSearchCatalogRef(), ...scope, runId };
+        const compacted = applyCodeModeCatalog({
+          ...context,
+          tools: [...createCodeModeTools(context), selected],
+        });
+        return JSON.stringify(
+          [selected, ...compacted.tools].map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          })),
+        );
+      };
+      const admitted = tool({ currentChannelProvider });
+      const nextRun = tool({
+        currentChannelProvider,
+        runId: runId + "-next",
+        messageActionTurnCapability: undefined,
+      });
+      expect(definition(nextRun)).toBe(definition(admitted));
+      expect(Check(nextRun.parameters, { action: "react", emoji: "👍" })).toBe(true);
+      revokeMessageActionTurnCapability(token);
+      expect(definition(tool({ currentChannelProvider }))).toBe(definition(admitted));
+      expect(external).not.toHaveBeenCalled();
+    },
+  );
 
   it("commits the agent's current-prompt reaction and publishes only actual changes", async () => {
     const messageId = await persist();
@@ -350,7 +389,12 @@ describe("admitted WebChat prompt reactions", () => {
         vi.spyOn(Date, "now").mockReturnValue(Number.MAX_SAFE_INTEGER);
       }
       await expect(execute({}, selected)).rejects.toThrow();
+      const rebuilt = tool();
+      expect(rebuilt.description).toBe(selected.description);
+      expect(rebuilt.parameters).toEqual(selected.parameters);
+      await expect(execute({}, rebuilt)).rejects.toThrow();
       expect(broadcast).not.toHaveBeenCalled();
+      expect(external).not.toHaveBeenCalled();
       expect(await listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
     },
   );

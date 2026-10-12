@@ -678,9 +678,12 @@ export function publishOpenClawAgentDatabaseSchema(database: ValidationDatabase)
   const validation = getOpenClawAgentDatabaseValidation(database);
   const facts = getAdmittedSqliteSchemaFacts(database.db);
   if (validation && facts && !database.db.isTransaction) {
-    invalidateOpenClawAgentDatabaseSchema(database);
-    const valid = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-    Atomics.store(new Int32Array(valid), 0, 1);
+    // Repeated publication preserves borrowers; real DDL revokes their shared cell.
+    let valid = validation.schema?.valid;
+    if (!valid || Atomics.load(new Int32Array(valid), 0) !== 1) {
+      valid = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      Atomics.store(new Int32Array(valid), 0, 1);
+    }
     validation.schema = { facts, valid };
     publishSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey, validation);
   }

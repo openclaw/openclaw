@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import {
@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   loadSessionEntry,
   onSessionIdentityMutation,
@@ -33,10 +34,13 @@ function createScope(name: string) {
   };
 }
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("SQLite session row persistence", () => {

@@ -31,9 +31,9 @@ import {
 import {
   conflictingSubagentRunVersions,
   writeSubagentRunValuesInDatabase,
-  type SubagentRegistryWrite,
 } from "../registry/subagent-registry.store.kernel.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
+import type { SubagentRegistryWrite } from "../registry/subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import {

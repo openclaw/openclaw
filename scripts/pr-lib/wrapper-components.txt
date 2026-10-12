@@ -349,11 +349,13 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
+src/infra/database-engine/observation.ts
+src/infra/database-engine/policy.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
-src/infra/postgres-sync/query-compiler.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
+src/infra/sql-query-compiler.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts
@@ -777,6 +779,7 @@ src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
 src/gateway/worker-environments/placement-authority-owner.ts
+src/gateway/worker-environments/placement-inventory-changed-error.ts
 src/gateway/worker-environments/placement-read-authority.ts
 src/gateway/worker-environments/placement-record.ts
 src/gateway/worker-environments/placement-row-codec.ts
@@ -1164,6 +1167,7 @@ src/infra/test-runtime-env.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-doctor-config-schema.ts
+src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-result.ts
 src/infra/update-failure-facts-format.ts
 src/infra/update-failure-facts.ts
@@ -1314,6 +1318,7 @@ src/plugins/compat/native-exec-approval-record.ts
 src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
+src/plugins/compat/runtime-config-record.ts
 src/plugins/compat/sqlite-runtime-records.ts
 src/plugins/compat/binding-persistence-records.ts
 src/plugins/compat/registry-records.ts
@@ -1709,6 +1714,7 @@ src/state/openclaw-agent-canonical-validation-schema.ts
 src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
 src/state/openclaw-agent-db-admission.ts
+src/state/openclaw-agent-db-close.ts
 src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-discovery-paths.ts
 src/state/openclaw-agent-db-disposal.ts
@@ -2044,6 +2050,9 @@ src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
 src/config/sessions/session-actor-replica.ts
+src/config/sessions/session-actor-bounded-history.ts
+src/config/sessions/session-actor-transcript-anchors.ts
+src/config/sessions/session-actor-transcript-replica.ts
 src/config/sessions/activity-summary.ts
 src/config/sessions/session-actor.ts
 src/config/sessions/session-entry-cohort-scope.ts
@@ -2231,6 +2240,7 @@ src/config/sessions/session-actor-memory-worker-transcript.ts
 src/config/sessions/session-actor-memory.ts
 src/config/sessions/session-actor-phase.ts
 src/config/sessions/session-actor-receipt.ts
+src/config/sessions/session-actor-read-error.ts
 src/config/sessions/session-actor-reducers.ts
 src/config/sessions/session-actor-storage-binding.ts
 src/config/sessions/session-bounded-context-selection.ts

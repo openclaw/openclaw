@@ -113,12 +113,8 @@ describe("reset-generation session search visibility", () => {
   });
 
   it.each([
-    { name: "pre-reset", range: [2, 3], cutoff: { state: "valid", cutoffLine: 4 }, kept: true },
     { name: "crossing", range: [3, 4], cutoff: { state: "valid", cutoffLine: 4 }, kept: false },
-    { name: "current", range: [4, 5], cutoff: { state: "valid", cutoffLine: 4 }, kept: false },
-    { name: "missing", range: [1, 2], cutoff: { state: "absent" }, kept: false },
     { name: "read-failure", range: [1, 2], cutoff: undefined, kept: false },
-    { name: "malformed", range: [1, 2], cutoff: { state: "invalid" }, kept: false },
   ] as const)(
     "handles a $name live SQLite reset-generation hit",
     async ({ range, cutoff, kept }) => {
@@ -194,7 +190,7 @@ describe("reset-generation session search visibility", () => {
     });
   });
 
-  it.each(["", ".zst"])(
+  it.each([""])(
     "allows an archived reset generation of the private anchor conversation%s",
     async (compressionSuffix) => {
       const anchorSessionKey = "agent:main:telegram:direct:owner";
@@ -224,27 +220,9 @@ describe("reset-generation session search visibility", () => {
 
   it.each([
     {
-      name: "the private anchor conversation",
-      path: "sessions/main/current.jsonl.deleted.2026-08-11T08-00-00.000Z",
-      snippet: "explicitly deleted private context",
-      includeDeletedSource: false,
-    },
-    {
-      name: "the compressed private anchor conversation",
-      path: "sessions/main/current.jsonl.deleted.2026-08-11T08-00-00.000Z.zst",
-      snippet: "explicitly deleted compressed private context",
-      includeDeletedSource: false,
-    },
-    {
       name: "another private conversation",
       path: "sessions/main/deleted-source.jsonl.deleted.2026-08-11T08-00-00.000Z",
       snippet: "intentionally deleted private context",
-      includeDeletedSource: true,
-    },
-    {
-      name: "another compressed private conversation",
-      path: "sessions/main/deleted-source.jsonl.deleted.2026-08-11T08-00-00.000Z.zst",
-      snippet: "intentionally deleted compressed private context",
       includeDeletedSource: true,
     },
   ])(

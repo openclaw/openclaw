@@ -8,6 +8,7 @@ import {
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -635,7 +636,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           },
           undefined,
         );
-        await handleDirectExternalChatSend(sendOptions);
+        // The initial child turn must acquire its own writer, not the spawning parent's.
+        await runWithoutOwnedSessionTranscriptWrites(() =>
+          handleDirectExternalChatSend(sendOptions),
+        );
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {

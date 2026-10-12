@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -375,6 +376,67 @@ it("refuses a rewrite after final worker validation but before host consumption"
     }
   });
 });
+
+it.each(["projection", "full context"] as const)(
+  "accepts a fenced %s through a store alias but rejects a copied store",
+  async (route) => {
+    await withOpenClawTestState({ label: "context-input-store-alias" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "alias-input",
+        sessionKey: "agent:main:alias-input",
+        storePath: state.statePath("transcript.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const manager = await SessionManager.openAsync(target);
+      await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
+      const current = await manager.appendMessageAsync({
+        role: "user",
+        content: "current",
+        timestamp: 2,
+      });
+      const anchor = readActiveTranscriptEntryAnchor({ ...target, entryId: current! });
+      if (!anchor) {
+        throw new Error("Missing current-input anchor");
+      }
+      const read = (storePath: string) =>
+        runWithSessionTranscriptReadFence(
+          { ...anchor, role: "user", logicalTurnId: "alias-turn" },
+          () =>
+            route === "projection"
+              ? readSessionTranscriptContextProjectionAsync(
+                  { ...target, storePath },
+                  async (source) => {
+                    const snapshot =
+                      await contextWorker.readSessionTranscriptContextMessagesInWorker(
+                        source.target,
+                        source.admission,
+                        undefined,
+                        source.physicalSource?.expectedIdentity,
+                      );
+                    return { value: snapshot.messages, version: snapshot.version };
+                  },
+                )
+              : SessionManager.readSessionContextAsync({ ...target, storePath }, (messages) => [
+                  ...messages,
+                ]),
+        );
+      const alias = state.statePath("alias");
+      await fs.symlink(
+        path.dirname(target.storePath),
+        alias,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await expect(read(path.join(alias, "transcript.sqlite"))).resolves.toMatchObject([
+        { role: "user", content: "earlier" },
+      ]);
+      await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+      const copy = state.statePath("copied.sqlite");
+      await fs.copyFile(target.storePath, copy);
+      await expect(read(copy)).rejects.toThrow("different transcript store");
+    });
+  },
+);
 
 it("rejects a read owner closed after scanning instead of accepting the detached context", async () => {
   await withOpenClawTestState({ label: "context-reader-close" }, async (state) => {

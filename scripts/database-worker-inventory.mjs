@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { format } from "oxfmt";
 import * as ts from "typescript/unstable/ast";
-import { inspectDatabaseWorkerCompatibility } from "./lib/database-worker-compat.mts";
+import { inspectDatabaseWorkerBoundaries } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
@@ -20,6 +20,10 @@ const primitives = new Map([
 ]);
 const excluded =
   /(?:^|\/)(?:__tests__|__fixtures__|test|tests|test-utils|test-helpers|test-support|test-fixtures|test-harness|fixtures|e2e)(?:\/|$)|(?:^|[/.-])(?:test|spec|e2e|test-support|test-helpers|test-fixtures|test-harness|test-runtime)(?:[.-])/;
+const testSuites = new Set([
+  // Imports Vitest; only server.auth.default-token.test.ts imports this suite.
+  "src/gateway/server.auth.default-token.suite.ts",
+]);
 const reviewed = new Map([
   [
     "src/agents/github-oauth-records.native.ts",
@@ -268,6 +272,91 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/flows/doctor-tool-schema-projection.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["collectAgentRuntimeToolSchemaFindings"],
+        evidence:
+          "Only doctor-tool-schema-runtime.ts invokes this projection through collectRuntimeToolSchemaFindings, wired exclusively into doctor-core-checks.ts by doctor-tool-schema-check.ts. Its synchronous tool construction runs under withPluginRuntimeGenerationRegistryScope during the Doctor one-shot.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-participants.native.ts",
+    [
+      {
+        tier: "W",
+        operations: ["recordSessionParticipantFromWorker"],
+        evidence:
+          "Only session-sharing-store.worker.ts invokes this worker entry. The separate native participant entry resolves aliases from the resident Gateway catalog.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/channel-operator-authority.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "resolveChannelOperatorAdminAuthority",
+          "resolveUpdateChannelOperatorAdminIdentityAuthority",
+        ],
+        evidence:
+          "Native identity capture is private to resolveChannelOperatorAdminAuthority and resolveUpdateChannelOperatorAdminIdentityAuthority; command-auth.ts passes those only to the CLI/updater captureCommandOwnerIdentity path used by update-requester-authority.ts. Gateway ingress awaits prepareChannelOperatorAdmin instead. Returned currency checks preserve update execution authority.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-owner-migration.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["repairMergedGatewayOwnerProfile"],
+        evidence:
+          "Doctor repair-sequencing.ts invokes merged-owner repair; preview-warnings.ts invokes the same entry with shouldRepair false. No Gateway caller.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-channel-identities.ts",
+    [
+      {
+        tier: "W",
+        operations: ["linkUserChannelIdentity", "unlinkUserChannelIdentity"],
+        evidence:
+          "Only user-channel-identities.worker.ts executes channel link/unlink mutations; Gateway callers await the registered worker operations.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-tailscale-migration.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["migrateLegacyTailscaleProfileIdentities"],
+        evidence:
+          "Only commands/doctor/repair-sequencing.ts invokes the legacy Tailscale identity repair.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-quarantine-store.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "readOpenClawAgentIntegrityVerification.read",
+          "recordOpenClawAgentIntegrityVerification",
+          "invalidateAgentIntegrityVerification",
+          "markOpenClawAgentIntegrityClean",
+        ],
+        evidence:
+          "Integrity receipts belong to agent-database lease admission and final release: openclaw-agent-db-lease.ts consumes proof during claim, records completed admission, invalidates dead-owner proof, and certifies the last clean closer. openclaw-agent-db-lifecycle.ts revokes proof on failed disposal; openclaw-agent-schema-inspection.worker.ts also reads proof during boot inspection. These are startup/lock primitives, not ordinary quarantine-decision guards.",
+      },
+    ],
+  ],
   [
     "src/secrets/store/secret-store-hidden-github.kernel.ts",
     [
@@ -815,15 +904,18 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "ensureSkillLibrarySchema",
+          "resolveSkillLibraryActor",
           "requireSelectedSkillLibraryUpload",
+          "selectSkillLibraryOwner",
           "selectSkillLibraryEntries",
+          "selectSkillLibraryEntries.readOwners",
           "selectSkillLibraryRevision",
           "selectSkillLibraryRevisionMetadata",
           "assertSkillLibraryNameAvailable",
           "recordSkillLibraryEvent",
         ],
         evidence:
-          "Library row, revision, upload, and mutation kernels run only through the shared-state reader/writer; the SDK metadata batch remains in selection-read.kernel.ts",
+          "Library actor, owner, row, revision, upload, and mutation kernels run only through the shared-state reader/writer (read.kernel.ts, service.kernel.ts, import.kernel.ts, and store.worker.ts); readOwners is private to the worker list projection. The SDK metadata batch remains in selection-read.kernel.ts.",
       },
     ],
   ],
@@ -1225,7 +1317,7 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["recordMemorySessionTombstonesInDatabase", "hasMemorySessionTombstone"],
+        operations: ["recordMemorySessionTombstonesInDatabase", "readMemorySessionTombstones"],
         evidence:
           "memory-entry-origins.worker.ts -> memory-forget-kernel.ts owns tombstone writes; manager-publication.worker.ts owns every hasMemorySessionTombstone call, including the session.current predicate retained under workspace custody for shadow publication.",
       },
@@ -1300,9 +1392,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["conflictingSubagentRunVersions", "writeSubagentRunValuesInDatabase"],
+        operations: [
+          "conflictingSubagentRunVersions",
+          "conflictingSubagentRegistrationCohort",
+          "writeSubagentRunValuesInDatabase",
+        ],
         evidence:
-          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
+          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Registration cohort reads have only the registry persistence worker caller at subagent-registry.store.worker.ts:182. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
       },
     ],
   ],
@@ -1487,9 +1583,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["selectAcpSessionRows"],
+        operations: ["selectAcpSessionRows", "selectAcpSessionRowsByKeys"],
         evidence:
-          "src/acp/runtime/session-meta-list.ts:21 submits acpSessions.list → src/state/openclaw-state-read.worker.ts:264.",
+          "session-meta-list.ts submits acpSessions.list to the shared read worker. Batched exact-key reads are called only by session-meta-read.worker.ts; ordinary bundled entry readers await that worker and the deprecated synchronous SDK reader uses its separate single-row operation.",
       },
     ],
   ],
@@ -2122,9 +2218,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["repairOpenClawAgentDatabasePathAliases"],
+        operations: ["repairOpenClawAgentDatabasePaths"],
         evidence:
-          "src/commands/doctor-agent-database-paths.ts:24 under Doctor repair; registered health runner src/flows/doctor-health-contribution-runners.state.ts:122.",
+          "Only noteDoctorAgentDatabasePathHealth calls the repair, within its Doctor transaction. Entry: runStateIntegrityHealth in src/flows/doctor-health-contribution-runners.state.ts.",
       },
     ],
   ],
@@ -2301,11 +2397,19 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/state/user-profiles.worker.ts", // Registered profile operations; Gateway submits commands through user-profile-operations.ts.
+  "src/state/user-profile-writes.worker.ts", // Shared-state profile mutation implementation; loaded by the profile worker only.
+  "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
+  "src/state/user-profile-catalog-identity.read.ts", // Only readUserProfileReadCommand in user-profile-read.worker.ts executes this reader.
+  "src/gateway/github-personal-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
+  "src/gateway/github-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
+  "src/state/user-github-connections.worker.ts", // openclaw-state-worker-registry installs its operation table; host imports are type-only.
   "src/config/sessions/session-accessor.sqlite-worktree-owner.ts", // Only session-entry-read.worker.ts reads the worktree projection after owner-protection's worker cutover.
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
+  "src/skills/library/read.kernel.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/skills/workshop/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
   "src/skills/workshop/skill-usage.kernel.ts", // changes.worker.ts owns recordSkillUsageInDatabase; host imports are type-only.
@@ -2494,6 +2598,39 @@ function classify(file, operation, binding, guards) {
   };
 }
 
+/** Only reviewed entries are proof roots; filename-based CLI/migration leads are not. */
+function classifyKnownEntry(file, operation) {
+  const reviewedOperation = reviewedOperations
+    .get(file)
+    ?.find(
+      (entry) =>
+        entry.operations.includes(operation) &&
+        entry.binding === undefined &&
+        entry.guard === undefined,
+    );
+  if (
+    reviewedOperation?.tier === "T2" ||
+    reviewedOperation?.tier === "T3" ||
+    reviewedOperation?.tier === "W"
+  ) {
+    return reviewedOperation.tier;
+  }
+  if (workerModules.has(file)) {
+    return "W";
+  }
+  if (cliModules.has(file)) {
+    return "T3";
+  }
+  if (
+    exceptionModules.has(file) ||
+    (file === "src/state/openclaw-state-db-schema-runtime.ts" &&
+      operation === "ensureOpenClawStateRuntimeSchema")
+  ) {
+    return "T2";
+  }
+  return undefined;
+}
+
 function ownerOf(file) {
   const parts = file.split("/");
   const depth =
@@ -2663,14 +2800,20 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   }
   const sourceFiles = result.stdout
     .split("\0")
-    .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file));
+    .filter(
+      (file) =>
+        /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) &&
+        !excluded.test(file) &&
+        !testSuites.has(file),
+    );
   const texts = snapshot
     ? loadRatchetSources(root, sourceFiles, ref)
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
-  const compatibility = inspectDatabaseWorkerCompatibility(
+  const compatibility = inspectDatabaseWorkerBoundaries(
     root,
     texts,
     (file, operation) => classify(file, operation).tier !== "T1",
+    classifyKnownEntry,
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(
@@ -2709,7 +2852,17 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         ) {
           classification.tier = "T1-compat";
           classification.evidence =
-            "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove at the next Plugin SDK major.";
+            "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove in a later release after stable deprecation.";
+        }
+        const nonRuntimeTier = compatibility.nonRuntimeOperations.get(file)?.get(call.operation);
+        if (
+          classification.tier === "T1" &&
+          nonRuntimeTier &&
+          compatibility.nonRuntimeCallLocations.get(file)?.has(`${call.line}:${call.column}`)
+        ) {
+          classification.tier = nonRuntimeTier;
+          classification.evidence =
+            "Mechanically proven kernel: every value reference stays within reviewed worker or maintenance entries; no runtime, SDK, or unproven callback escape.";
         }
         const group = groups.get(classification.tier) ?? {
           file,
@@ -2762,11 +2915,11 @@ function render(rows) {
     "",
     `This snapshot contains **${total.files} non-test files and ${total.calls} call expressions** for the five primitives below. The campaign previously reported 404 files; that is a historical estimate, not a fixed target or a count of call expressions. This inventory follows current source and excludes import-only matches, comments, tests, fixtures, and test support. Its scan scope and exclusions are explicit below.`,
     "",
-    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser, compatibility reference graph, and `rg`; it does not load application code or open a database.",
+    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser, entry-point reference graph, and `rg`; it does not load application code or open a database.",
     "",
     "## Scope and interpretation",
     "",
-    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T1-compat is deprecated-only SDK compatibility and named shared kernels whose only main-thread paths originate at mechanically guarded deprecated APIs. Worker/maintenance callers retain their existing classification; escaped callbacks and returned-method families remain live/unproven. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
+    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T1-compat is deprecated-only SDK compatibility and named shared kernels whose only main-thread paths originate at mechanically guarded deprecated APIs. Named worker/maintenance-only kernels are proven through exact reviewed entry points; filename-only leads are not proof roots. Escaped callbacks and returned-method families remain live/unproven. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",

@@ -33,7 +33,6 @@ function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): numbe
 export function markInterruptedStartupRun(params: {
   state: CronJobPolicyContext;
   job: CronJob;
-  taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
   deferredNotifications: DeferredCronNotifications;
@@ -105,7 +104,6 @@ export function markInterruptedStartupRun(params: {
 
   return {
     jobId: job.id,
-    ...(params.taskRunId ? { taskRunId: params.taskRunId } : {}),
     ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
     runAtMs: runningAtMs,
     durationMs: job.state.lastDurationMs,
@@ -136,7 +134,7 @@ export function restoreFinalizedStartupRun(params: {
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
   const persistedNextRunAtMs = asDateTimestampMs(job.state.nextRunAtMs);
   // Committed edits own scheduling even if the clock repeats or moves back.
-  // Keep the existing one-shot protection for older pending runs without a nonce.
+  // Older pending one-shots still retain a later replacement deadline.
   const scheduleOwnership =
     typeof job.state.runningScheduleChangeId === "string" ||
     (job.schedule.kind === "at" &&

@@ -11,7 +11,7 @@ export type PostgresErrorData = {
   name: string;
   message: string;
   stack?: string;
-  /** Server SQLSTATE only; socket error codes are not copied by the worker. */
+  /** Server SQLSTATE; connection setup can also report a socket error code. */
   code?: string;
   detail?: string;
   constraint?: string;
@@ -31,6 +31,9 @@ export type BridgeWorkerData = {
   signal: SharedArrayBuffer;
   url: string;
   schema: string;
+  connectTimeoutMs: number;
+  lockTimeoutMs: number;
+  statementTimeoutMs: number;
 };
 
 /** Rewrite anonymous bindings without changing quoted SQL, comments, or escaped ?? operators. */

@@ -23,6 +23,13 @@ export function releaseCronRunQueue(state: CronServiceState): void {
   pendingQueues.delete(state);
 }
 
+export function listCronRunQueueOwners(state: CronServiceState): CronServiceState[] {
+  const storeKey = cronStoreKey(state.deps.storePath);
+  return [...pendingQueues.keys()].filter(
+    (owner) => cronStoreKey(owner.deps.storePath) === storeKey,
+  );
+}
+
 export function wakeCronRunQueues(state: CronServiceState): void {
   const storeKey = cronStoreKey(state.deps.storePath);
   for (const [owner, refresh] of schedulers) {

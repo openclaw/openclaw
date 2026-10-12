@@ -693,6 +693,7 @@ async function runDoctorHealthFlowWithResult(
           resultPath: updateResult.resultPath,
           result: {
             ...doctorResult,
+            deferredInspectionCheckIds: updateResult.capture.deferredInspectionCheckIds,
             ...(maintenance?.databaseWrites ? { databaseWrites: maintenance.databaseWrites } : {}),
             ...(updateResult.capture.fileWrites
               ? { configFileWrites: updateResult.capture.fileWrites }

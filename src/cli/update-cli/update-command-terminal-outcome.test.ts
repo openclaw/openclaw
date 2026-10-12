@@ -6,6 +6,10 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
@@ -111,6 +115,7 @@ beforeEach(async () => {
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -857,6 +862,7 @@ it("keeps foreground success pending until the replacement Gateway observes the 
   if (!sentinel) {
     throw new Error("Expected the canonical final sentinel");
   }
+  setRuntimeConfigSnapshot(validConfigSnapshot.runtimeConfig);
   await finalizeRestartUpdateRun(sentinel.payload);
   expect(getUpdateRun(run.runId)).toMatchObject({
     status: "succeeded",

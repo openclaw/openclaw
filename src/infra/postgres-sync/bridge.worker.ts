@@ -7,11 +7,19 @@ import type {
   PostgresErrorData,
 } from "./protocol.js";
 
-const { port, signal, url, schema }: BridgeWorkerData = workerData;
+const {
+  port,
+  signal,
+  url,
+  schema,
+  connectTimeoutMs,
+  lockTimeoutMs,
+  statementTimeoutMs,
+}: BridgeWorkerData = workerData;
 const control = new Int32Array(signal);
 const client = new pg.Client({
   connectionString: url,
-  connectionTimeoutMillis: 15_000,
+  connectionTimeoutMillis: connectTimeoutMs,
   types: {
     // Store decoders own JSON parsing, including malformed legacy payload handling.
     getTypeParser: (oid, format) =>
@@ -36,6 +44,10 @@ async function handleRequest(request: BridgeRequest) {
       await client.connect();
       // Matches the pilot's SQLite WAL + synchronous=NORMAL durability tradeoff.
       await client.query("SET synchronous_commit = off");
+      await client.query(
+        "SELECT set_config('lock_timeout', $1, false), set_config('statement_timeout', $2, false)",
+        [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`],
+      );
       await client.query(`SET search_path TO "${schema.replaceAll('"', '""')}"`);
       reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
     } else if (request.operation === "close") {
@@ -72,6 +84,9 @@ async function handleRequest(request: BridgeRequest) {
       message: failure.message,
       stack: failure.stack,
     };
+    if (request.operation === "connect" && "code" in failure && typeof failure.code === "string") {
+      details.code = failure.code;
+    }
     if (error instanceof pg.DatabaseError) {
       Object.assign(details, {
         code: error.code,

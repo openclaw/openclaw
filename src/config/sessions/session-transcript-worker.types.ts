@@ -12,7 +12,6 @@ import type {
 } from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
-import type { SessionCostUsageCacheReadResult } from "../../infra/session-cost-usage-cache-read.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { VoiceSessionMatch } from "../../talk/client-voice-session-store.js";
@@ -175,7 +174,6 @@ import type {
   SessionMemoryCaptureWorkerInput,
   SessionProgressCardWorkerInput,
   VoiceSessionsWorkerInput,
-  SessionUsageCacheWorkerInput,
 } from "./session-transcript-worker-read.types.js";
 import type {
   ConversationDeliveryWorkerInput,
@@ -359,7 +357,6 @@ export type SessionHistoryWorkerInput =
   | CombinedSessionStoreTopologyWorkerInput
   | SessionIdentityEvidenceWorkerInput
   | VoiceSessionsWorkerInput
-  | SessionUsageCacheWorkerInput
   | SessionTranscriptSearchWorkerInput
   | SessionTranscriptMatchWorkerInput;
 
@@ -512,7 +509,6 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       evidence: SessionIdentityEvidenceResult[];
     };
     "voice-sessions": { kind: "voice-sessions"; matches: VoiceSessionMatch[] };
-    "usage-cache": SessionCostUsageCacheReadResult;
     "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
     "context-messages": import("./session-history-read.types.js").SessionTranscriptContextSnapshot;
     "session-reset-recall": {
@@ -719,5 +715,4 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       ReturnType<typeof listSessionPendingInputReceipts>
     >;
     readVoiceSessions: SessionHistoryReader<VoiceSessionsWorkerInput>;
-    readUsageCache: SessionHistoryReader<SessionUsageCacheWorkerInput>;
   };

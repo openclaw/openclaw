@@ -158,22 +158,28 @@ class GatewaySwitchFixture(GatewayFixture):
                 node = node.get_parent()
             return False
 
-        def click(label, role=("button", "push button", "toggle button")):
-            node = wait(label, role, predicate=in_active_window)
-            component = node.get_component_iface()
-            component.scroll_to(Atspi.ScrollType.ANYWHERE)
-            bounds = component.get_extents(Atspi.CoordType.SCREEN)
+        def click(label, role=("button", "push button", "toggle button"), *, predicate=in_active_window):
+            bounds = None
+
+            def ready(node):
+                nonlocal bounds
+                if not predicate(node):
+                    return False
+                component = node.get_component_iface()
+                if component is None:
+                    return False
+                # Snapshot geometry while wait can still reacquire replaced WebKit accessibles.
+                component.scroll_to(Atspi.ScrollType.ANYWHERE)
+                bounds = component.get_extents(Atspi.CoordType.SCREEN)
+                return True
+
+            wait(label, role, predicate=ready)
             self.chrome.command("xdotool", "mousemove", str(bounds.x + bounds.width // 2),
                                 str(bounds.y + bounds.height // 2), "click", "1")
 
         def focus_input(label):
-            node = wait(label, ("entry", "text", "password text"), predicate=lambda node:
-                        node.get_state_set().contains(Atspi.StateType.EDITABLE) and in_active_window(node))
-            component = node.get_component_iface()
-            component.scroll_to(Atspi.ScrollType.ANYWHERE)
-            bounds = component.get_extents(Atspi.CoordType.SCREEN)
-            self.chrome.command("xdotool", "mousemove", str(bounds.x + bounds.width // 2),
-                                str(bounds.y + bounds.height // 2), "click", "1")
+            click(label, ("entry", "text", "password text"), predicate=lambda node:
+                  node.get_state_set().contains(Atspi.StateType.EDITABLE) and in_active_window(node))
 
         def fill(label, value):
             focus_input(label)

@@ -384,6 +384,17 @@ export function getRuntimeConfigSnapshot(options?: { capture?: boolean }): OpenC
   return runtimeConfigSnapshot;
 }
 
+/** Read the config published by runtime preparation without cold-loading storage. */
+export function readRuntimeConfig(): OpenClawConfig {
+  const config = getRuntimeConfigSnapshot();
+  if (!config) {
+    throw new Error(
+      "Runtime config is not prepared. Await captureRuntimeConfigAsyncReader()() first.",
+    );
+  }
+  return config;
+}
+
 export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
   return runtimeConfigSourceSnapshot;
 }

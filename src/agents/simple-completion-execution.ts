@@ -6,6 +6,7 @@ import {
   prepareHeadersForSimpleCompletion,
   prepareModelForSimpleCompletion,
 } from "@openclaw/ai/transports";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveProviderThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
@@ -25,6 +26,24 @@ import type { AssistantMessage, Model, SimpleStreamOptions } from "../llm/types.
 import { createModelLifecycle } from "./embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.js";
 import { createModelObserver } from "./embedded-agent-runner/run/attempt.model-diagnostic-observation.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
+
+/** Keep explicit one-shot off ahead of configured local-server thinking switches.
+ * Native transports still own scalar effort mappings and mandatory reasoning floors.
+ */
+function disableConfiguredThinking(payload: unknown): void {
+  if (!isRecord(payload)) {
+    return;
+  }
+  if ("think" in payload) {
+    payload.think = false;
+  }
+  if ("enable_thinking" in payload) {
+    payload.enable_thinking = false;
+  }
+  if (isRecord(payload.chat_template_kwargs) && "enable_thinking" in payload.chat_template_kwargs) {
+    payload.chat_template_kwargs = { ...payload.chat_template_kwargs, enable_thinking: false };
+  }
+}
 
 type SimpleCompletionModelOptions = {
   headers?: Record<string, string>;
@@ -96,6 +115,7 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
   const completionOptions: SimpleStreamOptions = {
     ...options,
     ...(reasoning ? { reasoning } : {}),
+    ...(rawReasoning === "off" ? { onPayload: disableConfiguredThinking } : {}),
     apiKey: params.auth.apiKey,
     ...(headers ? { headers } : {}),
   };

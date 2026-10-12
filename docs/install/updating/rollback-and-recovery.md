@@ -261,8 +261,10 @@ Detailed recovery reasons remain in the update result, status diagnostics, and f
 
 Use `openclaw update status` for the recorded reason and `openclaw triage` to
 diagnose a failed check. Recovery guidance reports whether the Gateway is running
-or stopped from the latest service observation, even when the new version is running but did
-not pass verification. A restored Gateway must pass its own verification checks
+or stopped from the latest service observation. When the Gateway answers with the
+update's target version, that observation supersedes a saved runtime-verification
+restart warning; the original failed run and any migration rollback restrictions
+remain recorded. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
 
 In the Control UI, open **Settings → Updates** and choose **Diagnose update** to
@@ -318,8 +320,8 @@ through Doctor and rollback.
 The temporary snapshots used to check migrations are removed after
 validation and do not replace your backup.
 If the schema comparison cannot be completed, automatic rollback is refused
-(`rollback-state-unverified`). The newly installed version owns final
-verification and reporting after migration,
+(`rollback-state-unverified`). The updater captures authored config and include files without opening migrated
+state; the newly installed version owns state verification and final reporting after migration,
 preserving the same run ID and recorded activation steps.
 
 For pnpm and Bun, changes to sibling global packages after staging refuse automatic rollback (`rollback-project-changed`) without restoring the shared project; keep a reachable version installed, otherwise keep the Gateway stopped and follow the report’s repair command.

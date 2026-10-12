@@ -2,11 +2,12 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** Registry projections must agree with admitted execution and queue owners. */
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { buildSubagentsStatusLine } from "../../../auto-reply/reply/commands-status-subagents.js";
 import { resolveSubagentEntryForToken } from "../../../auto-reply/reply/commands-subagents/shared.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { projectGatewaySessionRunState } from "../../../gateway/session-utils-display.js";
 import {
   claimAgentRunContext,
@@ -60,6 +61,9 @@ import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 const parent = "agent:main:liveness-parent";
 const start = Date.parse("2026-09-13T12:00:00Z");
 const olderThanCutoff = start + 2 * 60 * 60 * 1000 + 1;
@@ -80,6 +84,8 @@ async function register(id: string, collect = false, expectsCompletionMessage = 
   await registerSubagentRun({
     runId: id,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
     requesterSessionKey: parent,
     requesterAgentId: "main",
     requesterDisplayKey: parent,

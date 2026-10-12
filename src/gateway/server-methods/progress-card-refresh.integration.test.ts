@@ -12,9 +12,11 @@ import {
   clearAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { progressCardStore } from "../progress-card-store.js";
@@ -68,7 +70,11 @@ describe("registered progress refresh admission", () => {
             }
           : {}),
       });
+      using _ = caller
+        ? { [Symbol.dispose]: (await prepareUserProfileCatalog()).release }
+        : undefined;
       if (caller) {
+        prepareGatewayRecipientProfile(caller);
         const cfg = { ...f.context.getRuntimeConfig(), ...rolePolicyConfig() };
         f.context.getRuntimeConfig = () => cfg;
       }

@@ -8,6 +8,10 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -57,6 +61,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
@@ -72,6 +77,7 @@ beforeAll(async () => {
     agents: { entries: { main: { workspace: path.join(stateDir, "workspace") } } },
   };
   getRuntimeConfig.mockReturnValue(cfg);
+  setRuntimeConfigSnapshot(cfg);
 });
 
 it("streams a trusted owner webchat video over 16 MiB into managed storage and serves a seek range", async () => {

@@ -6,6 +6,7 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
+import { resolveSubagentChildAgentId } from "../subagents/registry/subagent-child-owner-match.js";
 import {
   ensureSubagentControllerOwnsRun,
   listControlledSubagentRunFacts,
@@ -408,7 +409,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             {
               cfg,
               sessionKey: target.childSessionKey,
-              agentId: target.childAgentId ?? target.requesterAgentId,
+              agentId: resolveSubagentChildAgentId(target),
               expectedRunId: target.runId,
               expectedTaskRunId: target.taskRunId ?? target.runId,
               expectedGeneration: target.generation,

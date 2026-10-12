@@ -308,7 +308,21 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
+  it("skips terminal retention reads for empty inventory and resumes after a committed create", async () => {
+    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
+    const workerService = support.createService(support.createProvider());
+
+    await workerService.reconcileOnce();
+    await workerService.reconcileOnce();
+    expect(prune).not.toHaveBeenCalled();
+
+    await support.seedReady("retention-created-worker");
+    await workerService.reconcileOnce();
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
   it("propagates terminal cleanup failures", async () => {
+    await support.seedReady("retention-failure-worker");
     const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
     const prune = vi
       .spyOn(support.testState.store, "pruneTerminalEnvironments")

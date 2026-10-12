@@ -15,6 +15,7 @@ import { captureAgentToolSourceExecutionGuard } from "../../agents/agent-tool-so
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -208,6 +209,7 @@ it.each(["requested", "worker-turn", "remote-exec", "unknown"] as const)(
 
 it("retains worker-parent source predicates through tool execution and rejects a reset before child commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target: BoundAgentRunSessionTarget = {
       ...SESSION,
       storePath: state.statePath("agents", "main", "sessions", "sessions.json"),

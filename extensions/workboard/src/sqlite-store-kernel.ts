@@ -5,18 +5,18 @@ import {
   type WorkboardExecution,
 } from "@openclaw/workboard-contract";
 import {
+  runEngineStoreReadSnapshot,
+  type DatabaseEngineInput,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
-  runSqliteDeferredTransactionSync,
-  runSqliteReadSnapshotSync,
-  PostgresSyncConnection,
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { definedFields } from "../record-fields.js";
-import type { WorkboardDatabaseInput } from "./database-config.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -61,7 +61,10 @@ export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
   close(this: void): void;
-  withWriteTransaction<T>(operation: () => T): T;
+  withWriteTransaction<T>(
+    operation: () => T,
+    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  ): T;
 };
 
 function keyedEntries<T>(rows: Iterable<Row>, read: (row: Row) => T) {
@@ -266,9 +269,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   entries(scope?: WorkboardCardReadScope): Array<{ key: string; value: PersistedWorkboardCard }> {
     // Selection and hydration must agree if another connection changes a parent or sibling.
     return scope?.kind === "worker-context"
-      ? (this.db instanceof PostgresSyncConnection
-          ? runSqliteReadSnapshotSync
-          : runSqliteDeferredTransactionSync)(this.db, () => this.readEntries(scope))
+      ? runEngineStoreReadSnapshot(this.db, () => this.readEntries(scope))
       : this.readEntries(scope);
   }
 
@@ -694,7 +695,7 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 export function createWorkboardSqliteKernel(
   dbPath: string,
   retainClose?: (close: () => void) => void,
-  postgresInput?: WorkboardDatabaseInput,
+  postgresInput?: DatabaseEngineInput,
 ): WorkboardSqliteKernel {
   const { db, close } = createWorkboardDatabase(dbPath, retainClose, postgresInput);
   const boards = new WorkboardSqliteBoardStore(db);
@@ -705,6 +706,7 @@ export function createWorkboardSqliteKernel(
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
     close,
-    withWriteTransaction: (operation) => runSqliteImmediateTransactionSync(db, operation),
+    withWriteTransaction: (operation, options) =>
+      runSqliteImmediateTransactionSync(db, operation, options),
   };
 }

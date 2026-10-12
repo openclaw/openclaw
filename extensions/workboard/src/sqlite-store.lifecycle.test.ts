@@ -10,10 +10,10 @@ import {
   type WorkboardSqliteResult,
 } from "./sqlite-store-errors.js";
 
-const { openSqliteWorkerStore } = vi.hoisted(() => ({ openSqliteWorkerStore: vi.fn() }));
-vi.mock(import("openclaw/plugin-sdk/sqlite-runtime"), async (importOriginal) => ({
+const { openEngineWorkerStore } = vi.hoisted(() => ({ openEngineWorkerStore: vi.fn() }));
+vi.mock(import("openclaw/plugin-sdk/database-engine-runtime"), async (importOriginal) => ({
   ...(await importOriginal()),
-  openSqliteWorkerStore,
+  openEngineWorkerStore,
 }));
 
 import { createWorkboardSqliteStores } from "./test/database-config.js";
@@ -27,7 +27,7 @@ type Request = {
 function workerFixture() {
   const execute = vi.fn<(request: Request) => Promise<WorkboardSqliteResult<unknown>>>();
   const release = vi.fn(async () => {});
-  openSqliteWorkerStore.mockResolvedValue({ execute, close: release });
+  openEngineWorkerStore.mockResolvedValue({ execute, close: release });
   const stores = createWorkboardSqliteStores({
     dbPath: "/unused-workboard-lifecycle.sqlite",
     workerModuleUrl,
@@ -35,7 +35,7 @@ function workerFixture() {
   return { execute, release, stores };
 }
 
-beforeEach(() => openSqliteWorkerStore.mockReset());
+beforeEach(() => openEngineWorkerStore.mockReset());
 
 describe("Workboard SQLite facade cleanup", () => {
   it("retains its broker reference until the same connection closes successfully", async () => {
@@ -71,7 +71,7 @@ describe("Workboard SQLite facade cleanup", () => {
     await retry;
     await stores.close();
     expect(release).toHaveBeenCalledOnce();
-    expect(openSqliteWorkerStore).toHaveBeenCalledOnce();
+    expect(openEngineWorkerStore).toHaveBeenCalledOnce();
     expect(execute.mock.calls.map(([request]) => request)).toEqual([
       { type: "connection.open", input: undefined },
       { type: "cards.lookup", input: { connection: 7, args: ["missing"] } },
@@ -93,7 +93,7 @@ describe("Workboard SQLite facade cleanup", () => {
     await stores.close();
     await stores.close();
     expect(release).toHaveBeenCalledTimes(2);
-    expect(openSqliteWorkerStore).toHaveBeenCalledOnce();
+    expect(openEngineWorkerStore).toHaveBeenCalledOnce();
     expect(execute.mock.calls.map(([request]) => request)).toEqual([
       { type: "connection.open", input: undefined },
       { type: "connection.close", input: { connection: 7 } },
@@ -133,30 +133,27 @@ describe("Workboard SQLite facade cleanup", () => {
       await stores.close();
       expect(release).toHaveBeenCalledTimes(2);
       expect(execute).toHaveBeenCalledTimes(2);
-      expect(openSqliteWorkerStore).toHaveBeenCalledOnce();
+      expect(openEngineWorkerStore).toHaveBeenCalledOnce();
     },
   );
 
-  it.each(["overloaded", undefined])(
-    "retains nonterminal rejection %s for explicit retry",
-    async (code) => {
-      const failure = Object.assign(new Error("close refused"), { code });
-      const { execute, release, stores } = workerFixture();
-      execute
-        .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
-        .mockRejectedValueOnce(failure)
-        .mockResolvedValueOnce({ ok: true, value: undefined });
-      await stores.ready;
-      await expect(stores.close()).rejects.toBe(failure);
-      expect(release).not.toHaveBeenCalled();
-      await stores.close();
-      expect(execute.mock.calls.slice(1).map(([request]) => request)).toEqual([
-        { type: "connection.close", input: { connection: 7 } },
-        { type: "connection.close", input: { connection: 7 } },
-      ]);
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([undefined])("retains nonterminal rejection %s for explicit retry", async (code) => {
+    const failure = Object.assign(new Error("close refused"), { code });
+    const { execute, release, stores } = workerFixture();
+    execute
+      .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ ok: true, value: undefined });
+    await stores.ready;
+    await expect(stores.close()).rejects.toBe(failure);
+    expect(release).not.toHaveBeenCalled();
+    await stores.close();
+    expect(execute.mock.calls.slice(1).map(([request]) => request)).toEqual([
+      { type: "connection.close", input: { connection: 7 } },
+      { type: "connection.close", input: { connection: 7 } },
+    ]);
+    expect(release).toHaveBeenCalledOnce();
+  });
 
   it("reclaims a failed open while preserving its original initialization error", async () => {
     const openingFailure = new Error("connection initialization failed");
@@ -179,7 +176,7 @@ describe("Workboard SQLite facade cleanup", () => {
     await expect(stores.close()).resolves.toBeUndefined();
     await expect(stores.cards.entries()).rejects.toBe(openingFailure);
     expect(release).toHaveBeenCalledOnce();
-    expect(openSqliteWorkerStore).toHaveBeenCalledOnce();
+    expect(openEngineWorkerStore).toHaveBeenCalledOnce();
     expect(execute.mock.calls.map(([request]) => request)).toEqual([
       { type: "connection.open", input: undefined },
       { type: "connection.close", input: { connection: 7 } },

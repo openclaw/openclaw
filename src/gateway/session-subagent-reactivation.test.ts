@@ -1,7 +1,12 @@
 /**
  * Subagent session reactivation tests.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as acpMetadata from "../acp/runtime/session-meta-readonly.js";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const getLatestLiveSubagentRunByChildSessionKeyMock = vi.fn();
@@ -60,10 +65,61 @@ function mockEndedRun(run: ReturnType<typeof endedRun>) {
 }
 
 describe("reactivateCompletedSubagentSession", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     getLatestLiveSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
+  });
+
+  it("skips ACP reads without a completed run and observes ACP metadata written after a native follow-up", async () => {
+    await withOpenClawTestState(
+      { scenario: "minimal", label: "subagent-reactivation-acp" },
+      async (state) => {
+        const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
+        await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const sessionKey = "agent:main:subagent:acp-followup";
+        const scope = { cfg, agentId: "main", sessionKey, env: state.env };
+        let entry = await upsertSessionEntryCore(scope, {
+          sessionId: "child-session",
+          lifecycleRevision: "child-lifecycle",
+          updatedAt: 1,
+        });
+        const params = {
+          sessionKey,
+          runId: "run-next",
+          acpSession: { cfg, activeSessionAgentId: "main", sessionEntry: entry ?? undefined },
+        };
+        const readMetadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
+
+        await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
+        expect(readMetadata).not.toHaveBeenCalled();
+
+        mockEndedRun(endedRun(sessionKey));
+        replaceSubagentRunAfterSteerMock.mockReturnValue(true);
+        await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(true);
+        expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
+
+        entry = await upsertAcpSessionMeta({
+          ...scope,
+          skipMaintenance: true,
+          mutate: () => ({
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "child-acp",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 2,
+          }),
+        });
+        expect(entry).not.toBeNull();
+        params.acpSession.sessionEntry = entry ?? undefined;
+        await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
+        expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
+      },
+    );
   });
 
   it("reactivates the newest ended row even when stale active rows still exist for the same child session", async () => {

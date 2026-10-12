@@ -1,6 +1,8 @@
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.entry.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SessionActivitySummaryService } from "./session-activity-summaries.js";
 
@@ -50,6 +52,7 @@ export const preparedActivityRecapModel = {
   agentId: "main",
   agentDir: "/tmp/unused",
   outputTextPolicy: "strict-visible" as const,
+  thinkLevel: "off" as const,
 };
 export const activityRecapResult = (text: string) => ({
   text,
@@ -58,9 +61,10 @@ export const activityRecapResult = (text: string) => ({
   owner: { kind: "harness" as const, id: "test" },
 });
 
-export async function createActivityRecapSessionFixture() {
+export async function createActivityRecapSessionFixture(cfg: OpenClawConfig = {}) {
   const state = await createOpenClawTestState({ scenario: "minimal" });
   try {
+    setRuntimeConfigSnapshot(cfg);
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       lifecycleRevision: "lifecycle-1",

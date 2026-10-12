@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -103,6 +104,7 @@ async function createOwnRunFixture() {
     visibility: "shared",
     createdActor: { type: "human", source: "profile", id: profile.id },
   };
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(sessionScope, entry);
   const browser = questionPeer(profile, "original-browser");
   const sourceController = new AbortController();

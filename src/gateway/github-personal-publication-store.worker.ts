@@ -11,7 +11,7 @@ import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-d
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolvePersonalGitHubOwner } from "../state/user-github-connections.js";
+import { resolvePersonalGitHubOwnerInDatabase } from "../state/user-github-connections.kernel.js";
 import { personalGitHubRequestDigest } from "./github-personal-publication-store.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 
@@ -21,7 +21,7 @@ const query = (db: Parameters<typeof getNodeSqliteKysely>[0]) =>
   getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
 function assertOwner(db: DatabaseSync, owner: string): void {
-  if (resolvePersonalGitHubOwner(owner, db) !== owner) {
+  if (resolvePersonalGitHubOwnerInDatabase(owner, db) !== owner) {
     throw new Error("My GitHub publication owner changed.");
   }
 }

@@ -8,11 +8,7 @@ import {
 import { loadMutableCronStoreInWorker } from "./load.worker.js";
 import { registerCronQuarantineInDatabase } from "./quarantine.kernel.js";
 import { recordCronRunInDatabase } from "./run-history.kernel.js";
-import {
-  bindCronRunReceiptExecutionInDatabase,
-  ensureCronRunReceiptSchema,
-} from "./run-receipt-store.js";
-import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
+import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
 import { executeCronStoreSaveCommand } from "./save.worker.js";
 import type { CronStateWorkerOperations } from "./worker-contract.js";
 
@@ -86,7 +82,7 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
     });
   }
   if (
-    ["cron.markDeliveryStarted", "cron.finishReceipt", "cron.removeStaleFamily"].includes(
+    ["cron.markDeliveryStarted", "cron.removeStaleFamily", "cron.bindReceiptExecution"].includes(
       String(type),
     ) &&
     !receipts
@@ -105,7 +101,7 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       maintenance = loaded;
     });
   }
-  if (type !== "cron.repairRun" || recovery) {
+  if (type !== "cron.recoverRuns" || recovery) {
     return undefined;
   }
   return loadRecovery().then((loaded) => {
@@ -132,19 +128,18 @@ export function isCronStateWorkerCommand(command: {
     case "cron.mutateJobs":
     case "cron.recordRun":
     case "cron.markDeliveryStarted":
-    case "cron.finishReceipt":
+    case "cron.bindReceiptExecution":
     case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
     case "cron.loadMutable":
     case "cron.initializeRunReceipts":
-    case "cron.repairRun":
+    case "cron.recoverRuns":
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
     case "cron.save":
     case "cron.saveChanges":
     case "cron.registerQuarantine":
-    case "cron.bindReceiptExecution":
       return true;
     default:
       return false;
@@ -224,26 +219,26 @@ export function executeCronStateCommand(
       }
       return finalization.finalizeCronRunsInWorker(database, command.input);
     case "cron.markDeliveryStarted":
-    case "cron.finishReceipt":
+    case "cron.bindReceiptExecution":
     case "cron.removeStaleFamily":
       if (!receipts) {
         throw new Error("Cron receipts worker is not prepared");
       }
       switch (command.type) {
+        case "cron.bindReceiptExecution":
+          return receipts.bindCronRunReceiptExecutionInWorker(database, command.input);
         case "cron.markDeliveryStarted":
           return receipts.markCronDeliveryStartedInWorker(database, command.input);
-        case "cron.finishReceipt":
-          return receipts.finishCronReceiptInWorker(database, command.input);
         case "cron.removeStaleFamily":
           return receipts.removeStaleCronFamilyInWorker(database, command.input);
       }
     case "cron.loadMutable":
       return loadMutableCronStoreInWorker(database, command.input.storeKey);
-    case "cron.repairRun":
+    case "cron.recoverRuns":
       if (!recovery) {
         throw new Error("Cron recovery worker is not prepared");
       }
-      return recovery.repairCronRunInWorker(database, command.input);
+      return recovery.recoverCronRunsInWorker(database, command.input);
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
@@ -265,18 +260,6 @@ export function executeCronStateCommand(
     case "cron.save":
     case "cron.saveChanges":
       return executeCronStoreSaveCommand(command, database);
-    case "cron.bindReceiptExecution":
-      return runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          bindCronRunReceiptExecutionInDatabase(
-            db,
-            command.input.handle,
-            command.input.binding,
-            prepareCronRunReceiptWriteSchema(db),
-          ),
-        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-        { operationLabel: "cron.run-receipt.execution-binding" },
-      );
     default:
       throw new Error("Unknown Cron shared-state worker command");
   }

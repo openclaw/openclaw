@@ -155,6 +155,37 @@ synchronous executor and the connection's bounded statement cache when enabled.
 Keep the prepared function with its database owner and discard it when closing
 the connection; transaction callbacks must remain synchronous.
 
+### Database engine adapters (experimental)
+
+Engine-aware stores use two narrow SDK entrypoints. Keep them on their owning
+side of the host/worker boundary:
+
+- `openclaw/plugin-sdk/database-engine-runtime` is host-only. Await
+  `resolveDatabaseEngineInput(config)` to resolve the configured connection secret,
+  then carry the resulting `DatabaseEngineInput` through the existing worker
+  input transport. `openEngineWorkerStore` opens the worker store and observes
+  its connection open, execute, and close requests. `runEngineStoreOperation`
+  wraps host-side store operations, preserving write admission,
+  current-authority checks, and worker-request observation without making the
+  store facade branch on the engine. This
+  entrypoint does not load the synchronous PostgreSQL bridge.
+- `openclaw/plugin-sdk/database-engine-worker-runtime` is worker/admission-only.
+  Call `openEngineStore` with the physical SQLite handle, `StoreSchema`, resolved
+  input, and the store's existing SQLite open and anchor-preparation callbacks.
+  `StoreSchema` declares the store ID, version, canonical SQLite DDL, and optional
+  generated PostgreSQL DDL. The owner selects the adapter, admits the physical
+  store once, and returns an `EngineConnection`. Use `runEngineStoreReadSnapshot`
+  for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
+  envelope using the kernel's transaction callback; SQLite executes the operation
+  directly. Keep the kernel's own write-transaction API atomic on both engines.
+
+The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
+`DatabaseEngineAdapter` types; it does not export a PostgreSQL connection
+constructor. Open physical connections through `openEngineStore`. A store
+without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store that
+fails admission never falls back. See [Database engines](/reference/database-engines)
+for configuration, supported stores, durability, anchors, and observation events.
+
 ### Worker task admission
 
 `WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` supports reusable

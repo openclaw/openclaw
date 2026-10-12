@@ -51,7 +51,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it.each(["acquire", "release", "rollup", "prune"] as const)(
+it.each(["rollup", "prune"] as const)(
   "queues warm usage %s behind the active writer reservation",
   async (operation) => {
     const root = tempDirs.make("openclaw-usage-writer-reservation-");
@@ -63,7 +63,6 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
         ({ db }) =>
           writeSessionCostUsageRollupInDatabase(db, {
             rollupId: "session.jsonl",
-            previousValueJson: null,
             valueJson: Buffer.from('{"totalTokens":1}'),
             blob: null,
             updatedAt: 1,
@@ -72,7 +71,7 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
         { operationLabel: "session-cost-usage.rollup.write" },
       );
       let lock: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
-      if (operation === "release" || operation === "rollup") {
+      if (operation === "rollup") {
         lock = prepareSessionCostUsageRefreshLock(agentId, databasePath);
         expect(await lock.acquire()).toBe(true);
       }
@@ -95,18 +94,10 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
       let settled = false;
       const writing = (async () => {
         switch (operation) {
-          case "acquire":
-            lock = prepareSessionCostUsageRefreshLock(agentId, databasePath);
-            expect(await lock.acquire()).toBe(true);
-            break;
-          case "release":
-            await lock!.release();
-            break;
           case "rollup":
             expect(
               await lock!.writeRollup({
                 rollupId: "session.jsonl",
-                previousValueJson: Buffer.from(before.rows[0]!.valueJson),
                 valueJson: Buffer.from('{"totalTokens":2}'),
                 blob: null,
                 updatedAt: 2,
@@ -137,17 +128,11 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
           await written;
         }
         await expect(writing).resolves.toBeUndefined();
-        if (operation === "acquire") {
-          expect(readLock()).toBeDefined();
-        } else if (operation === "release") {
-          expect(readLock()).toBeUndefined();
-        } else {
-          expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual(
-            operation === "prune"
-              ? []
-              : [{ key: "session.jsonl", valueJson: '{"totalTokens":2}', updatedAt: 2 }],
-          );
-        }
+        expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual(
+          operation === "prune"
+            ? []
+            : [{ key: "session.jsonl", valueJson: '{"totalTokens":2}', updatedAt: 2 }],
+        );
       } finally {
         await lock?.release();
       }
@@ -221,7 +206,6 @@ it.each([
             expect(await lock.acquire()).toBe(true);
             return await lock.writeRollup({
               rollupId: "session.jsonl",
-              previousValueJson: null,
               valueJson: Buffer.from('{"totalTokens":7}'),
               blob: null,
               updatedAt: 1,
@@ -273,150 +257,6 @@ it.each([
         await opened;
         await written;
         await drain;
-      }
-    });
-  },
-);
-
-it("reads the committed refresh lock while acquisition waits for the writer reservation", async () => {
-  const root = tempDirs.make("openclaw-usage-status-race-");
-  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    const agentId = "usage-test";
-    const database = openOpenClawAgentDatabase({ agentId });
-    database.db
-      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run("session-cost-usage", "refresh-lock", "{}", 1);
-    const readLock = () =>
-      database.db
-        .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
-        .get("session-cost-usage", "refresh-lock");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const reservation = runOpenClawAgentWorkerWrite({ agentId, path: database.path }, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
-    let acquired = false;
-    const acquiring = owner.acquire().then((granted) => {
-      acquired = granted;
-      return granted;
-    });
-    let observed: boolean | undefined;
-    const reading = isSessionCostUsageRefreshRunning(agentId, database.path).then((running) => {
-      observed = running;
-      return running;
-    });
-    const outcomes = Promise.allSettled([acquiring, reading]);
-    try {
-      expect(await reading).toBe(false);
-      expect(observed).toBe(false);
-      expect(acquired).toBe(false);
-      expect(readLock()).toEqual({ value_json: "{}" });
-      release.resolve();
-      await reservation;
-      expect(await acquiring).toBe(true);
-      expect(await reading).toBe(false);
-      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
-      await owner.release();
-      expect(readLock()).toBeUndefined();
-      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-    } finally {
-      release.resolve();
-      await reservation;
-      await outcomes;
-      await owner.release();
-    }
-  });
-});
-
-it.each([false, true])(
-  "releases a committed lock through the deletion fence after a delayed reply (lost=%s)",
-  async (lost) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const agentId = "usage-delayed-lock";
-      const database = openOpenClawAgentDatabase({ agentId, env: state.env });
-      const committed = createDeferredCore();
-      const reply = createDeferredCore();
-      const write = writerAdmission.runOpenClawAgentWorkerWrite;
-      vi.spyOn(writerAdmission, "runOpenClawAgentWorkerWrite").mockImplementationOnce(
-        (options, run, timing, signal) =>
-          write(
-            options,
-            async () => {
-              const result = await run();
-              committed.resolve();
-              await reply.promise;
-              if (lost) {
-                throw new Error("Acquisition reply lost");
-              }
-              return result;
-            },
-            timing,
-            signal,
-          ),
-      );
-      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
-      const acquiring = owner.acquire();
-      const outcome = acquiring.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      let releasing: Promise<void> | undefined;
-      let reopen: (() => void) | undefined;
-      try {
-        await awaitGateBeforeSettlement(committed.promise, acquiring, "Acquisition did not commit");
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
-        const refusal = new Error("Agent deletion is draining active work");
-        reopen = closeAgentWorkAdmissions({ agentId, env: state.env, reason: refusal });
-        expect(() =>
-          prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env }),
-        ).toThrow(refusal);
-        releasing = owner.release();
-        reply.resolve();
-        expect(await outcome).toEqual(
-          lost ? { error: new Error("Acquisition reply lost") } : { value: true },
-        );
-        await releasing;
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-      } finally {
-        reply.resolve();
-        try {
-          await outcome;
-          await releasing;
-          await owner.release();
-        } finally {
-          reopen?.();
-        }
-      }
-    });
-  },
-);
-
-it.each([false, true])(
-  "recovers retired lock cleanup only through open admission (fenced=%s)",
-  async (fenced) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const agentId = "usage-retired-lock";
-      const databasePath = openOpenClawAgentDatabase({ agentId, env: state.env }).path;
-      const owner = prepareSessionCostUsageRefreshLock(agentId, databasePath, { env: state.env });
-      expect(await owner.acquire()).toBe(true);
-      await closeOpenClawAgentDatabaseByPathAsync(databasePath, agentId);
-      const refusal = new Error("Agent deletion is draining active work");
-      const reopen = fenced
-        ? closeAgentWorkAdmissions({ agentId, env: state.env, reason: refusal })
-        : undefined;
-      try {
-        if (fenced) {
-          await expect(owner.release()).rejects.toBe(refusal);
-        } else {
-          await expect(owner.release()).resolves.toBeUndefined();
-        }
-        expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(fenced);
-      } finally {
-        reopen?.();
-        await Promise.allSettled([owner.release()]);
       }
     });
   },
@@ -541,7 +381,6 @@ it.for(["rollup", "prune"] as const)(
       expect(await owner.acquire()).toBe(true);
       const row = {
         rollupId: "retained",
-        previousValueJson: null,
         valueJson: Buffer.from("{}"),
         blob: null,
         updatedAt: 1,
@@ -603,7 +442,6 @@ it("rejects a queued rollup after its refresh authority is revoked", async () =>
     await entered.promise;
     const writing = owner.writeRollup({
       rollupId: "revoked",
-      previousValueJson: null,
       valueJson: Buffer.from("{}"),
       blob: null,
       updatedAt: 1,
@@ -647,7 +485,6 @@ it.each(["rollup", "prune"] as const)(
           ? owner.writeRollup(
               {
                 rollupId: "expired",
-                previousValueJson: null,
                 valueJson: Buffer.from("{}"),
                 blob: null,
                 updatedAt: 1,
@@ -698,7 +535,7 @@ it("releases the acquired refresh lock after the caller changes its state direct
   });
 });
 
-it("keeps a queued usage lock and release in its mixed-case Windows state root", async () => {
+it("keeps usage exclusion in its mixed-case Windows state root", async () => {
   await withOpenClawTestState({ scenario: "minimal", layout: "split" }, async (state) => {
     const agentId = "usage-test";
     const options = { agentId, env: state.env };
@@ -758,11 +595,12 @@ it("keeps a queued usage lock and release in its mixed-case Windows state root",
       expect(process.platform).toBe(hostPlatform);
       await setImmediate();
       expect(readLock()).toBeUndefined();
-      expect(acquired).toBe(false);
+      expect(acquired).toBe(true);
       release.resolve();
       await reservation;
       expect(await acquiring).toBe(true);
-      expect(readLock()).toMatchObject({ value_json: expect.any(String) });
+      expect(readLock()).toBeUndefined();
+      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
       expect(registry()).toEqual(beforeRegistry);
       expect(fs.existsSync(defaultRoot)).toBe(false);
       expect(fs.existsSync(laterRoot)).toBe(false);
