@@ -17,6 +17,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
+  captureRuntimeConfigAsyncReader,
   getRuntimeConfig,
   resetConfigRuntimeState,
   withConfigMutationExclusive,
@@ -286,6 +287,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           },
           plugins: { slots: { memory: "none" } },
         });
+        await captureRuntimeConfigAsyncReader()();
         const workspace = state.path("workspace-doomed");
         const created = await createAgent({ name: "doomed", workspace, skipBootstrap: true });
         signal.throwIfAborted();
@@ -690,6 +692,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             revokeSqliteDatabaseAdmissionsForPath(sharedDatabasePath);
           }
           resetConfigRuntimeState();
+          await captureRuntimeConfigAsyncReader()();
           if (scenario === "restart-draining") {
             await deletionRecovery.resumeAgentDeletions(context, AbortSignal.abort());
             const scope = { agentId, env: state.env, sessionKey };

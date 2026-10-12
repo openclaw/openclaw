@@ -21,6 +21,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type {
@@ -38,6 +39,15 @@ export function commitSessionLifecycleProjection(
     const projectionReconcileSessionIds: string[] = [];
     const postimages: SessionEntryWritePostimages = new Map();
     const archivedPrevious = new Map<string, SessionEntry>();
+    const upsert = input.projected.upsertedEntries[0];
+    // Compound lifecycle changes keep their ordinary cold-read fallback.
+    const publishActorEntry =
+      input.projected.upsertedEntries.length === 1 &&
+      input.projected.removals.length === 0 &&
+      upsert &&
+      !upsert.resetBoundary
+        ? prepareSessionActorEntryPatch(database, upsert.sessionKey)
+        : undefined;
     const result = commitPreparedSessionEntryLifecycleMutationInDatabase(
       database,
       input,
@@ -96,6 +106,13 @@ export function commitSessionLifecycleProjection(
         { postimages },
       ),
     };
+    if (
+      result.maintenancePlans.every(
+        (plan) => plan.archivedEntries.length === 0 && plan.entryRemovals.length === 0,
+      )
+    ) {
+      publishActorEntry?.(postimages, candidate.publication);
+    }
     const receipt = transferSessionEntryWorkerCandidate(database, admit, candidate);
     return receipt;
   });

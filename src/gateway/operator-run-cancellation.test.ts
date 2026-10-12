@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -30,6 +31,7 @@ async function withCancellationFixture(
       agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const fixture = await createCancellationFixture(cfg);
     try {
       await run(fixture);

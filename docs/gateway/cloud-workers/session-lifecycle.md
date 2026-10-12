@@ -15,6 +15,8 @@ Gateway workspace preflight has a ten-minute budget covering both Git enumeratio
 
 Starting a cloud session in the Control UI shows your submitted prompt immediately and keeps it visible while the worker starts. Provisioning and workspace preparation appear beneath it in the chat. The prompt is sent only after placement is active; opening an already-provisioning session also shows its progress in the conversation.
 
+Session lifecycle admission refreshes its maintenance inventory once if another session's worker placement changes during preparation. A change to the admitting session's placement, or another inventory change during the retry, still rejects admission. This requires only a Gateway update and changes no stored data or worker protocol.
+
 ## Update the Gateway and worker runtime
 
 Gateway updates retain an attached cloud machine and install the new worker bundle in place. The Gateway stops the old worker and revokes its credential before admitting the new build. The machine's workspace, installed packages, and desktop remain available. Failed installation retains the lease for recovery rather than allocating a replacement. The node must support the current bundle installer and reconnect before recovery can finish. Node bundle cleanup keeps the Gateway's current build until every live environment on that node has recorded it, so cleanup that runs while provisioning or an in-place update is finishing cannot remove the bundle the next turn launches.

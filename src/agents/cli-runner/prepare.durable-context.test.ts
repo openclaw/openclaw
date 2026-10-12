@@ -1,6 +1,10 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -78,7 +82,10 @@ describe("CLI durable session context", () => {
       prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
       loadManifestModelCatalog: () => [],
     });
-    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
+    fixture = createCliRunnerPrepareFixture((params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return prepareCliRunContext(params);
+    });
   });
 
   afterEach(async () => {
@@ -92,6 +99,7 @@ describe("CLI durable session context", () => {
       resetCliRunnerPrepareTestDeps();
       cliBackendsTesting.resetDepsForTest();
       await fixture.cleanup();
+      clearRuntimeConfigSnapshot();
     }
   });
 

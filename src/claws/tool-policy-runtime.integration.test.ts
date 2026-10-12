@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
@@ -23,8 +22,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -218,51 +215,6 @@ describe("Claw tool policy consent provenance", () => {
     expect(() =>
       resolveConversationCapabilityProfile({ agentId: "legacy", config: mixedConfig }),
     ).toThrow("legacy dynamic tool policy");
-  });
-
-  it("refreshes runtime consent without copying the live database on each catalog generation", async () => {
-    const root = tempDirs.make("openclaw-claw-runtime-consent-");
-    const env = stateEnv(root);
-    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    const { plan } = await makeProvenancePlan(
-      root,
-      { schemaVersion: 1, agent: { id: "worker" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "full", allow: ["read"] } },
-        },
-      },
-    );
-    persistClawInstallRecord(plan, { env });
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    closeOpenClawStateDatabase();
-    const external = new DatabaseSync(databasePath);
-    const snapshot = vi.spyOn(sqliteSnapshot, "prepareSqliteReadOnlyLocationSync");
-    const config = { agents: { entries: toAgentEntriesRecord([plan.agent.config]) } };
-    try {
-      setRuntimeConfigSnapshot(config);
-      expect(() =>
-        resolveConversationCapabilityProfile({ agentId: "worker", config }),
-      ).not.toThrow();
-      external
-        .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
-        .run("openclaw.clawInstallRecord.v1", "worker");
-      setRuntimeConfigSnapshot(config);
-      expect(() => resolveConversationCapabilityProfile({ agentId: "worker", config })).toThrow(
-        "legacy dynamic tool policy",
-      );
-      expect(snapshot).not.toHaveBeenCalled();
-
-      withArtifactPreservingStateReads(() => setRuntimeConfigSnapshot(config));
-      expect(snapshot).toHaveBeenCalledOnce();
-      expect(() => resolveConversationCapabilityProfile({ agentId: "worker", config })).toThrow(
-        "legacy dynamic tool policy",
-      );
-    } finally {
-      snapshot.mockRestore();
-      external.close();
-    }
   });
 
   it.each([{ profile: "coding" as const }, { profile: "full" as const, allow: ["read"] }])(

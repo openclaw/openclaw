@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as commands from "../../process/exec.js";
@@ -19,6 +23,7 @@ const exec = promisify(execFile);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "source-only-filters-");
 afterEach(() => {
   vi.restoreAllMocks();
+  resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 const initialize = useManagedWorktreeTestRepository();
@@ -40,6 +45,7 @@ beforeEach(async () => {
   vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   vi.stubEnv("GIT_CONFIG_PARAMETERS", "");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  setRuntimeConfigSnapshot({}, {});
   repo = await initialize(root);
   marker = path.join(root, "host-marker");
   script = path.join(root, "filter.cjs");

@@ -432,12 +432,25 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
     : withFreshOpenClawStateDatabaseReadOnly(operation, options, existingPath);
 }
 
+type StateReadReply<Type extends OpenClawStateReadCommand["type"]> = Extract<
+  OpenClawStateReadReply,
+  { ok: true }
+> & { type: Type };
+
+function isStateReadReply<Type extends OpenClawStateReadCommand["type"]>(
+  reply: OpenClawStateReadReply,
+  type: Type,
+): reply is StateReadReply<Type> {
+  return reply.ok && reply.type === type;
+}
+
 /** Fixed reads observe committed state unless their owner explicitly selected a snapshot. */
-export function executeExistingOpenClawStateRead(
+export function executeExistingOpenClawStateRead<Command extends OpenClawStateReadCommand>(
   options: OpenClawStateDatabaseOptions,
-  command: OpenClawStateReadCommand,
+  command: Command,
   readOptions: OpenClawStateReadOptions = {},
-): Promise<OpenClawStateReadReply | undefined> {
+): Promise<StateReadReply<Command["type"]> | undefined> {
+  const type = command.type;
   const { context, current, live, mapError } = readOptions;
   const receipt: OpenClawStateReadReceipt = { phase: "before-read" };
   let completion: OpenClawStateReadCompletion;
@@ -457,7 +470,13 @@ export function executeExistingOpenClawStateRead(
   } catch (error) {
     throw mapError ? mapError(error, receipt.phase) : error;
   }
-  return completion.kind === "retained" ? completion.operation.result : completion.result;
+  const result = completion.kind === "retained" ? completion.operation.result : completion.result;
+  return result.then((reply) => {
+    if (!reply || isStateReadReply(reply, type)) {
+      return reply;
+    }
+    throw new Error(`Unexpected shared-state read reply for ${type}`);
+  });
 }
 
 function startRetainedOpenClawStateRead(

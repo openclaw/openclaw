@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import type { nothing, TemplateResult } from "lit";
 import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import {
@@ -44,18 +43,6 @@ export type ConfigTierGroupsProps = {
   onHideAdvanced?: () => void;
   renderTier: (node: () => JsonSchema) => JSX.Element;
   commonPrelude?: JSX.Element;
-};
-
-export type LegacyConfigFormProps = Omit<ConfigFormProps, "sectionActions" | "sectionPrelude"> & {
-  sectionActions?: TemplateResult;
-  sectionPrelude?: TemplateResult;
-};
-export type LegacyConfigTierGroupsProps = Omit<
-  ConfigTierGroupsProps,
-  "commonPrelude" | "renderTier"
-> & {
-  commonPrelude?: TemplateResult;
-  renderTier: (node: ConfigTierGroupsProps["schema"]) => TemplateResult | typeof nothing;
 };
 
 export {

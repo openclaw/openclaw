@@ -1,4 +1,4 @@
-/** Code-only carrier custody; the broker alone validates and consumes it. */
+/** Optional code-only warming; database admission remains with the broker. */
 export type SqliteWorkerRuntimePreparation = {
   release(): Promise<void>;
 };

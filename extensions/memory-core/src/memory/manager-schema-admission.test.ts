@@ -11,6 +11,10 @@ import {
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  openNodeSqliteDatabase,
+  readSqliteDatabaseWriteTokenForPath,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { describe, expect, it } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -130,6 +134,11 @@ describe("memory index schema admission", () => {
   it("retains admission when the publication owner creates vectors on an admitted agent", async () => {
     const options = { agentId: "main" };
     const database = openOpenClawAgentDatabase(options);
+    // Retain quarantine admission too: the observer includes its checks during writer reopen.
+    const quarantinePath = path.join(fixture.paths.stateDir, "state", "openclaw-quarantine.sqlite");
+    expect(readSqliteDatabaseWriteTokenForPath(quarantinePath)).toBeDefined();
+    using quarantine = openNodeSqliteDatabase(quarantinePath, { readOnly: true });
+    expect(quarantine.isOpen).toBe(true);
     const loaded = await loadSqliteVecExtension({ db: database.db });
     expect(loaded.ok, loaded.error).toBe(true);
     const reader = openOpenClawAgentDatabaseReadOnly(options, { allowExtension: true });

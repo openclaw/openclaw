@@ -70,6 +70,8 @@ async function setup(label: string) {
     session: { store: storePath },
   } as OpenClawConfig);
   await state.writeConfig(cfg);
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot(cfg);
   const runAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (p) => ({
     payloads: [{ text: "HEARTBEAT_OK" }],
     meta: {

@@ -58,11 +58,7 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
   const fields = () => (
     <>
       <For each={object().fields} keyed={(field) => String(field.path.at(-1))}>
-        {(field) => {
-          // The renderer accepts the live keyed accessor; evaluating it here would freeze the field.
-          // oxlint-disable-next-line solid/reactivity
-          return props.renderNode(field);
-        }}
+        {(field) => <>{props.renderNode(field)}</>}
       </For>
       <Show when={object().additional}>
         {(additional) => <ConfigMapField params={additional()} renderNode={props.renderNode} />}

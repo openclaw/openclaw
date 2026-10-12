@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { TerminalSessionManager } from "../../gateway/terminal/session-manager.js";
 import {
@@ -100,6 +101,10 @@ describe("terminal tool", () => {
     approvalMocks.register.mockClear();
     approvalMocks.decide.mockReset();
     approvalMocks.decide.mockResolvedValue("allow-once");
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("exposes existing-session controls but never shell creation behind the owner-only gate", () => {
@@ -344,6 +349,7 @@ describe("terminal tool", () => {
 
   it("rejects terminal input when the authoritative persisted session is missing", async () => {
     const { backend, manager, sessionId } = await openAgentTerminal();
+    setRuntimeConfigSnapshot({});
     const tool = makeTool(manager, { execSession: undefined });
 
     await expect(

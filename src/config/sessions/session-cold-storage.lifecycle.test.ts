@@ -53,7 +53,7 @@ import { trimSessionTranscriptForManualCompact } from "./session-accessor.transc
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
-import { captureSessionEntryCurrentCheckInternal } from "./session-entry-current-check.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -604,7 +604,7 @@ describe("cold current transcript lifecycle", () => {
         });
       }
     }, sourceOptions);
-    const current = await captureSessionEntryCurrentCheckInternal({
+    const current = await captureSessionEntryCurrentCheckAsyncInternal({
       ...sourceScope,
       alternatives: conversations.map((identity, index) => ({
         conversations: [{ ...identity, sessionKey: sourceScope.sessionKey }],
@@ -612,7 +612,7 @@ describe("cold current transcript lifecycle", () => {
       })),
       errorMessage: "Compaction conversation authority revoked",
     });
-    const source: SessionSourceAssertion = current.assertCurrent;
+    const source: SessionSourceAssertion = current.source;
     const before = fixture.snapshot();
     const archiveBefore = await fs.readFile(fixture.archivePath);
     let changed = false;

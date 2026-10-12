@@ -4,6 +4,10 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   replaceSessionEntry,
   patchSessionEntryCore,
@@ -46,6 +50,8 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
             .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
             .mockReturnValue(() => terminalWrite.promise);
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-terminal-"));
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     const target = {
       storePath: path.join(root, "sessions.json"),
       sessionKey: "agent:main:terminal-stop",
@@ -82,7 +88,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
       agentRunSeq: new Map(),
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
       removeChatRun: vi.fn(),
       broadcast: vi.fn(),
       nodeSendToSession: vi.fn(),
@@ -295,6 +301,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
       await closeSessionSqliteDatabasesForTest();
+      clearRuntimeConfigSnapshot();
       persistenceSpy?.mockRestore();
       routing.load.mockReset();
       await fs.rm(root, { recursive: true, force: true });

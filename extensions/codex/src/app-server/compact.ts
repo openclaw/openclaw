@@ -453,7 +453,7 @@ export async function maybeCompactCodexAppServerSession(
             const guardedResult = await options.bindingStore.withLease(
               bindingIdentity,
               async () => {
-                const currentBinding = options.bindingStore.read(bindingIdentity);
+                const currentBinding = await options.bindingStore.readAsync(bindingIdentity);
                 if (attempt.abortSignal.aborted) {
                   if (!options.allowNonManualNativeRequest) {
                     attempt.abortSignal.throwIfAborted();

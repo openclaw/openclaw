@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -37,6 +41,7 @@ describe("completed requester delivery replay fence", () => {
       "OPENCLAW_STATE_DIR",
       tempDirs.make("openclaw-completion-replay-", resolvePreferredOpenClawTmpDir()),
     );
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
@@ -55,6 +60,7 @@ describe("completed requester delivery replay fence", () => {
         await closeOpenClawStateDatabaseAsync();
         subagentRuns.clear();
         closeOpenClawStateDatabaseForTest();
+        clearRuntimeConfigSnapshot();
         // Keep failed removals tracked without retaining the retired fixture's environment.
         try {
           tempDirs.cleanup();

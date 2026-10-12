@@ -11,7 +11,7 @@ import type {
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { configFieldId, schemaType } from "./config-form.shared.ts";
 
-export function ConfigFormStructuredDraftContent(props: {
+function ConfigFormStructuredDraftContent(props: {
   props?: ConfigFormStructuredDraftModel;
 }): JSX.Element {
   const [draftValue, setDraftValue] = createSignal<Record<string, unknown> | unknown[] | undefined>(

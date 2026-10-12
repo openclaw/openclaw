@@ -2,9 +2,10 @@ import {
   runEngineWorkerWrite,
   type DatabaseEngineInput,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import type {
-  SqliteWorkerBackend,
-  SqliteWorkerCommand,
+import {
+  requestSqliteWorkerOperationAdmission,
+  type SqliteWorkerBackend,
+  type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type {
   WorkboardSqliteOperations,
@@ -162,7 +163,15 @@ export function createSqliteWorkerBackend(
             ? runEngineWorkerWrite(
                 input,
                 () => execute(command),
-                (operation) => kernel.withWriteTransaction(operation),
+                (operation) => {
+                  requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+                  return kernel.withWriteTransaction(operation, {
+                    withCommit(commit) {
+                      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+                      commit();
+                    },
+                  });
+                },
               )
             : execute(command);
         return { ok: true, value };

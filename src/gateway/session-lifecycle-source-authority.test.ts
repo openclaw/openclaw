@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
@@ -13,6 +13,7 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import {
   appendTranscriptMessage,
@@ -56,6 +57,9 @@ beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "lifecycle-source" });
 });
 afterAll(async () => state?.cleanup());
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 afterEach(() => {
   routing.loadSessionEntry.mockReset();
   vi.restoreAllMocks();

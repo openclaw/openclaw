@@ -22,9 +22,9 @@ vi.mock("../../components/lobster-pet-look.ts", async (importOriginal) => {
   };
 });
 
-import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.tsx";
+import { MemoryOverview, type MemoryOverviewStatus } from "./memory-overview.tsx";
 
-type MemoryOverviewProps = Parameters<typeof renderMemoryOverview>[0];
+type MemoryOverviewProps = Parameters<typeof MemoryOverview>[0];
 
 function fixturePayload(): DoctorMemoryStatusPayload {
   const phaseBase = {
@@ -93,24 +93,26 @@ function renderOverview(
   },
   overrides: Partial<MemoryOverviewProps> = {},
 ) {
-  const { container } = mountSolid(() =>
-    renderMemoryOverview({
-      agentId: "main",
-      engineSelection,
-      engineDisabled: false,
-      status,
-      probingEmbeddings: false,
-      onRefresh: vi.fn(),
-      onProbeEmbeddings: vi.fn(),
-      onNavigate: vi.fn(),
-      ...overrides,
-    }),
-  );
+  const { container } = mountSolid(() => (
+    <MemoryOverview
+      {...{
+        agentId: "main",
+        engineSelection,
+        engineDisabled: false,
+        status,
+        probingEmbeddings: false,
+        onRefresh: vi.fn(),
+        onProbeEmbeddings: vi.fn(),
+        onNavigate: vi.fn(),
+        ...overrides,
+      }}
+    />
+  ));
   flush();
   return container;
 }
 
-describe("renderMemoryOverview", () => {
+describe("MemoryOverview", () => {
   it("renders the awake reading hero and status cards from one payload", () => {
     const container = renderOverview({ kind: "ready", payload: fixturePayload() });
 

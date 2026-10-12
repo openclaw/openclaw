@@ -106,13 +106,20 @@ The extension package boundary row has a 30-minute job budget for SDK preparatio
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
 command alone; one completed compile and canary but exceeded the former
-20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+20-minute whole-job deadline.
 Optional hybrid hosted overflow retains this row on Blacksmith: compiled receipt
 archives include checkout-specific paths and links, and hosted cold runs exceeded
 22 minutes. Explicit hosted overrides, retry and trust fallbacks remain available.
 Other jobs keep their existing admission thresholds; the hosted row total counts
 only the rows actually offloaded. Compiler concurrency, coverage and cache guards
 are unchanged.
+
+The Plugin SDK API diff row also has a 30-minute job budget. Two hosted runs took
+722 and 725 seconds to render the base revision, then reached the former
+20-minute deadline while rendering the candidate. The budget allows both full
+revision renders plus setup and cleanup. Rendering stays serial below eight CPUs
+or 24 GiB of memory; larger hosts retain two render workers. Other
+additional-check rows retain 20 minutes.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 

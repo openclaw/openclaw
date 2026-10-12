@@ -270,12 +270,27 @@ export function runSessionNativeBindingWorkerOperation<
         const committed = completed && acknowledged && receipt?.agent === "committed";
         const rolledBack =
           completed && receipt?.agent === "rolled-back" && !receipt.bindings.includes("deleted");
-        if (!committed && !rolledBack) {
+        let rollbackRefreshFailure: { cause: unknown } | undefined;
+        if (rolledBack && readinessAuthorized) {
+          try {
+            // Only compensation changes lease facts; pending and absent bindings were untouched.
+            for (const [index, { participant }] of members.entries()) {
+              if (receipt.bindings[index] === "restored") {
+                await participant.refreshCommittedFacts?.();
+              }
+            }
+          } catch (cause) {
+            rollbackRefreshFailure = { cause };
+          }
+        }
+        if ((!committed && !rolledBack) || rollbackRefreshFailure) {
           const error = new SqliteWorkerError(
-            "Native binding settlement is unknown; this generation cannot be reused",
+            rollbackRefreshFailure
+              ? "Native binding rollback could not restore current lease facts; this generation cannot be reused"
+              : "Native binding settlement is unknown; this generation cannot be reused",
             "outcome-unknown",
           );
-          error.cause = outcome.ok ? undefined : outcome.error;
+          error.cause = rollbackRefreshFailure?.cause ?? (outcome.ok ? undefined : outcome.error);
           if (receipt?.compensationFailure) {
             const compensation = new Error("Native binding compensation failed");
             retainOpenClawStateWorkerErrorPayload(compensation, receipt.compensationFailure);

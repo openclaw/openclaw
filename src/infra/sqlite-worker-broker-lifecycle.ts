@@ -57,13 +57,10 @@ export function createSqliteWorkerLifecycle({
       slot: Slot;
       moduleUrl: string;
       carrierUrl: string;
-      closeEpoch: number;
       preempted?: Promise<void>;
     }
   >();
   const reservedSlots = new Set<Slot>();
-  let closeEpoch = 0;
-  let completedCloseEpoch = 0;
 
   function prepareRuntime(
     source: RuntimeSource,
@@ -90,15 +87,14 @@ export function createSqliteWorkerLifecycle({
       slot,
       moduleUrl: source.moduleUrl,
       carrierUrl: source.carrierUrl.href,
-      closeEpoch: closeEpoch + 1,
     });
     return prepared;
   }
 
-  async function finishClose(epoch: number, succeeded: boolean): Promise<void> {
+  async function finishClose(succeeded: boolean): Promise<void> {
     const results = await Promise.allSettled([
       ...[...preparedRuntimes].flatMap(([prepared, runtime]) =>
-        succeeded && runtime.closeEpoch === epoch && (runtime.preempted || !runtime.slot.failed)
+        succeeded && (runtime.preempted || !runtime.slot.failed)
           ? runtime.preempted
             ? [runtime.preempted]
             : []
@@ -111,9 +107,6 @@ export function createSqliteWorkerLifecycle({
       await Promise.allSettled([...preparedRuntimes.keys()].map((prepared) => prepared.release()));
       throwSqliteLifecycleErrors(errors, "SQLite prepared runtime cleanup failed");
     }
-    if (succeeded) {
-      completedCloseEpoch = epoch;
-    }
   }
 
   async function closeHost({
@@ -125,7 +118,6 @@ export function createSqliteWorkerLifecycle({
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
   }): Promise<void> {
-    const epoch = ++closeEpoch;
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     for (const waiting of waiters) {
       for (const resume of waiting) {
@@ -148,7 +140,7 @@ export function createSqliteWorkerLifecycle({
       errors.push(error);
     }
     try {
-      await finishClose(epoch, errors.length === 0);
+      await finishClose(errors.length === 0);
     } catch (error) {
       errors.push(error);
     }
@@ -170,8 +162,6 @@ export function createSqliteWorkerLifecycle({
       !runtime ||
       options.target ||
       options.runtimeGeneration ||
-      runtime.closeEpoch !== closeEpoch ||
-      completedCloseEpoch !== closeEpoch ||
       runtime.moduleUrl !== moduleUrl ||
       runtime.carrierUrl !== options.carrierUrl.href ||
       (!runtime.preempted && (runtime.slot.failed || runtime.slot.retiring || runtime.slot.exited))
@@ -183,7 +173,8 @@ export function createSqliteWorkerLifecycle({
           (signal) => signal.reason,
         );
       }
-      throw new SqliteWorkerError("SQLite prepared runtime is no longer available", "closed");
+      // Code warming is only a hint; unavailable or mismatched hints use normal admission.
+      return undefined;
     }
     preparedRuntimes.delete(prepared);
     reservedSlots.delete(runtime.slot);
@@ -195,9 +186,6 @@ export function createSqliteWorkerLifecycle({
       );
       options.assertCurrent?.();
       options.signal?.throwIfAborted();
-      if (runtime.closeEpoch !== closeEpoch || completedCloseEpoch !== closeEpoch) {
-        throw new SqliteWorkerError("SQLite prepared runtime close epoch changed", "closed");
-      }
       return undefined;
     }
     runtime.slot.pendingOpens += 1;
@@ -215,15 +203,9 @@ export function createSqliteWorkerLifecycle({
     options.signal?.throwIfAborted();
     if (options.runtimePreparation) {
       const prepared = await consumeRuntimePreparation(options, moduleUrl);
-      return (
-        prepared ??
-        acquireSlot(
-          { ...options, runtimePreparation: undefined },
-          moduleUrl,
-          limits,
-          createReplyOwner,
-        )
-      );
+      if (prepared) {
+        return prepared;
+      }
     }
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
     const hasEphemeral = Boolean(options.target) || [...slots].some((slot) => slot.ephemeral);

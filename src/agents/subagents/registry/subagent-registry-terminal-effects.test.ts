@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -51,6 +55,7 @@ it("qualifies a completed child's raw session with its recorded agent", async ()
       ownersByEntry: new Map(),
     },
   );
+  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
   vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   await controller.completeSubagentRun({
     runId: entry.runId,
@@ -81,6 +86,7 @@ it.each(["keep", "delete"] as const)(
       { entry, maybeWakeRequesterAfterAllChildrenSettled: wake },
       { callGateway: vi.fn(), cleanupBrowserSessionsForLifecycleEnd, ownersByEntry: new Map() },
     );
+    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
     const settleRoots = observeRootWork();
 
     try {
@@ -155,6 +161,7 @@ it.for(["queued", "pre-commit"] as const)(
         ownersByEntry: new Map(),
       },
     );
+    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
     const retireSupersededRun = vi.spyOn(controller.options, "retireSupersededRun");
     const announce = vi
       .spyOn(controller, "startSubagentAnnounceCleanupFlow")
@@ -217,7 +224,10 @@ it.for(["queued", "pre-commit"] as const)(
     }
   },
 );
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each([
   {
@@ -255,6 +265,7 @@ it.each([
       ownersByEntry: new Map(),
     },
   );
+  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
   const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   try {
     await expect(
@@ -310,6 +321,7 @@ it("retires a browser cleanup queued behind a newer terminal publication", async
       ownersByEntry: new Map(),
     },
   );
+  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
   const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   const commit = lifecyclePersistence.commitSubagentLifecycleMutation;
   vi.spyOn(lifecyclePersistence, "commitSubagentLifecycleMutation").mockImplementation(

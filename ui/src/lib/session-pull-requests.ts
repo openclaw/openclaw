@@ -106,6 +106,7 @@ export function sessionPullRequestsForGateway(
   const pendingRefreshKeys = new Set<string>();
   const automaticRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
+  let subscriptionMayExist = false;
   let refreshing: readonly string[] | null = null;
 
   const canReadPullRequests = () =>
@@ -211,6 +212,7 @@ export function sessionPullRequestsForGateway(
   };
 
   const retireConnection = () => {
+    subscriptionMayExist = false;
     retainRefreshIntent(watchedKeys());
     lifecycle.clearRequest();
     refreshing = null;
@@ -358,6 +360,13 @@ export function sessionPullRequestsForGateway(
     const sessionKeys =
       typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : desiredKeys;
     const signature = JSON.stringify(sessionKeys.toSorted());
+    // Capability changes do not clear a subscription already sent on this connection.
+    if (sessionKeys.length === 0 && !subscriptionMayExist) {
+      if (!isActive()) {
+        lifecycle.detach();
+      }
+      return;
+    }
     const sameRequest = lifecycle.matchesRequest(signature);
     if (refreshing !== null && !sameRequest) {
       // A replacement retires the old acknowledgement, not its retained intent.
@@ -381,12 +390,16 @@ export function sessionPullRequestsForGateway(
     for (const key of refreshSessionKeys) {
       pendingRefreshKeys.delete(key);
     }
+    subscriptionMayExist ||= sessionKeys.length > 0;
     lifecycle.send(
       client,
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
       { sessionKeys, ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}) },
       signature,
       {
+        onSuccess: () => {
+          subscriptionMayExist = sessionKeys.length > 0;
+        },
         onError: () => {
           for (const key of refreshSessionKeys) {
             pendingRefreshKeys.add(key);

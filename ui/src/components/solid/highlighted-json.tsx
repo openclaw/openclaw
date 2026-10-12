@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { createMemo } from "solid-js";
 import { highlightJsonHtml } from "../markdown-code-blocks.ts";
+import { SanitizedHtml } from "./sanitized-html.tsx";
 
 /** The highlighter owns markup; only its span/class vocabulary reaches the DOM. */
 export function HighlightedJson(props: { value: unknown; class?: string }) {
@@ -10,6 +11,5 @@ export function HighlightedJson(props: { value: unknown; class?: string }) {
       ALLOWED_ATTR: ["class"],
     }),
   );
-  // oxlint-disable-next-line solid/no-innerhtml -- This owner sanitizes generated highlighting to span/class above.
-  return <pre class={props.class} innerHTML={markup()} />;
+  return <SanitizedHtml tag="pre" class={props.class} html={markup()} />;
 }

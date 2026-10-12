@@ -4,10 +4,7 @@ import {
   renderAnalyzedFormFixture,
   renderArrayFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
-import type {
-  ConfigFormCollectionDraft,
-  ConfigFormCollectionDraftCommit,
-} from "./config-form-collection-draft.tsx";
+import type { ConfigFormCollectionDraftCommit } from "./config-form-collection-draft.tsx";
 import { configFieldId } from "./config-form.shared.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 
@@ -212,7 +209,7 @@ describe("config form integrity", () => {
     expect(addCode.disabled).toBe(false);
     addCode.click();
     const codeDraftHost = expectElement(
-      codes.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      codes.querySelector("openclaw-config-form-collection-draft"),
       "patterned string array draft host",
     );
     await codeDraftHost.updateComplete;
@@ -368,7 +365,7 @@ describe("config form integrity", () => {
     );
     addEntry.click();
     const draftHost = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "typed map draft host",
     );
     await draftHost.updateComplete;
@@ -593,7 +590,7 @@ describe("config form integrity", () => {
       "unset codes array",
     );
     const draftHost = expectElement(
-      codes.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      codes.querySelector("openclaw-config-form-collection-draft"),
       "unset codes draft host",
     );
     await draftHost.updateComplete;

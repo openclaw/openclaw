@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   listSessionEntriesCore,
@@ -325,6 +326,7 @@ const read = (limit: number, cursor?: string) =>
   readSessionTranscriptCatalogPage({ ...scope, ...source, limit, cursor });
 
 async function seed(messages: unknown[]) {
+  setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   for (const [index, message] of messages.entries()) {
     await appendTranscriptMessage(scope, {

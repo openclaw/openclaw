@@ -1236,7 +1236,7 @@ const nodeTestShards = targetNodeTestShards
         (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
       ),
     };
-    if (compactReleaseMatrixRows) {
+    if (compactReleaseMatrixRows || (packedGroups && !frozenTarget)) {
       // The workflow treats absent feature flags as false and history as [].
       // Encoded groups own their names; the outer name is only a legacy fallback.
       for (const key of [
@@ -1319,14 +1319,14 @@ const additionalChecks = [
     group,
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
-  // Only dispatches execute this report; scheduled tips have no change range.
-  ...(eventName === "workflow_dispatch"
+  // Main-shaped qualifications are still dispatches with an exact comparison range.
+  ...(eventName === "workflow_dispatch" || mainQualification
     ? [
-        // Diff generation took 209–246s on smaller hosts; keep its 8GiB heap isolated.
+        // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
           check_name: "report-plugin-sdk-api-diff",
           group: "plugin-sdk-api-diff",
-          runner: "blacksmith-8vcpu-ubuntu-2404",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
         },
       ]
     : []),
