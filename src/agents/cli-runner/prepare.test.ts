@@ -211,7 +211,7 @@ function createCliBackendConfig(params: TestCliBackendParams = {}): OpenClawConf
 }
 
 const SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE =
-  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private.";
+  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `mcp__openclaw__message(action=send)`; final text private.";
 
 function createLoopbackRuntime() {
   return {

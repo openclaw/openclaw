@@ -105,6 +105,8 @@ export function buildCliAgentSystemPrompt(params: {
   docsPath?: string;
   sourcePath?: string;
   tools: AgentTool[];
+  /** Prefix the backend adds when exposing `tools` to the model; see `resolveOpenClawMcpToolNamePrefix`. */
+  toolNamePrefix?: string;
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
@@ -120,6 +122,7 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const messageTool = params.tools.find((tool) => tool.name.trim().toLowerCase() === "message");
   const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -164,7 +167,11 @@ export function buildCliAgentSystemPrompt(params: {
     }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
-    messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
+    toolNamePrefix: params.toolNamePrefix,
+    messageTool: messageTool && {
+      ...messageTool,
+      name: `${params.toolNamePrefix ?? ""}${messageTool.name}`,
+    },
     skillsPrompt: params.skillsPrompt,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
