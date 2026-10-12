@@ -10,7 +10,12 @@ import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { z } from "zod";
 import { buildOpenShellBaseArgv } from "./cli.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
-import { createOpenShellWorkerNodeConfig, OPEN_SHELL_WORKER_BOOTSTRAP } from "./worker-launch.js";
+import {
+  createOpenShellWorkerNodeConfig,
+  OPEN_SHELL_WORKER_BOOTSTRAP,
+  OPEN_SHELL_AGENT_WORKSPACE_CHECK,
+} from "./worker-launch.js";
+import { prepareOpenShellAgentWorkspace } from "./worker-workspace.js";
 
 type WorkerOptions = {
   targetFile?: string;
@@ -224,6 +229,51 @@ async function configureWorkerProfile(sandbox: string, options: WorkerOptions) {
     );
   }
   const nextProfile = previous ?? { provider: "device", settings: { device, inference: "worker" } };
+  const agentWorkspace = worker.agentWorkspace;
+  const fileTransfer = agentWorkspace
+    ? prepareOpenShellAgentWorkspace(
+        source,
+        agentWorkspace,
+        device,
+        prepared.snapshot.runtimeConfig,
+      )
+    : undefined;
+  if (agentWorkspace) {
+    const script = [
+      'const fs = require("node:fs"); const path = require("node:path");',
+      'const {workspace, stateDir} = JSON.parse(fs.readFileSync(0, "utf8"));',
+      "(" + OPEN_SHELL_AGENT_WORKSPACE_CHECK + ")(workspace.remoteRoot, stateDir);",
+      'const file = path.join(stateDir, "openclaw.json"); const stat = fs.lstatSync(file);',
+      'if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) || stat.uid !== process.getuid()) throw new Error("Unsafe node configuration");',
+      'const cfg = JSON.parse(fs.readFileSync(file, "utf8"));',
+      'if (cfg.agents?.entries?.[workspace.agentId]?.workspace !== workspace.remoteRoot || cfg.plugins?.entries?.["file-transfer"]?.enabled !== true) throw new Error("Start the node with this agentWorkspace configuration first");',
+      "process.stdout.write(workspace.remoteRoot);",
+    ].join("\n");
+    const verified = await runUtf8CommandWithTimeout(
+      [
+        ...buildOpenShellBaseArgv(plugin),
+        "sandbox",
+        "exec",
+        sandbox,
+        "--no-tty",
+        "--no-login-shell",
+        "--",
+        worker.nodeExecutable,
+        "-e",
+        script,
+      ],
+      {
+        timeoutMs: plugin.timeoutMs,
+        killProcessTree: true,
+        input: JSON.stringify({ workspace: agentWorkspace, stateDir: worker.stateDir }),
+      },
+    );
+    if (verified.code !== 0 || verified.stdout.trim() !== agentWorkspace.remoteRoot) {
+      throw new Error(
+        "Canonical agent workspace is not ready. Prepare its private directory and start this node with the matching agentWorkspace settings first; no Gateway configuration was changed.",
+      );
+    }
+  }
   if (options.apply) {
     await mutateConfigFile({
       base: "source",
@@ -236,6 +286,10 @@ async function configureWorkerProfile(sandbox: string, options: WorkerOptions) {
         if (options.required) {
           workers.requiredProfile = profile;
         }
+        if (fileTransfer) {
+          const plugins = (draft.plugins ??= {});
+          plugins.entries = { ...plugins.entries, "file-transfer": fileTransfer };
+        }
       },
     });
   }
@@ -247,6 +301,16 @@ async function configureWorkerProfile(sandbox: string, options: WorkerOptions) {
           profiles: { [profile]: nextProfile },
           ...(options.required ? { requiredProfile: profile } : {}),
         },
+        ...(agentWorkspace
+          ? {
+              agentWorkspace: {
+                ...agentWorkspace,
+                nodeId: device,
+                tools: ["file_fetch", "file_write"],
+                note: "Remote canonical files; no local copy or fallback. Existing File Transfer policy and command approvals remain authoritative. Ordinary coding tools still use the session task workspace.",
+              },
+            }
+          : {}),
         model: worker.model.provider + "/" + worker.model.id,
         next: "Use this model's non-secret metadata and the OpenClaw runtime on the Gateway. Device pairing, current availability, worker capability, and model admission are checked at dispatch. The device identity was read inside the selected sandbox; broker egress remains the OpenShell deployment trust contract.",
       },

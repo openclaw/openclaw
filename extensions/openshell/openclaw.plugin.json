@@ -54,72 +54,29 @@
   ],
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
-      "mode": {
-        "type": "string",
-        "enum": [
-          "mirror",
-          "remote"
-        ]
-      },
-      "command": {
-        "type": "string",
-        "minLength": 1
-      },
-      "gateway": {
-        "type": "string",
-        "minLength": 1
-      },
-      "gatewayEndpoint": {
-        "type": "string",
-        "minLength": 1
-      },
-      "workspace": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 19,
-        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-      },
-      "from": {
-        "type": "string",
-        "minLength": 1
-      },
-      "policy": {
-        "type": "string",
-        "minLength": 1
-      },
-      "providers": {
-        "type": "array",
-        "items": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "gpu": {
-        "type": "boolean"
-      },
-      "autoProviders": {
-        "type": "boolean"
-      },
-      "remoteWorkspaceDir": {
-        "type": "string",
-        "minLength": 1,
-        "pattern": "^\\/(?:sandbox|agent)(?:\\/|$)"
-      },
-      "remoteAgentWorkspaceDir": {
-        "type": "string",
-        "minLength": 1,
-        "pattern": "^\\/(?:sandbox|agent)(?:\\/|$)"
-      },
-      "timeoutSeconds": {
-        "type": "number",
-        "minimum": 1,
-        "maximum": 2147000
-      },
       "worker": {
         "type": "object",
         "properties": {
+          "agentWorkspace": {
+            "type": "object",
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "remoteRoot": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^\\/(?:sandbox|agent)(?:\\/|$)"
+              }
+            },
+            "required": [
+              "agentId",
+              "remoteRoot"
+            ],
+            "additionalProperties": false
+          },
           "nodeCommand": {
             "default": "openclaw",
             "type": "string",
@@ -209,8 +166,70 @@
           "model"
         ],
         "additionalProperties": false
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "mirror",
+          "remote"
+        ]
+      },
+      "command": {
+        "type": "string",
+        "minLength": 1
+      },
+      "gateway": {
+        "type": "string",
+        "minLength": 1
+      },
+      "gatewayEndpoint": {
+        "type": "string",
+        "minLength": 1
+      },
+      "workspace": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 19,
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      },
+      "from": {
+        "type": "string",
+        "minLength": 1
+      },
+      "policy": {
+        "type": "string",
+        "minLength": 1
+      },
+      "providers": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "gpu": {
+        "type": "boolean"
+      },
+      "autoProviders": {
+        "type": "boolean"
+      },
+      "remoteWorkspaceDir": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^\\/(?:sandbox|agent)(?:\\/|$)"
+      },
+      "remoteAgentWorkspaceDir": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^\\/(?:sandbox|agent)(?:\\/|$)"
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 2147000
       }
-    }
+    },
+    "additionalProperties": false
   },
   "uiHints": {
     "mode": {

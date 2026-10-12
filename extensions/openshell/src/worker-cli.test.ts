@@ -56,6 +56,166 @@ afterEach(() => {
 });
 
 describe("OpenShell standalone worker CLI", () => {
+  it("binds the selected agent to a prepared canonical node workspace without widening command grants", async () => {
+    await withTempHome(
+      async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        const source: OpenClawConfig = {
+          ...config(),
+          agents: { entries: { main: { workspace: path.join(home, "gateway-workspace") } } },
+          gateway: {
+            nodes: {
+              commands: {
+                allow: [
+                  "file.fetch",
+                  "file.stat",
+                  "file.write",
+                  "file.create",
+                  "dir.list",
+                  "workspace.memory",
+                  "workspace.skills",
+                ],
+              },
+            },
+          },
+        };
+        source.plugins!.entries!.openshell!.config = {
+          ...source.plugins!.entries!.openshell!.config,
+          worker: {
+            ...worker,
+            agentWorkspace: { agentId: "main", remoteRoot: "/agent/canonical" },
+          },
+        };
+        await fs.writeFile(configPath, JSON.stringify(source));
+        run.mockImplementation(async (argv: string[]) => ({
+          code: 0,
+          stdout: argv.includes("identity")
+            ? JSON.stringify({ deviceId: "a".repeat(64) })
+            : "/agent/canonical",
+        }));
+        vi.spyOn(process.stdout, "write").mockReturnValue(true);
+        await invoke(
+          source,
+          "configure",
+          "native-worker",
+          "--worker-profile",
+          "native",
+          "--required",
+          "--apply",
+        );
+        const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+        expect(saved.plugins.entries["file-transfer"].config.workspaces.main).toEqual({
+          nodeId: "a".repeat(64),
+          remoteRoot: "/agent/canonical",
+        });
+        expect(saved.gateway.nodes.commands).toEqual(source.gateway!.nodes!.commands);
+        expect(saved.agents).toEqual(source.agents);
+        expect(saved.cloudWorkers.requiredProfile).toBe("native");
+        const existingPolicy = { ask: "off", denyPaths: ["/**"], followSymlinks: false };
+        for (const selector of ["*", "Operator-managed node"]) {
+          const guarded = structuredClone(source);
+          guarded.plugins!.entries!["file-transfer"] = {
+            enabled: true,
+            config: { policyVersion: 2, nodes: { [selector]: existingPolicy } },
+          };
+          clearRuntimeConfigSnapshot();
+          await fs.writeFile(configPath, JSON.stringify(guarded));
+          await invoke(
+            guarded,
+            "configure",
+            "native-worker",
+            "--worker-profile",
+            "native",
+            "--apply",
+          );
+          expect(
+            JSON.parse(await fs.readFile(configPath, "utf8")).plugins.entries["file-transfer"]
+              .config.nodes,
+          ).toEqual({ [selector]: existingPolicy });
+        }
+        const restrictions: Array<{ restrict: (cfg: OpenClawConfig) => void; error: RegExp }> = [
+          {
+            restrict: (cfg) => {
+              cfg.plugins!.entries!["file-transfer"] = { enabled: false };
+            },
+            error: /existing plugin restriction/,
+          },
+          {
+            restrict: (cfg) => {
+              cfg.plugins!.deny = ["file-transfer"];
+            },
+            error: /existing plugin restriction/,
+          },
+          {
+            restrict: (cfg) => {
+              cfg.gateway!.nodes!.commands!.allow = ["file.fetch"];
+            },
+            error: /existing Gateway node-command grants/,
+          },
+          {
+            restrict: (cfg) => {
+              cfg.gateway!.nodes!.commands!.deny = ["file.write"];
+            },
+            error: /existing Gateway node-command grants/,
+          },
+          {
+            restrict: (cfg) => {
+              cfg.plugins!.entries!["file-transfer"] = {
+                config: {
+                  policyVersion: 2,
+                  workspaces: { main: { nodeId: "different-node", remoteRoot: "/agent/other" } },
+                },
+              };
+            },
+            error: /different canonical workspace binding/,
+          },
+        ];
+        restrictions.push({
+          restrict: (cfg) => {
+            const root = cfg.agents!.entries!.main!.workspace!;
+            cfg.env = { vars: { OPEN_SHELL_TEST_WORKSPACE: root } };
+            cfg.agents!.entries!.main!.workspace = "${OPEN_SHELL_TEST_WORKSPACE}";
+            cfg.agents!.entries!.other = { workspace: root };
+            cfg.agents!.ownership = "explicit";
+          },
+          error: /Another agent shares this Gateway workspace/,
+        });
+        for (const { restrict, error } of restrictions) {
+          const restricted = structuredClone(source);
+          restrict(restricted);
+          const original = JSON.stringify(restricted);
+          clearRuntimeConfigSnapshot();
+          await fs.writeFile(configPath, original);
+          const candidate = await readConfigFileSnapshotForWrite();
+          expect(candidate.snapshot.valid, JSON.stringify(candidate.snapshot.issues)).toBe(true);
+          await expect(
+            invoke(
+              restricted,
+              "configure",
+              "native-worker",
+              "--worker-profile",
+              "native",
+              "--apply",
+            ),
+          ).rejects.toThrow(error);
+          expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        }
+        expect(saved.plugins.entries["file-transfer"].config.nodes["a".repeat(64)]).toMatchObject({
+          followSymlinks: false,
+          allowWritePaths: expect.arrayContaining([
+            "/agent/canonical/AGENTS.md",
+            "/agent/canonical/SOUL.md",
+          ]),
+        });
+      },
+      {
+        env: {
+          OPENCLAW_CONFIG_PATH: (home) => path.join(home, ".openclaw", "openclaw.json"),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../../", import.meta.url)),
+        },
+      },
+    );
+  });
   it("creates through the configured OpenShell gateway without auto-importing host credentials", async () => {
     run.mockResolvedValue({ code: 0 });
     vi.spyOn(process.stdout, "write").mockReturnValue(true);

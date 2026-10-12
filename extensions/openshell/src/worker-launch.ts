@@ -22,8 +22,37 @@ export function createOpenShellWorkerNodeConfig(
       },
     },
     nodeHost: { workerRuns: { enabled: true, isolation: "none" } },
+    ...(worker.agentWorkspace
+      ? {
+          agents: {
+            defaults: { workspace: worker.agentWorkspace.remoteRoot, skipBootstrap: true },
+            entries: {
+              [worker.agentWorkspace.agentId]: { workspace: worker.agentWorkspace.remoteRoot },
+            },
+          },
+          plugins: { allow: ["file-transfer"], entries: { "file-transfer": { enabled: true } } },
+        }
+      : {}),
   };
 }
+
+// Run on the node before enrollment or binding; never seed or replace remote documents.
+export const OPEN_SHELL_AGENT_WORKSPACE_CHECK = String.raw`(root, stateDir) => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const state = path.resolve(stateDir);
+  if (root === state || root.startsWith(state + "/") || state.startsWith(root + "/")) {
+    throw new Error("Agent workspace must be separate from private node state");
+  }
+  let stat;
+  try { stat = fs.statSync(root); } catch {
+    throw new Error("Prepare the canonical agent workspace directory in this sandbox before starting or configuring its worker; setup never copies or seeds agent files");
+  }
+  if (!stat.isDirectory() || fs.realpathSync(root) !== root || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
+    throw new Error("Canonical agent workspace must be a private directory owned by the node user without symlink aliases");
+  }
+  fs.accessSync(root, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+}`;
 
 // Executed by the image's Node inside OpenShell, not by the Gateway. The only
 // secret input is a one-shot pairing handoff on stdin; it never enters argv.
@@ -48,6 +77,9 @@ process.stdin.on("end", () => {
     const credential = process.env[worker.model.credentialEnv];
     if (!credential || !credential.startsWith("openshell:resolve:env:")) {
       throw new Error("OpenShell did not provide a broker placeholder for the configured credential environment; refusing worker startup");
+    }
+    if (worker.agentWorkspace) {
+      (${OPEN_SHELL_AGENT_WORKSPACE_CHECK})(worker.agentWorkspace.remoteRoot, worker.stateDir);
     }
     const stateDir = path.resolve(worker.stateDir);
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });

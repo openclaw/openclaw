@@ -88,5 +88,40 @@ console.log(JSON.stringify({args, target, placeholder: process.env.OPENAI_API_KE
     );
     expect(resumed.code, resumed.stderr).toBe(0);
     expect(JSON.parse(resumed.stdout).args).toEqual(["node", "run", "--session-host"]);
+
+    worker.agentWorkspace = { agentId: "main", remoteRoot: path.join(home, "agent-files") };
+    worker.stateDir = path.join(home, "bound-node-state");
+    const invokeBound = () =>
+      invoke(
+        "openshell:resolve:env:synthetic-opaque-reference",
+        JSON.stringify({ worker, config: createOpenShellWorkerNodeConfig(worker) }),
+      );
+    const absent = await invokeBound();
+    expect(absent.code).toBe(1);
+    expect(absent.stderr).toContain("Prepare the canonical agent workspace");
+    await expect(fs.stat(worker.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.mkdir(worker.agentWorkspace.remoteRoot, { mode: 0o700 });
+    const document = path.join(worker.agentWorkspace.remoteRoot, "AGENTS.md");
+    await fs.writeFile(document, "Preserve these remote instructions");
+    const bound = await invokeBound();
+    expect(bound.code, bound.stderr).toBe(0);
+    expect(JSON.parse(bound.stdout).config).toMatchObject({
+      agents: {
+        defaults: { workspace: worker.agentWorkspace.remoteRoot, skipBootstrap: true },
+        entries: { main: { workspace: worker.agentWorkspace.remoteRoot } },
+      },
+      plugins: { entries: { "file-transfer": { enabled: true } } },
+    });
+    await fs.writeFile(document, "Edited by another session");
+    expect((await invokeBound()).code).toBe(0);
+    expect(await fs.readFile(document, "utf8")).toBe("Edited by another session");
+    const alias = path.join(home, "agent-alias");
+    await fs.symlink(worker.agentWorkspace.remoteRoot, alias);
+    worker.agentWorkspace.remoteRoot = alias;
+    const redirected = await invokeBound();
+    expect(redirected.code).toBe(1);
+    expect(redirected.stderr).toContain("without symlink aliases");
+    worker.agentWorkspace.remoteRoot = worker.stateDir;
+    expect((await invokeBound()).stderr).toContain("separate from private node state");
   });
 });

@@ -49,6 +49,23 @@ const openShellWorkspaceName = z
   });
 
 const OpenShellWorkerConfigSchema = z.strictObject({
+  agentWorkspace: z
+    .strictObject({
+      agentId: z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+      remoteRoot: openShellManagedRemotePath("worker.agentWorkspace.remoteRoot").refine(
+        (value) =>
+          path.posix.normalize(value) === value &&
+          !["/sandbox", "/agent"].includes(value) &&
+          !["\\", "\0", "*", "?", "[", "]", "{", "}", "!", "(", ")"].some((part) =>
+            value.includes(part),
+          ),
+        "worker.agentWorkspace.remoteRoot must be a normalized directory below /sandbox or /agent without glob characters",
+      ),
+    })
+    .optional(),
   nodeCommand: nonEmptyTrimmedString("worker.nodeCommand must be a non-empty string").default(
     "openclaw",
   ),
