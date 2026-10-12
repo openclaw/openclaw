@@ -7,7 +7,6 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   ensureDurableDirectory,
   requireDirectorySync,
-  sha256File,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
@@ -228,13 +227,12 @@ export async function createUpdateDatabaseBackupInProcess(
         `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
       );
     }
-    const { digest, bytes: sizeBytes } = await sha256File(snapshotPath);
     databases.push({
       path: sourcePath,
       snapshotPath,
       userVersion: snapshot.userVersion,
-      sha256: digest,
-      sizeBytes,
+      sha256: snapshot.sha256,
+      sizeBytes: snapshot.sizeBytes,
     });
   }
   const current = await canonicalDatabaseInventory(
