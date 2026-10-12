@@ -232,6 +232,35 @@ describe("Claude CLI node command", () => {
     });
   });
 
+  it("accepts the thinking env the gateway forwards for a paired-node Claude run", async () => {
+    // The gateway re-injects these per run from the effective thinking level.
+    // Without them in both allowlists the node answers INVALID_REQUEST before
+    // Claude Code starts, which a mocked node invocation never surfaces.
+    const thinkingCwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-think-"));
+    tempDirs.push(thinkingCwd);
+    await expect(
+      decodeClaudeCliNodeRunParams(
+        JSON.stringify({
+          argv: ["-p"],
+          cwd: thinkingCwd,
+          env: {
+            CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1",
+            MAX_THINKING_TOKENS: "0",
+          },
+          clearEnv: ["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "MAX_THINKING_TOKENS"],
+          idleTimeoutMs: 1_000,
+          timeoutMs: 2_000,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      env: {
+        CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1",
+        MAX_THINKING_TOKENS: "0",
+      },
+      clearEnv: ["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "MAX_THINKING_TOKENS"],
+    });
+  });
+
   it("rejects missing cwd and non-allowlisted environment", async () => {
     await expect(
       decodeClaudeCliNodeRunParams(

@@ -366,8 +366,15 @@ export async function executePreparedCliRun(
             ...resolveNodeClaudeAuthEnv(context),
           }
         : undefined;
+      // Only name a thinking key this run actually resolved. Naming it unconditionally
+      // would put it in the node request even when the model carries no thinking value,
+      // and a paired node that predates these keys rejects the whole request as
+      // INVALID_REQUEST before launch. Gating on the resolved value keeps the prior
+      // request shape for runs that set nothing.
       const nodeRuntimeClearEnv = nodePlacement
-        ? [...NODE_CLAUDE_FORWARD_ENV_KEYS].filter((key) => backend.clearEnv?.includes(key))
+        ? [...NODE_CLAUDE_FORWARD_ENV_KEYS].filter(
+            (key) => backend.clearEnv?.includes(key) && Object.hasOwn(preparedBackendEnv, key),
+          )
         : [];
       const nodeClearEnv = [
         ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
