@@ -522,7 +522,11 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     const content = "PRIVATE_VALUE API_TOKEN = computeToken()";
     const messages = f.sessionManager
       .buildSessionContext()
-      .messages.map((message) => (message.role === "user" ? { ...message, content } : message));
+      .messages.filter(
+        (message) =>
+          message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+      )
+      .map((message) => (message.role === "user" ? { ...message, content } : message));
     await expect(
       boundary(f.session.agent.streamFn, model, { messages }, {}),
     ).resolves.toMatchObject({ providerReplay: { compactedWindow: { outputTokens: 5 } } });
