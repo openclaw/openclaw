@@ -1,4 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -21,7 +22,6 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { buildToolMutationState } from "./tool-mutation.js";
@@ -475,7 +475,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
+        args: asOptionalObjectRecord(args),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });

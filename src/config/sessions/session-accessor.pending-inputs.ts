@@ -39,7 +39,7 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
@@ -146,7 +146,7 @@ export function bindSessionPendingInputSources(
   ) {
     throw new Error("Collected input requires one exact session and a distinct aggregate identity");
   }
-  // Collected framing still passes storage redaction; its staged sources have
+  // Collected framing still passes storage preparation; its staged sources have
   // already passed approval and must not run through another plugin hook.
   const clients = normalizeMessageClientSources(
     receipts.flatMap((receipt) => readMessageClientSources(receipt.message)),
@@ -158,9 +158,7 @@ export function bindSessionPendingInputSources(
       transport: { ...asOptionalRecord(message["__openclaw"]?.transport), clients },
     };
   }
-  const messageJson = JSON.stringify(
-    redactTranscriptMessageForStorage(collectedMessage, { config: sources.at(-1)?.config }),
-  );
+  const messageJson = JSON.stringify(sanitizeTranscriptMessageForStorage(collectedMessage));
   if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
     throw new Error("Collected input exceeds the Gateway payload limit");
   }
@@ -530,8 +528,7 @@ async function stagePreparedPendingInput(
       return undefined;
     }
     const messageJson =
-      existing?.message_json ??
-      JSON.stringify(redactTranscriptMessageForStorage(prepared, { config: options.config }));
+      existing?.message_json ?? JSON.stringify(sanitizeTranscriptMessageForStorage(prepared));
     if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
       throw new Error("Approved pending input exceeds the Gateway payload limit");
     }

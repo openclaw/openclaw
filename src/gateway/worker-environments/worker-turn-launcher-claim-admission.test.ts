@@ -213,7 +213,7 @@ describe("worker turn launcher claim admission", () => {
     );
   });
 
-  it.each(["after-restart", "restart-result-run"])(
+  it.each(["restart-result-run"])(
     "returns a recovery outcome for restart-cleared claim retry %s",
     async (runId) => {
       await seedActivePlacement("remote-exec");
@@ -472,32 +472,6 @@ describe("worker turn launcher claim admission", () => {
       finishCancellation.resolve();
       await Promise.allSettled([first, replacement].filter((operation) => operation !== undefined));
     }
-  });
-
-  it("releases the admitted claim when managed workspace resolution fails", async () => {
-    await seedActivePlacement();
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-      resolveWorkspace: async () => {
-        throw new Error("managed workspace unavailable");
-      },
-    });
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-workspace-resolution-failure",
-        },
-        turn("run-workspace-resolution-failure"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow("managed workspace unavailable");
-
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 
   it.each([

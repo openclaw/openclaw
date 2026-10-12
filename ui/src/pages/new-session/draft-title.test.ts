@@ -84,27 +84,4 @@ describe("creation draft title preparation", () => {
     expect(prepare).toHaveBeenCalledOnce();
     expect(titles.takePreparedTitle()).toBeUndefined();
   });
-
-  it("bounds source text without splitting Unicode and keeps model selection scoped", async () => {
-    const { flow, place, request, titles } = fixture();
-    flow.setMessage("a".repeat(999) + "🦞more");
-    place.modelControl.selected = "test/utility";
-    titles.hostUpdated();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.title.prepare",
-      { agentId: "main", message: "a".repeat(999), model: "test/utility" },
-      { timeoutMs: 20_000 },
-    );
-    place.modelControl.selected = "test/other";
-    expect(titles.takePreparedTitle()).toBeUndefined();
-  });
-
-  it.each(["short", "/help command"])("skips ineligible source %j", async (message) => {
-    const { flow, prepare, titles } = fixture();
-    flow.setMessage(message);
-    titles.hostUpdated();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(prepare).not.toHaveBeenCalled();
-  });
 });

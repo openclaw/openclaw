@@ -258,6 +258,10 @@ export async function executeFastAbortRequest(
     }
     const resolvedTargetKey = resolvedAbortTarget?.sessionKey ?? targetKey;
     const assertCurrent = () => {
+      if (params.isCommandTargetCurrent?.sessionSource?.assertScopeCurrent) {
+        params.isCommandTargetCurrent.sessionSource.assertScopeCurrent();
+        return;
+      }
       if (params.isCommandTargetCurrent?.() === false) {
         throw new Error("The selected session changed before it could be stopped.");
       }
@@ -323,7 +327,6 @@ export async function executeFastAbortRequest(
           if (!authorized) {
             return false;
           }
-          assertCurrent();
           const bindingContext = commandSessionKey
             ? resolveSessionConversationBindingContext(cfg, ctx)
             : undefined;
@@ -355,7 +358,13 @@ export async function executeFastAbortRequest(
           const targets = [...abortTargetKeys, ...(sourceAbortKey ? [sourceAbortKey] : [])].map(
             (key) => preparedTargets.get(key) ?? prepareTarget(key),
           );
-          assertCurrent();
+          const current = params.isCommandTargetCurrent?.();
+          if (
+            (typeof current === "boolean" || current === undefined ? current : await current) ===
+            false
+          ) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
           sealRootSelection();
           try {
             for (const target of targets) {

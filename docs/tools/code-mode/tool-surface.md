@@ -181,21 +181,11 @@ plan text or silently turn every asynchronous service into required work.
 
 ### Source in session history
 
-In the built-in OpenClaw runtime, the JSON Code Mode tool executes the original
-input. Session history preserves computations such as `const API_TOKEN = computeToken();`
-and boolean or null initializers in the outer call's JavaScript
-`code` and `command` fields, while masking credential literals, recognizable
-tokens, registered secrets, and configured redaction patterns. Credential
-assignments use full masks so repeated storage redaction stays stable.
-
-This treatment does not extend to shell commands, nested tool calls, unrelated
-argument strings, or assistant prose. Large or unrecognized source syntax
-remains subject to diagnostic masking. Stored source is a redacted record, not
-a place to recover credentials; no additional setting is required.
-This applies to new calls; already-redacted source cannot be reconstructed.
-The Copilot runtime's separate transcript journal does not yet preserve this
-source structure. Native Codex uses a separate freeform source path; this
-behavior does not describe its storage.
+Code Mode executes and persists the original tool input without secret masking.
+Source, credential literals, nested tool arguments, and returned text retain their
+contents in model context and session history, subject to size and media limits.
+`logging.redactPatterns` applies to logs and diagnostics, not stored source.
+Already-masked historical source cannot be reconstructed.
 
 ## `wait`
 

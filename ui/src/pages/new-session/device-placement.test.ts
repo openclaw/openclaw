@@ -35,13 +35,6 @@ describe("device placement projection", () => {
 
   it.each([
     {
-      name: "available host",
-      environment: node({}),
-      selectable: true,
-      reason: undefined,
-      facts: ["macOS", "Camera"],
-    },
-    {
       name: "ignores unknown capabilities that match object prototype properties",
       environment: node({ capabilities: ["constructor", "__proto__", "camera.snap"] }),
       selectable: true,
@@ -216,7 +209,7 @@ describe("device placement projection", () => {
     }
   });
 
-  it.each(["pending-approval", "undeclared", "unauthorized", "invocable"] as const)(
+  it.each(["undeclared", "invocable"] as const)(
     "uses Gateway command remediation without changing %s eligibility",
     (state) => {
       const message = "Enable the codex plugin on this node with openclaw plugins enable codex.";

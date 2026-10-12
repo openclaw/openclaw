@@ -8532,7 +8532,6 @@
 ["src/llm/utils/oauth/openai-chatgpt.test.ts","../../../plugins/provider-openai-chatgpt-oauth.js","89ab8a052d6a704b9496f9bb7c31d8b1a56c532a1a170c989dcf1b98cd003ab8",1]
 ["src/llm/utils/oauth/openai-chatgpt.test.ts","../../../plugins/provider-runtime.runtime.js","5d8d83fbda7f286c3ba324fb418f874b1fd91a449d49e4ac93e6e16e9d87c98b",1]
 ["src/logging/diagnostic-stuck-session-exec-deadline.test.ts","../agents/bash-tools.exec-host-gateway.js","f6d7931a0fa57cf035ff7f9764f0011c571e8b32edafdb9c1eab948aea588414",1]
-["src/logging/diagnostic-stuck-session-exec-deadline.test.ts","../infra/shell-env.js","e5745c5b9a0b78d6f3516b1105f11d5d1e486d8f00cdce2342135f07d01db892",1]
 ["src/logging/diagnostic-stuck-session-exec-deadline.test.ts","../process/supervisor/adapters/child.js","c4a51b72a8d67a1c6afceb2c71687b518b1900da75afd6b73914294fc111894d",1]
 ["src/logging/diagnostic-stuck-session-exec-deadline.test.ts","../process/supervisor/index.js","03f852a56b4365b32e3988185389653d0c0c5e34bd26fbc99d9de1eefc438629",1]
 ["src/logging/diagnostic-stuck-session-recovery.runtime.test-harness.ts","../agents/embedded-agent-runner/active-run-projections.js","8a35eef1e1fc264e912f7fd250a0bdb44c214bad79bab413a5552d0557a35fa0",1]

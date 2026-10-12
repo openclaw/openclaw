@@ -15,6 +15,10 @@ import {
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "./agent-tool-source-execution-guard.js";
+import {
   buildExecApprovalFollowupTarget,
   buildExecApprovalDeniedToolResult,
   buildExecAutoReviewDeniedToolResult,
@@ -54,6 +58,7 @@ const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
+  const assertSourceActive = captureAgentToolSourceExecutionGuard(params.signal);
   const target = await resolveNodeExecutionTarget(params);
   params.signal?.throwIfAborted();
   const { hostSecurity, hostAsk, askFallback } = params.bypassHostApprovalFloors
@@ -471,26 +476,29 @@ export async function executeNodeHostCommand(
             }
             // Approved follow-up invocations need approval scopes because they mutate remote node state.
             nodeInvocationStarted = true;
-            const invocation = await invokeNodeSystemRun({
-              invokeWaitMs: target.invokeWaitMs,
-              invoke: buildNodeSystemRunInvoke({
-                target,
-                prepared,
-                request: params,
-                approved: approvalSource ? undefined : approvedByAsk,
-                approvalDecision: approvalSource
-                  ? null
-                  : approvalDecision === "allow-always" &&
-                      (inlineEvalHit !== null || allowAlwaysPersistence.kind === "one-shot")
-                    ? "allow-once"
-                    : approvalDecision,
-                approvalSource,
-                runId: approvalId,
-                suppressNotifyOnExit: true,
+            const invocation = await runWithAgentToolSourceExecutionScope(assertSourceActive, () =>
+              invokeNodeSystemRun({
+                source: assertSourceActive,
+                invokeWaitMs: target.invokeWaitMs,
+                invoke: buildNodeSystemRunInvoke({
+                  target,
+                  prepared,
+                  request: params,
+                  approved: approvalSource ? undefined : approvedByAsk,
+                  approvalDecision: approvalSource
+                    ? null
+                    : approvalDecision === "allow-always" &&
+                        (inlineEvalHit !== null || allowAlwaysPersistence.kind === "one-shot")
+                      ? "allow-once"
+                      : approvalDecision,
+                  approvalSource,
+                  runId: approvalId,
+                  suppressNotifyOnExit: true,
+                }),
+                scopes: APPROVED_NODE_INVOKE_SCOPES,
+                signal: params.signal,
               }),
-              scopes: APPROVED_NODE_INVOKE_SCOPES,
-              signal: params.signal,
-            });
+            );
             nodeInvocationCompleted = true;
             if (!invocation.ok) {
               await execHostShared.sendExecApprovalFollowupResult(
@@ -593,6 +601,7 @@ export async function executeNodeHostCommand(
   });
   params.signal?.throwIfAborted();
   return dispatchNodeSystemRun({
+    source: assertSourceActive,
     request: params,
     target,
     invoke,

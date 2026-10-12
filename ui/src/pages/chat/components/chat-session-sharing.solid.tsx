@@ -16,8 +16,11 @@ import { handlePeopleMenuKeydown } from "../../../components/searchable-people-m
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
+
+registerEnglishCatalog(registerSessionPeopleEnglish);
 
 export type ChatSessionSharingState = {
   loading: boolean;

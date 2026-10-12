@@ -111,7 +111,7 @@ function withSelectedFacts<T>(
 
 describe("trusted plugin selected session facts", () => {
   it.each(["config-presentation", "secret registry"] as const)(
-    "refreshes exact and selected redaction while preserving PR state after %s changes",
+    "preserves exact and selected text and PR state after %s changes",
     (change) =>
       withFixture(async (fixture) => {
         const releaseForeground = retainSessionListForegroundWork();
@@ -163,14 +163,15 @@ describe("trusted plugin selected session facts", () => {
           }
           const exact = await read(fixture, [plainKey]);
           const current = await selected();
-          expect(exact.sessions[0]?.label).toBe("***");
-          expect(current.sessions.find((row) => row.key === plainKey)?.label).toBe("***");
+          expect(exact.sessions[0]?.label).toBe(marker);
+          expect(current.sessions.find((row) => row.key === plainKey)?.label).toBe(marker);
           expect(current.retryAt).toBe(stale.retryAt);
           const currentPrs = current.sessions.find((row) => row.key === sessionKey)!;
           expect(currentPrs.pullRequestsUnavailable).toBe(true);
           expect(currentPrs.pullRequestsStale).toBe(true);
-          expect(currentPrs.pullRequests).toEqual([{ number: 12, state: "open" }]);
-          expect(current.redactionRevision).not.toBe(stale.redactionRevision);
+          expect(currentPrs.pullRequests).toEqual([
+            { number: 12, state: "open", title: prTitle.slice(0, 120) },
+          ]);
         } finally {
           resetLogger();
           resetSecretRedactionRegistryForTest();
@@ -411,13 +412,15 @@ describe("trusted plugin selected session facts", () => {
       const describeRow = vi.spyOn(projection, "describe");
       try {
         sessionChanges.emit({ agentId: "main", sessionKey, scope: "runtime" });
-        acquisition.mockRejectedValueOnce(new Error("Synthetic facts read failed"));
+        acquisition.mockRejectedValueOnce(
+          new Error("Synthetic facts read failed: API_TOKEN = computeToken()"),
+        );
         const failed = await selected();
         expect(failed.sessions).toMatchObject([
           {
             key: sessionKey,
             sessionId: fixture.sessionId,
-            unavailable: "Error: Synthetic facts read failed",
+            unavailable: "Error: Synthetic facts read failed: API_TOKEN = computeToken()",
           },
         ]);
         expect(failed.missingSessionKeys).toBeUndefined();
@@ -786,7 +789,7 @@ describe("trusted plugin session facts", () => {
       }),
   );
 
-  it("retries rate-limited snapshots and bounds and redacts PR titles", () =>
+  it("retries rate-limited snapshots and bounds PR titles", () =>
     withFixture(async (fixture) => {
       const pullRequest = {
         number: 42,
@@ -814,7 +817,7 @@ describe("trusted plugin session facts", () => {
         url: pullRequest.url,
       });
       expect(limited.pullRequests[0]?.title?.length).toBeLessThanOrEqual(120);
-      expect(limited.pullRequests[0]?.title).not.toContain("synthetic-secret-value");
+      expect(limited.pullRequests[0]?.title).toContain("synthetic-secret-value");
       expect(limited.pullRequests[1]).toEqual({ number: 43, state: "open" });
       await fixture.subscriptions.pollNow();
       const recovered = (await read(fixture, [sessionKey])).sessions[0]!;

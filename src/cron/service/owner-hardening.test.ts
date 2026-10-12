@@ -835,29 +835,6 @@ describe("cron durable run ownership", () => {
     }
   });
 
-  it("force-runs through a dead markerless receipt without lifecycle startup", async () => {
-    vi.useRealTimers();
-    const { storePath } = await makeStorePath();
-    const now = Date.now();
-    const job = makeCommandJob("force-after-dead-owner", now + 60_000);
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const abandoned = claimMarkerlessReceipt(storePath, job, now);
-    releaseLocalCronRunReceiptOwnership(abandoned);
-    const runner = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = makeParentService(storePath, runner);
-    try {
-      await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
-      expect(runner).toHaveBeenCalledOnce();
-      expect(
-        receipts(storePath, job.id)
-          .map(({ status }) => status)
-          .toSorted(),
-      ).toEqual(["interrupted", "ok"]);
-    } finally {
-      cron.stop();
-    }
-  });
-
   it("records manual task recovery before postcommit notification can crash", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();

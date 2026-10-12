@@ -1,10 +1,14 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
@@ -245,10 +249,10 @@ export async function prepareMediaGenerationTask<
     requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
-    assertAdmissionCurrent: () => {
-      assertSourceCurrent();
+    assertAdmissionCurrent: composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+      assertSource();
       resources?.assertOpen();
-    },
+    }),
   });
 }
 
@@ -311,12 +315,17 @@ export async function runMediaGenerationTask(params: {
       providerId: params.providerId,
       assertCurrent: assertAdmissionCurrent,
     });
-    try {
-      assertAdmissionCurrent();
-    } catch (error) {
-      lifecycle.failTaskRun({ handle, error });
-      throw error;
-    }
+    const admitExecution = async <T>(start: () => T): Promise<{ execution: T }> => {
+      try {
+        return await runWithAgentToolSourceExecutionScope(assertAdmissionCurrent, async () => {
+          assertAdmissionCurrent();
+          return { execution: start() };
+        });
+      } catch (error) {
+        lifecycle.failTaskRun({ handle, error });
+        throw error;
+      }
+    };
 
     if (handle?.detach) {
       recordRecentMediaGenerationTaskStartForSession({
@@ -331,15 +340,17 @@ export async function runMediaGenerationTask(params: {
         providerId: params.providerId,
         progressSummary,
       });
-      scheduleMediaGenerationTaskCompletion({
-        lifecycle,
-        handle,
-        scheduleBackgroundWork: params.scheduleBackgroundWork,
-        progressSummary,
-        toolName: `${title} generation`,
-        onWakeFailure: params.onFailure,
-        run: () => run(handle),
-      });
+      await admitExecution(() =>
+        scheduleMediaGenerationTaskCompletion({
+          lifecycle,
+          handle,
+          scheduleBackgroundWork: params.scheduleBackgroundWork,
+          progressSummary,
+          toolName: `${title} generation`,
+          onWakeFailure: params.onFailure,
+          run: () => run(handle),
+        }),
+      );
       resourcesTransferred = true;
       try {
         await params.onAsyncTaskStarted?.(
@@ -377,7 +388,8 @@ export async function runMediaGenerationTask(params: {
     }
 
     try {
-      const executed = await run(handle);
+      const { execution } = await admitExecution(() => run(handle));
+      const executed = await execution;
       lifecycle.completeTaskRun({
         handle,
         provider: executed.provider,

@@ -16,7 +16,7 @@ import {
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
 import { HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT } from "../auto-reply/heartbeat.js";
 import { isToolCallBlock, isToolResultBlock, resolveToolUseId } from "../chat/tool-content.js";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
@@ -81,7 +81,7 @@ export function decodeClaudeCliProjectEntry(line: string): ClaudeCliProjectEntry
 export function redactClaudeCliHistoryMessage(
   message: TranscriptLikeMessage,
 ): TranscriptLikeMessage {
-  return redactTranscriptMessage(
+  return sanitizeTranscriptMessage(
     message as unknown as AgentMessage,
   ) as unknown as TranscriptLikeMessage;
 }

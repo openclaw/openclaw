@@ -639,6 +639,15 @@ export function writeSessionEntry(
     persisted.snapshotsChanged ||
     written.window.changed ||
     written.conversationWritten;
+  const sideMetadata =
+    changed || actor || options.postimages
+      ? structuredClone({
+          owner: canonicalPreviousEntry?.owner,
+          participants: canonicalPreviousEntry?.participants,
+          participantCount: canonicalPreviousEntry?.participantCount,
+        })
+      : {};
+  const snapshots = persisted.snapshotsChanged ? persisted.snapshots : undefined;
   if (changed) {
     publishSessionEntryCacheInvalidation(
       database,
@@ -653,12 +662,8 @@ export function writeSessionEntry(
           }),
         entryJson: persisted.entryJson,
         snapshotEntry: canonicalEntry,
-        snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
-        sideMetadata: structuredClone({
-          owner: canonicalPreviousEntry?.owner,
-          participants: canonicalPreviousEntry?.participants,
-          participantCount: canonicalPreviousEntry?.participantCount,
-        }),
+        snapshots,
+        sideMetadata,
         previousEntry: canonicalPreviousEntry,
         ...(!options.allowStoredAliases
           ? {
@@ -683,20 +688,7 @@ export function writeSessionEntry(
   }
   const persistedEntry =
     actor || options.postimages
-      ? projectSessionEntryCacheUpdate(
-          persisted.entryJson,
-          structuredClone({
-            ...(canonicalPreviousEntry?.owner ? { owner: canonicalPreviousEntry.owner } : {}),
-            ...(canonicalPreviousEntry?.participants
-              ? { participants: canonicalPreviousEntry.participants }
-              : {}),
-            ...(canonicalPreviousEntry?.participantCount !== undefined
-              ? { participantCount: canonicalPreviousEntry.participantCount }
-              : {}),
-          }),
-          canonicalEntry,
-          persisted.snapshotsChanged ? persisted.snapshots : undefined,
-        )
+      ? projectSessionEntryCacheUpdate(persisted.entryJson, sideMetadata, canonicalEntry, snapshots)
       : undefined;
   const row = persistedEntry
     ? createSessionEntryWriteRow({
