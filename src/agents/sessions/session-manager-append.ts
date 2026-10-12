@@ -514,7 +514,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   // SDK v2026.9.5 exposes this synchronous opt-in; internal replay uses async preparation.
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
-    options?: { includeOmittedCustomMessages?: boolean },
+    options?: {
+      /** @deprecated Await openAsync and traverse the complete view without this option. */
+      includeOmittedCustomMessages?: boolean;
+    },
   ): string | null {
     this.assertTranscriptViewAvailable();
     const includeOmitted = options?.includeOmittedCustomMessages === true;

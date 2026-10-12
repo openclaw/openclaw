@@ -14,9 +14,11 @@ import { resolveSessionParentSessionKey } from "../../channels/plugins/session-c
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
 import {
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
+  hasTerminalMainSessionTranscriptNewerThanRegistryAsync,
+  resolveSessionLifecycleTimestampsAsync,
+} from "../../config/sessions/lifecycle-read.js";
+import {
   isRestartRecoveryTombstone,
   resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
@@ -509,12 +511,13 @@ async function initSessionStateAttemptLocked(
     : undefined;
   const terminalMainTranscriptNewerThanRegistry =
     !isSystemEvent &&
-    hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+    (await hasTerminalMainSessionTranscriptNewerThanRegistryAsync({
       entry,
       sessionScope,
       ...sessionTarget,
       mainKey,
-    });
+      signal: params.signal,
+    }));
   const recoverTerminalVisibleEntry =
     canReuseExistingEntry &&
     !isSystemEvent &&

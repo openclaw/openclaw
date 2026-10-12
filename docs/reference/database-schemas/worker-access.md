@@ -5806,3 +5806,23 @@ committed timestamp without a follow-up read. Generic synchronous machine-state
 APIs retain other callers pending their owner-level cutover; these changes do not
 classify those callers as worker-only. Schemas, retention, stored bytes, and
 update behavior are unchanged.
+
+### Transcript accessor API cutovers
+
+Ordinary transcript rewrites use the prepared message worker operation. Turn
+cursor publication consumes the append receipt for a single message and the
+history worker for a batch. Canonical session replacement with native binding
+participants uses `session.entries.replaceWithNativeBindings` and the existing
+binding settlement owner. Terminal-session transcript freshness uses the history
+worker's metadata projection. Durable context consumers retain their captured
+snapshot when later transcript writes occur; owner and admission checks still
+apply before consumption.
+
+The native accessor kernels remain shared with released synchronous
+`SessionManager` methods, opaque transcript transaction callbacks, and
+process-held incognito. Bundled callers use the asynchronous replacements.
+Unbound harness deletion callbacks are deprecated in favor of the native binding
+lifecycle or commit-finalizer helpers; their native transaction behavior remains
+until the next Plugin SDK major. Initialization rollback and offline maintenance
+also retain their existing native transaction. These mixed kernels are not
+classified as worker-only. Incognito's native owner is a separate cutover.

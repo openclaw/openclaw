@@ -408,6 +408,13 @@ export type AgentHarnessSessionDeletionParams = {
   assertCurrent: () => void;
 };
 
+/**
+ * Direct, unbound commit/rollback callbacks are deprecated and will be removed
+ * in the next Plugin SDK major. Use createNativeSessionBindingLifecycleV2 for
+ * reversible stored bindings or createNativeSessionCommitFinalizer for
+ * commit-only cleanup from openclaw/plugin-sdk/agent-harness-session-runtime.
+ * Factory-produced participants remain supported by this contract.
+ */
 export type AgentHarnessSessionDeletionMutation = {
   /** Synchronously remove only the prepared owner's state at the session commit edge. */
   commit: () => void;

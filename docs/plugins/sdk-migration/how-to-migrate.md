@@ -536,6 +536,32 @@ The released synchronous `createSessionCatalogSourceActorProjector` and
 bundled Session Share uses the awaited helpers. Schemas, stored data, retention,
 permissions, and update behavior are unchanged.
 
+## Replace unbound native session deletion callbacks
+
+Harness `withSessionDeletion` and `withSessionContextReset` hooks should pass
+factory-produced participants to `run`, instead of plain
+`AgentHarnessSessionDeletionMutation` objects with unbound `commit` and
+`rollback` callbacks. Import the factories from
+`openclaw/plugin-sdk/agent-harness-session-runtime`:
+
+| Deprecated callback                                                   | Replacement                                                                                |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Direct callbacks that remove and restore a stored native binding      | The participant supplied by `createNativeSessionBindingLifecycleV2(...).withDeletion(...)` |
+| Direct callbacks that only finalize cleanup after the session commits | `createNativeSessionCommitFinalizer({ commit, rollback })`                                 |
+
+The binding lifecycle lets the existing worker transaction settle reversible
+stored state. The commit finalizer is only for cleanup without a reversible
+storage effect; it does not move arbitrary database callbacks to a worker.
+Use `wrapNativeSessionDeletionMutation` when adding live-authority or settlement
+hooks to either participant, so the wrapper preserves its worker ownership.
+
+Direct unbound callbacks retain their synchronous transaction and rollback
+behavior for compatibility, warn once per plugin and native-session-deletion
+family per Gateway process, and will be **removed in the next Plugin SDK
+major**. Factory-produced participants and the two harness hooks remain
+supported. This migration changes no schema, stored format, retention, or
+update behavior.
+
 ## Await session upstream links
 
 Use `upsertSessionUpstreamLinkAsync` and `deleteSessionUpstreamLinkAsync` from
@@ -802,11 +828,11 @@ Replace `SessionManager.readSessionContext(target, read)` with
 `await SessionManager.readSessionContextAsync(target, read, { admission?, signal? })`.
 This reader preserves full-fidelity messages, including storage-only fields omitted
 from model context. Its consumer may return a promise; the iterator closes when
-the consumer settles, and source validation must succeed before the result is
-returned. A rewritten source or revoked admission rejects the read. The durable
-reader retains its database owner through consumption and cleanup;
-database closure revokes the read. Final acceptance uses the existing writer
-FIFO and native mutation witness, including rewrites made after worker validation.
+the consumer settles. The durable reader retains its database owner through
+consumption and cleanup; database closure, cancellation, or revoked admission
+rejects the read. A later append or rewrite does not invalidate the captured
+durable snapshot or the result already computed from it. A subsequent read sees
+the new transcript.
 The `session-manager-sync-context-read` record deprecates the synchronous reader on
 October 4, 2026, with one warning per process and removal at the next Plugin SDK
 major. Its existing synchronous result remains compatible during that window.
@@ -815,8 +841,9 @@ Actor-bound incognito sessions reject the deprecated synchronous persistence and
 context methods before native storage or loaded-view mutation. The error names
 the awaited replacement. Production incognito remains host-owned until the atomic
 worker activation; durable synchronous compatibility is unchanged. An ordinary
-`resolveCurrentTurnEntryId()` only walks the loaded view; to include omitted
-custom messages, await `openAsync(target)` and walk that complete view instead.
+`resolveCurrentTurnEntryId()` only walks the loaded view. Its
+`includeOmittedCustomMessages` option is deprecated; await `openAsync(target)`
+and walk that complete view instead.
 
 Bundled Codex history captures `captureCodexSessionContextReader(target, signal?)`
 from `openclaw/plugin-sdk/codex-session-transcript-runtime` before yielding. When

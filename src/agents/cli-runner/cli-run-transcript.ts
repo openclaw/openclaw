@@ -34,7 +34,7 @@ import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import {
   awaitAgentEndSideEffects,
-  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
 } from "../harness/agent-end-side-effects.js";
 import { buildAgentRunBlockedUserMessage } from "../harness/before-agent-run.js";
 import {
@@ -88,7 +88,7 @@ function isAgentMessage(value: unknown): value is AgentMessage {
   return Boolean(value && typeof value === "object" && "role" in value);
 }
 
-type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 
 export async function runCliAgentEndHook(
   params: RunCliAgentParams,
@@ -98,7 +98,7 @@ export async function runCliAgentEndHook(
     await awaitAgentEndSideEffects(hookParams);
     return;
   }
-  runAgentEndSideEffects(hookParams);
+  await runAgentEndSideEffectsAsync(hookParams);
 }
 
 export async function persistApprovedCliUserTurnTranscript(

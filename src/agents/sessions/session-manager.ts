@@ -693,7 +693,7 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** Consume full-fidelity context outside SQL; validate its source after the consumer settles. */
+  /** Consume a full-fidelity snapshot while retaining its owner through the consumer. */
   static async readSessionContextAsync<T>(
     target: SessionTranscriptRuntimeTarget,
     read: (messages: Iterable<AgentMessage>, header: unknown) => T | Promise<T>,

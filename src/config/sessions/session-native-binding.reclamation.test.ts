@@ -20,9 +20,86 @@ import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
+import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each([false, true])(
+  "settles canonical replacement and native binding cleanup off thread (rollback: %s)",
+  async (rollback) => {
+    await withNativeBindingFixture("agentsapi", async (fixture) => {
+      const before = fixture.readEntry();
+      assert(before);
+      const binding = fixture.readBinding();
+      const sessionKey = "agent:main:replacement-target";
+      const failure = new Error("synthetic replacement commit refusal");
+      let admitted = false;
+      probe.admission(admission, (request, grant, callback) => {
+        const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+        if (
+          request.stage === "commit" &&
+          isRecord(facts) &&
+          facts.kind === "session-native-binding"
+        ) {
+          admitted = true;
+          if (rollback) {
+            throw failure;
+          }
+        }
+        callback(request, grant);
+      });
+      const sql = observeHostDataSql();
+      try {
+        const replacement = withPluginRuntimeRegistryScope(fixture.registry, () =>
+          applySessionEntryCanonicalReplacements({
+            agentId: fixture.scope.agentId,
+            env: fixture.scope.env,
+            storePath: fixture.scope.storePath,
+            skipMaintenance: true,
+            sessionKeys: [fixture.scope.sessionKey, sessionKey],
+            update: () => ({
+              result: "replaced",
+              replacements: [
+                { sessionKey, entry: before, previousSessionKeys: [fixture.scope.sessionKey] },
+              ],
+            }),
+          }),
+        );
+        if (rollback) {
+          await expect(replacement).rejects.toBe(failure);
+        } else {
+          await expect(replacement).resolves.toBe("replaced");
+        }
+        expect(admitted).toBe(true);
+        expect(
+          sql.queries.filter((query) =>
+            /\b(?:session_nodes|session_windows|transcript_events)\b/i.test(query),
+          ),
+        ).toEqual([]);
+        expect(
+          sql.queries.filter((query) =>
+            /\b(?:delete\s+from|insert(?:\s+or\s+\w+)?\s+into)\s+["`]?plugin_state_entries\b/i.test(
+              query,
+            ),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(fixture.readEntry()).toEqual(rollback ? before : undefined);
+      expect(fixture.readBinding()).toEqual(rollback ? binding : undefined);
+      expect(readExactSessionEntryRow(fixture.database, sessionKey)?.entry).toEqual(
+        rollback ? undefined : before,
+      );
+      const transcript = loadTranscriptEventsSync({
+        ...fixture.scope,
+        sessionKey: rollback ? fixture.scope.sessionKey : sessionKey,
+      });
+      expect(transcript).toEqual(fixture.events);
+    });
+  },
+);
 
 it.each([false, true])(
   "settles typed reset and native reclamation without replacing a successor (%s)",
