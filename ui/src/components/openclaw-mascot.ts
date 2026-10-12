@@ -1,1 +1,1 @@
-export { OpenClawMascot, type OpenClawMascotElement } from "./openclaw-mascot.tsx";
+import "./openclaw-mascot.tsx";

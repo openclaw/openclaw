@@ -21,7 +21,7 @@ import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
 
-it("reads cold entry, participant and membership facts in one statement without a transaction", async () => {
+it.each([false, true])("reads complete cold entry facts with lifecycle=%s", async (lifecycle) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:fused";
@@ -29,6 +29,7 @@ it("reads cold entry, participant and membership facts in one statement without 
     replaceSessionEntrySync(scope, {
       sessionId: "fused",
       updatedAt: 1,
+      sessionStartedAt: 1,
       skillsSnapshot: { prompt: "cold prompt", skills: [] },
     });
     const contribution = {
@@ -54,6 +55,7 @@ it("reads cold entry, participant and membership facts in one statement without 
           snapshotFields,
           includeMembers: true,
           includeParticipantRecords: true,
+          ...(lifecycle ? { lifecycleSessionKey: sessionKey } : {}),
         },
         context,
       );
@@ -62,7 +64,9 @@ it("reads cold entry, participant and membership facts in one statement without 
     try {
       const first = read();
       expect(statements.counts.all).toBe(1);
-      expect(transactions).not.toHaveBeenCalled();
+      expect(transactions.mock.calls.map(([sql]) => sql)).toEqual(
+        lifecycle ? ["BEGIN", "COMMIT"] : [],
+      );
       expect(first.entries).toMatchObject([
         {
           sessionKey,
@@ -101,7 +105,9 @@ it("reads cold entry, participant and membership facts in one statement without 
         { contributionCount: 2, firstPromptedAt: 2, lastPromptedAt: 4 },
       ]);
       expect(statements.counts.all).toBe(1);
-      expect(transactions).not.toHaveBeenCalled();
+      expect(transactions.mock.calls.map(([sql]) => sql)).toEqual(
+        lifecycle ? ["BEGIN", "COMMIT"] : [],
+      );
       database.db
         .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")
         .run(9_007_199_254_740_992n, sessionKey);

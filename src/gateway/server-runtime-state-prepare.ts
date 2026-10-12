@@ -187,6 +187,7 @@ export async function prepareGatewayKernelState(params: {
           workerPlacementModule.createGatewayWorkerPlacementRuntime({
             scheduler,
             placements: workerEnvironmentStartup.placementStore,
+            initialPlacements: await workerEnvironmentStartup.placementStore.listAsync(),
             getCommittedRuntimeConfig,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,

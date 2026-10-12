@@ -151,6 +151,7 @@ function retireIdleScopedCommandLane(state: LaneState): void {
       (state.maxConcurrent !== 1 ||
         (!state.lane.startsWith("session:") &&
           !state.lane.startsWith("nested:") &&
+          !state.lane.startsWith("cli:") &&
           !state.lane.startsWith("context-engine-turn-maintenance:"))))
   ) {
     return;
