@@ -135,6 +135,36 @@ describe("msteams conversation store (plugin state)", () => {
     });
   });
 
+  it("isolates account lookups and removal while preserving the default namespace", async () => {
+    const reference: StoredConversationReference = {
+      conversation: { id: "19:shared", conversationType: "personal" },
+      serviceUrl: "https://service.example.com/default",
+      user: { id: "shared-user", aadObjectId: "shared-aad" },
+    };
+    await openStoredConversations().register(conversationStateKey("19:shared"), reference);
+    const defaultStore = createMSTeamsConversationStoreState({ accountId: "default" });
+    const namedStore = createMSTeamsConversationStoreState({ accountId: "19" });
+    expect(await defaultStore.get("19:shared")).toEqual(reference);
+    expect(await namedStore.get("19:shared")).toBeNull();
+    await namedStore.upsert("19:shared", {
+      ...reference,
+      serviceUrl: "https://service.example.com/named",
+    });
+    expect(await namedStore.findPreferredDmByUserId("shared-aad")).toMatchObject({
+      conversationId: "19:shared",
+      reference: { serviceUrl: "https://service.example.com/named" },
+    });
+    expect(await defaultStore.findPreferredDmByUserId("shared-aad")).toMatchObject({
+      reference: { serviceUrl: "https://service.example.com/default" },
+    });
+    await defaultStore.remove("19:shared");
+    expect(await namedStore.list()).toHaveLength(1);
+    expect(
+      await createMSTeamsConversationStoreState({ accountId: "19" }).get("19:shared"),
+    ).not.toBeNull();
+    expect(await createMSTeamsConversationStoreState().list()).toEqual([]);
+  });
+
   it("serializes concurrent upserts so sparse activities preserve independent fields", async () => {
     const store = createMSTeamsConversationStoreState();
 

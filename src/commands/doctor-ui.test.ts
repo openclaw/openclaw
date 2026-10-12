@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as packageRoot from "../infra/openclaw-root.js";
+import * as commands from "../process/exec.js";
 import {
   detectUiProtocolFreshnessIssues,
   uiProtocolFreshnessIssueToHealthFinding,
@@ -38,8 +40,25 @@ async function touch(filePath: string, date: Date): Promise<void> {
   await fs.utimes(filePath, date, date);
 }
 
+function inspectRoot(root: string) {
+  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+  return detectUiProtocolFreshnessIssues();
+}
+
+function mockGitLog(stdout: string | null) {
+  return vi.spyOn(commands, "runCommandWithTimeout").mockResolvedValue({
+    stdout: stdout ?? "",
+    stderr: "",
+    code: stdout === null ? 1 : 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  });
+}
+
 describe("UI protocol freshness health mapping", () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(
       tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
     );
@@ -97,11 +116,9 @@ describe("UI protocol freshness health mapping", () => {
       if (kind === "stale-assets") {
         await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-01"));
       }
-      const findings = await detectUiProtocolFreshnessIssues({
-        root,
-        cwd: unrelated,
-        collectChangesSinceBuild: async () => ["abc123 protocol changed"],
-      });
+      vi.spyOn(process, "cwd").mockReturnValue(unrelated);
+      mockGitLog("abc123 protocol changed");
+      const findings = await inspectRoot(root);
       expect(findings).toHaveLength(1);
       expect(findings[0]?.kind).toBe(kind);
       const finding = uiProtocolFreshnessIssueToHealthFinding(findings[0]!);
@@ -134,7 +151,7 @@ ${command!}`;
     const root = await createOpenClawRoot();
     await fs.rm(path.join(root, "packages"), { recursive: true });
 
-    await expect(detectUiProtocolFreshnessIssues({ root })).resolves.toEqual([
+    await expect(inspectRoot(root)).resolves.toEqual([
       {
         kind: "missing-assets",
         root,
@@ -155,18 +172,10 @@ ${command!}`;
     const root = await createOpenClawRoot();
     await fs.rm(path.join(root, "packages"), { recursive: true });
     await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-02"));
-    let checkedHistory = false;
+    const gitLog = mockGitLog("abc123 unavailable packaged source");
 
-    await expect(
-      detectUiProtocolFreshnessIssues({
-        root,
-        async collectChangesSinceBuild() {
-          checkedHistory = true;
-          return ["abc123 unavailable packaged source"];
-        },
-      }),
-    ).resolves.toEqual([]);
-    expect(checkedHistory).toBe(false);
+    await expect(inspectRoot(root)).resolves.toEqual([]);
+    expect(gitLog).not.toHaveBeenCalled();
   });
 
   it("reads committed nested protocol changes from the real complete-package git pathspec", async () => {
@@ -208,7 +217,7 @@ ${command!}`;
       },
     );
 
-    await expect(detectUiProtocolFreshnessIssues({ root })).resolves.toEqual([
+    await expect(inspectRoot(root)).resolves.toEqual([
       expect.objectContaining({
         kind: "stale-assets",
         changesSinceBuild: [expect.stringMatching(/update nested protocol schema$/)],
@@ -224,14 +233,8 @@ ${command!}`;
     await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
     await touch(path.join(root, "ui/package.json"), new Date("2026-01-01T00:00:00.000Z"));
 
-    await expect(
-      detectUiProtocolFreshnessIssues({
-        root,
-        async collectChangesSinceBuild() {
-          return [];
-        },
-      }),
-    ).resolves.toEqual([]);
+    mockGitLog("");
+    await expect(inspectRoot(root)).resolves.toEqual([]);
   });
 
   it("does not report stale assets when git history is unavailable", async () => {
@@ -242,13 +245,7 @@ ${command!}`;
     await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
     await touch(path.join(root, "ui/package.json"), new Date("2026-01-01T00:00:00.000Z"));
 
-    await expect(
-      detectUiProtocolFreshnessIssues({
-        root,
-        async collectChangesSinceBuild() {
-          return null;
-        },
-      }),
-    ).resolves.toEqual([]);
+    mockGitLog(null);
+    await expect(inspectRoot(root)).resolves.toEqual([]);
   });
 });

@@ -75,14 +75,27 @@ openclaw devices reject <requestId>
 ### `openclaw devices join-code`
 
 Mint a single-use node onboarding URL with administrator access to the
-Gateway. Paste the printed `npx openclaw connect <url>` command on the machine
-to enroll. This join URL is not a mobile app setup code; for Android/iOS use
-[`openclaw qr`](/cli/qr) instead.
+Gateway. Paste the printed `npx -y openclaw@<gateway-version> connect <url> --service --session-host`
+command on the machine to enroll it as a background service that can run agent
+sessions. Use only trusted shared infrastructure; for a command-only node,
+omit `--session-host`. This join URL is not a mobile app setup code; for
+Android/iOS use [`openclaw qr`](/cli/qr) instead.
 
 ```bash
 openclaw devices join-code
 openclaw devices join-code --json
 ```
+
+The npm version comes from the Gateway that minted the URL, not the invoking
+CLI. Source checkouts and unpublished versions use a matching npm channel tag
+when it resolves, otherwise unpinned `openclaw`, with a matching-build note.
+Registry checks take at most two seconds.
+
+Already have OpenClaw installed? Run: `openclaw connect <join-url> --service --session-host`.
+
+JSON preserves `joinUrl` and `command` (the default service/session-host command),
+and adds `serviceCommand` (command-only node service), `installedCommand` (uses
+the existing installation), and optional `versionNote` (matching-build guidance).
 
 Join-code creation and redemption are core Gateway operations; no pairing
 plugin needs to be enabled. The URL must be reachable from the joining machine.
@@ -195,7 +208,7 @@ A non-admin paired-device caller can revoke only its **own** device token. Revok
 - For operator tokens, the CLI first reads the pairing list, then requests pairing plus the target token's scopes (or explicit rotate scopes). If the target is not visible, it requests admin access for cross-device management. A narrowed token does not inherit a broader device approval baseline; the caller must already be authorized for the requested scopes.
 - For paired-device token sessions, cross-device management (`remove`, `rename`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.
 - Token rotation returns a new token (sensitive) — treat it like a secret.
-- If pairing scope is unavailable on local loopback and no explicit `--url` is passed, `list`/`approve` can fall back to local pairing state.
+- If pairing scope is unavailable on local loopback and no explicit `--url` is passed, `list` can read local pairing state. Approval never writes around a running Gateway: use an authorized device or shared Gateway credentials, or stop the Gateway through its service owner and rerun the exact approval command. When the local Gateway is stopped, `list` reads the existing state and `approve` holds exclusive offline ownership through the write and cleanup. Explicit URLs and uncertain request outcomes never replay locally.
 
 ## Token drift recovery checklist
 

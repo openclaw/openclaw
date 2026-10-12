@@ -15,18 +15,18 @@ When the selected model uses the Codex harness, Codex app-server owns native
 token-pressure and manual thread compaction. OpenClaw separately owns its
 transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
 is set to a positive value, OpenClaw checks that mirror before ordinary and
-heartbeat turns. When the byte guard trips, OpenClaw requires semantic
+heartbeat turns. When the byte guard trips, OpenClaw attempts semantic
 compaction through its selected host context engine before admitting the turn.
-This host compaction does not itself replace or rewrite Codex's canonical
+This host compaction does not itself replace or rewrite Codex's
 native thread.
 
-If the context engine declines required host compaction, OpenClaw rejects the
-turn without sending it to Codex. The reply names the saved-history size limit
-and asks you to use `/new`, then resend the message, or ask the operator to review
-the compaction settings. The failure reason is logged at warning level even when
-verbose replies are off. A decline does not count as successful compaction or
-suppress the next byte-limit check; native token headroom does not bypass the
-host byte guard.
+If the context engine declines host compaction or leaves history oversized,
+OpenClaw continues with a bounded projection of recent whole turns. The native
+thread follows that projection so omitted history cannot remain in its context.
+A visible notice asks you to resend any essential earlier details; saved history
+is unchanged. The failure reason is logged at warning level. Failed attempts do
+not count as successful compaction, and suppressed retries still receive bounded
+context. System instructions and the current request remain intact.
 
 After host mirror compaction commits, OpenClaw may request
 `thread/compact/start` to synchronize an eligible native thread. This request
@@ -93,6 +93,6 @@ entries Codex kept after compaction.
 Repeated completion notifications for the same compaction item count once and
 do not repeat completion hooks or active-plan restoration.
 
-Because Codex owns the canonical native thread, `tool_result_persist` does
+Because Codex owns the native thread, `tool_result_persist` does
 not rewrite Codex-native tool result records. It only applies when OpenClaw
 writes an OpenClaw-owned session transcript tool result.

@@ -80,21 +80,6 @@ export function createGatewayTimeoutError() {
   });
 }
 
-export function createGatewayClosedError() {
-  const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1006,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
 export function createGatewayNormalCloseError() {
   const err = new Error("gateway closed (1000 normal closure): no close reason");
   err.name = "GatewayTransportError";

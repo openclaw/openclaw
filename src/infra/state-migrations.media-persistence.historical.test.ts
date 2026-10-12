@@ -5,13 +5,17 @@ import { DatabaseSync as NativeDatabaseSync, type DatabaseSync } from "node:sqli
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import * as transcriptFts from "../config/sessions/session-transcript-fts.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -31,8 +35,183 @@ import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenan
 import { historicalV14AgentSchemaSql } from "./state-migrations.media-persistence.historical-schema.test-support.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
+import { repairDoctorSessionWindowsBeforeMigration } from "./state-migrations.session-window-repair.js";
 
 const tempDirs: string[] = [];
+
+function seedOrphanSessionWindows(pathname: string, schemaVersion: number) {
+  using database = new NativeDatabaseSync(pathname);
+  database.exec("PRAGMA foreign_keys = OFF;");
+  const insertNode = database.prepare(`INSERT INTO session_nodes
+    (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`);
+  const insertWindow = database.prepare(`INSERT INTO session_windows
+    (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)`);
+  const insertLegacyEvent =
+    schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION
+      ? database.prepare(`INSERT INTO transcript_events
+        (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)`)
+      : undefined;
+  for (const sessionId of ["retained", "orphan-one", "orphan-two"]) {
+    const sessionKey = `agent:main:${sessionId}`;
+    insertNode.run(sessionKey, sessionId, JSON.stringify({ sessionId, updatedAt: 1 }));
+    insertWindow.run(sessionId, sessionKey);
+    const eventJson = JSON.stringify({
+      id: `message-${sessionId}`,
+      type: "message",
+      message: { role: "user", content: sessionId },
+    });
+    if (insertLegacyEvent) {
+      insertLegacyEvent.run(sessionId, eventJson);
+    } else {
+      createTranscriptEventInserter(database, sessionId)({ seq: 0, eventJson, createdAt: 1 });
+    }
+    transcriptFts.createSessionTranscriptFtsInserter(
+      database,
+      sessionId,
+    )({
+      messageId: `message-${sessionId}`,
+      text: sessionId,
+      role: "user",
+      timestamp: 1,
+    });
+  }
+  database.exec(
+    "UPDATE session_windows SET rowid = 9007199254740993 WHERE session_id = 'orphan-one';",
+  );
+  database.exec("DELETE FROM session_nodes WHERE current_session_id != 'retained';");
+}
+
+it.each([
+  ["repair", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["unrelated violation", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["cleanup failure", OPENCLAW_AGENT_SCHEMA_VERSION, false],
+  ["repair", 24, false],
+  ["repair", 24, true],
+] as const)(
+  "Doctor preserves original orphan history before repair (%s, schema %i, before migration %s)",
+  async (scenario, schemaVersion, beforeMigration) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const options = { agentId: "main", env: state.env };
+      const pathname = resolveOpenClawAgentSqlitePath(options);
+      if (schemaVersion === 24) {
+        openOpenClawStateDatabase({ env: state.env });
+        fs.mkdirSync(path.dirname(pathname), { recursive: true });
+        using source = new NativeDatabaseSync(pathname);
+        source.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+        source.exec(`PRAGMA user_version = 24;
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+          VALUES ('primary', 'agent', 24, 'main', '2026.9.9', 1, 1)`);
+        registerOpenClawAgentDatabase({ ...options, path: pathname, schemaVersion });
+      } else {
+        openOpenClawAgentDatabase(options);
+      }
+      closeOpenClawAgentDatabasesForTest();
+      seedOrphanSessionWindows(pathname, schemaVersion);
+      const readRows = (database: DatabaseSync) => ({
+        windows: database.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
+        events: database
+          .prepare(
+            "SELECT session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at FROM transcript_events ORDER BY session_id, seq",
+          )
+          .all(),
+        search: database
+          .prepare("SELECT session_id, text FROM session_transcript_fts ORDER BY session_id")
+          .all(),
+      });
+      let original: ReturnType<typeof readRows>;
+      {
+        using damaged = new NativeDatabaseSync(pathname);
+        if (scenario === "unrelated violation") {
+          damaged.exec("PRAGMA foreign_keys = OFF;");
+          damaged.exec(
+            "UPDATE session_windows SET primary_conversation_id = 'missing' WHERE session_id = 'retained'",
+          );
+        }
+        original = readRows(damaged);
+        expect(
+          damaged.prepare("SELECT count(*) AS count FROM pragma_foreign_key_check").get(),
+        ).toEqual({
+          count: scenario === "unrelated violation" ? 3 : 2,
+        });
+      }
+      expect(
+        recordOpenClawDatabaseQuarantine({
+          env: state.env,
+          kind: "agent",
+          path: pathname,
+          reason: "fixture orphan session windows",
+        }),
+      ).toBe(true);
+
+      let removedSearchRows: number | undefined;
+      if (scenario === "cleanup failure") {
+        const remove = transcriptFts.deleteSessionTranscriptFtsRowsInTransaction;
+        vi.spyOn(
+          transcriptFts,
+          "deleteSessionTranscriptFtsRowsInTransaction",
+        ).mockImplementationOnce((...args) => {
+          removedSearchRows = remove(...args);
+          throw new Error("fixture cleanup refused after deleting search rows");
+        });
+      }
+      const preMigrationChanges = beforeMigration
+        ? await repairDoctorSessionWindowsBeforeMigration({
+            env: state.env,
+            targets: [
+              {
+                agentId: "main",
+                path: pathname,
+                realPath: fs.realpathSync(pathname),
+                source: "registry",
+              },
+            ],
+          })
+        : [];
+      const result = await migrateLegacyMediaPersistence({ env: state.env });
+      result.changes.unshift(...preMigrationChanges);
+      if (scenario === "cleanup failure") {
+        expect(removedSearchRows).toBe(1);
+      }
+      using repaired = new NativeDatabaseSync(pathname, { readOnly: true });
+      if (scenario === "repair") {
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toContain(
+          `Removed 2 orphan session window(s) from ${pathname}; their dependent history remains in the backup.`,
+        );
+        expect(repaired.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        const retained = readRows(repaired);
+        for (const key of ["windows", "events", "search"] as const) {
+          expect(retained[key]).toEqual(
+            original[key].filter((row) => row.session_id === "retained"),
+          );
+        }
+        expect(() => openOpenClawAgentDatabase(options)).not.toThrow();
+      } else {
+        expect(result.warnings.join("\n")).toMatch(
+          scenario === "unrelated violation" ? /foreign_key_check/ : /fixture cleanup refused/,
+        );
+        expect(readRows(repaired)).toEqual(original);
+      }
+      const backups = fs
+        .readdirSync(path.dirname(pathname))
+        .filter((name) => name.startsWith("openclaw-session-window-recovery-"));
+      expect(backups).toHaveLength(1);
+      if (backups.length > 0) {
+        using backup = new NativeDatabaseSync(
+          path.join(path.dirname(pathname), backups[0]!, "database.sqlite"),
+          { readOnly: true },
+        );
+        expect(readRows(backup)).toEqual(original);
+        expect(
+          backup.prepare("SELECT count(*) AS count FROM pragma_foreign_key_check").get(),
+        ).toEqual({ count: scenario === "unrelated violation" ? 3 : 2 });
+      }
+    });
+  },
+);
 
 afterEach(() => {
   vi.restoreAllMocks();

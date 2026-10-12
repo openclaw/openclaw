@@ -102,22 +102,16 @@ function resolveShellWrapperCandidate(
       return null;
     }
     const dispatch = unwrapKnownDispatchWrapperInvocation(argv);
-    if (dispatch.kind === "blocked") {
+    if (dispatch.kind === "unwrapped" && inspectEnv) {
+      hasEnvManipulation ||= hasDispatchEnvManipulation(argv);
+    }
+    const wrapper =
+      dispatch.kind === "not-wrapper" ? unwrapKnownShellMultiplexerInvocation(argv) : dispatch;
+    if (wrapper.kind === "blocked") {
       return null;
     }
-    if (dispatch.kind === "unwrapped") {
-      if (inspectEnv) {
-        hasEnvManipulation ||= hasDispatchEnvManipulation(argv);
-      }
-      argv = dispatch.argv;
-      continue;
-    }
-    const multiplexer = unwrapKnownShellMultiplexerInvocation(argv);
-    if (multiplexer.kind === "blocked") {
-      return null;
-    }
-    if (multiplexer.kind === "unwrapped") {
-      argv = multiplexer.argv;
+    if (wrapper.kind === "unwrapped") {
+      argv = wrapper.argv;
       continue;
     }
     return { argv, token0, hasEnvManipulation };

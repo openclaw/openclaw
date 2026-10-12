@@ -40,6 +40,10 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 vi.mock("../../config/sessions/session-store-owner.js", () => ({
   resolvePersistedSessionStoreOwnerForTarget: () => ({ kind: "none" }),
 }));
+// mock-isolation: This native admission fixture has no actor; actor paths use real-worker coverage.
+vi.mock("../../config/sessions/session-incognito-binding.js", () => ({
+  captureIncognitoSessionBinding: () => undefined,
+}));
 vi.mock("../../config/sessions/transcript.js", () => ({
   appendExactAssistantMessageToSessionTranscript: vi.fn(),
 }));
@@ -273,13 +277,6 @@ it.each(["native", "supplied"] as const)(
     }
   },
 );
-
-it("leaves supplied initial-writer creation with the session manager", async () => {
-  current = undefined;
-  await run("supplied").result;
-  expect(mocks.read).not.toHaveBeenCalled();
-  expect(mocks.append).toHaveBeenCalledOnce();
-});
 
 it("keeps a supplied detached manager targetless", async () => {
   mocks.getTarget.mockReturnValue(undefined);

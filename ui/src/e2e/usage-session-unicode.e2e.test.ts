@@ -137,6 +137,8 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "sessions.usage": usageResponse(scenario.key),
+            "sessions.usage.timeseries": { points: [] },
+            "sessions.usage.logs": { logs: [] },
             "usage.status": { updatedAt: Date.now(), providers: [] },
           },
         });

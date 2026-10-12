@@ -111,6 +111,18 @@ function runEndOf(
   return end;
 }
 
+function makeCachedRunEnd(text: string, isMember: (char: string | undefined) => boolean) {
+  let start = -1;
+  let end = -1;
+  return (position: number): number => {
+    if (position < start || position >= end) {
+      start = position;
+      end = runEndOf(text, position, isMember);
+    }
+    return end;
+  };
+}
+
 /**
  * Shared matcher for the `BASE64_SAFE_TOKEN_BOUNDARY` vendor rules. The boundary group is
  * checked per candidate in O(1); the `(?<!;base64,[A-Za-z0-9+/=]*)` exemption walks each
@@ -199,12 +211,12 @@ function fixedTailTokenEnd(
 }
 
 /** `dapi` + 32 hex digits + an optional `-<digit>`; the optional tail is greedy like the regex. */
+const dapiBodyEnd = fixedTailTokenEnd(4, 32, isHexChar);
+
 function dapiTokenEnd(text: string, start: number): number | null {
-  const bodyEnd = start + 4 + 32;
-  for (let index = start + 4; index < bodyEnd; index++) {
-    if (!isHexChar(text[index])) {
-      return null;
-    }
+  const bodyEnd = dapiBodyEnd(text, start);
+  if (bodyEnd === null) {
+    return null;
   }
   if (text[bodyEnd] === "-" && isDigitChar(text[bodyEnd + 1])) {
     return bodyEnd + 2;
@@ -219,38 +231,27 @@ function dapiTokenEnd(text: string, start: number): number | null {
  */
 function makeAtEqualsTokenMatcher(source: string, prefix: string) {
   const prefixLength = prefix.length;
+  const equalsTailEnd = fixedTailTokenEnd(1, 8, isAlnumChar);
   return makeBase64SafeTokenMatcher(source, prefix, () => {
     let runStart = -1;
     let runEnd = -1;
-    let equals: number[] = [];
+    let lastEquals: number | undefined;
     return (text: string, start: number): number | null => {
       const valueStart = start + prefixLength;
       if (valueStart < runStart || valueStart >= runEnd) {
         runEnd = runEndOf(text, valueStart, AT_VALUE_CHAR);
         runStart = valueStart;
-        equals = [];
+        lastEquals = undefined;
         for (let index = valueStart; index < runEnd; index++) {
-          if (
-            text[index] === "=" &&
-            index + 9 <= text.length &&
-            isAlnumChar(text[index + 1]) &&
-            isAlnumChar(text[index + 2]) &&
-            isAlnumChar(text[index + 3]) &&
-            isAlnumChar(text[index + 4]) &&
-            isAlnumChar(text[index + 5]) &&
-            isAlnumChar(text[index + 6]) &&
-            isAlnumChar(text[index + 7]) &&
-            isAlnumChar(text[index + 8])
-          ) {
-            equals.push(index);
+          if (text[index] === "=" && equalsTailEnd(text, index) !== null) {
+            lastEquals = index;
           }
         }
       }
       // Greedy backtracking lands on the rightmost valid split, and later candidates in the
-      // same run only raise the minimum, so the largest entry is always the answer.
+      // same run only raise the minimum, so retaining the last split is sufficient.
       const minimum = valueStart + 1;
-      const split = equals[equals.length - 1];
-      return split !== undefined && split >= minimum ? split + 9 : null;
+      return lastEquals !== undefined && lastEquals >= minimum ? lastEquals + 9 : null;
     };
   });
 }
@@ -299,32 +300,23 @@ const JWT_MATCHER = Object.freeze({
     // Run caches are per-segment: scanning the second or third segment must not invalidate
     // the first segment's cache, or candidates that share one long first segment rescan it
     // for every occurrence (quadratic work on adversarial input like "eyJ".repeat(N)).
-    const firstRun = { start: -1, end: -1 };
-    const secondRun = { start: -1, end: -1 };
-    const thirdRun = { start: -1, end: -1 };
-    const segmentEnd = (position: number, run: { start: number; end: number }): number => {
-      if (position >= run.start && position < run.end) {
-        return run.end;
-      }
-      const end = runEndOf(text, position, JWT_SEGMENT_CHAR);
-      run.start = position;
-      run.end = end;
-      return end;
-    };
+    const firstSegmentEnd = makeCachedRunEnd(text, JWT_SEGMENT_CHAR);
+    const secondSegmentEnd = makeCachedRunEnd(text, JWT_SEGMENT_CHAR);
+    const thirdSegmentEnd = makeCachedRunEnd(text, JWT_SEGMENT_CHAR);
     let searchFloor = 0;
     for (const candidate of scanPrefixOccurrences(text, "eyj")) {
       if (candidate < searchFloor) {
         continue;
       }
-      const firstEnd = segmentEnd(candidate + 3, firstRun);
+      const firstEnd = firstSegmentEnd(candidate + 3);
       if (firstEnd - (candidate + 3) < 10 || text[firstEnd] !== ".") {
         continue;
       }
-      const secondEnd = segmentEnd(firstEnd + 1, secondRun);
+      const secondEnd = secondSegmentEnd(firstEnd + 1);
       if (secondEnd - (firstEnd + 1) < 10 || text[secondEnd] !== ".") {
         continue;
       }
-      const thirdEnd = segmentEnd(secondEnd + 1, thirdRun);
+      const thirdEnd = thirdSegmentEnd(secondEnd + 1);
       if (thirdEnd - (secondEnd + 1) < 10) {
         continue;
       }
@@ -465,17 +457,7 @@ function isFormPairBoundary(text: string, ampersand: number): boolean {
 const FORM_BODY_FIRST_PAIR_MATCHER = Object.freeze({
   source: "form-body-first-pair (linear)",
   *exec(text: string): Iterable<RedactMatch> {
-    let runStart = -1;
-    let runEnd = -1;
-    const valueEnd = (start: number): number => {
-      if (start >= runStart && start < runEnd) {
-        return runEnd;
-      }
-      const end = runEndOf(text, start, (char) => char !== "&" && !isJsWhitespaceChar(char));
-      runStart = start;
-      runEnd = end;
-      return end;
-    };
+    const valueEnd = makeCachedRunEnd(text, (char) => char !== "&" && !isJsWhitespaceChar(char));
     let searchFloor = 0;
     let separator = text.indexOf("=");
     while (separator !== -1) {

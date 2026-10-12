@@ -97,6 +97,7 @@ describe("plugin status reports", () => {
         manifestRegistry,
         plugins: manifestRegistry.plugins,
         byPluginId: new Map(),
+        diagnostics: [],
       };
     });
     mocks.autoEnable.mockImplementation((params: { config: unknown }) => ({

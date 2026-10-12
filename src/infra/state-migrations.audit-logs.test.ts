@@ -452,7 +452,7 @@ describe("legacy core audit log migration", () => {
         scope: SYSTEM_AGENT_AUDIT_SCOPE,
         maxEntries: 3,
         env: audit.env,
-      }).register(
+      }).upsert(
         "runtime",
         systemAuditEvent("runtime", {
           timestamp: "2026-07-04T00:00:00.000Z",
@@ -522,7 +522,7 @@ describe("legacy core audit log migration", () => {
         scope: SYSTEM_AGENT_AUDIT_SCOPE,
         maxEntries: 1,
         env: restoredAudit.env,
-      }).register(
+      }).upsert(
         "runtime-after-restore",
         systemAuditEvent("Runtime after restore", {
           timestamp: "2026-07-04T00:00:00.000Z",

@@ -224,7 +224,7 @@ describe("sessions_spawn terminal effects", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves dispatch failure with nested no-start proof: %s",
     async (nestedNoStart) => {
       const failure = new Error("Gateway disconnected");

@@ -2,12 +2,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 
 /** Model a future release whose catalog this build cannot interpret. */
 export function writeUnreadableNewerStateSchema(databasePath: string) {
-  const database = openNodeSqliteDatabase(databasePath);
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
   try {
     database.exec(`
       PRAGMA journal_mode = WAL;

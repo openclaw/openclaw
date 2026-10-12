@@ -67,7 +67,7 @@ type TelegramMessageContextSessionRuntime =
 
 const sessionRuntimeMethods = [
   "buildChannelInboundEventContext",
-  "readAmbientTranscriptWatermark",
+  "readAmbientTranscriptWatermarkAsync",
   "readSessionUpdatedAtAsync",
   "recordInboundSession",
   "resolveAmbientTranscriptWatermarkKey",
@@ -130,17 +130,6 @@ function replyTargetToChainEntry(
   };
 }
 
-function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReplyChainEntry {
-  const {
-    forwardedFrom: _forwardedFrom,
-    forwardedFromId: _forwardedFromId,
-    forwardedFromUsername: _forwardedFromUsername,
-    forwardedDate: _forwardedDate,
-    ...withoutForwarded
-  } = entry;
-  return withoutForwarded;
-}
-
 function formatTelegramForwardedMessageBody(params: {
   body: string;
   forwardedFrom?: string;
@@ -176,21 +165,17 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
 }
 
-const TELEGRAM_MEDIA_KINDS = new Set<TelegramMediaKind>([
+const TELEGRAM_MEDIA_KINDS: TelegramMediaKind[] = [
   "audio",
   "document",
   "image",
   "sticker",
   "video",
-]);
-
-function isTelegramMediaKind(value: string): value is TelegramMediaKind {
-  return TELEGRAM_MEDIA_KINDS.has(value as TelegramMediaKind);
-}
+];
 
 function resolveReplyChainMediaType(entry: TelegramReplyChainEntry) {
   const mediaType = entry.mediaType;
-  const nativeKind = mediaType && isTelegramMediaKind(mediaType) ? mediaType : undefined;
+  const nativeKind = TELEGRAM_MEDIA_KINDS.find((kind) => kind === mediaType);
   const kind = entry.mediaKind || nativeKind;
   return {
     ...(kind ? { kind } : {}),
@@ -361,7 +346,13 @@ export async function buildTelegramInboundContextPayload(
     const includeForwarded =
       visibleEntry.forwardedFrom &&
       shouldIncludeGroupSupplementalContext("forwarded", visibleEntry.forwardedFromId);
-    return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
+    if (!includeForwarded) {
+      delete visibleEntry.forwardedFrom;
+      delete visibleEntry.forwardedFromId;
+      delete visibleEntry.forwardedFromUsername;
+      delete visibleEntry.forwardedDate;
+    }
+    return [visibleEntry];
   });
   const bufferedBodySegments = shouldRenderBufferedBody
     ? bufferedMessages.flatMap((bufferedMessage) => {
@@ -418,10 +409,9 @@ export async function buildTelegramInboundContextPayload(
           .map(formatReplyChainEntry)
           .join("\n")}\n[/Reply chain]`
       : "";
-  const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
-    ? (groupLabel ?? `group:${chatId}`)
+    ? buildGroupLabel(msg, chatId, resolvedThreadId)
     : buildSenderLabel(msg, senderId || chatId);
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
   const storePath = sessionRuntime.resolveStorePath(cfg.session?.store, {
@@ -442,7 +432,7 @@ export async function buildTelegramInboundContextPayload(
         })
       : undefined;
   const ambientTranscriptWatermark = ambientTranscriptWatermarkKey
-    ? sessionRuntime.readAmbientTranscriptWatermark({
+    ? await sessionRuntime.readAmbientTranscriptWatermarkAsync({
         storePath,
         sessionKey: route.sessionKey,
         key: ambientTranscriptWatermarkKey,

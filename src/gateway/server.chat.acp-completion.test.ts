@@ -4,7 +4,7 @@ import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
@@ -143,7 +143,7 @@ describe("Gateway ACP completion ownership", () => {
     },
     { name: "replaced transcript target", rebound: true },
   ];
-  test.each(cases)("completes $name once with truthful transcript ownership", async (scenario) => {
+  test.for(cases)("completes $name once", async (scenario, { signal }) => {
     const storePath = path.join(tempDirs.make(), "sessions.json");
     testState.sessionStorePath = storePath;
     const mediaFile = path.join(path.dirname(storePath), "photo.png");
@@ -323,7 +323,23 @@ describe("Gateway ACP completion ownership", () => {
         errorKind?: string;
       };
     }> = [];
-    const capture = (data: Buffer) => frames.push(JSON.parse(data.toString()));
+    let lifecycleStarted = createDeferred();
+    let lifecycleDelivered = createDeferred();
+    const capture = (data: Buffer) => {
+      const frame: (typeof frames)[number] = JSON.parse(data.toString());
+      frames.push(frame);
+      if (
+        frame.event === "agent" &&
+        frame.payload?.runId === activeRunId &&
+        frame.payload.stream === "lifecycle"
+      ) {
+        if (frame.payload.data?.phase === "start") {
+          lifecycleStarted.resolve();
+        } else if (frame.payload.data?.phase === "end" || frame.payload.data?.phase === "error") {
+          lifecycleDelivered.resolve();
+        }
+      }
+    };
     ws.on("message", capture);
     try {
       // Preserve the observed order: one cold turn, then the same session and
@@ -335,6 +351,8 @@ describe("Gateway ACP completion ownership", () => {
         dispatchAdmissions.set(runId, admissionCapture);
         turnStarted = createDeferred();
         releaseTurn = createDeferred();
+        lifecycleStarted = createDeferred();
+        lifecycleDelivered = createDeferred();
         const expectedState = scenario.rpcAbort
           ? "aborted"
           : scenario.fail || scenario.persistFail || scenario.timeout || scenario.rebound
@@ -358,6 +376,8 @@ describe("Gateway ACP completion ownership", () => {
         expect(accepted.ok).toBe(true);
         if (scenario.rpcAbort) {
           await turnStarted.promise;
+          // Stop suppresses a start still awaiting publication; this case aborts after start.
+          await withinTest(lifecycleStarted.promise, signal);
           const aborted = await rpcReq(ws, "chat.abort", { sessionKey, runId });
           expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
           releaseTurn.resolve();
@@ -393,6 +413,8 @@ describe("Gateway ACP completion ownership", () => {
         expect.soft(waited.payload).toMatchObject({
           status: scenario.cancel ? "error" : expectedStatus,
         });
+        // Run settlement does not join the asynchronous lifecycle subscriber.
+        await withinTest(lifecycleDelivered.promise, signal);
         const finals = frames.filter(
           (frame) =>
             frame.event === "chat" &&

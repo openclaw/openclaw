@@ -88,16 +88,7 @@ export function readSessionTerminalFallbackModel(
       { ...params.sessionScope, sessionId: entry.sessionId },
       { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
     );
-    const message = asOptionalRecord(asOptionalRecord(page.events[0]?.event)?.message);
-    if (
-      (message?.stopReason === "stop" || message?.stopReason === "length") &&
-      readSessionTranscriptRunId(message) === entry.lastRunId &&
-      projectSessionDisplayMessage(message)?.role === "assistant" &&
-      typeof message.provider === "string" &&
-      typeof message.model === "string"
-    ) {
-      return { modelProvider: message.provider, model: message.model };
-    }
+    return selectSessionTerminalFallbackModel(entry, page.events[0]?.event);
   } catch (error) {
     if (
       !isSessionTranscriptProjectionUnavailableError(error) &&
@@ -105,6 +96,24 @@ export function readSessionTerminalFallbackModel(
     ) {
       throw error;
     }
+  }
+  return undefined;
+}
+
+/** Durable and memory readers apply the same terminal-run selection to a bounded tail. */
+export function selectSessionTerminalFallbackModel(
+  entry: InternalSessionEntry,
+  event: unknown,
+): SessionTerminalModel | undefined {
+  const message = asOptionalRecord(asOptionalRecord(event)?.message);
+  if (
+    (message?.stopReason === "stop" || message?.stopReason === "length") &&
+    readSessionTranscriptRunId(message) === entry.lastRunId &&
+    projectSessionDisplayMessage(message)?.role === "assistant" &&
+    typeof message.provider === "string" &&
+    typeof message.model === "string"
+  ) {
+    return { modelProvider: message.provider, model: message.model };
   }
   return undefined;
 }

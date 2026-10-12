@@ -1,4 +1,4 @@
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
 import {
@@ -705,11 +705,11 @@ describe("FaceTime runtime call sequencing", () => {
   ])(
     "preserves pending cancellation after a late start-call $settlement",
     async ({ error, expected }) => {
-      const state = createPluginStateKeyedStoreForTests<unknown>("facetime", {
-        namespace: "pending-dial",
-        maxEntries: 1,
-        overflowPolicy: "reject-new",
-      });
+      const state = createPluginStateKeyedStoreV2ForTests<unknown>(
+        "facetime",
+        { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
+        { assertCurrent() {} },
+      );
       let finishReply = () => {};
       let signalHelperStarted = () => {};
       const helperStarted = new Promise<void>((resolve) => {

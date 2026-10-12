@@ -11,12 +11,7 @@ import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
-import {
-  appendCallReplayKey,
-  releaseRejectedProviderCall,
-  rememberManagerReplayKey,
-  reserveRejectedProviderCall,
-} from "./replay-keys.js";
+import { appendCallReplayKey, rememberManagerReplayKey } from "./replay-keys.js";
 import { addTranscriptEntry, copyCallRecord, transitionState } from "./state.js";
 import { findCallInStore, persistCallRecord } from "./store.js";
 import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
@@ -190,10 +185,7 @@ async function processEventInQueue(
       if (ctx.isStopping()) {
         return { kind: "processed" };
       }
-      const rejectionReservation = reserveRejectedProviderCall(ctx.rejectedProviderCallIds, pid);
-      if (rejectionReservation === undefined) {
-        return { kind: "ignored" };
-      }
+      rememberManagerReplayKey(ctx.rejectedProviderCallIds, pid);
       rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
       log.info(`Rejecting inbound call by policy: ${pid}`);
       ctx.trackCallWork(
@@ -204,7 +196,7 @@ async function processEventInQueue(
             reason: "hangup-bot",
           })
           .catch((err: unknown) => {
-            releaseRejectedProviderCall(ctx.rejectedProviderCallIds, pid, rejectionReservation);
+            ctx.rejectedProviderCallIds.delete(pid);
             const message = formatErrorMessage(err);
             log.warn(`Failed to reject inbound call ${pid}: ${message}`);
           }),

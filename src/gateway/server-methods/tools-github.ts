@@ -82,7 +82,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
                   : {}),
               }
             : undefined;
-          const token = consumeGitHubSetupHandoff({ name: params.secretName });
+          const token = await consumeGitHubSetupHandoff({ name: params.secretName });
           if (!token) {
             throw new Error("temporary GitHub credential is unavailable");
           }

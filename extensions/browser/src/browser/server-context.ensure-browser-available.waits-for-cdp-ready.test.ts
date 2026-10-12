@@ -621,7 +621,6 @@ function createAvailability() {
     profile,
     state: () => state,
     runtime,
-    configRevision: 0,
   });
   vi.mocked(chromeModule.isChromeCdpReady).mockImplementation(async (...args) => {
     await args[4]?.onDiagnostic?.({

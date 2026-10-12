@@ -1,4 +1,5 @@
 import type { CodeModeOutputSource } from "./code-mode-json.js";
+import type { CodeModeNodeInitialization } from "./code-mode-node-input.js";
 import type {
   CodeModeFailurePhase,
   CodeModeWorkerBoundary,
@@ -18,7 +19,8 @@ export type CodeModeFailureCode =
   | "snapshot_limit_exceeded"
   | "internal_error";
 
-export type CodeModeExecutorStartInput = Extract<CodeModeWorkerPayload<never>, { kind: "exec" }>;
+export type CodeModeExecutorStartInput = Extract<CodeModeWorkerPayload<never>, { kind: "exec" }> &
+  CodeModeNodeInitialization;
 export type CodeModeExecutorResumeInput = Omit<
   Extract<CodeModeWorkerPayload<never>, { kind: "resume" }>,
   "continuation"

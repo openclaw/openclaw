@@ -18,6 +18,7 @@ import {
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
+import { appendClaudeCliToolNamingGuidance } from "./cli-tool-naming.js";
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -177,6 +178,8 @@ export function buildAnthropicCliBackend(
     nativeToolMode: "selectable",
     hostOwnedTools: ["exec", "process"],
     toolAvailabilityEnforcement: "execution-args",
+    transformSystemPrompt: ({ systemPrompt, openClawMcpToolNames }) =>
+      appendClaudeCliToolNamingGuidance(systemPrompt, openClawMcpToolNames),
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,

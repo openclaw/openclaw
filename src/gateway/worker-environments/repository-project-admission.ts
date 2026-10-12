@@ -5,6 +5,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync,
 } from "../../agents/agent-lifecycle-registry.js";
 import {
   GitHubIdentityError,
@@ -86,7 +87,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
   }
   const agent =
     expected?.source.owner.agent ??
-    captureAgentLifecycleBinding(params.getConfig(), request.agentId);
+    (await captureAgentLifecycleBinding(params.getConfig, request.agentId));
   if (!agent) {
     throw new Error("Repository preparation requires an existing agent that is not being deleted");
   }
@@ -96,13 +97,22 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       sourceChanged();
     }
   };
-  const assertAdmission = () => {
+  const assertAgentPrepared = async () => {
+    if (!(await matchesAgentLifecycleBindingAsync(getConfig, agent))) {
+      sourceChanged();
+    }
+  };
+  const assertCaller = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
+  };
+  const assertAdmission = () => {
+    assertCaller();
     assertAgent();
   };
-  const prepareIdentity = async () => {
-    assertAgent();
+  const prepareIdentity = async (assertPreparationCurrent: () => void) => {
+    await assertAgentPrepared();
+    assertPreparationCurrent();
     const config = getConfig();
     const identity = await prepareGitHubReadIdentity({
       config,
@@ -112,8 +122,8 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       assertActive: assertAgent,
       refresh: () => requestCurrentGitHubOAuthRefresh(agent.agentId),
       allowAnonymous: true,
-    }).catch((error: unknown) => {
-      assertAgent();
+    }).catch(async (error: unknown) => {
+      await assertAgentPrepared();
       // Native credential subprocess diagnostics must never enter provider errors.
       throw error instanceof GitHubIdentityError ? error : new GitHubIdentityError("unverified");
     });
@@ -121,7 +131,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     return identity;
   };
   assertAdmission();
-  let identity = await prepareIdentity();
+  let identity = await prepareIdentity(assertCaller);
   assertAdmission();
   const owner = { agent, identity: identity.selection };
   if (expected && !isDeepStrictEqual(owner, expected.source.owner)) {
@@ -359,7 +369,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
       assertCurrent();
     };
     assertSource();
-    const current = await prepareIdentity();
+    const current = await prepareIdentity(() => signal?.throwIfAborted());
     assertSource();
     if (!isDeepStrictEqual(current.selection, owner.identity)) {
       sourceChanged();

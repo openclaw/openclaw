@@ -62,15 +62,23 @@ function readOptionalEnum<const T extends string>(
   return normalized === undefined ? undefined : readEnum(normalized, label, values);
 }
 
+function readCallbackDataKind(value: unknown, label: string) {
+  return readOptionalEnum(value, label, ["command", "callback"]);
+}
+
 function readOptionalArray<T>(
   value: unknown,
   label: string,
   readEntry: (entry: unknown, label: string) => T,
+  nonArray: "reject" | "ignore" = "reject",
 ): T[] | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (!Array.isArray(value)) {
+    if (nonArray === "ignore") {
+      return undefined;
+    }
     throw new Error(`${label} must be an array`);
   }
   return value.map((entry, index) => readEntry(entry, `${label}[${index}]`));
@@ -178,10 +186,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
     style,
     url,
     callbackData: normalizeOptionalString(obj.callbackData),
-    callbackDataKind: readOptionalEnum(obj.callbackDataKind, `${label}.callbackDataKind`, [
-      "command",
-      "callback",
-    ]),
+    callbackDataKind: readCallbackDataKind(obj.callbackDataKind, `${label}.callbackDataKind`),
     emoji: readOptionalEmoji(obj.emoji, `${label}.emoji`),
     disabled: asBoolean(obj.disabled),
     reusable: asBoolean(obj.reusable),
@@ -201,10 +206,7 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
   return {
     type,
     callbackData: normalizeOptionalString(obj.callbackData),
-    callbackDataKind: readOptionalEnum(obj.callbackDataKind, `${label}.callbackDataKind`, [
-      "command",
-      "callback",
-    ]),
+    callbackDataKind: readCallbackDataKind(obj.callbackDataKind, `${label}.callbackDataKind`),
     placeholder: normalizeOptionalString(obj.placeholder),
     minValues: readOptionalInteger(obj.minValues, `${label}.minValues`, { min: 0, max: 25 }),
     maxValues: readOptionalInteger(obj.maxValues, `${label}.maxValues`, { min: 1, max: 25 }),
@@ -263,10 +265,12 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       };
     case "section": {
       const text = readNonBlankString(obj.text);
-      const textsRaw = obj.texts;
-      const texts = Array.isArray(textsRaw)
-        ? textsRaw.map((entry, idx) => readRequiredString(entry, `${label}.texts[${idx}]`, false))
-        : undefined;
+      const texts = readOptionalArray(
+        obj.texts,
+        `${label}.texts`,
+        (entry, entryLabel) => readRequiredString(entry, entryLabel, false),
+        "ignore",
+      );
       if (!text && (!texts || texts.length === 0)) {
         throw new Error(`${label}.text or ${label}.texts is required for section blocks`);
       }
@@ -315,10 +319,7 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       };
     }
     case "actions": {
-      const buttonsRaw = obj.buttons;
-      const buttons = Array.isArray(buttonsRaw)
-        ? buttonsRaw.map((entry, idx) => parseButtonSpec(entry, `${label}.buttons[${idx}]`))
-        : undefined;
+      const buttons = readOptionalArray(obj.buttons, `${label}.buttons`, parseButtonSpec, "ignore");
       const select = obj.select ? parseSelectSpec(obj.select, `${label}.select`) : undefined;
       if ((!buttons || buttons.length === 0) && !select) {
         throw new Error(`${label} requires buttons or select`);
@@ -379,10 +380,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     return null;
   }
   const obj = requireObject(raw, "components");
-  const blocksRaw = obj.blocks;
-  const blocks = Array.isArray(blocksRaw)
-    ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
-    : undefined;
+  const blocks = readOptionalArray(obj.blocks, "components.blocks", parseComponentBlock, "ignore");
   const modalRaw = obj.modal;
   let modal: DiscordModalSpec | undefined;
   if (modalRaw !== undefined) {

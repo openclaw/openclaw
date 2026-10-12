@@ -142,19 +142,15 @@ export function registerSlackAgentEvents(params: {
         chatType: resolveSlackChatType(auth.channelType),
         eventScope,
       });
-      const updated = await getSlackRuntime().agent.session.patchSessionEntry({
+      const updated = await getSlackRuntime().agent.session.prepareSessionEntryPatch({
         agentId: routing.route.agentId,
         storePath: resolveStorePath(runtimeContext.cfg.session?.store, {
           agentId: routing.route.agentId,
         }),
         sessionKey: routing.sessionKey,
         preserveActivity: true,
-        assertCommitAllowed: () => {
-          if (!routing.isCurrentSession()) {
-            throw new Error("Slack conversation owner changed before the title update");
-          }
-        },
-        update: () => ({ displayName: event.title }),
+        authority: { kind: "source", source: routing.assertCurrentSession },
+        prepare: () => ({ displayName: event.title }),
       });
       if (!updated) {
         throw new Error("Slack conversation session disappeared before the title update");

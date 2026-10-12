@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -87,12 +87,22 @@ describe("submitted input source evidence", () => {
         } else {
           const payload = prepareTranscriptPayload(db, `{"message":${messageJson}}`);
           db.prepare(
-            "UPDATE transcript_events SET event_json = ?, event_zstd = ?, event_utf8_bytes = ?, navigation_json = ? WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
+            `UPDATE transcript_events SET event_json = ?, event_zstd = ?, event_utf8_bytes = ?, navigation_json = ?,
+              navigation_type = ?, navigation_custom_type = ?, navigation_display = ?, message_role = ?,
+              navigation_last_type = ?, navigation_last_custom_type = ?, navigation_valid = ?
+              WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)`,
           ).run(
             payload.event_json,
             payload.event_zstd,
             payload.event_utf8_bytes,
             payload.navigation_json,
+            payload.navigation_type,
+            payload.navigation_custom_type,
+            payload.navigation_display,
+            payload.message_role,
+            payload.navigation_last_type,
+            payload.navigation_last_custom_type,
+            payload.navigation_valid,
             sessionId,
             sessionId,
             receipt.inputId,

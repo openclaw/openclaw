@@ -4,7 +4,6 @@ import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findBundledPluginSource,
-  findBundledPluginSourceInMap,
   getProcessBundledPluginSources,
   resolveBundledPluginSources,
 } from "./bundled-sources.js";
@@ -247,31 +246,6 @@ describe("bundled plugin sources", () => {
     expectBundledSourceLookupCase({ lookup, expected });
   });
 
-  it("forwards an explicit env to bundled discovery helpers", () => {
-    setBundledDiscoveryCandidates([]);
-
-    const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
-
-    resolveBundledPluginSources({
-      workspaceDir: "/workspace",
-      env,
-    });
-    findBundledPluginSource({
-      lookup: { kind: "pluginId", value: "feishu" },
-      workspaceDir: "/workspace",
-      env,
-    });
-
-    expect(discoverOpenClawPluginsMock).toHaveBeenNthCalledWith(1, {
-      workspaceDir: "/workspace",
-      env,
-    });
-    expect(discoverOpenClawPluginsMock).toHaveBeenNthCalledWith(2, {
-      workspaceDir: "/workspace",
-      env,
-    });
-  });
-
   it("marks bundled sources that require plugin config before activation", () => {
     setBundledDiscoveryCandidates([
       createBundledCandidate({
@@ -297,35 +271,5 @@ describe("bundled plugin sources", () => {
         requiresConfig: true,
       }),
     );
-  });
-
-  it("reuses a pre-resolved bundled map for repeated lookups", () => {
-    const bundled = new Map([
-      [
-        "feishu",
-        createResolvedBundledSource({
-          pluginId: "feishu",
-          localPath: appBundledPluginRoot("feishu"),
-        }),
-      ],
-    ]);
-
-    expect(
-      findBundledPluginSourceInMap({
-        bundled,
-        lookup: { kind: "pluginId", value: "feishu" },
-      }),
-    ).toEqual(
-      createResolvedBundledSource({
-        pluginId: "feishu",
-        localPath: appBundledPluginRoot("feishu"),
-      }),
-    );
-    expect(
-      findBundledPluginSourceInMap({
-        bundled,
-        lookup: { kind: "npmSpec", value: "@openclaw/feishu" },
-      })?.pluginId,
-    ).toBe("feishu");
   });
 });

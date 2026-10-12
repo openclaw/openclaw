@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   ComputerActResult,
   ComputerUseV2ActionName,
@@ -39,6 +41,10 @@ import {
   MAX_WAIT_SECONDS,
 } from "./computer-tool-shared.js";
 import { readGatewayCallOptions } from "./gateway.js";
+import {
+  getInProcessGatewayToolContext,
+  runWithGatewayToolCleanupContext,
+} from "./in-process-gateway.js";
 import { textResult } from "./tool-results.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
@@ -63,6 +69,7 @@ function prepareComputerArguments(args: unknown): unknown {
 
 export function createComputerTool(options?: {
   config?: OpenClawConfig;
+  computerExecutionId?: string;
   /** Stable run scope used to deduplicate a replayed model tool call on the node. */
   idempotencyScope?: string;
   /** Tracks whether the current screenshot pixels still reach model context. */
@@ -74,7 +81,7 @@ export function createComputerTool(options?: {
   /** Attempt owner for deterministic provider-execution cleanup. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
 }): AnyAgentTool {
-  const executionId = crypto.randomUUID();
+  const executionId = options?.computerExecutionId ?? crypto.randomUUID();
   const hasCleanupOwner = options?.registerRunCleanup !== undefined;
   const availableActions = (actions: readonly ComputerUseV2ActionName[]) =>
     availableComputerActions(actions, hasCleanupOwner);
@@ -132,6 +139,20 @@ export function createComputerTool(options?: {
     registerRunCleanup: options?.registerRunCleanup,
     getOperationQueue: () => opQueue,
   });
+  if (options?.computerExecutionId && !hasCleanupOwner) {
+    const context = getInProcessGatewayToolContext();
+    const stop = registerAgentRunDelegatedAuthorityClosedHandler((closed, approvalReason) => {
+      if (!approvalReason && closed.operationalRunInstance.instanceId === executionId) {
+        stop();
+        void runWithGatewayToolCleanupContext(
+          () => session.dispose("run-ended"),
+          () => context,
+        ).catch((error: unknown) =>
+          createSubsystemLogger("agents/computer").warn(formatErrorMessage(error)),
+        );
+      }
+    });
+  }
 
   const captureAndDeliverScreenshot = async (params: {
     noteLines: string[];

@@ -84,21 +84,19 @@ async function appendDiscordThreadRenameResult(
   if (!threadName) {
     return params.payload;
   }
+  const ignored = (reason: string) => ({
+    ...params.payload,
+    warning: `Discord threadName was ignored because ${reason}.`,
+  });
   if (!ctx.isActionEnabled("channels")) {
-    return {
-      ...params.payload,
-      warning: "Discord threadName was ignored because Discord channel management is disabled.",
-    };
+    return ignored("Discord channel management is disabled");
   }
 
   let channelId: string;
   try {
     channelId = resolveDiscordChannelId(params.target);
   } catch {
-    return {
-      ...params.payload,
-      warning: "Discord threadName was ignored because the send target is not a channel/thread.",
-    };
+    return ignored("the send target is not a channel/thread");
   }
 
   try {
@@ -107,10 +105,7 @@ async function appendDiscordThreadRenameResult(
       ctx.withOpts(),
     );
     if (!isDiscordThreadChannelType(channel.type)) {
-      return {
-        ...params.payload,
-        warning: "Discord threadName was ignored because the send target is not a thread.",
-      };
+      return ignored("the send target is not a thread");
     }
     const renamed = await discordMessagingActionRuntime.editChannelDiscord(
       {

@@ -76,40 +76,46 @@ export function summarizeTokenConfig(params: {
       : "";
   };
 
-  if (httpMode || (hasBotTokenField && hasAppTokenField)) {
-    const secondaryKey = httpMode ? "signingSecret" : "appToken";
-    const secondaryLabel = httpMode ? "signing" : "app";
-    const credentialLabel = httpMode ? "credentials" : "tokens";
-    const need = `bot+${secondaryLabel}`;
-    const hasCredential = (rec: Record<string, unknown>, key: string) =>
-      Boolean(normalizeOptionalString(rec[key])) ||
-      (httpMode && rec[`${key}Status`] === "available");
-    const ready = enabled.filter((a) => {
-      const rec = asRecord(a.account);
-      return hasCredential(rec, "botToken") && hasCredential(rec, secondaryKey);
-    });
-    const partial = enabled.filter((a) => {
-      const rec = asRecord(a.account);
-      return hasCredential(rec, "botToken") !== hasCredential(rec, secondaryKey);
-    });
+  const paired = httpMode || (hasBotTokenField && hasAppTokenField);
+  const tokenKey = hasBotTokenField ? "botToken" : "token";
+  const secondaryKey = httpMode ? "signingSecret" : "appToken";
+  const secondaryLabel = httpMode ? "signing" : "app";
+  const label = paired
+    ? httpMode
+      ? "credentials"
+      : "tokens"
+    : hasBotTokenField
+      ? "bot token"
+      : "token";
+  const need = paired ? ` (need bot+${secondaryLabel})` : "";
+  const hasCredential = (rec: Record<string, unknown>, key: string) =>
+    Boolean(normalizeOptionalString(rec[key])) || (httpMode && rec[`${key}Status`] === "available");
+  const ready = enabled.filter((a) => {
+    const rec = asRecord(a.account);
+    return hasCredential(rec, tokenKey) && (!paired || hasCredential(rec, secondaryKey));
+  });
+  const partial = paired
+    ? enabled.filter((a) => {
+        const rec = asRecord(a.account);
+        return hasCredential(rec, tokenKey) !== hasCredential(rec, secondaryKey);
+      }).length
+    : 0;
 
-    // HTTP reports unavailable credentials first; socket mode prioritizes incomplete pairs.
-    if (unavailable.length > 0 && (httpMode || partial.length === 0)) {
-      return {
-        state: "warn",
-        detail: `configured ${httpMode ? "http credentials" : "tokens"} unavailable in this command path · accounts ${unavailable.length}`,
-      };
-    }
-    if (partial.length > 0) {
-      return {
-        state: "warn",
-        detail: `partial ${credentialLabel} (need ${need}) · accounts ${partial.length}`,
-      };
-    }
-    if (ready.length === 0) {
-      return { state: "setup", detail: `no ${credentialLabel} (need ${need})` };
-    }
+  // HTTP reports unavailable credentials first; socket mode prioritizes incomplete pairs.
+  if (unavailable.length > 0 && (httpMode || partial === 0)) {
+    return {
+      state: "warn",
+      detail: `configured ${httpMode ? "http credentials" : label} unavailable in this command path · accounts ${unavailable.length}`,
+    };
+  }
+  if (partial > 0) {
+    return { state: "warn", detail: `partial ${label}${need} · accounts ${partial}` };
+  }
+  if (ready.length === 0) {
+    return { state: "setup", detail: `no ${label}${need}` };
+  }
 
+  if (paired) {
     const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
     const secondarySources = summarizeSources(
       ready.map((a) => a.snapshot[httpMode ? "signingSecretSource" : "appTokenSource"] ?? "none"),
@@ -122,23 +128,8 @@ export function summarizeTokenConfig(params: {
         : "";
     return {
       state: "ok",
-      detail: `${credentialLabel} ok (bot ${botSources}, ${secondaryLabel} ${secondarySources})${hint} · accounts ${ready.length}/${enabled.length}`,
+      detail: `${label} ok (bot ${botSources}, ${secondaryLabel} ${secondarySources})${hint} · accounts ${ready.length}/${enabled.length}`,
     };
-  }
-
-  const tokenKey = hasBotTokenField ? "botToken" : "token";
-  const label = hasBotTokenField ? "bot token" : "token";
-  const ready = enabled.filter((a) =>
-    Boolean(normalizeOptionalString(asRecord(a.account)[tokenKey])),
-  );
-  if (unavailable.length > 0) {
-    return {
-      state: "warn",
-      detail: `configured ${label} unavailable in this command path · accounts ${unavailable.length}`,
-    };
-  }
-  if (ready.length === 0) {
-    return { state: "setup", detail: `no ${label}` };
   }
 
   const source = hasBotTokenField

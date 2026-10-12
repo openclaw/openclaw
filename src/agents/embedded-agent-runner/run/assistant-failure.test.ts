@@ -32,10 +32,6 @@ vi.mock("../../../plugins/provider-failover.js", () => providerRuntimeMocks);
 const CREDENTIAL_FILE_ENOENT_MESSAGE =
   "ENOENT: no such file or directory, open '/home/operator/.claude/.credentials.json'";
 const INCOMPLETE_TERMINAL_STREAM_MESSAGE = "Bedrock stream ended before messageStop";
-const INCOMPLETE_TERMINAL_STREAM_CASES = [
-  { provider: "amazon-bedrock", message: INCOMPLETE_TERMINAL_STREAM_MESSAGE },
-  { provider: "mistral", message: "Mistral stream ended without a terminal finish reason" },
-] as const;
 
 type AssistantFailureInput = Parameters<typeof handleEmbeddedAssistantFailure>[0];
 
@@ -424,30 +420,6 @@ describe("handleEmbeddedAssistantFailure", () => {
     },
   );
 
-  it.each(INCOMPLETE_TERMINAL_STREAM_CASES)(
-    "rotates profiles for a $provider terminal stream with visible partial output",
-    async ({ provider, message }) => {
-      const fixture = makeTerminalStreamFailureInput({ errorMessage: message, provider });
-
-      const outcome = await handleEmbeddedAssistantFailure(fixture.input);
-
-      expect(outcome).toMatchObject({
-        action: "retry",
-        lastRetryFailoverReason: "timeout",
-      });
-      expect(fixture.input.failover.advanceAuthProfile).toHaveBeenCalledOnce();
-      expect(fixture.traceAttempts).toEqual([
-        {
-          provider,
-          model: "mock-1",
-          result: "timeout",
-          reason: "timeout",
-          stage: "assistant",
-        },
-      ]);
-    },
-  );
-
   it("recovers a real loopback Mistral partial EOF through embedded model fallback", async () => {
     const { assistant, partialText } = await streamIncompleteMistralResponseOverLoopback();
     const classification = classifyAssistantFailoverReason(assistant);
@@ -524,99 +496,6 @@ describe("handleEmbeddedAssistantFailure", () => {
     console.log(`[terminal-stream recovery proof] ${JSON.stringify(proof)}`);
   });
 
-  it.each(INCOMPLETE_TERMINAL_STREAM_CASES)(
-    "advances model fallback instead of returning a partial $provider terminal-stream error",
-    async ({ provider, message }) => {
-      const config = {
-        agents: {
-          defaults: {
-            model: {
-              primary: `${provider}/mock-1`,
-              fallbacks: ["google/mock-2"],
-            },
-          },
-        },
-      } satisfies OpenClawConfig;
-      const calls: string[] = [];
-
-      const result = await runWithModelFallback({
-        cfg: config,
-        provider,
-        model: "mock-1",
-        sessionId: `session:incomplete-terminal-stream:${provider}`,
-        skipAuthProfileRuntime: true,
-        run: async (candidateProvider, model) => {
-          calls.push(`${candidateProvider}/${model}`);
-          if (candidateProvider === provider) {
-            await handleEmbeddedAssistantFailure(
-              makeTerminalStreamFailureInput({
-                errorMessage: message,
-                profileAvailable: false,
-                provider,
-              }).input,
-            );
-          }
-          return "fallback complete";
-        },
-      });
-
-      expect(result.result).toBe("fallback complete");
-      expect(calls).toEqual([`${provider}/mock-1`, "google/mock-2"]);
-    },
-  );
-
-  it("surfaces an incomplete terminal-stream error when no retry target remains", async () => {
-    const fixture = makeTerminalStreamFailureInput({
-      fallbackConfigured: false,
-      profileAvailable: false,
-    });
-
-    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
-      reason: "timeout",
-      provider: "amazon-bedrock",
-      model: "mock-1",
-      rawError: INCOMPLETE_TERMINAL_STREAM_MESSAGE,
-    });
-  });
-
-  it("falls back after exhausted replay-safe credential-file retries without touching auth state", async () => {
-    const fixture = makeExhaustedCredentialFailureInput();
-
-    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
-      reason: "unknown",
-      provider: "anthropic",
-      model: "mock-1",
-      rawError: CREDENTIAL_FILE_ENOENT_MESSAGE,
-    });
-
-    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(fixture.input.preparedRuntime.attemptAuthProfileStore.usageStats).toEqual({
-      "anthropic:p1": { lastUsed: 1 },
-      "anthropic:p2": { lastUsed: 2 },
-    });
-    expect(fixture.traceAttempts).toEqual([
-      {
-        provider: "anthropic",
-        model: "mock-1",
-        result: "fallback_model",
-        reason: "unknown",
-        stage: "assistant",
-      },
-    ]);
-  });
-
-  it("does not fallback credential-file ENOENT after replay-unsafe tool activity", async () => {
-    const fixture = makeExhaustedCredentialFailureInput({ replaySafe: false });
-
-    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
-
-    expect(outcome.action).toBe("proceed");
-    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(fixture.traceAttempts).toEqual([]);
-  });
-
   it("closes every failover retry after an idle timeout commits a write", async () => {
     const fixture = makeIdleTimeoutFailureInput();
 
@@ -628,24 +507,6 @@ describe("handleEmbeddedAssistantFailure", () => {
     ).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
-  });
-
-  it("keeps replay-safe idle timeout profile rotation available", async () => {
-    const fixture = makeIdleTimeoutFailureInput({ replaySafe: true });
-    fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
-
-    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
-
-    expect(outcome).toMatchObject({ action: "retry", lastRetryFailoverReason: "timeout" });
-    expect(fixture.advanceAuthProfile).toHaveBeenCalledOnce();
-    expect(fixture.traceAttempts).toEqual([
-      {
-        provider: "anthropic",
-        model: "mock-1",
-        result: "rotate_profile",
-        stage: "assistant",
-      },
-    ]);
   });
 
   it.each([

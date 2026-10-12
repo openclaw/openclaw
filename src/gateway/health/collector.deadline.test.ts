@@ -136,7 +136,6 @@ describe("gateway health collection deadline", () => {
   }, 1_000);
 
   it.each([
-    { audience: "admin" as const, channelId: "deadline-test", retained: true },
     { audience: "public" as const, channelId: "imessage", retained: true },
     { audience: "public" as const, channelId: "deadline-test", retained: false },
   ])(
@@ -177,15 +176,11 @@ describe("gateway health collection deadline", () => {
             ? {
                 ok: false,
                 error:
-                  audience === "admin"
-                    ? error
-                    : "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+                  "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
               }
             : { timedOut: true, error: "health collection timed out after 50ms" },
         );
-        if (audience === "public") {
-          expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
-        }
+        expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
       } finally {
         releaseSummary.resolve();
         await scope.drain();

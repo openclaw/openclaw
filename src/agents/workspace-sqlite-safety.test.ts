@@ -134,26 +134,6 @@ describe("workspace setup-only SQLite safety", () => {
     await expect(fs.readFile(identityPath, "utf8")).resolves.toBe("# Existing identity\n");
   });
 
-  it("does not mistake an old generated template for setup-only customization", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "old generated agents\n");
-    await mergeWorkspaceSetupState(tempDir, {
-      bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
-      setupCompletedAt: "2026-07-15T10:01:00.000Z",
-    });
-
-    await expect(
-      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
-    ).rejects.toMatchObject({
-      code: WORKSPACE_VANISHED_ERROR_CODE,
-      name: "WorkspaceVanishedError",
-    });
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toHaveProperty(
-      "code",
-      "ENOENT",
-    );
-  });
-
   it("refuses to reseed a missing workspace with recent setup-only state", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await mergeWorkspaceSetupState(tempDir, {

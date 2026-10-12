@@ -121,6 +121,7 @@ describe("worker placement startup health lifetime", () => {
     };
     const warn = vi.fn();
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler,
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
@@ -215,6 +216,7 @@ describe("worker placement startup health lifetime", () => {
         stop: vi.fn().mockResolvedValue(undefined),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        initialPlacements: [],
         scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
@@ -303,6 +305,7 @@ describe("worker placement startup health lifetime", () => {
       stopNodeEnrollmentWaits: vi.fn(),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
@@ -369,6 +372,7 @@ describe("worker placement startup health lifetime", () => {
       stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
@@ -462,6 +466,7 @@ describe("worker placement startup health lifetime", () => {
               stop: vi.fn().mockResolvedValue(undefined),
             };
             const runtime = createGatewayWorkerPlacementRuntime({
+              initialPlacements: [],
               scheduler: createTestGatewayScheduler(),
               getCommittedRuntimeConfig: getRuntimeConfig,
               cancelSessionWork: vi.fn(async () => {}),
@@ -591,6 +596,7 @@ describe("worker placement startup health lifetime", () => {
       }),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
@@ -675,6 +681,7 @@ describe("worker placement startup recovery authority", () => {
       environmentId: "worker-recovery",
     };
     createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),

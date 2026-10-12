@@ -20,12 +20,16 @@ export function createPluginCapabilityCatalogContext(
 ): PluginCapabilityCatalogHostContext {
   const {
     isProviderApiKeyConfigured,
+    isProviderApiKeyConfiguredAsync,
     isProviderAuthProfileConfigured,
+    isProviderAuthProfileConfiguredAsync,
     resolveProviderAuthProfileApiKey,
   } = availability;
   return Object.freeze({
     isProviderApiKeyConfigured,
+    isProviderApiKeyConfiguredAsync,
     isProviderAuthProfileConfigured,
+    isProviderAuthProfileConfiguredAsync,
     resolveAgentDir,
     createRealtimeTranscriptionWebSocketSession,
     resolveProviderRequestHeaders,

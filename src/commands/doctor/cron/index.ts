@@ -187,7 +187,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   }
   for (const job of normalized.legacyTriggerScriptJobs) {
     recordFinding({
-      message: `Legacy cron trigger script for ${job} can be migrated to canonical direct tool calls.`,
+      message: `Legacy cron trigger script for ${job} can be migrated to direct tool calls.`,
       requirement: "legacy-cron-trigger-script",
     });
   }

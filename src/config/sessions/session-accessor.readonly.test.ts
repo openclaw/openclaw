@@ -13,6 +13,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -134,7 +135,7 @@ describe("session accessor readonly listing", () => {
     replaceSessionEntrySync({ ...scope, sessionKey }, entry);
     closeOpenClawAgentDatabasesForTest();
 
-    const peer = new DatabaseSync(storePath);
+    const peer = openNodeSqliteDatabase(storePath);
     try {
       withSessionEntryReadOnlyScope(scope, () => {
         expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("shared");
@@ -314,7 +315,7 @@ describe("session accessor readonly listing", () => {
     listSessionEntriesReadOnly(scope);
     const database = openOpenClawAgentDatabase(scope);
     const update = database.db.prepare(
-      "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
+      "UPDATE session_nodes SET entry_json = ?, updated_at = ?, entry_valid = 0 WHERE session_key = ?",
     );
     update.run(
       JSON.stringify({ sessionId: "pending-updated", updatedAt: 30, label: "fresh" }),

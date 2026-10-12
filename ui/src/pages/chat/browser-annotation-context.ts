@@ -4,9 +4,8 @@ export function composeBrowserAnnotationContext(
   userText: string,
   attachments: readonly ChatAttachment[],
 ): string {
-  const contexts = attachments.flatMap((attachment) => {
-    const context = attachment.browserAnnotation?.modelContext.trim();
-    return context ? [context] : [];
-  });
+  const contexts = attachments.map(({ browserAnnotation }) =>
+    browserAnnotation?.modelContext.trim(),
+  );
   return [...contexts, userText].filter(Boolean).join("\n\n");
 }

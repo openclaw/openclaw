@@ -41,6 +41,8 @@ describe("memory session redaction retry", () => {
       const observer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), {
         readOnly: true,
       });
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       try {
         const before = readPublishedSessionIndex(observer, sessionPath, "violet");
         expect(before.source).toBeDefined();
@@ -91,6 +93,9 @@ describe("memory session redaction retry", () => {
           replies.mockRestore();
         }
 
+        if (mode === "full") {
+          clock.mockReturnValue(now + 30_000);
+        }
         await manager.sync({ reason: "retry-after-redaction-change" });
         const recovered = readPublishedSessionIndex(observer, sessionPath, "violet");
         expect(recovered.source?.hash).not.toBe(before.source?.hash);
@@ -103,6 +108,7 @@ describe("memory session redaction retry", () => {
         expect(manager.status().dirty).toBe(false);
         expect(manager.status().lastSyncError).toBeUndefined();
       } finally {
+        clock.mockRestore();
         observer.close();
       }
     },

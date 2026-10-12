@@ -8,6 +8,7 @@ import {
   createOperatorClient,
 } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -170,29 +171,20 @@ export function registerSessionsSendRequesterRetirementTests({
         requesterRetired = true;
         admission.close();
       };
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
-      const retireBeforePublication = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((owner, run, options) =>
-          execute(
-            owner,
-            (scope) =>
-              run({
-                execute: async (command, executeOptions) => {
-                  const result = await scope.execute(command, executeOptions);
-                  if (
-                    retirement === "before publication" &&
-                    !requesterRetired &&
-                    command.type === "subagents.persistChanges"
-                  ) {
-                    retireRequester();
-                  }
-                  return result;
-                },
-              }),
-            options,
-          ),
-        );
+      const retireBeforePublication = probe.command(
+        stateWorker,
+        async (command, executeOptions, scope) => {
+          const result = await scope.execute(command, executeOptions);
+          if (
+            retirement === "before publication" &&
+            !requesterRetired &&
+            command.type === "subagents.persistChanges"
+          ) {
+            retireRequester();
+          }
+          return result;
+        },
+      );
       const stopRetiring = subscribeSubagentRunChanges("persistence", () => {
         if (
           retirement === "after publication" &&

@@ -6,16 +6,18 @@ import { updateTerminalFont } from "./terminal-fonts.ts";
 import { bootTerminalPanelSession } from "./terminal-panel-session-boot.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
+  terminalPanelControllerForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const create: CreateGhosttyTerminalMock = vi.fn();
 const tag = defineTestTerminalPanelElement(create);
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.restoreAllMocks();
   vi.useRealTimers();
   create.mockReset();
@@ -36,12 +38,13 @@ it("adopts the newest font after asynchronous recovery without another panel ren
     }
     return controller;
   });
-  const panel = document.createElement(tag) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(tag);
   document.body.append(panel);
   await panel.updateComplete;
   const viewport = document.body.appendChild(document.createElement("div"));
-  vi.spyOn(panel, "findTerminalPanelViewport").mockReturnValue(viewport);
-  vi.spyOn(panel, "terminalFontFamily", "get").mockImplementation(() => family);
+  const controller = terminalPanelControllerForTest(panel);
+  vi.spyOn(controller, "findTerminalPanelViewport").mockReturnValue(viewport);
+  vi.spyOn(controller, "terminalFontFamily", "get").mockImplementation(() => family);
   const client: TerminalGatewayClient = {
     forceReconnect: vi.fn(),
     request: vi.fn(),
@@ -50,7 +53,7 @@ it("adopts the newest font after asynchronous recovery without another panel ren
   const connection = new TerminalConnection(client);
   const signal = new AbortController().signal;
   const boot = await bootTerminalPanelSession({
-    panel,
+    panel: controller,
     connection,
     sequence: 1,
     awaitFirstOutput: false,

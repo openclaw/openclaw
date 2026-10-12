@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
@@ -159,4 +159,58 @@ it("keeps incognito metadata with its process-held owner", async () => {
   ).resolves.toBeUndefined();
   expect(observed.nativeRead).toHaveBeenCalledOnce();
   expect(observed.readMetadata).not.toHaveBeenCalled();
+});
+
+it("removes an aborted cold restoration from its store queue", async ({ signal }) => {
+  const target = scope();
+  const preparedTarget = { ...target, path: resolveOpenClawAgentSqlitePath(target) };
+  const entered = createDeferredCore();
+  const release = createDeferredCore<undefined>();
+  const blocked = restoreSessionColdTranscript(target, undefined, {
+    target: preparedTarget,
+    readMetadata: async (phase) => {
+      if (phase === "initial") {
+        return archive;
+      }
+      entered.resolve();
+      return release.promise;
+    },
+  });
+  const controller = new AbortController();
+  const aborted = new Error("cold restoration task deadline");
+  const initial = createDeferredCore();
+  const readMetadata = vi.fn(async (phase: "initial" | "queued") => {
+    if (phase === "initial") {
+      initial.resolve();
+      return archive;
+    }
+    return undefined;
+  });
+  let canceled: Promise<void> | undefined;
+  try {
+    await awaitGateBeforeSettlement(entered.promise, blocked, "First restore did not enter");
+    canceled = restoreSessionColdTranscript(
+      target,
+      undefined,
+      { target: preparedTarget, readMetadata },
+      undefined,
+      controller.signal,
+    );
+    const rejected = expect(canceled).rejects.toBe(aborted);
+    await initial.promise;
+    controller.abort(aborted);
+    await withinTest(rejected, signal);
+    release.resolve(undefined);
+    await Promise.all([blocked, rejected]);
+    expect(readMetadata.mock.calls.map(([phase]) => phase)).toEqual(["initial"]);
+    await expect(
+      restoreSessionColdTranscript(target, undefined, {
+        target: preparedTarget,
+        readMetadata: async (phase) => (phase === "initial" ? archive : undefined),
+      }),
+    ).resolves.toBeUndefined();
+  } finally {
+    release.resolve(undefined);
+    await Promise.allSettled([blocked, canceled]);
+  }
 });

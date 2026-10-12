@@ -1,7 +1,7 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
@@ -19,6 +19,7 @@ import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
+import { CreationComposer, retainCreatedComposer } from "./creation-composer.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
@@ -31,6 +32,7 @@ import {
 import { DraftSessionStartup, type DraftStartupResumption } from "./draft-session-startup.ts";
 import type {
   DraftSubmissionCallbacks,
+  RestoredDraftState,
   DraftSubmissionSnapshot,
 } from "./draft-submission-contract.ts";
 import { prepareDraftSubmission } from "./draft-submission-input.ts";
@@ -83,6 +85,11 @@ export class DraftSubmissionFlow {
   private readonly sessionStartup: DraftSessionStartup;
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
   readonly attachmentDraft: NewSessionAttachmentDraft;
+  private creationComposerValue: CreationComposer | undefined;
+
+  get creationComposer(): CreationComposer | undefined {
+    return this.creationComposerValue?.canDisplay() ? this.creationComposerValue : undefined;
+  }
   readonly composerTextarea = new NewSessionComposerTextareaController();
   permissionMode: SessionCreateParams["permissionMode"];
   readonly draftPersistence: NewSessionDraftPersistence;
@@ -194,14 +201,7 @@ export class DraftSubmissionFlow {
     this.callbacks.requestUpdate();
   }
 
-  restoreDraftState(state: {
-    message: string;
-    mentions?: readonly HumanMention[];
-    attachments: ChatAttachment[];
-    visibility: NewSessionVisibility;
-    toolOverrides?: NewSessionCapabilityController["toolOverrides"];
-    permissionMode?: SessionCreateParams["permissionMode"];
-  }) {
+  restoreDraftState(state: RestoredDraftState) {
     this.draftPersistence.noteDraftReplaced();
     this.updateMessage(state.message);
     this.mentionsValue = state.mentions ?? [];
@@ -339,6 +339,8 @@ export class DraftSubmissionFlow {
   }
 
   resetDraft() {
+    this.creationComposerValue?.releaseDraft();
+    this.creationComposerValue = undefined;
     this.startedSession.clearSubmission();
     this.rejectedPromptError = null;
     this.sessionStartup.clear();
@@ -439,6 +441,7 @@ export class DraftSubmissionFlow {
     this.callbacks.closeTransientUi();
     this.callbacks.requestUpdate();
     let instant: InstantThreadHandoff | undefined;
+    let worktreeNameCleanup: void | Promise<void> = undefined;
     try {
       const started = this.startedSession.current;
       if (started && this.startedSession.isCurrent(context, this.place.agentId)) {
@@ -446,6 +449,22 @@ export class DraftSubmissionFlow {
         return;
       }
       this.startedSession.current = null;
+      if (
+        !background &&
+        this.callbacks.retainForHandoff &&
+        (!this.creationComposer || this.creationComposer.acceptedSessionKey)
+      ) {
+        this.creationComposerValue?.releaseDraft();
+        this.creationComposerValue = new CreationComposer(
+          context,
+          input.agentId,
+          this.visibilityValue === "incognito",
+          this.callbacks.requestUpdate,
+        );
+      }
+      if (this.creationComposer && this.visibilityValue === "incognito") {
+        this.creationComposer.incognito = true;
+      }
       const placementTarget = startup
         ? null
         : resolveDraftSessionPlacement(this.pendingPlacement, this.place);
@@ -456,7 +475,11 @@ export class DraftSubmissionFlow {
         !startup && !input.pendingPlacement,
       );
       const remoteProject =
-        !startup && !input.pendingPlacement && !placementTarget && !input.hasInitialTurn
+        !this.place.hostedEnvironment &&
+        !startup &&
+        !input.pendingPlacement &&
+        !placementTarget &&
+        !input.hasInitialTurn
           ? this.place.browser.remoteProject
           : null;
       if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {
@@ -491,6 +514,7 @@ export class DraftSubmissionFlow {
         agentId: input.agentId,
         retainDraft: this.callbacks.retainForHandoff,
         message: this.pendingMessage,
+        composer: this.creationComposer,
       });
       const placementCreateParams = placementTarget
         ? input.pendingPlacement
@@ -542,7 +566,7 @@ export class DraftSubmissionFlow {
       instant = beginInstant?.();
       const result = await createRequest;
       if (result && !placementTarget && result.initialRun.status !== "rejected") {
-        await input.consumeWorktreeName?.();
+        worktreeNameCleanup = input.consumeWorktreeName?.();
       }
       if (requestId !== this.submitRequestToken && !placementTarget) {
         // Leaving the view cancels navigation, not a confirmed send. Retire only
@@ -572,6 +596,8 @@ export class DraftSubmissionFlow {
           submittedRecovery: submissionPlacementRecovery,
           sessionKey: result.key,
           createdAt: submittedAt,
+          startupError:
+            result.initialRun.status === "rejected" ? result.initialRun.error : undefined,
           isRequestCurrent: () => requestId === this.submitRequestToken,
           isLifecycleCurrent: () =>
             this.read().isConnected &&
@@ -588,6 +614,11 @@ export class DraftSubmissionFlow {
             });
           },
           clearDraft: () => {
+            const composer = this.creationComposer;
+            if (composer) {
+              composer.accept(result);
+              retainCreatedComposer(context, result.key, composer);
+            }
             retainSubmittedSession(result.key);
             return this.clearSubmittedDraft(true, submittedDraft);
           },
@@ -618,6 +649,7 @@ export class DraftSubmissionFlow {
         result,
         turn,
         instant,
+        composer: this.creationComposer,
         navigation: this.startedSession,
         isCurrent: () => requestId === this.submitRequestToken,
         clearDraft: (release, keepPending) => {
@@ -642,8 +674,9 @@ export class DraftSubmissionFlow {
         }
       }
     } finally {
-      if (instant) {
-        await instant.finish();
+      // Accepted preference writes outlive the draft; they must not hold chat admission.
+      if (worktreeNameCleanup || instant) {
+        await Promise.all([worktreeNameCleanup, instant?.finish()]);
       }
       if (requestId === this.submitRequestToken) {
         this.activeSubmission = null;
@@ -697,6 +730,7 @@ export class DraftSubmissionFlow {
   }
 
   disconnect() {
+    this.creationComposerValue?.releaseDraft();
     this.pendingPlacement.releaseClaim();
     this.startedSession.current = null;
     this.draftPersistence.disconnect();

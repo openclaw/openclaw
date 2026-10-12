@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases.js";
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
@@ -10,10 +11,7 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
@@ -35,6 +33,7 @@ import {
   prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
@@ -73,11 +72,22 @@ it.each(["cold", "preexisting"] as const)(
       closeOpenClawAgentDatabasesForTest();
     }
 
-    await runSessionStartupMigration({
-      cfg: { agents: { entries: { main: {} } } },
-      env,
-      log: { info: vi.fn(), warn: vi.fn() },
-    });
+    const statements = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+    try {
+      await runSessionStartupMigration({
+        cfg: { agents: { entries: { main: {} } } },
+        env,
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+    } finally {
+      statements.restore();
+    }
+    // Schema re-admission preserves the unchanged stored policy.
+    expect(
+      statements.queries.filter((sql) =>
+        /select "main_key" from "session_key_contract"/iu.test(sql),
+      ),
+    ).toEqual([]);
 
     expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, options)).toEqual({
       found: true,
@@ -282,8 +292,8 @@ it("observes committed deletion before startup handoff after canonical database 
           deleteFiles: false,
         });
         await prepareAgentDeleteDatabases(cfg, "alpha", agentDir, { env });
-        deletion.assertCurrent();
-        deletion.finish();
+        await deletion.assertCurrentAsync();
+        await deletion.finish();
       },
       { env },
     );

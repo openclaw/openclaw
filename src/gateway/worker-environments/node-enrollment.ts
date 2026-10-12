@@ -244,11 +244,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     try {
       const prepared = await prepare(record, enrollmentSignal);
       requireCurrent();
-      let current = await options.store.ensureNodeEnrollment(record.environmentId);
-      requireCurrent();
-      if (!isProvisioningOwner(current, record)) {
-        throw new Error("Worker node enrollment is no longer provisioning");
-      }
+      await options.store.ensureNodeEnrollment(record.environmentId);
+      let current = requireCurrent();
       let mode:
         | { mode: "connect"; setupCode: string; setupId: string }
         | { mode: "resume"; deviceId: string };
@@ -273,8 +270,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           };
         }
         if (issued.status === "completed") {
-          current = await options.store.ensureNodeEnrollment(record.environmentId);
-          requireCurrent();
+          await options.store.ensureNodeEnrollment(record.environmentId);
+          current = requireCurrent();
           if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
             throw new Error("Worker node enrollment completion did not bind its environment");
           }
@@ -343,15 +340,6 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             if (live.nodeDeviceId) {
               const availability = await options.resolveAvailability(live.nodeDeviceId);
               enrollmentSignal.throwIfAborted();
-              const latest = options.store.get(owner.environmentId);
-              if (
-                !isProvisioningOwner(latest, owner) ||
-                latest.nodeSetupId !== owner.nodeSetupId ||
-                latest.nodeDeviceId !== live.nodeDeviceId ||
-                active.get(owner.environmentId) !== binding
-              ) {
-                throw new Error("Worker node enrollment is no longer current");
-              }
               if (availability.available) {
                 return live.nodeDeviceId;
               }
@@ -391,21 +379,11 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
 
   return {
     prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
-      const preflight = new AbortController();
-      try {
-        const prepared = await prepare(
-          record,
-          AbortSignal.any([
-            signal,
-            preflight.signal,
-            ...(operationSignal ? [operationSignal] : []),
-          ]),
-        );
-        return prepared.artifact.tarballSha256;
-      } finally {
-        // Preflight creates no transfer grant; release its artifact pin even on success.
-        preflight.abort();
-      }
+      const prepared = await prepare(
+        record,
+        operationSignal ? AbortSignal.any([signal, operationSignal]) : signal,
+      );
+      return prepared.artifact.tarballSha256;
     },
     prepareRuntime,
     begin,

@@ -1,8 +1,17 @@
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
+import { copyFileSync, renameSync } from "node:fs";
+import { DatabaseSync, StatementSync } from "node:sqlite";
+import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
+import {
+  openOpenClawStateReadConnection,
+  openOpenClawStateReadOnlyLocation,
+} from "./openclaw-state-db-read-connection.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -10,7 +19,10 @@ import {
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
+});
 
 function legacyReceiptDatabase() {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("cron-delivery-migration-") } };
@@ -29,17 +41,82 @@ function legacyReceiptDatabase() {
     UPDATE schema_meta SET schema_version = 19;
   `);
   legacy.close();
+  // The fixture represents bytes created by a previous process, outside this load's admission.
+  const replacement = `${databasePath}.legacy`;
+  copyFileSync(databasePath, replacement);
+  renameSync(replacement, databasePath);
   return { options, databasePath };
 }
+
+it.each(["managed transaction", "implicit snapshot"] as const)(
+  "keeps a reader's %s version until the migrated catalog becomes visible",
+  (kind) => {
+    const { options, databasePath } = legacyReceiptDatabase();
+    openOpenClawStateReadOnlyLocation(databasePath, databasePath).close();
+    const reader = openOpenClawStateReadConnection(databasePath, databasePath);
+    const { db } = reader.database;
+    try {
+      const migrateWhileReading = () => {
+        expect(db.prepare("SELECT receipt_id FROM cron_run_receipts").get()).toEqual({
+          receipt_id: "legacy-receipt",
+        });
+        const writer = openOpenClawStateDatabase(options);
+        expect(readStateSchemaContentVersion(writer.db)).toBe(20);
+        const observation = observeSqliteReadSql(StatementSync.prototype);
+        try {
+          expect(readStateSchemaContentVersion(db)).toBe(19);
+          expect(observation.queries).toEqual([]);
+        } finally {
+          observation.restore();
+        }
+        expect(() => db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts")).toThrow(
+          /no such column/iu,
+        );
+      };
+      if (kind === "managed transaction") {
+        runSqliteDeferredTransactionSync(db, migrateWhileReading);
+      } else {
+        runSqliteSchemaReadSnapshotSync(db, migrateWhileReading);
+      }
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        expect(readStateSchemaContentVersion(db)).toBe(20);
+        expect(observation.queries).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+      expect(db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts").get()).toEqual({
+        delivery_attempt_state: "unknown",
+      });
+    } finally {
+      reader.close();
+    }
+  },
+);
 
 it.each(["runtime open", "doctor repair"] as const)(
   "%s preserves legacy receipt uncertainty and refuses a schema-19 downgrade",
   async (entry) => {
     const { options } = legacyReceiptDatabase();
-    if (entry === "doctor repair") {
-      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    const migration = observeSqliteReadSql(StatementSync.prototype);
+    let database: ReturnType<typeof openOpenClawStateDatabase>;
+    try {
+      if (entry === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      }
+      database = openOpenClawStateDatabase(options);
+      const integrityChecks = migration.queries.filter((sql) =>
+        /^PRAGMA integrity_check\s*;?$/iu.test(sql),
+      );
+      if (entry === "runtime open") {
+        expect(integrityChecks).toHaveLength(1);
+      } else {
+        expect(integrityChecks.length).toBeGreaterThan(0);
+      }
+    } finally {
+      migration.restore();
     }
-    const { db } = openOpenClawStateDatabase(options);
+    const { db } = database;
     expect(
       db.prepare("SELECT receipt_id, status, delivery_attempt_state FROM cron_run_receipts").all(),
     ).toEqual([
@@ -49,11 +126,23 @@ it.each(["runtime open", "doctor repair"] as const)(
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     db.exec("UPDATE cron_run_receipts SET delivery_attempt_state = 'started'");
     closeOpenClawStateDatabaseForTest();
-    expect(
-      openOpenClawStateDatabase(options)
-        .db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts")
-        .get(),
-    ).toEqual({ delivery_attempt_state: "started" });
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(
+        openOpenClawStateDatabase(options)
+          .db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts")
+          .get(),
+      ).toEqual({ delivery_attempt_state: "started" });
+      expect(
+        observation.queries.filter((sql) =>
+          /(?:sqlite_(?:schema|master)|pragma_(?:table|index|foreign_key)|\bPRAGMA\s+(?:user_version|schema_version|integrity_check|quick_check|foreign_key_check|table_info|table_xinfo|index_list|index_info|index_xinfo)\b|\bFROM\s+"?schema_meta\b|state\.schema\.contentVersion)/iu.test(
+            sql,
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
     closeOpenClawStateDatabaseForTest();
     const preflight = await preflightOpenClawDatabaseSchemas({
       env: options.env,

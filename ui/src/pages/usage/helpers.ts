@@ -33,14 +33,17 @@ type UsageSessionQueryTarget = {
   } | null;
 };
 
-export function currentLocalDate(date = new Date()): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+export function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
+  const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
+  const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
+  const day = timeZone === "utc" ? date.getUTCDate() : date.getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 export function createDefaultUsageDateRange(date = new Date()) {
   const start = new Date(date);
   start.setDate(start.getDate() - 29);
-  return { startDate: currentLocalDate(start), endDate: currentLocalDate(date) };
+  return { startDate: formatIsoDate(start), endDate: formatIsoDate(date) };
 }
 
 export function toggleUsageRangeSelection<T>(
@@ -48,7 +51,7 @@ export function toggleUsageRangeSelection<T>(
   value: T,
   orderedValues: T[],
   shiftKey: boolean,
-  append: boolean,
+  mode: "toggle" | "append" | "replace",
 ): T[] {
   if (shiftKey && selected.length > 0) {
     for (const lastSelected of selected.slice(-1)) {
@@ -61,27 +64,13 @@ export function toggleUsageRangeSelection<T>(
       }
     }
   }
+  if (mode === "replace") {
+    return selected.length === 1 && selected[0] === value ? [] : [value];
+  }
   if (selected.includes(value)) {
     return selected.filter((entry) => entry !== value);
   }
-  return append ? [...selected, value] : [value];
-}
-
-export function selectUsageSessionKeys(
-  selected: string[],
-  key: string,
-  orderedKeys: string[],
-  shiftKey: boolean,
-): string[] {
-  if (shiftKey && selected.length > 0) {
-    const lastIndex = orderedKeys.indexOf(selected.at(-1) ?? "");
-    const nextIndex = orderedKeys.indexOf(key);
-    if (lastIndex !== -1 && nextIndex !== -1) {
-      const [start, end] = lastIndex < nextIndex ? [lastIndex, nextIndex] : [nextIndex, lastIndex];
-      return [...new Set([...selected, ...orderedKeys.slice(start, end + 1)])];
-    }
-  }
-  return selected.length === 1 && selected[0] === key ? [] : [key];
+  return mode === "append" ? [...selected, value] : [value];
 }
 
 const globToRegex = (pattern: string): RegExp => {

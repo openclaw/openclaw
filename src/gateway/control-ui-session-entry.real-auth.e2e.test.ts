@@ -10,10 +10,8 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import {
-  replaceTranscriptEvents,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -265,6 +263,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
           getResolvedAuth: () => auth,
           getRuntimeConfig: () => cfg,
           getGatewayRequestContext: () => context,
+          httpRequestLifetime: context,
           isTerminalEnabled: () => false,
         }),
     });
@@ -346,7 +345,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
       expect(response.body.indexOf("history.replaceState")).toBeLessThan(
         response.body.indexOf('type="module"'),
       );
-      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers["cache-control"]).toBe("private, no-store");
       expect(response.headers["content-encoding"]).toBe("gzip");
       for (const hash of computeInlineScriptHashes(response.body)) {
         expect(response.headers["content-security-policy"]).toContain(hash);

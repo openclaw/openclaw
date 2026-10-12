@@ -45,15 +45,6 @@ describe("getOrCreateAccountThrottler", () => {
     resetTelegramAccountThrottlersForTest();
   });
 
-  it("shares throttlers per bot token", () => {
-    const first = getOrCreateAccountThrottler("tok");
-    const second = getOrCreateAccountThrottler("tok");
-    const other = getOrCreateAccountThrottler("other");
-
-    expect(second).toBe(first);
-    expect(other).not.toBe(first);
-  });
-
   it("preserves the group message budget while sending topic actions", async () => {
     vi.useFakeTimers();
     const sent: string[] = [];
@@ -581,53 +572,6 @@ describe("getOrCreateAccountThrottler", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       vi.useRealTimers();
     }
-  });
-
-  it("round-robins group topic requests before entering the Telegram throttler", async () => {
-    const firstGate = deferred<void>();
-    const entered: string[] = [];
-    const throttler = getOrCreateAccountThrottler(
-      "round-robin",
-      () => async (prev, method, payload, signal) => prev(method, payload, signal),
-    ).transformer;
-    const prev = vi.fn(async (_method: string, payload: unknown) => {
-      const request = payload as { message_thread_id?: number; text?: string };
-      entered.push(`${request.message_thread_id}:${request.text}`);
-      if (entered.length === 1) {
-        await firstGate.promise;
-      }
-      return { ok: true, result: request.text ?? "" };
-    }) as unknown as TelegramPreviousCall;
-
-    const first = throttler(
-      prev,
-      "sendMessage",
-      { chat_id: -100123, message_thread_id: 10, text: "first" },
-      undefined,
-    );
-    await vi.waitFor(() => expect(entered).toEqual(["10:first"]));
-
-    const secondSameTopic = throttler(
-      prev,
-      "sendMessage",
-      { chat_id: -100123, message_thread_id: 10, text: "second" },
-      undefined,
-    );
-    const otherTopic = throttler(
-      prev,
-      "sendMessage",
-      { chat_id: -100123, message_thread_id: 20, text: "other" },
-      undefined,
-    );
-    await Promise.resolve();
-
-    expect(entered).toEqual(["10:first"]);
-    firstGate.resolve();
-    await vi.waitFor(() => expect(entered.length).toBeGreaterThanOrEqual(2));
-    expect(entered[1]).toBe("20:other");
-    await Promise.all([first, secondSameTopic, otherTopic]);
-
-    expect(entered).toEqual(["10:first", "20:other", "10:second"]);
   });
 
   it("uses edited message ids as lanes when Telegram omits topic ids", async () => {

@@ -281,10 +281,6 @@ test.each([
     });
     const root = openClawState.root;
     const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
-    const origin = path.join(root, "origin.git");
-    await execFileAsync("git", ["init", "--bare", origin]);
-    await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", origin]);
-    await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
     testState.agentConfig = { workspace };
     testState.sessionConfig = { dmScope: "main" };
     const { storePath } = await createSessionStoreDir();
@@ -389,10 +385,6 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   // A remote makes the base commit reachable from `--remotes`, so leaving the worktree via a
   // plain New Chat is lossless and the reset can remove it (the real leave-worktree flow).
-  const origin = path.join(root, "origin.git");
-  await execFileAsync("git", ["init", "--bare", origin]);
-  await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", origin]);
-  await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
   testState.agentConfig = { workspace, model: { primary: "openai/current-model" } };
   testState.sessionConfig = { dmScope: "main" };
   const { storePath } = await createSessionStoreDir();

@@ -36,7 +36,7 @@ afterEach(() => {
   fixture.stream.mockReset();
 });
 
-it("executes the real terminal client tool before settling credentials and admitting Doctor", async () => {
+it("settles the real repair handoff without closing a parent lease before Doctor admission", async () => {
   await withOpenClawTestState({ layout: "home" }, async (state) => {
     fixture.handoff = createManagedHandoffTestBinding(state.root);
     vi.stubEnv(
@@ -133,56 +133,77 @@ it("executes the real terminal client tool before settling credentials and admit
       import("../agents/embedded-agent.js"),
       import("../agents/embedded-agent-runner/run-entry.js"),
     ]);
-    const result = await runUpdateRepairTurn({
-      target: { ...state, installRoot: state.workspaceDir },
-      route: {
-        runner: "embedded",
-        provider: "fixture",
-        model: "repair",
-        modelLabel: "fixture/repair",
-        agentId: "owner",
-        agentDir,
-        authProfileId: "fixture:repair",
-        runConfig: config,
-        sourceConfig: config,
-      },
-      modelFallbacks: [],
-      prompt: "Request Doctor repair using the maintenance tool.",
-      timeoutMs: 30000,
-      maxToolCalls: 1,
-      signal: new AbortController().signal,
-      maintenanceHandoff: true,
-    });
-    expect(result, JSON.stringify(result)).toMatchObject({
-      status: "completed",
-      envelope: { status: "ok" },
-      maintenance: { operation: "doctor-fix" },
-    });
-    expect(fixture.stream).toHaveBeenCalledTimes(1);
-    // These checks must precede fixture teardown: cleanup must not hide a leaked lease.
-    expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toEqual([]);
-    const saved = auth.loadAuthProfileStoreForRuntime(agentDir, {
-      readOnly: true,
-      externalCli: { mode: "none" },
-    });
-    expect(saved.usageStats?.["fixture:repair"]?.lastUsed).toBeGreaterThan(0);
-    const doctor = await beginDoctorMaintenance({
-      options: { repair: true, nonInteractive: true },
-      root: null,
-      runtime: { log() {}, error() {}, exit() {} },
-    });
-    expect(doctor).toBeDefined();
+    const parent = createOpenClawDatabaseMaintenanceScope();
     try {
-      doctor!.run(() => auth.saveAuthProfileStore(saved, agentDir));
-    } finally {
-      await doctor?.release();
-    }
-    expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toEqual([]);
-    expect(
-      auth.loadAuthProfileStoreForRuntime(agentDir, {
+      parent.run(() =>
+        auth.saveAuthProfileStore({ version: 1, profiles: {} }, state.agentDir("independent")),
+      );
+      const result = await parent.run(() =>
+        runUpdateRepairTurn({
+          target: { ...state, installRoot: state.workspaceDir },
+          route: {
+            runner: "embedded",
+            provider: "fixture",
+            model: "repair",
+            modelLabel: "fixture/repair",
+            agentId: "owner",
+            agentDir,
+            authProfileId: "fixture:repair",
+            runConfig: config,
+            sourceConfig: config,
+          },
+          modelFallbacks: [],
+          prompt: "Request Doctor repair using the maintenance tool.",
+          timeoutMs: 30000,
+          maxToolCalls: 1,
+          signal: new AbortController().signal,
+          maintenanceHandoff: true,
+        }),
+      );
+      expect(result, JSON.stringify(result)).toMatchObject({
+        status: "completed",
+        envelope: { status: "ok" },
+        maintenance: { operation: "doctor-fix" },
+      });
+      expect(fixture.stream).toHaveBeenCalledTimes(1);
+      // These checks must precede fixture teardown: cleanup must not hide a leaked lease.
+      expect(
+        readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env }).map(
+          (lease) => lease.agent_id,
+        ),
+      ).toEqual(["independent"]);
+      const saved = auth.loadAuthProfileStoreForRuntime(agentDir, {
         readOnly: true,
         externalCli: { mode: "none" },
-      }),
-    ).toEqual(saved);
+      });
+      expect(saved.usageStats?.["fixture:repair"]?.lastUsed).toBeGreaterThan(0);
+      const admitDoctor = () =>
+        beginDoctorMaintenance({
+          options: { repair: true, nonInteractive: true },
+          root: null,
+          runtime: { log() {}, error() {}, exit() {} },
+        });
+      await expect(admitDoctor()).rejects.toMatchObject({
+        refusal: { kind: "deferred", reason: "agent-database-in-use" },
+      });
+      await parent.close();
+      expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toEqual([]);
+      const doctor = await admitDoctor();
+      expect(doctor).toBeDefined();
+      try {
+        doctor!.run(() => auth.saveAuthProfileStore(saved, agentDir));
+      } finally {
+        await doctor?.release();
+      }
+      expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toEqual([]);
+      expect(
+        auth.loadAuthProfileStoreForRuntime(agentDir, {
+          readOnly: true,
+          externalCli: { mode: "none" },
+        }),
+      ).toEqual(saved);
+    } finally {
+      await parent.close();
+    }
   });
 });

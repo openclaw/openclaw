@@ -25,6 +25,23 @@ import {
 
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
 
+// Gateway services and workspace command registries have distinct APIs but share these stores.
+let notifyStateRevision = 0;
+let pendingNotifyWrites = 0;
+const inactiveNotifierRevisions = new WeakMap<OpenClawPluginApi, number>();
+
+async function writeNotifyState<T>(write: () => Promise<T>): Promise<T> {
+  notifyStateRevision++;
+  pendingNotifyWrites++;
+  try {
+    return await write();
+  } finally {
+    // Failed replies can follow durable writes; the next poll must reconcile either outcome.
+    notifyStateRevision++;
+    pendingNotifyWrites--;
+  }
+}
+
 type PendingPairingRequest = Pick<
   Awaited<ReturnType<typeof listDevicePairing>>["pending"][number],
   "requestId" | "deviceId" | "displayName" | "platform" | "role" | "roles" | "scopes" | "remoteIp"
@@ -132,7 +149,9 @@ async function registerNotifySubscriber(params: {
   if (!params.refresh && current?.mode === params.mode) {
     return false;
   }
-  await store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent });
+  await writeNotifyState(() =>
+    store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent }),
+  );
   return true;
 }
 
@@ -181,13 +200,23 @@ function shouldNotifySubscriberForRequest(
 }
 
 async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<void> {
+  if (inactiveNotifierRevisions.get(params.api) === notifyStateRevision) {
+    return;
+  }
+  const revision = notifyStateRevision;
   const subscriberStore = openNotifySubscriberStore(params.api);
   const seenRequestStore = openNotifySeenRequestStore(params.api);
-  const [subscriberEntries, seenRequestEntries, pairing] = await Promise.all([
+  const [subscriberEntries, seenRequestEntries] = await Promise.all([
     subscriberStore.entries(),
     seenRequestStore.entries(),
-    listDevicePairing(),
   ]);
+  if (subscriberEntries.length === 0 && seenRequestEntries.length === 0) {
+    if (notifyStateRevision === revision && pendingNotifyWrites === 0) {
+      inactiveNotifierRevisions.set(params.api, revision);
+    }
+    return;
+  }
+  const pairing = await listDevicePairing();
   const subscribers = subscriberEntries.toSorted((a, b) => a.value.addedAtMs - b.value.addedAtMs);
   const pending: PendingPairingRequest[] = pairing.pending;
   const now = Date.now();
@@ -204,7 +233,7 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
       !pendingIds.has(requestId) ||
       now - notifiedAtMs > DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS
     ) {
-      await seenRequestStore.delete(entry.key);
+      await writeNotifyState(() => seenRequestStore.delete(entry.key));
       continue;
     }
     notifiedRequestIds.add(requestId);
@@ -254,18 +283,22 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
         if (subscriber.mode === "once") {
           deliveredOneShots.add(entry.key);
           // A changed row belongs to its writer; never recapture it after delivery.
-          await subscriberStore.compareAndApply(entry.key, observation.comparison, {
-            operation: "delete",
-            action: "delete",
-          });
+          await writeNotifyState(() =>
+            subscriberStore.compareAndApply(entry.key, observation.comparison, {
+              operation: "delete",
+              action: "delete",
+            }),
+          );
         }
       }
 
       if (delivered) {
-        await seenRequestStore.register(
-          notifyRequestStoreKey(request.requestId),
-          { requestId: request.requestId, notifiedAtMs: now },
-          { ttlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS },
+        await writeNotifyState(() =>
+          seenRequestStore.register(
+            notifyRequestStoreKey(request.requestId),
+            { requestId: request.requestId, notifiedAtMs: now },
+            { ttlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS },
+          ),
         );
         notifiedRequestIds.add(request.requestId);
       }
@@ -334,7 +367,9 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "off" || params.action === "disable") {
-    await subscriberStore.delete(targetStoreKey, { assertCurrent: assertOwnerCurrent });
+    await writeNotifyState(() =>
+      subscriberStore.delete(targetStoreKey, { assertCurrent: assertOwnerCurrent }),
+    );
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
 
@@ -380,6 +415,8 @@ export function startPairingNotifier(
   api: OpenClawPluginApi,
   scheduler: PluginServiceSchedulerV1,
 ): void {
+  // Fence empty reads still in flight from an earlier service lifetime.
+  notifyStateRevision++;
   // Keep the first scan off Gateway readiness; retirement joins delivery and its receipt.
   scheduler.schedule({
     id: "notifications",

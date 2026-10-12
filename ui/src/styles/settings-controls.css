@@ -11,7 +11,9 @@
 .settings-row__control .btn,
 .settings-section__actions .btn,
 .settings-section__actions .agent-select__trigger,
-.settings-group .data-table-search input {
+.settings-group .data-table-search input,
+input.settings-input,
+select.settings-select:not([multiple]) {
   height: var(--settings-control-height);
   padding-block: 0;
   box-sizing: border-box;
@@ -90,14 +92,6 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-wa-radio-group.settings-segmented::part(form-control-label) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
 }
 
 /* The parent selector also wins over the shared .btn hover/active chrome. */
@@ -221,13 +215,6 @@ wa-radio-group.settings-segmented::part(form-control-label) {
     content: attr(data-compact-label);
     font-size: var(--control-ui-text-sm);
   }
-}
-
-input.settings-input,
-select.settings-select:not([multiple]) {
-  height: var(--settings-control-height);
-  padding-block: 0;
-  box-sizing: border-box;
 }
 
 .settings-input,

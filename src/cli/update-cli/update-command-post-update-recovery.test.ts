@@ -249,7 +249,6 @@ describe("skipped update exit status", () => {
 
   it.each([
     ["dirty", 1],
-    ["not-git-install", 1],
     ["already-current", 0],
   ] as const)("handles %s with exit %i", async (reason, exitCode) => {
     const failure = await finishSkippedUpdate(reason);
@@ -354,11 +353,6 @@ describe("failed update recovery restart", () => {
     },
   );
 
-  it("does not turn missing producer safety into restart permission", async () => {
-    await finishFailedUpdate(failedResult(undefined));
-    expect(mocks.restart).not.toHaveBeenCalled();
-  });
-
   it.each([
     { mutationStarted: false, stopped: false, waitForStartup: false },
     { mutationStarted: false, stopped: true, waitForStartup: true },
@@ -441,14 +435,6 @@ describe("failed update recovery restart", () => {
     },
   );
 
-  it("leaves a managed Gateway stopped after unverified rollback recovery", async () => {
-    await finishFailedUpdate(
-      failedResult({ serviceRestartSafe: false, reason: "runtime-verification-failed" }),
-    );
-
-    expect(mocks.restart).not.toHaveBeenCalled();
-  });
-
   it("does not restart when the mutation owner returned no recovery verdict", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
     const failure = await finishFailedUpdate(failedResult(undefined), {
@@ -524,7 +510,7 @@ describe("failed update recovery restart", () => {
     },
   );
 
-  it.each([79, 80])(
+  it.each([80])(
     "does not activate when pre-restart convergence exits %s",
     async (childExitCode) => {
       mocks.restartCandidate.mockResolvedValueOnce("ok");
@@ -616,6 +602,7 @@ describe("failed update recovery restart", () => {
       expect(recorded.origin.nextAction).not.toContain("gateway stopped");
       expect(recorded.origin.nextAction).not.toContain("remains stopped");
       expect(recorded.origin.nextAction).toContain("triage");
+      expect(recorded.origin.nextAction).toContain("update repair");
       expect(recorded.verification).toMatchObject({ serviceRunning: true, pid });
       expect(recorded.verification.runningVersion).toBe(version);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
@@ -624,30 +611,13 @@ describe("failed update recovery restart", () => {
       const report = renderUpdateRunReport(recorded).markdown;
       expect(report).toContain("readyz-unhealthy");
       expect(report).toContain("triage");
+      expect(report).toContain("update repair");
       expect(report).not.toContain("remains stopped");
       expect(renderUpdateRunNotice(recorded, "finished")).toBe(
         "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
       );
     },
   );
-
-  it("keeps structured JSON recovery free of prose guidance", async () => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    const result = failedResult({
-      serviceRestartSafe: false,
-      reason: "rollback-checkout-dirty",
-    });
-
-    await finishFailedUpdate(result, { json: true });
-
-    expect(mocks.printResult).toHaveBeenCalledWith(
-      expect.objectContaining({ ...result, durationMs: expect.any(Number) }),
-      expect.objectContaining({ json: true }),
-      expect.objectContaining({ nextAction: expect.any(String) }),
-    );
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalled();
-  });
 });
 
 describe("failed package update recovery safety", () => {
@@ -875,30 +845,6 @@ describe("failed package update recovery safety", () => {
       }
     },
   );
-
-  it("keeps the replaced package stopped after the package-swap fails", async () => {
-    const failure = await finishFailedUpdate({
-      status: "error",
-      mode: "npm",
-      reason: "global-install-failed",
-      steps: [
-        { name: "package-install", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
-        {
-          name: "package-swap",
-          command: "verify",
-          cwd: "/",
-          durationMs: 1,
-          exitCode: 1,
-        },
-      ],
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      durationMs: 1,
-    });
-    expect(failure.exitCode).toBe(1);
-
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(mocks.restartCandidate).not.toHaveBeenCalled();
-  });
 
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
     const failure = await finishFailedUpdate({

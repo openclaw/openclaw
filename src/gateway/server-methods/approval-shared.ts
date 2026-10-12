@@ -362,13 +362,22 @@ export async function handlePendingApprovalRequest<
         });
       }
     }
-    const internalApprovalSubscriberCount =
-      suppressDelivery || approvalClientsOnly
-        ? 0
-        : (params.context.approvalEvents?.publishRequested(
+    const approvalEvents = params.context.approvalEvents;
+    let internalApprovalSubscriberCount = 0;
+    if (!suppressDelivery && !approvalClientsOnly && approvalEvents) {
+      internalApprovalSubscriberCount = approvalEvents.publishRequestedAsync
+        ? await approvalEvents.publishRequestedAsync(
             params.approvalKind ?? "exec",
             params.requestEvent,
-          ) ?? 0);
+          )
+        : approvalEvents.publishRequested(params.approvalKind ?? "exec", params.requestEvent);
+    }
+
+    if (!params.manager.isPendingDeliveryCurrent(params.record)) {
+      deliveryReady.resolve(true);
+      await handoff.observation;
+      return;
+    }
 
     const hasApprovalClients = suppressDelivery
       ? false
@@ -392,12 +401,17 @@ export async function handlePendingApprovalRequest<
       !hasApprovalClients &&
       !delivered &&
       (params.approvalKind !== "plugin" || pluginRequest !== undefined) &&
-      hasApprovalTurnSourceRoute({
+      (await hasApprovalTurnSourceRoute({
         turnSourceChannel: params.record.request.turnSourceChannel,
         turnSourceAccountId: params.record.request.turnSourceAccountId,
         approvalKind: params.approvalKind ?? "exec",
         ...(pluginRequest ? { request: pluginRequest } : {}),
-      });
+      }));
+    if (!params.manager.isPendingDeliveryCurrent(params.record)) {
+      deliveryReady.resolve(true);
+      await handoff.observation;
+      return;
+    }
     const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
       ? "forwarder"
       : hasApprovalClients

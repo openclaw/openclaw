@@ -59,6 +59,7 @@ export async function mutateSubagentRunForKill(
   stopAcceptance: { accepted: boolean },
 ): Promise<{
   killed: boolean;
+  continuationRetired?: true;
   superseded?: boolean;
   declined?: true;
   targetState?: SubagentKillTargetState;
@@ -131,6 +132,7 @@ export async function mutateSubagentRunForKill(
     return { killed: false, superseded: true };
   }
   if (resolveSubagentKillTargetState(initial)) {
+    let continuationRetired = false;
     if (params.suppressTaskDelivery && initial.requesterSettleWake) {
       await cancelSubagentRequesterSettleWake(initial, () => {
         params.cancellationControl.assertCurrent();
@@ -138,6 +140,10 @@ export async function mutateSubagentRunForKill(
           throw new Error("Subagent ownership changed during cancellation; retry.");
         }
       });
+      // Only a terminal, non-yielded wake enters the durable cancellation path.
+      // A completed successful execution remains successful after that commit.
+      continuationRetired =
+        initial.execution.status === "terminal" && initial.pauseReason !== "sessions_yield";
     }
     if (
       currentEntry()?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
@@ -148,7 +154,11 @@ export async function mutateSubagentRunForKill(
     if (!isCurrent()) {
       return { killed: false, superseded: true };
     }
-    return { killed: false, targetState: targetState() };
+    return {
+      killed: false,
+      targetState: targetState(),
+      ...(continuationRetired ? { continuationRetired: true as const } : {}),
+    };
   }
   if (initial.execution.endedAt && initial.pauseReason !== "sessions_yield") {
     return { killed: false };

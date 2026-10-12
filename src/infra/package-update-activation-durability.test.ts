@@ -9,6 +9,7 @@ import * as durability from "./directory-durability.js";
 import {
   openPackageActivationJournal,
   resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
   resolvePackageActivationHelper,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
@@ -338,6 +339,9 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
         await recover(first.anchor);
       }
       const before = first ? openPackageActivationJournal(first.anchor).read() : undefined;
+      const previousReceipt = first
+        ? fs.readFileSync(resolvePackageActivationJournalPath(first.anchor))
+        : undefined;
       let anchor = "";
       let helperFd: number | undefined;
       let helperIdentity: fs.BigIntStats | undefined;
@@ -372,10 +376,13 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
       expect(() => fs.fstatSync(helperFd!)).toThrow();
       expect(custody).not.toHaveBeenCalled();
       if (before) {
-        expect(openPackageActivationJournal(anchor).read()).toEqual(before);
-      } else {
-        expect(fs.existsSync(resolvePackageActivationControl(anchor))).toBe(false);
+        expect(
+          fs.readFileSync(
+            `${anchor}.superseded-${before.descriptor.operationId}/control/operation.sqlite`,
+          ),
+        ).toEqual(previousReceipt);
       }
+      expect(fs.existsSync(resolvePackageActivationControl(anchor))).toBe(false);
     },
   );
 });

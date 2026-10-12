@@ -1,17 +1,59 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db-lifecycle.js";
 import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
+import {
+  createGatewayWorkerDispatchAdmission,
+  withGatewayWorkerSessionAdmission,
+} from "./server-worker-placement-dispatch-admission.js";
+import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+});
+
+it("binds a workspace while retaining an admitted canonical session reader", async () => {
+  const identity = { agentId: "main", sessionKey: "agent:main:workspace", sessionId: "workspace" };
+  const storePath = path.join(tempDirs.make("worker-workspace-"), "sessions.sqlite");
+  const entry = { sessionId: identity.sessionId, lifecycleRevision: "original", updatedAt: 1 };
+  const scope = { ...identity, storePath };
+  await replaceSessionEntry(scope, entry);
+  // A warm native reader is retained by worker admission across workspace preparation.
+  expect(loadSessionEntry(scope)?.sessionId).toBe(identity.sessionId);
+  const sessionRoot = path.join(tempDirs.make("worker-root-"), identity.sessionId);
+  await withGatewayWorkerSessionAdmission(
+    {
+      identity,
+      target: {
+        agentId: identity.agentId,
+        canonicalKey: identity.sessionKey,
+        storePath,
+        storeKeys: [identity.sessionKey],
+      },
+    },
+    async (source) => {
+      const bound = await commitPreparedSessionWorkspace({
+        prepared: { sessionRoot, spawnedCwd: sessionRoot },
+        target: { ...source.target, sessionKey: identity.sessionKey },
+        assertCurrent: source.assertCurrent,
+        assertEntry: (current) => expect(current.sessionId).toBe(identity.sessionId),
+        onCommitted: source.onCommitted,
+        missingSessionMessage: "Session disappeared before workspace binding",
+      });
+      expect(bound.sessionRoot).toBe(sessionRoot);
+      expect(source.assertCurrent().sessionId).toBe(identity.sessionId);
+    },
+  );
+  expect(loadSessionEntry(scope)).toMatchObject({ sessionRoot, spawnedCwd: sessionRoot });
 });
 
 it.each(["replacement", "database-close"] as const)(

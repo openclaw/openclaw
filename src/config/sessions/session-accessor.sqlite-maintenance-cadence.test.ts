@@ -10,7 +10,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryReplacements,
-  appendTranscriptEventSync,
   assignSessionOwner,
   listSessionParticipantsReadOnly,
   loadSessionEntry,
@@ -33,6 +32,7 @@ import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintena
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
 import {
@@ -152,7 +152,7 @@ it.each(["participant", "owner"] as const)(
       database.db,
       ["after", "dashboards", "pending", "unexpected"],
       (sql) => {
-        if (!sql.includes('as "session_started_at"') || !sql.includes('from "session_nodes"')) {
+        if (!sql.includes('"session_started_at"') || !sql.includes('from "session_nodes"')) {
           return null;
         }
         if (sql.includes('"age_namespaces"')) {
@@ -204,6 +204,49 @@ it.each(["participant", "owner"] as const)(
     }
   },
 );
+
+it("reports a maintenance deadline without an unused revision snapshot", () => {
+  const now = Date.now();
+  const { database, options } = createStore(1, now);
+  const maintenance: ResolvedSessionMaintenanceConfig = {
+    ...resolveMaintenanceConfigFromInput(),
+    mode: "enforce",
+    pruneAfterMs: DAY_MS,
+    archiveDashboardAfterMs: null,
+    preserveRecentMs: null,
+  };
+  runOpenClawAgentWriteTransaction(
+    (current) => ageFacts.recordSessionEntryMaintenanceAgeFact(current, maintenance, now),
+    options,
+  );
+  const reads = trackSqliteStatementExecutions(database.db, ["revision"], (sql) =>
+    /^PRAGMA data_version\b/i.test(sql) ? "revision" : null,
+  );
+  let admittedReads = 0;
+  try {
+    const result = reclaimSessionMaintenanceInTransaction(
+      {
+        kind: "maintenance-age",
+        databaseOptions: resolveSessionReclamationDatabaseOptions(options),
+        materializedPlans: [],
+        maintenance,
+      },
+      {
+        beforeMutation() {
+          // The transaction's freshness probe remains; the deadline needs no second snapshot.
+          admittedReads = reads.counts.revision;
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "maintenance-age",
+      nextAt: now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
+    });
+    expect(reads.counts.revision - admittedReads).toBe(0);
+  } finally {
+    reads.restore();
+  }
+});
 
 it.each([
   { scenario: "a write crosses the cap", count: 2, maxEntries: 2, force: false },

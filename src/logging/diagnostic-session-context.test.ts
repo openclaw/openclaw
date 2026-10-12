@@ -8,7 +8,7 @@ import {
   readLatestTranscriptAssistantText,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
+import * as sessionReads from "../config/sessions/session-entry-diagnostic-read.js";
 import { saveCronStore } from "../cron/store.js";
 import {
   areDiagnosticsEnabledForProcess,

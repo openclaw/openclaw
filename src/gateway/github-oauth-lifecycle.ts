@@ -50,6 +50,7 @@ import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
 import {
   authorizationStillOwned,
+  authorizationStillOwnedAsync,
   configuredOAuthIdentities,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
@@ -148,11 +149,11 @@ export function createGitHubOAuthLifecycle(params: {
     record: GitHubDeviceAuthorizationRecord,
     tokens: GitHubOAuthTokenPair,
   ): Promise<ToolsGitHubAuthorizePollResult> => {
-    const current = params.getConfig();
-    if (!authorizationStillOwned(current, record)) {
+    if (!(await authorizationStillOwnedAsync(params.getConfig, record))) {
       queueDeviceCleanup(record.requestId);
       return { status: "failed", reason: "identity_changed" };
     }
+    const current = params.getConfig();
     const profileId = createManagedGitHubProfileId();
     const profileDir = resolveManagedGitHubProfileDir({
       agentId: record.agentId,
@@ -565,11 +566,15 @@ export function createGitHubOAuthLifecycle(params: {
       );
       const agentLifecycleBinding =
         input.scope === "agent"
-          ? captureAgentLifecycleBinding(params.getConfig(), input.agentId)
+          ? await captureAgentLifecycleBinding(params.getConfig, input.agentId)
           : undefined;
       if (input.scope === "agent" && !agentLifecycleBinding) {
         throw new Error("GitHub authorization requires an active agent.");
       }
+      if (!identityStillSelected(params.getConfig(), input, expectedIdentity)) {
+        throw new Error("GitHub identity changed while authorization was starting.");
+      }
+      deviceController.signal.throwIfAborted();
       const authorization = await startGitHubDeviceFlow(deviceController.signal);
       if (
         !identityStillSelected(params.getConfig(), input, expectedIdentity) ||

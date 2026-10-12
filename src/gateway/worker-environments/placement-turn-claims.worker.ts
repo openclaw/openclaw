@@ -79,7 +79,14 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        admit("transaction", { placement: find(db, sessionId), placementMove: move() });
+        const simpleTurn =
+          type === "placementTurns.claim" ||
+          type === "placementTurns.release" ||
+          type === "placementTurns.releaseIfOwned";
+        admit("transaction", {
+          placement: simpleTurn ? undefined : find(db, sessionId),
+          placementMove: move(),
+        });
         const receipt = execute(
           {
             path: database.path,
@@ -90,8 +97,10 @@ function operation<
           },
           input,
         );
-        receipt.workspaceResult =
-          listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        if (!(simpleTurn && receipt.placement?.state === "local")) {
+          receipt.workspaceResult =
+            listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        }
         receipt.placementMove = move();
         admit("commit", receipt);
         deferSqliteWorkerCommitReceipt(db, receipt);
@@ -162,25 +171,24 @@ export const placementTurnClaimOperations = {
   ),
   "placementTurns.markResultPending": operation(
     "placementTurns.markResultPending",
-    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
-      createPlacementWorkspaceResultOps(runtime).markWorkspaceResultPending(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).markWorkspaceResultPending(input.claim),
+    }),
   ),
   "placementTurns.acceptResult": operation(
     "placementTurns.acceptResult",
-    (runtime, input: ClaimInput) => {
-      createPlacementWorkspaceResultOps(runtime).acceptWorkspaceResult(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).acceptWorkspaceResult(input.claim),
+    }),
     true,
   ),
   "placementTurns.handoffResult": operation(
     "placementTurns.handoffResult",
-    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
-      createPlacementWorkspaceResultOps(runtime).handoffWorkspaceResultRecovery(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).handoffWorkspaceResultRecovery(
+        input.claim,
+      ),
+    }),
   ),
   "placementTurns.abandonResult": operation(
     "placementTurns.abandonResult",
@@ -325,8 +333,7 @@ export const placementTurnClaimOperations = {
   "placementTurns.claim": operation(
     "placementTurns.claim",
     (runtime, input: { claim: WorkerTurnClaimInput; nowMs?: number }) => {
-      const claim = createPlacementTurnClaimOps(runtime).claimTurn(input.claim);
-      return { claim, placement: getRequired(runtime.read(), claim.sessionId) };
+      return createPlacementTurnClaimOps(runtime).claimTurn(input.claim);
     },
   ),
   "placementTurns.updateWorkspaceBaseManifest": operation(
@@ -349,16 +356,14 @@ export const placementTurnClaimOperations = {
         repositoryWorkspaceId?: string;
         sessionEntryCurrentSource?: SessionEntryCurrentSource;
       },
-    ) => {
-      const db = runtime.read();
-      recordStagedWorkerWorkspaceResult(
-        db,
+    ) => ({
+      placement: recordStagedWorkerWorkspaceResult(
+        runtime.read(),
         input.claim,
         input.stagedResultRef,
         input.repositoryWorkspaceId,
-      );
-      return { placement: getRequired(db, input.claim.sessionId) };
-    },
+      ),
+    }),
     true,
   ),
   "placementTurns.recoverWorkspace": operation(
@@ -366,8 +371,7 @@ export const placementTurnClaimOperations = {
     (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
       const results = createPlacementWorkspaceResultOps(runtime);
       results.markWorkspaceResultPending(input.claim);
-      results.handoffWorkspaceResultRecovery(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
+      return { placement: results.handoffWorkspaceResultRecovery(input.claim) };
     },
   ),
   "placementTurns.handoffRuntimeRefreshResult": operation(
@@ -391,10 +395,7 @@ export const placementTurnClaimOperations = {
   "placementTurns.releaseIfOwned": operation(
     "placementTurns.releaseIfOwned",
     (runtime, input: ClaimInput) => {
-      const claims = createPlacementTurnClaimOps(runtime);
-      return claims.validateTurnClaim(input.claim)
-        ? { placement: claims.releaseTurn(input.claim) }
-        : {};
+      return { placement: createPlacementTurnClaimOps(runtime).releaseTurnIfOwned(input.claim) };
     },
   ),
   "placementTurns.release": operation("placementTurns.release", (runtime, input: ClaimInput) => ({

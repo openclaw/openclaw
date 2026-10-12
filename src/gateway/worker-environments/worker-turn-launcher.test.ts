@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -11,20 +11,25 @@ import {
   installSessionPlacementAdmissionProvider,
   prepareSessionPlacementSandbox,
   resolveSessionPlacementRuntimeOverride,
+  sessionPlacementUsesWorkerInference,
 } from "../../agents/session-placement-admission.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
 } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
+import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
@@ -47,6 +52,8 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn launcher local placement", () => {
   let localProvider: ReturnType<typeof createWorkerSessionTurnPlacementProvider>;
   beforeEach(async () => {
@@ -56,7 +63,7 @@ describe("worker turn launcher local placement", () => {
       placements,
     });
   });
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it("reads absent sandbox placement without caller-thread SQL", async () => {
     const provider = createWorkerSessionTurnPlacementProvider({
@@ -84,6 +91,49 @@ describe("worker turn launcher local placement", () => {
       uninstall();
     }
   });
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "uses current %s placement facts for worker inference without caller-thread SQL",
+    async (executionMode) => {
+      const environment = {
+        ...attachedEnvironment(),
+        providerId: "device",
+        profileSnapshot: { settings: { inference: "worker" } },
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments: { ...unusedEnvironments(), get: () => environment },
+        placements,
+      });
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      const identity = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" };
+      const sql = observeMainThreadSql();
+      try {
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+        sql.expectIdle();
+        await seedActivePlacement(executionMode);
+        sql.clear();
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(
+          executionMode === "worker-turn",
+        );
+        for (const mismatch of [
+          { sessionId: "other-session" },
+          { sessionKey: "agent:main:other" },
+          { agentId: "other-agent" },
+        ]) {
+          expect(await sessionPlacementUsesWorkerInference({ ...identity, ...mismatch })).toBe(
+            false,
+          );
+        }
+        environment.ownerEpoch += 1;
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+        uninstall();
+      }
+      expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+    },
+  );
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "uses only the matching %s placement as a runtime default",
@@ -364,6 +414,61 @@ describe("worker turn launcher local placement", () => {
     expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
   });
 
+  it.each(["absent", "local"] as const)(
+    "prepares %s placement once before claiming an admitted local turn",
+    async (state) => {
+      setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
+      const claim = {
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        runId: "run-prepared-local",
+      };
+      if (state === "local") {
+        await localProvider.executeLocalTurn(claim, async () => {});
+      }
+      const { databaseClaim } = await loadSessionEntryForAdmission(sessionTarget);
+      const operation = createReplyOperation({ ...claim, resetTriggered: false });
+      const binding = bindReplyOperationDatabaseAdmission(
+        operation,
+        claim,
+        undefined,
+        databaseClaim,
+      );
+      const projection = vi.spyOn(placements, "readProjection");
+      const standaloneEntry = vi.spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker");
+      const acquire = placements.claimTurn.bind(placements);
+      const preparationRequests: number[] = [];
+      const claimTurn = vi.spyOn(placements, "claimTurn").mockImplementation((...args) => {
+        preparationRequests.push(projection.mock.calls.length);
+        return acquire(...args);
+      });
+      try {
+        expect(binding.operationAdmission.reader).toBeDefined();
+        await localProvider.executeTurn(
+          claim,
+          { ...turn(claim.runId), replyOperation: operation },
+          async () => {
+            expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(claim.runId);
+            return { meta: { durationMs: 1 } };
+          },
+        );
+        expect(preparationRequests).toEqual([1]);
+        expect(standaloneEntry).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      } finally {
+        claimTurn.mockRestore();
+        standaloneEntry.mockRestore();
+        projection.mockRestore();
+        operation.complete();
+        await binding.releaseWorkerDatabaseClaim?.();
+        if (!binding.releaseWorkerDatabaseClaim) {
+          await databaseClaim.release();
+        }
+      }
+    },
+  );
+
   it.each(["absent", "local"])(
     "keeps a repository session off the Gateway with %s placement",
     async (state) => {
@@ -420,40 +525,51 @@ describe("worker turn launcher local placement", () => {
     },
   );
 
-  it("rejects local placement when caller authority ends after the metadata read", async () => {
-    setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
-    const controller = new AbortController();
-    const revoked = new Error("local turn source retired");
-    const read = sessionEntryReader.readSessionEntryReadOnlyInWorker;
-    const heldRead = vi
-      .spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker")
-      .mockImplementationOnce(async (...args) => {
-        const entry = await read(...args);
-        controller.abort(revoked);
-        return entry;
-      });
-    const claimTurn = vi.spyOn(placements, "claimTurn");
-    const runLocal = vi.fn(async () => "local execution started");
-    try {
-      await expect(
-        localProvider.executeLocalTurn(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: "revoked-local",
-          },
-          runLocal,
-          () => controller.signal.throwIfAborted(),
-        ),
-      ).rejects.toBe(revoked);
-      expect(claimTurn).not.toHaveBeenCalled();
-      expect(runLocal).not.toHaveBeenCalled();
-    } finally {
-      heldRead.mockRestore();
-      claimTurn.mockRestore();
-    }
-  });
+  it.each(["caller revocation", "placement publication"] as const)(
+    "rejects local placement after %s during the metadata read",
+    async (change) => {
+      setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
+      const controller = new AbortController();
+      const revoked = new Error("local turn source retired");
+      const read = sessionEntryReader.readSessionEntryReadOnlyInWorker;
+      const heldRead = vi
+        .spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker")
+        .mockImplementationOnce(async (...args) => {
+          const entry = await read(...args);
+          if (change === "caller revocation") {
+            controller.abort(revoked);
+          } else {
+            await placements.startDispatch(sessionTarget);
+          }
+          return entry;
+        });
+      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+      try {
+        await expect(
+          localProvider.executeTurn(
+            {
+              sessionId: SESSION_ID,
+              sessionKey: SESSION_KEY,
+              agentId: "main",
+              runId: "revoked-local",
+            },
+            turn("revoked-local"),
+            runLocal,
+            undefined,
+            () => controller.signal.throwIfAborted(),
+          ),
+        ).rejects.toThrow(
+          change === "caller revocation"
+            ? revoked.message
+            : `Local turn rejected for session ${SESSION_ID} in placement requested`,
+        );
+        expect(placements.get(SESSION_ID)?.turnClaim ?? null).toBeNull();
+        expect(runLocal).not.toHaveBeenCalled();
+      } finally {
+        heldRead.mockRestore();
+      }
+    },
+  );
 
   it("mints a fresh claim token when a later turn reuses the run id", async () => {
     const claimIds: string[] = [];

@@ -58,6 +58,19 @@ function mirror(fields: Record<string, unknown> = {}) {
 const payloadFor = (message: unknown) =>
   projectSessionMessagePayload({ sessionKey: "agent:main:main", message }).payload;
 
+it("correlates queued deliveries with earlier source rows rather than the adjacent reply", () => {
+  const first = assistant();
+  const user = { role: "user", content: "And the next train?" };
+  const second = assistant({
+    __openclaw: { id: "second-answer" },
+    content: [text("The next train leaves at two.")],
+  });
+  const secondMirror = mirror({
+    content: second.content,
+    openclawDeliveryMirror: { kind: "channel-final", sourceAssistantMessageId: "second-answer" },
+  });
+  expect(project([first, user, second, mirror(), secondMirror])).toEqual([first, user, second]);
+});
 it("caps commentary captions across an intervening image as one message", () => {
   const caption = (letter: string) => phased(letter.repeat(20), "commentary", "progress-caption");
   const source = { role: "assistant", content: [caption("A"), image, caption("B")] };
@@ -258,7 +271,6 @@ describe("channel mirror display controls", () => {
   const fieldless = mirror({
     openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "existing-delivery" },
   });
-  const visiblePair = [{ role: "assistant" }, { model: "delivery-mirror" }];
   const withTool = { content: expect.arrayContaining([tool]) };
   const withAttachment = { content: expect.arrayContaining([document]) };
   type Control = [string, unknown[], unknown[]];
@@ -266,7 +278,11 @@ describe("channel mirror display controls", () => {
     ["different source despite mirrorIdentity", [otherSource, mirror()], [{}, {}]],
     ["different visible text", [assistant(), otherText], [{}, {}]],
     ["another delivery mirror", [earlierMirror, mirror()], [{}, {}]],
-    ["filtered user turn", [assistant(), { role: "user", content: "" }, mirror()], visiblePair],
+    [
+      "filtered user turn",
+      [assistant(), { role: "user", content: "" }, mirror()],
+      [{ role: "assistant" }],
+    ],
     ["canonical tool call", [canonicalTool, mirror()], [withTool, {}]],
     ["mirror attachment", [assistant(), attachedMirror], [{}, withAttachment]],
     ["assistant media facts", [assistantMedia, mirror()], [withMedia, {}]],

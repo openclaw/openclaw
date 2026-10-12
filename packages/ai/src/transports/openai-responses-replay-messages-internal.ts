@@ -32,10 +32,12 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
+  RESPONSES_RETAINED_USER,
   type OpenAIResponsesReasoningReplayMetadata,
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import {
@@ -259,6 +261,7 @@ type ConvertResponsesMessagesOptions = {
   sessionId?: string;
   authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
+  retainUserProvenance?: boolean;
 };
 
 function convertResponsesMessagesWithStyle(
@@ -348,7 +351,13 @@ function convertResponsesMessagesWithStyle(
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
-    messages.push(...replayPlan.compactedWindow);
+    messages.push(
+      ...replayPlan.compactedWindow.map((item) =>
+        options?.retainUserProvenance && item.type === "message" && item.role === "user"
+          ? Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true })
+          : item,
+      ),
+    );
   }
   let replayMessages = replayPlan.compaction
     ? [replayPlan.compaction, ...transformedMessages]
@@ -379,12 +388,13 @@ function convertResponsesMessagesWithStyle(
   }
   let msgIndex = 0;
   const appendAssistant = createResponsesInputReplay(model);
+  const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
   for (const msg of replayMessages) {
     if (!("role" in msg)) {
       messages.push(msg);
       continue;
     }
-    if (isRuntimeContextMessage(msg)) {
+    if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
       messages.push(
         buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
           {
@@ -394,33 +404,43 @@ function convertResponsesMessagesWithStyle(
         ]),
       );
     } else if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        messages.push(
-          buildResponsesInputMessage(
-            "user",
-            [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
-            msg,
-          ),
-        );
-      } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter(
-          (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",
-        );
-        if (content.length > 0) {
-          messages.push(buildResponsesInputMessage("user", content, msg));
-        } else if (providerStyle) {
-          continue;
+      const role =
+        msg.operatorMessage &&
+        inHistorySystemUpdates &&
+        (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
+          ? resolveResponsesInstructionRole(model)
+          : "user";
+      const content: ResponseInputMessageContentList =
+        typeof msg.content === "string"
+          ? [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }]
+          : (
+              msg.content.map((item) =>
+                item.type === "text"
+                  ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
+                  : {
+                      type: "input_image",
+                      detail: "auto",
+                      image_url: `data:${item.mimeType};base64,${item.data}`,
+                    },
+              ) as ResponseInputMessageContentList
+            ).filter(
+              (item) =>
+                providerStyle || model.input.includes("image") || item.type !== "input_image",
+            );
+      if (content.length > 0) {
+        const input = buildResponsesInputMessage(role, content, msg);
+        if (
+          options?.retainUserProvenance &&
+          role === "user" &&
+          !msg.synthetic &&
+          !msg.operatorMessage &&
+          !hasRuntimeContextMarker(msg)
+        ) {
+          Object.assign(input, { [RESPONSES_RETAINED_USER]: true });
         }
+        messages.push(input);
+      } else if (providerStyle) {
+        continue;
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
@@ -595,6 +615,7 @@ export function convertProviderResponsesMessages<TApi extends Api>(
     sessionId?: string;
     authProfileId?: string;
     replayMode?: OpenAIResponsesReplayMode;
+    retainUserProvenance?: boolean;
   },
 ): ResponseInput {
   return convertResponsesMessagesWithStyle(

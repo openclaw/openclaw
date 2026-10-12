@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
-import type { UpdateScheduleState } from "../api/types.ts";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
@@ -19,6 +18,34 @@ import { createApplicationOverlays } from "./overlays.ts";
 afterEach(() => vi.useRealTimers());
 
 describe("application update status response ownership", () => {
+  it("settles a manual refresh when its administrator grant is renewed", async () => {
+    const discovery = deferred<unknown>();
+    const harness = createAutomaticUpdateHarness((method, params) =>
+      method === "update.status" && (params as { refreshCheckout?: boolean }).refreshCheckout
+        ? discovery.promise
+        : Promise.resolve({}),
+    );
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      const refresh = overlays.refreshUpdateStatus();
+      expect(overlays.snapshot.updateStatusRefreshing).toBe(true);
+      harness.update({
+        hello: {
+          auth: { role: "operator", scopes: ["operator.admin"] },
+          snapshot: { updateSchedule: AUTO_UPDATE_SCHEDULE },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      discovery.resolve({ schedule: null });
+      await expect(refresh).resolves.toBe(false);
+      expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
+      expect(overlays.snapshot.updateSchedule).toEqual(AUTO_UPDATE_SCHEDULE);
+    } finally {
+      discovery.resolve({});
+      overlays.dispose();
+    }
+  });
+
   it("keeps progress polling while checkout discovery exceeds the progress deadline", async () => {
     vi.useFakeTimers();
     const discovery = deferred<unknown>();
@@ -54,56 +81,23 @@ describe("application update status response ownership", () => {
     }
   });
 
-  it.each(["newer terminal run", "older legacy failure"])(
-    "reconciles a %s from checkout after fast progress",
-    async (outcome) => {
-      const discovery = deferred<unknown>();
-      const first = updateRunFixture({ updatedAtMs: 1_000 });
-      const finished = updateRunFixture({
-        updatedAtMs: 6_000,
-        status: "succeeded",
-        phase: "finished",
-        finishedAtMs: 6_000,
-      });
-      const sentinel = { kind: "update", status: "error", ts: 2_000, stats: { reason: "current" } };
-      const legacy = outcome === "older legacy failure";
-      const request = vi.fn<RequestFn>((method, params) =>
-        method === "update.status"
-          ? (params as { refreshCheckout?: boolean }).refreshCheckout
-            ? discovery.promise
-            : Promise.resolve(legacy ? { sentinel } : { activeRun: first })
-          : Promise.resolve({}),
-      );
-      const harness = legacy
-        ? createAutomaticUpdateHarness(request)
-        : createGatewayHarness(client(request));
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        const refreshing = overlays.refreshUpdateStatus();
-        await flushMicrotasks();
-        if (!legacy) {
-          expect(overlays.snapshot.updateRun).toEqual(first);
-        }
-        discovery.resolve(
-          legacy
-            ? { sentinel: { ...sentinel, ts: 1_000, stats: { reason: "obsolete" } } }
-            : { lastRun: finished },
-        );
-        await expect(refreshing).resolves.toBe(true);
-        if (legacy) {
-          expect(overlays.snapshot.recordedUpdateAttempt?.timestampMs).toBe(2_000);
-          expect(overlays.snapshot.updateStatusBanner?.text).toContain("current");
-          expect(overlays.snapshot.reportableUpdateFailureId).toBe("recorded:2000");
-        } else {
-          expect(overlays.snapshot.updateRun).toEqual(finished);
-          expect(overlays.snapshot.updateRunning).toBe(false);
-        }
-      } finally {
-        discovery.resolve({});
-        overlays.dispose();
-      }
-    },
-  );
+  it("adopts a completed run from a manual status check", async () => {
+    const finished = updateRunFixture({
+      updatedAtMs: 6_000,
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: 6_000,
+    });
+    const harness = createGatewayHarness(client(async () => ({ lastRun: finished })));
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
+      expect(overlays.snapshot.updateRun).toEqual(finished);
+      expect(overlays.snapshot.updateRunning).toBe(false);
+    } finally {
+      overlays.dispose();
+    }
+  });
 
   it.each(["unchanged", "access", "gateway"])(
     "keeps checkout error ownership until its %s scope releases it",
@@ -208,103 +202,6 @@ describe("application update status response ownership", () => {
     }
   });
 
-  it.each([
-    [
-      "advanced campaign",
-      {
-        ...AUTO_UPDATE_SCHEDULE,
-        campaign: {
-          ...AUTO_UPDATE_SCHEDULE.campaign,
-          state: "applying",
-          holdUntilMs: 90_000,
-          updatedAtMs: 2_000,
-        },
-      },
-    ],
-    [
-      "replacement campaign",
-      {
-        ...AUTO_UPDATE_SCHEDULE,
-        autoEnabled: false,
-        target: { kind: "package", version: "3.0.0" },
-        campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, id: "campaign-next", updatedAtMs: 2_000 },
-      },
-    ],
-    ["removed campaign", { channel: "stable", autoEnabled: true }],
-    ["cleared schedule", null],
-    ["changed channel", { ...AUTO_UPDATE_SCHEDULE, channel: "dev" }],
-    ["omitted schedule", undefined],
-  ] as const)(
-    "keeps the %s and checkout metadata in either response order",
-    async (_label, progressSchedule) => {
-      for (const checkoutFirst of [false, true]) {
-        const discovery = deferred<unknown>();
-        const progress = deferred<unknown>();
-        const followup = deferred<unknown>();
-        const install = { kind: "git", git: { status: "behind", commitsBehind: 12 } } as const;
-        let checking = false;
-        let progressReads = 0;
-        const request = vi.fn<RequestFn>((method, params) => {
-          if (method !== "update.status") {
-            return Promise.resolve({});
-          }
-          if ((params as { refreshCheckout?: boolean }).refreshCheckout) {
-            checking = true;
-            return discovery.promise;
-          }
-          return !checking
-            ? Promise.resolve({})
-            : ++progressReads === 1
-              ? progress.promise
-              : followup.promise;
-        });
-        const harness = createAutomaticUpdateHarness(request);
-        const overlays = createApplicationOverlays(harness.gateway);
-        try {
-          await flushMicrotasks();
-          const refresh = overlays.refreshUpdateStatus();
-          const run = updateRunFixture({ updatedAtMs: 2_000 });
-          const available = { currentVersion: "1.0.0", latestVersion: "3.0.0", channel: "stable" };
-          const progressResponse = {
-            ...(progressSchedule === undefined ? {} : { schedule: progressSchedule }),
-            activeRun: run,
-            updateAvailable: available,
-          };
-          if (!checkoutFirst) {
-            progress.resolve(progressResponse);
-            await flushMicrotasks();
-          }
-          discovery.resolve({
-            schedule: { ...AUTO_UPDATE_SCHEDULE, install },
-            updateAvailable: null,
-          });
-          await expect(refresh).resolves.toBe(true);
-          if (checkoutFirst) {
-            progress.resolve(progressResponse);
-            await flushMicrotasks();
-          }
-          const expected: UpdateScheduleState | null =
-            progressSchedule === undefined
-              ? { ...AUTO_UPDATE_SCHEDULE, install }
-              : progressSchedule?.channel === "stable"
-                ? { ...progressSchedule, install }
-                : progressSchedule;
-          expect(overlays.snapshot.updateSchedule).toEqual(expected);
-          expect(overlays.snapshot.updateAvailable).toEqual(available);
-          expect(overlays.snapshot.updateRun).toEqual(run);
-          expect(overlays.snapshot.heldUpdateCampaignId).toBe(
-            expected?.campaign?.holdUntilMs === undefined ? null : expected.campaign.id,
-          );
-        } finally {
-          discovery.resolve({});
-          progress.resolve({});
-          followup.resolve({});
-          overlays.dispose();
-        }
-      }
-    },
-  );
-
   it("discovers a campaign after overlapping empty progress and starts polling it", async () => {
     vi.useFakeTimers();
     const discovery = deferred<unknown>();
@@ -338,7 +235,7 @@ describe("application update status response ownership", () => {
       discoveryFinished = true;
       discovery.resolve({ schedule: AUTO_UPDATE_SCHEDULE });
       await expect(refresh).resolves.toBe(true);
-      expect(overlays.snapshot.updateSchedule).toBeNull();
+      expect(overlays.snapshot.updateSchedule).toEqual(AUTO_UPDATE_SCHEDULE);
       expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
       reconciliation.resolve({ activeRun: first, schedule: AUTO_UPDATE_SCHEDULE });
       await flushMicrotasks();

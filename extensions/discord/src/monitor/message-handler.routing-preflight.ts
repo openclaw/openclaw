@@ -1,7 +1,7 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveDiscordRuntimeBindingConversationId } from "../conversation-identity.js";
 import type { User } from "../internal/discord.js";
-import { resolveDiscordConversationBindingRoute } from "./conversation-binding-route.js";
+import { resolveDiscordConversationBindingRouteAsync } from "./conversation-binding-route.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   buildDiscordRoutePeer,
@@ -44,13 +44,15 @@ export async function resolveDiscordPreflightRoute(params: {
     userId: params.author.id,
     channelId: params.messageChannelId,
   });
-  const { runtimeRoute, configuredRoute } = resolveDiscordConversationBindingRoute({
+  const { runtimeRoute, configuredRoute } = await resolveDiscordConversationBindingRouteAsync({
     cfg: params.preflight.cfg,
     resolveRoute: route,
     accountId: params.preflight.accountId,
     runtimeConversationId: bindingConversationId,
     configuredConversationId: params.messageChannelId,
     parentConversationId: params.earlyThreadParentId,
+    // Processing owns the awaited activity write after preflight completes.
+    touchBinding: false,
   });
   const configuredBinding = configuredRoute?.bindingResolution ?? null;
   const threadBinding = runtimeRoute.bindingRecord ?? configuredBinding?.record;

@@ -2,16 +2,123 @@ import { expect, it, vi } from "vitest";
 import { repairAcpSessionMetaKeysForDoctor } from "../../acp/runtime/session-meta-doctor.js";
 import { buildAcpDatabaseSessionKey } from "../../acp/runtime/session-meta-keys.js";
 import {
-  readAcpSessionMeta,
+  readAcpSessionEntry,
   writeAcpSessionMetaForMigration,
 } from "../../acp/runtime/session-meta.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
+import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
+
+it.each(["recorded", "ownerless", "literal"] as const)(
+  "startup defers %s ACP bindings until their physical store is admitted",
+  async (shape) => {
+    await withOpenClawTestState({ scenario: "empty" }, async ({ env, writeConfig }) => {
+      const cfg = {
+        agents: { ownership: "explicit" as const, entries: { main: {}, deferred: {} } },
+      };
+      await writeConfig(cfg);
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey: "agent:main:main" },
+        { sessionId: "ready-session", updatedAt: 100 },
+      );
+      const sessionKey =
+        shape === "recorded"
+          ? "agent:deferred:acp:legacy"
+          : shape === "ownerless"
+            ? "global"
+            : buildAcpDatabaseSessionKey("absent", "retired");
+      replaceSessionEntrySync(
+        { agentId: "deferred", env, sessionKey },
+        { sessionId: "deferred-session", lifecycleRevision: "deferred-revision", updatedAt: 100 },
+      );
+      writeAcpSessionMetaForMigration({
+        env,
+        sessionKey,
+        lifecycleRevision: "deferred-revision",
+        meta: {
+          backend: "fixture",
+          agent: "deferred",
+          runtimeSessionName: "deferred-runtime",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 100,
+        },
+        now: () => 100,
+      });
+      const deferredPath = resolveOpenClawAgentSqlitePath({ agentId: "deferred", env });
+      await closeOpenClawAgentDatabaseByPathAsync(deferredPath);
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: "deferred",
+        paths: [deferredPath],
+        reason: "Inspection and preparation continue after the listener binds",
+        pending: true,
+      });
+      recordAgentDatabaseAdmissions([refusal], { env, source: "startup" });
+      const handedOff: string[] = [];
+      const startup = (agentIds?: ReadonlySet<string>) =>
+        runSessionStartupMigration({
+          cfg,
+          env,
+          agentIds,
+          log: { info() {}, warn() {} },
+          handoffDatabase: async ({ agentId }) => {
+            handedOff.push(agentId);
+          },
+        });
+      await expect(startup()).resolves.toBeUndefined();
+      expect(handedOff).toEqual(["main"]);
+      expect(readAgentDatabaseAdmissionRefusal("deferred", { env })).toBe(refusal);
+      handedOff.length = 0;
+      await expect(
+        preparePendingAgentDatabase(refusal, { env, assertCurrent() {} }, () =>
+          startup(new Set(["deferred"])),
+        ),
+      ).rejects.toThrow("ACP metadata requires offline migration");
+      expect(handedOff).toEqual([]);
+      expect(readAgentDatabaseAdmissionRefusal("deferred", { env })).toBe(refusal);
+    });
+  },
+);
+
+it("startup refuses unresolved ACP ownership even without a discovered agent store", async () => {
+  await withOpenClawTestState({ scenario: "empty" }, async ({ env, writeConfig }) => {
+    const cfg = { agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } } };
+    await writeConfig(cfg);
+    writeAcpSessionMetaForMigration({
+      env,
+      sessionKey: "@agent:main:agent:ops:acp:legacy",
+      lifecycleRevision: "unresolved-revision",
+      meta: {
+        backend: "fixture",
+        agent: "ops",
+        runtimeSessionName: "unresolved-runtime",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 100,
+      },
+      now: () => 100,
+    });
+    await expect(
+      runSessionStartupMigration({ cfg, env, log: { info() {}, warn() {} } }),
+    ).rejects.toThrow("unresolved shared ACP owner");
+  });
+});
 
 it("startup requires offline ACP repair before handing restored stores to runtime", async () => {
   await withOpenClawTestState({ scenario: "empty" }, async ({ env, writeConfig }) => {
@@ -86,12 +193,13 @@ it("startup requires offline ACP repair before handing restored stores to runtim
         sourceKey === undefined ? { ...currentEntry, acp: meta } : currentEntry,
       );
       if (shape === "unsettled-embedded") {
-        const { db } = openOpenClawAgentDatabase({ agentId, env });
+        const database = openOpenClawAgentDatabase({ agentId, env });
+        const { db } = database;
+        runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
         const raw = `${JSON.stringify(currentEntry).slice(0, -1)},"acp":null,"acp":${JSON.stringify(meta)}}`;
-        db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-          raw,
-          sessionKey,
-        );
+        db.prepare(
+          "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
+        ).run(raw, sessionKey);
         expect(
           db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(sessionKey),
         ).toEqual({ entry_valid: 0 });
@@ -122,7 +230,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
         onWarnings: (reported) => warnings.push(...reported),
       });
       expect(warnings).toEqual([]);
-      expect(readAcpSessionMeta(scope)).toEqual(meta);
+      expect(readAcpSessionEntry(scope)?.acp).toEqual(meta);
       await expect(startup()).resolves.toBeUndefined();
       expect(handoffDatabase).toHaveBeenCalledTimes(owners.size);
       expect(await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: false })).toMatchObject({
@@ -160,7 +268,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(nullKey);
     await expect(startup()).resolves.toBeUndefined();
-    expect(readAcpSessionMeta({ ...nullScope, cfg })).toBeUndefined();
+    expect(readAcpSessionEntry({ ...nullScope, cfg })?.acp).toBeUndefined();
     expect(
       agentDatabase
         .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
@@ -291,12 +399,12 @@ it("startup preserves unbound ACP rows retained by Doctor without serving their 
     expect(handoffDatabase).toHaveBeenCalledTimes(1);
     for (const sessionKey of keys) {
       expect(
-        readAcpSessionMeta({
+        readAcpSessionEntry({
           cfg,
           env,
           agentId: sessionKey.startsWith("agent:retired:") ? "retired" : "main",
           sessionKey,
-        }),
+        })?.acp,
       ).toBeUndefined();
     }
     expect(db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all()).toEqual(before);

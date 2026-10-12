@@ -1,4 +1,3 @@
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionEntryCandidateTarget, type SessionEntry } from "../../config/sessions.js";
 import { resolveSessionEntryCandidateTargetForRuntime } from "../../config/sessions/session-accessor.entry.js";
@@ -22,7 +21,7 @@ function projectStatusEntry(
   return { entry, key, persisted };
 }
 
-export function resolveSessionStatusEntry(params: {
+export async function resolveSessionStatusEntry(params: {
   agentId: string;
   alias: string;
   cfg: OpenClawConfig;
@@ -30,7 +29,7 @@ export function resolveSessionStatusEntry(params: {
   keyRaw: string;
   mainKey: string;
   requesterInternalKey?: string;
-}): ResolvedStatusSessionEntry | null | Promise<ResolvedStatusSessionEntry | null> {
+}): Promise<ResolvedStatusSessionEntry | null> {
   const keyRaw = params.keyRaw.trim();
   if (!keyRaw) {
     return null;
@@ -62,12 +61,12 @@ export function resolveSessionStatusEntry(params: {
     }
   }
 
-  const resolved = resolveSessionEntryCandidateTargetForRuntime({
+  const resolved = await resolveSessionEntryCandidateTargetForRuntime({
     agentId: params.agentId,
     candidateKeys: candidates,
     cfg: params.cfg,
   });
-  return isPromiseLike(resolved) ? resolved.then(projectStatusEntry) : projectStatusEntry(resolved);
+  return projectStatusEntry(resolved);
 }
 
 /** Maps requester keys into the currently selected agent store's legacy main key shape. */

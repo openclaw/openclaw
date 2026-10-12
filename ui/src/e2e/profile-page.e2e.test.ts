@@ -236,7 +236,7 @@ suite.define(() => {
         await expect(toggle).not.toBeChecked();
         await screenshot(page, "09-github-identity-linked.png");
 
-        await coauthorRow.locator("wa-switch").click();
+        await toggle.click();
         const prefSet = await gateway.waitForRequest("users.prefs.set");
         expect(prefSet.params).toEqual({
           entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true },

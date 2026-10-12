@@ -73,7 +73,6 @@ export async function prepareCommandForegroundRun(
   params: CommandPreflight & {
     ingress: AgentCommandAdmissionIngress;
     suppressVisibleSessionEffects: boolean;
-    preserveUserFacingSessionModelState: boolean;
   },
 ) {
   const budget = createCommandBudget(
@@ -87,8 +86,7 @@ export async function prepareCommandForegroundRun(
     entry =
       params.opts.modelRun === true ||
       params.opts.promptMode === "none" ||
-      params.suppressVisibleSessionEffects ||
-      params.preserveUserFacingSessionModelState
+      params.suppressVisibleSessionEffects
         ? params.sessionEntry
         : await runCommandPreflightMaintenance({
             ...params,

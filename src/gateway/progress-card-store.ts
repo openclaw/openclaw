@@ -2,8 +2,12 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "../config/sessions/session-collaboration-scope.js";
-import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -20,7 +24,9 @@ import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../session-cards/progress-card-store.js";
+import type { ProgressCardStore } from "../session-cards/progress-card-store.types.js";
 import type { ProgressCardWorkerOperations } from "../session-cards/progress-card-store.worker.js";
+import { createSessionActorProgressCardStore } from "../session-cards/session-actor-progress-card-store.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -38,8 +44,6 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { captureGatewaySessionStoreScope } from "./board-store.js";
-
-export type ProgressCardStore = typeof progressCardStore;
 
 /**
  * The activation owner captures routing and supplies live, SQL-free authority.
@@ -116,11 +120,19 @@ export function createIncognitoProgressCardStore(
   };
 }
 
-export const progressCardStore = {
+export const progressCardStore: ProgressCardStore = {
   async get(
     sessionKey: string,
     agentId?: string,
   ): Promise<ReturnType<typeof readSessionProgressCard>> {
+    const actorBinding = getSessionActorStorageBinding({ sessionKey, agentId });
+    if (actorBinding) {
+      return createSessionActorProgressCardStore(() => actorBinding).get(sessionKey, agentId);
+    }
+    const source = captureIncognitoSessionSource({ sessionKey, agentId });
+    if (source && "kind" in source) {
+      return null;
+    }
     const incognito = captureIncognitoSessionOperation({ sessionKey, agentId });
     if (incognito) {
       return createIncognitoProgressCardStore(() => ({
@@ -157,6 +169,14 @@ export const progressCardStore = {
     },
     agentId?: string,
   ): Promise<{ card: ReturnType<typeof readSessionProgressCard> }> {
+    const actorBinding = getSessionActorStorageBinding({ sessionKey, agentId });
+    if (actorBinding) {
+      return createSessionActorProgressCardStore(() => actorBinding).put(
+        sessionKey,
+        input,
+        agentId,
+      );
+    }
     const incognito = captureIncognitoSessionOperation({ sessionKey, agentId });
     if (incognito) {
       return createIncognitoProgressCardStore(() => ({
@@ -173,17 +193,7 @@ export const progressCardStore = {
       steps: input.steps,
       expectedRevision: input.expectedRevision,
     });
-    const assertCurrent = () => {
-      input.assertCurrent?.();
-      const current = captureGatewaySessionStoreScope(sessionKey, agentId);
-      if (
-        current.agentId !== resolved.agentId ||
-        current.storePath !== resolved.storePath ||
-        current.sessionKey !== resolved.sessionKey
-      ) {
-        throw new Error("progress-card session changed; retry");
-      }
-    };
+    const assertCurrent = () => input.assertCurrent?.();
     assertCurrent();
     const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(resolved.storePath);
     if (isIncognitoOpenClawAgentSqlitePath(unsuffixed.path, { agentId: resolved.agentId, env })) {

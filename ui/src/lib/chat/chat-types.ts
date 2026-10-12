@@ -9,6 +9,7 @@ import type {
 import type { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
+import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
@@ -227,6 +228,8 @@ export type ChatItem =
       collapsedBody?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
+      /** A background skill review's changes; rendered as a native row instead of `text`. */
+      skillChanges?: SkillWorkshopChangeNotice;
     }
   | {
       kind: "divider";
@@ -243,6 +246,7 @@ export type ChatItem =
       kind: "stream";
       key: string;
       text: string;
+      thinking?: string;
       startedAt: number;
       isStreaming: boolean;
       replyToSender?: SenderIdentity;
@@ -268,6 +272,8 @@ export type ChatItem =
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
+  /** Input observed when live commentary first arrived; omitted for history replay. */
+  afterUserSendId?: string;
   text: string;
   ts: number;
   runId?: string;

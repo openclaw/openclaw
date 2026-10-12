@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -14,13 +14,21 @@ import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
 const diagnostic = { provider: "primary-fixture", model: "thinking" };
 let root: string;
 let storePath: string;
 let sequence = 0;
+const operations: ReplyOperation[] = [];
+afterEach(() => {
+  for (const operation of operations.splice(0)) {
+    operation.complete();
+  }
+});
 beforeAll(() => {
   // openclaw-temp-dir: allow suite database root drains before removal
   root = fs.mkdtempSync(
@@ -47,6 +55,13 @@ async function createFixture(selected = diagnostic) {
   };
   const cfg: OpenClawConfig = { session: { store: storePath } };
   await replaceSessionEntry({ storePath, sessionKey }, entry);
+  const replyOperation = createReplyOperation({
+    sessionId: entry.sessionId,
+    sessionKey,
+    resetTriggered: false,
+  });
+  operations.push(replyOperation);
+  replyOperation.setPhase("running");
   const context: Parameters<typeof accountAgentTurn>[0] = {
     activeSessionEntry: entry,
     activeSessionStore: { [sessionKey]: entry },
@@ -79,6 +94,7 @@ async function createFixture(selected = diagnostic) {
     },
     runId: `fallback-run-${id}`,
     runStartedAt: Date.now(),
+    replyOperation,
     sessionCtx: {},
     sessionKey,
     shouldInjectGroupIntro: false,
@@ -94,7 +110,20 @@ async function createFixture(selected = diagnostic) {
         contextTokens: 1_000,
         ...route,
       };
-      return accountAgentTurn(context);
+      return withAgentTurnCompletion(
+        {
+          agentId: "main",
+          storePath,
+          sessionKey,
+          entry: context.activeSessionEntry,
+          operation: replyOperation,
+          publish(next) {
+            context.activeSessionEntry = next;
+            context.activeSessionStore![sessionKey] = next;
+          },
+        },
+        (completion) => accountAgentTurn({ ...context, completion }),
+      );
     },
   };
 }

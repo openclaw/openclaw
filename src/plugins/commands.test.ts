@@ -684,25 +684,6 @@ describe("registerPluginCommand", () => {
     expect(listProviderPluginCommandSpecs("discord")).toStrictEqual([]);
   });
 
-  it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
-    const result = registerVoiceCommandForTest({
-      nativeNames: {
-        default: "talkvoice",
-        discord: "discordvoice",
-      },
-      description: "Demo command",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(listProviderPluginCommandSpecs("slack")).toEqual([
-      {
-        name: "talkvoice",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
-    ]);
-  });
-
   it("requires config before using read-only manifest command defaults", () => {
     setActivePluginRegistry(createTestRegistry([]));
     registerVoiceCommandForTest({
@@ -739,18 +720,6 @@ describe("registerPluginCommand", () => {
     ]);
   });
 
-  it("accepts native progress metadata on plugin commands", () => {
-    const result = registerVoiceCommandForTest({
-      nativeProgressMessages: { telegram: "Running voice command..." },
-      description: "Demo command",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(matchPluginCommand("/voice")?.command.nativeProgressMessages).toEqual({
-      telegram: "Running voice command...",
-    });
-  });
-
   it("exposes native description localizations on plugin command specs", () => {
     const result = registerVoiceCommandForTest({
       description: "Demo command",
@@ -777,18 +746,6 @@ describe("registerPluginCommand", () => {
     expect(result).toEqual({
       ok: false,
       error: 'Description localization "ko" cannot be empty',
-    });
-  });
-
-  it("rejects empty native progress metadata", () => {
-    const result = registerVoiceCommandForTest({
-      nativeProgressMessages: { telegram: "   " },
-      description: "Demo command",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: 'Native progress message "telegram" cannot be empty',
     });
   });
 
@@ -822,71 +779,6 @@ describe("registerPluginCommand", () => {
       ok: false,
       error: 'Command name "codex" is reserved by a built-in command',
     });
-  });
-
-  it("reserves the built-in learn command name", () => {
-    const result = registerPluginCommand("demo-plugin", {
-      name: "learn",
-      description: "Fake learn command",
-      handler: async () => ({ text: "ok" }),
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: 'Command name "learn" is reserved by a built-in command',
-    });
-  });
-
-  it("does not reserve login globally for external plugins", () => {
-    const result = registerPluginCommand("demo-plugin", {
-      name: "login",
-      description: "Plugin-owned login command",
-      handler: async () => ({ text: "ok" }),
-    });
-
-    expect(result).toEqual({ ok: true });
-  });
-
-  it("rejects reserved ownership on non-reserved direct command registrations", () => {
-    const result = registerPluginCommand(
-      "demo-plugin",
-      {
-        name: "voice",
-        description: "Voice command",
-        ownership: "reserved",
-        handler: async () => ({ text: "ok" }),
-      },
-      { allowReservedCommandNames: true },
-    );
-
-    expect(result).toEqual({
-      ok: false,
-      error: "Reserved command ownership is only available to bundled reserved commands",
-    });
-  });
-
-  it("does not expose owner status to normal plugin commands", async () => {
-    let observedOwnerStatus: boolean | undefined;
-    registerPluginCommand("demo-plugin", {
-      name: "voice",
-      description: "Voice command",
-      handler: async (ctx) => {
-        observedOwnerStatus = ctx.senderIsOwner;
-        return { text: "ok" };
-      },
-    });
-    const match = requirePluginCommandMatch("/voice");
-
-    await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/voice",
-      config: {},
-    });
-
-    expect(observedOwnerStatus).toBeUndefined();
   });
 
   it("sanitizes oversized arguments before passing them to plugin handlers", async () => {
@@ -1144,7 +1036,7 @@ describe("registerPluginCommand", () => {
     second.clearPluginCommands();
   });
 
-  it.each(["default", "discord"] as const)(
+  it.each(["discord"] as const)(
     "matches live %s aliases back to the canonical command",
     (provider) => {
       const nativeNames = { default: "talkvoice", discord: "discordvoice" };
@@ -1194,19 +1086,6 @@ describe("registerPluginCommand", () => {
       expected: {
         ok: false,
         error: 'Command "pair_device" already registered by plugin "demo-plugin"',
-      },
-    },
-    {
-      name: "rejects reserved provider aliases",
-      candidate: createVoiceCommand({
-        nativeNames: {
-          telegram: "help",
-        },
-      }),
-      expected: {
-        ok: false,
-        error:
-          'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
       },
     },
   ] as const)("$name", ({ setup, candidate, expected }) => {
@@ -1341,42 +1220,6 @@ describe("registerPluginCommand", () => {
     expect(result).toEqual({ text: "ok" });
     expect(receivedCtx?.sessionKey).toBe("agent:main:whatsapp:direct:123");
     expect(receivedCtx?.sessionId).toBe("session-123");
-  });
-
-  it("passes a host-bound llm runtime through to plugin command handlers", async () => {
-    let receivedCtx:
-      | {
-          runtimeContext?: {
-            llm?: {
-              complete?: unknown;
-            };
-          };
-        }
-      | undefined;
-    const handler = async (ctx: typeof receivedCtx) => {
-      receivedCtx = ctx;
-      return { text: "ok" };
-    };
-
-    const result = await executePluginCommand({
-      command: {
-        name: "runtimecheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-      },
-      channel: "telegram",
-      senderId: "U123",
-      isAuthorizedSender: true,
-      sessionKey: "agent:main:telegram:direct:runtimecheck",
-      authProfileId: "openai:claude@example.com",
-      commandBody: "/runtimecheck",
-      config: {} as never,
-    });
-
-    expect(result).toEqual({ text: "ok" });
-    expect(receivedCtx?.runtimeContext?.llm?.complete).toEqual(expect.any(Function));
   });
 
   it("binds legacy main session plugin llm runtime to the default agent", async () => {

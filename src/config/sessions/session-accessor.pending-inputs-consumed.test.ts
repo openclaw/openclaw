@@ -1,9 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -18,7 +19,6 @@ import {
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -31,7 +31,9 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 describe("committed pending input release", () => {
   const fixture = useTempSessionsFixture("pending-input-consumed-release-");
@@ -140,6 +142,12 @@ describe("committed pending input release", () => {
         Array(sources.length + 1).fill("queued"),
       );
       if (observerFails) {
+        setLoggerOverride({ level: "silent", consoleLevel: "error" });
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+        onTestFinished(() => {
+          errorLog.mockRestore();
+          resetLogger();
+        });
         expect(() =>
           runOpenClawAgentWriteTransaction((current) => {
             deferOpenClawAgentPostCommitPublication(current, () => {
@@ -147,7 +155,10 @@ describe("committed pending input release", () => {
             });
             promoteSync(receipt);
           }, options()),
-        ).toThrow("postcommit observer failed");
+        ).not.toThrow();
+        expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("SQLite post-commit notification failed"),
+        );
       } else {
         expect(
           await receipt.run(() => appendTranscriptMessage(scope(), { message: receipt.message })),
@@ -480,9 +491,12 @@ describe("committed pending input release", () => {
         if (difference === "malformed") {
           database()
             .db.prepare(
-              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant') WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
+              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant'), message_role = ? WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
             )
-            .run(`${runId}:user`);
+            .run(
+              deriveTranscriptPredicateFields('{"message":{"role":"assistant"}}').message_role,
+              `${runId}:user`,
+            );
         }
       } else {
         await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));
@@ -714,6 +728,12 @@ describe("committed pending input release", () => {
 
   it("preserves released synchronous completion when a postcommit observer fails", async () => {
     const first = await stagePrivate();
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => {
+      errorLog.mockRestore();
+      resetLogger();
+    });
     expect(() =>
       runOpenClawAgentWriteTransaction((current) => {
         deferOpenClawAgentPostCommitPublication(current, () => {
@@ -721,7 +741,10 @@ describe("committed pending input release", () => {
         });
         first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
       }, options()),
-    ).toThrow("observer failed");
+    ).not.toThrow();
+    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("SQLite post-commit notification failed"),
+    );
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
     expect(pendingCount()).toBe(0);
   });

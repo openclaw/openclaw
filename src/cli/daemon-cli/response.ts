@@ -45,7 +45,7 @@ const DAEMON_HINT_PREFIXES: readonly (readonly [string, DaemonHintKind])[] = [
   ["Restart the container or the service that manages it for ", "container-restart"],
   ["systemd user services are unavailable;", "systemd-unavailable"],
   ["On a headless server (SSH/no desktop session):", "systemd-headless"],
-  ["Also ensure XDG_RUNTIME_DIR is set:", "systemd-headless"],
+  ["Also check that XDG_RUNTIME_DIR is set:", "systemd-headless"],
   [
     "If you're in a container, run the gateway in the foreground instead of",
     "container-foreground",

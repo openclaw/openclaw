@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
@@ -59,34 +59,6 @@ describe("worker session placement gate", () => {
       owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
     });
   }
-
-  it("rejects an identical claim readmitted while runtime refresh hands off its result", async () => {
-    const claim = await preclaim("run-refresh-handoff");
-    await store.markWorkspaceResultPending(claim);
-    const gate = createWorkerSessionPlacementGate(store, { rejectExistingWorkerClaims: true });
-    const handoff = store.handoffRuntimeRefreshResult.bind(store);
-    vi.spyOn(store, "handoffRuntimeRefreshResult").mockImplementationOnce(async (...args) => {
-      const placement = await handoff(...args);
-      await store.acceptWorkspaceResult(claim);
-      await store.completeWorkspaceResultAndReleaseTurn(claim);
-      const replacement = await store.claimTurn({ ...SESSION, ...claim });
-      await store.markWorkspaceResultPending(replacement);
-      await store.handoffWorkspaceResultRecovery(replacement);
-      return placement;
-    });
-
-    await expect(
-      gate.prepareWorkerRuntimeRefresh({
-        sessionId: claim.sessionId,
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-      }),
-    ).rejects.toThrow("turn recovery owner");
-    expect(store.validateTurnClaim(claim)).toBe(true);
-    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
-      { claimId: claim.claimId, recoveryRequestedAtMs: expect.any(Number) },
-    ]);
-  });
 
   it.each(["missing result", "live reclaim", "live turn", "move"] as const)(
     "rejects draining runtime refresh with %s",

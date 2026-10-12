@@ -20,6 +20,7 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-a
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-audience.js";
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { sanitizeSystemRunParamsForForwarding } from "../node-invoke-system-run-approval.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -341,6 +342,83 @@ describe("exec approval signed agent runtime", () => {
       expect(await manager.listPendingRecords()).toHaveLength(0);
       expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
         message: expect.stringContaining("no longer active"),
+      });
+    });
+  });
+
+  it("records an omitted node session before approved replay", async (testContext) => {
+    const fixture = await createPreparedTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
+      if (!handler) {
+        throw new Error("exec approval request handler is missing");
+      }
+      const runtimeIdentity = identity(false);
+      const options = requestOptions(runtimeIdentity);
+      const command = ["/usr/bin/echo", "ok"];
+      const commandText = "/usr/bin/echo ok";
+      Object.assign(options.params, {
+        host: "node",
+        nodeId: "node-1",
+        command: commandText,
+        systemRunPlan: {
+          argv: command,
+          commandText,
+          cwd: "/tmp",
+          agentId: "main",
+          sessionKey: null,
+          policySnapshot: {
+            security: "allowlist",
+            ask: "always",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [],
+          },
+        },
+      });
+      const { pending } = await waitForApprovalRequested(
+        options.context,
+        "exec.approval.requested",
+        () => fixture.track(Promise.resolve(handler(options))),
+      );
+      const record = (await manager.listPendingRecords())[0];
+      if (!record) {
+        throw new Error("registered node approval is missing");
+      }
+      await manager.resolve(record.id, "allow-once");
+      await pending;
+
+      const result = await sanitizeSystemRunParamsForForwarding({
+        nodeId: "node-1",
+        rawParams: {
+          runId: record.id,
+          approved: true,
+          command,
+          rawCommand: commandText,
+          cwd: "/tmp",
+          agentId: runtimeIdentity.agentId,
+          sessionKey: runtimeIdentity.sessionKey,
+        },
+        client: options.client,
+        execApprovalManager: manager,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        params: {
+          cwd: "/tmp",
+          agentId: runtimeIdentity.agentId,
+          sessionKey: runtimeIdentity.sessionKey,
+          systemRunPlan: {
+            argv: command,
+            commandText,
+            cwd: "/tmp",
+            agentId: runtimeIdentity.agentId,
+            sessionKey: runtimeIdentity.sessionKey,
+          },
+        },
       });
     });
   });

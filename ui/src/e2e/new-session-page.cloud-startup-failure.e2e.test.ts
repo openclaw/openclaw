@@ -285,17 +285,13 @@ suite.define(() => {
             await captureUiProof(suite, page, "startup-disconnected.png");
             await gateway.setOnline(true);
             await failedGroup.waitFor({ state: "visible" });
-            // Observe the buggy delivery as well as admission before checking the invariant.
-            if (offline.queued.includes("later ordinary turn")) {
-              await gateway.waitForRequest("chat.send");
-            }
-            expect(composerDisabled).toBe(true);
+            expect(composerDisabled).toBe(false);
             expect({ offline, sends: await gateway.getRequests("chat.send") }).toMatchObject({
-              offline: { draft: "later ordinary turn", queued: [] },
+              offline: { draft: "", queued: ["later ordinary turn"] },
               sends: [],
             });
             expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
-              "later ordinary turn",
+              "",
             );
             expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
           } else {
@@ -346,7 +342,7 @@ suite.define(() => {
                 blocked: { draft: "later ordinary turn", queued: [] },
                 sends: [],
               });
-              expect(composerDisabled).toBe(true);
+              expect(composerDisabled).toBe(false);
             }
           }
           await failedGroup.waitFor({ state: "visible" });
@@ -377,9 +373,14 @@ suite.define(() => {
           expect(await gateway.getRequests("sessions.create")).toHaveLength(disconnect ? 1 : 0);
           if (disconnect || coldScope) {
             expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
-              "later ordinary turn",
+              disconnect ? "" : "later ordinary turn",
             );
-            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+            if (disconnect) {
+              const follower = await gateway.waitForRequest("chat.send");
+              expect(follower.params).toMatchObject({ sessionKey, message: "later ordinary turn" });
+            } else {
+              expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+            }
           }
         },
       );

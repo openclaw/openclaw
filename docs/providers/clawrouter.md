@@ -204,9 +204,14 @@ ClawRouter models. A catalog model is advertised as an OpenClaw model when:
   route); and
 - the provider exposes a matching route for one of the transports below.
 
-Adding a model to a supported ClawRouter provider needs no OpenClaw release:
-the next catalog refresh (cached 60 seconds per ClawRouter key scope) discovers
-it. A model that needs a new wire protocol requires plugin support first.
+Adding a model to a supported ClawRouter provider needs no OpenClaw release.
+Successful catalog responses, including an empty granted-model list, are reused
+for one hour per endpoint and resolved credential. Ordinary model-list reads
+serve retained inventory while expired data refreshes in the background. Use
+**Refresh** in Models to discover changes immediately; explicit refresh bypasses
+the response cache. A model that needs a new wire protocol requires plugin
+support first. Cached inventory is not authorization: ClawRouter checks current
+grants and budgets when a model request is dispatched.
 
 A model's optional `displayName` is its picker label; without it, OpenClaw uses
 the provider display name and catalog `id`, omitting a repeated `<provider>/`
@@ -260,6 +265,37 @@ The same provider snapshot is available to `/status` in chat and OpenClaw's
 usage UI. The budget is policy-wide, so requests made by another client using
 the same ClawRouter policy can change the remaining percentage.
 
+## Pool dashboard
+
+Open **ClawRouter** in the Control UI sidebar to inspect the subscription pool
+behind your configured key. The bundled plugin loads at Gateway startup when
+`models.providers.clawrouter` is configured, subject to the normal plugin
+allowlist and enablement settings. Apply the configuration and restart the
+Gateway if the entry is not yet available. No Custom plugin UI lab setting is
+needed for the bundled copy.
+
+The read-only page shows the policy's allowed models, subscriptions with
+headroom per model, account and plan details, credential status, quota windows
+(including model-specific windows), reset times, extra-usage spend and limits,
+and request, token, and API-equivalent usage. API-equivalent value describes
+metered model usage; it is not necessarily the subscription's actual bill.
+The paid-fallback summary aggregates the API-key and environment usage lanes;
+these totals can include direct paid routing as well as fallback requests.
+Select **Refresh** to request a fresh snapshot; the page does not poll.
+Missing upstream measurements appear as **Not reported**.
+
+The page calls the plugin-owned `clawrouter.pool.get` Gateway method, which
+requires `operator.read`. The Gateway requests `/v1/pool` from the configured
+ClawRouter origin using the same provider credential resolution as usage
+(env key first, then configured credentials and auth profiles). The key stays
+on the Gateway and is never included in the page response.
+
+Pool visibility is opt-in on the ClawRouter policy. If it is hidden, ask your
+ClawRouter admin to enable pool status for that policy. An older deployment
+without `/v1/pool` reports that an update is needed; rejected keys and temporary
+connection failures have separate next-step messages. These states do not
+prevent model calls or the existing `/v1/usage` snapshot.
+
 ## Troubleshooting
 
 | Symptom                                  | Check                                                                                                                                              |
@@ -273,7 +309,7 @@ the same ClawRouter policy can change the remaining percentage.
 
 ## Security behavior
 
-- Catalog discovery is scoped to the configured ClawRouter key. The result is cached per ClawRouter key scope (agent dir, workspace dir, auth profile id, and base URL).
+- Catalog discovery is scoped to the configured ClawRouter key. HTTP responses are cached by endpoint and resolved credential; changing either does not reuse the previous response. Prepared inventory and dynamic model lookup retain their own agent, workspace, and auth scopes.
 - The ClawRouter key is attached only at request dispatch; it is not stored in model metadata.
 - Automatic attribution and request-correlation values are trimmed and control-character rejected before dispatch. Attribution values are bounded to 256 characters; request ids are bounded to 128.
 - Model transport diagnostics contain metadata only and never include the ClawRouter key or model content.

@@ -5,6 +5,7 @@ import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { sanitizeAssistantVisibleStreamText } from "../../embedded-agent-utils.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
@@ -57,7 +58,7 @@ export function prepareEmbeddedRunTerminal(input: {
   authProfileId?: string;
   sessionIdUsed: string;
   sessionFileUsed?: string;
-  outerContextTokenMeta: { contextTokens?: number };
+  outerContextTokenMeta: { contextTokens?: number; contextTokensSource?: "resolved-v1" };
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
@@ -107,6 +108,12 @@ export function prepareEmbeddedRunTerminal(input: {
   // into the accumulator, so read it directly instead of re-adding the attempt.
   const runAssistantTurns = input.usageAccumulator.assistantTurns;
   const contextTokens = attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens;
+  // The outer window was resolved for the prepared model. A different reported identity is
+  // persisted next to it, so only the prepared model may carry its trusted provenance.
+  const outerContextTokensSource =
+    reportedModelRef.provider === input.provider && reportedModelRef.model === input.model
+      ? (input.outerContextTokenMeta.contextTokensSource ?? "resolved")
+      : "resolved";
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
@@ -118,7 +125,7 @@ export function prepareEmbeddedRunTerminal(input: {
           contextTokensSource:
             attempt.contextTokens !== undefined
               ? (attempt.contextTokensSource ?? "resolved")
-              : "resolved",
+              : outerContextTokensSource,
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
@@ -147,9 +154,12 @@ export function prepareEmbeddedRunTerminal(input: {
       : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
-  const attemptFinalText = attempt.assistantTexts
-    .findLast((text) => text.trim().length > 0)
-    ?.trim();
+  const attemptFinalText = answerAssistant
+    ? undefined
+    : attempt.assistantTexts
+        .map((text) => sanitizeAssistantVisibleStreamText(text))
+        .findLast((text) => text.trim().length > 0)
+        ?.trim();
   const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantVisibleText(answerAssistant) ?? attemptFinalText)
     : undefined;

@@ -8,6 +8,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
+import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
 import { withSessionTranscriptSourcePublication } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -275,6 +276,8 @@ export function createChatSendWorkAdmission(params: {
   let admittedSource = params.terminal?.target.readSource;
   let admittedLifecycleRevision = params.terminal?.lifecycleRevision;
   let finishPendingInput: (() => void | Promise<void>) | undefined;
+  let inputActor: ReturnType<typeof acquireSessionInputActor> | undefined;
+  let actorLifetimeActive = true;
   const releaseAdmission = () => {
     try {
       params.admission.release();
@@ -288,6 +291,22 @@ export function createChatSendWorkAdmission(params: {
   };
   const warnCleanupFailure = (error: unknown) => {
     params.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
+  };
+  const finishRelease = () => {
+    if (!inputActor) {
+      actorLifetimeActive = false;
+      releaseAdmission();
+      return;
+    }
+    const close = async () => {
+      try {
+        await (await inputActor)?.actor.release();
+      } finally {
+        actorLifetimeActive = false;
+        releaseAdmission();
+      }
+    };
+    void close().catch(warnCleanupFailure);
   };
   const release = () => {
     if (references === 0) {
@@ -308,12 +327,12 @@ export function createChatSendWorkAdmission(params: {
     if (pending) {
       // The existing admission's drain joins this write before releasing the
       // session/root fence; prompt custody has already been revoked.
-      void pending.then(releaseAdmission, (error: unknown) => {
+      void pending.then(finishRelease, (error: unknown) => {
         warnCleanupFailure(error);
-        releaseAdmission();
+        finishRelease();
       });
     } else {
-      releaseAdmission();
+      finishRelease();
     }
   };
   const hold = () => {
@@ -375,6 +394,32 @@ export function createChatSendWorkAdmission(params: {
     };
   };
   return {
+    acquireInputActor() {
+      if (!inputActor) {
+        const terminal = params.terminal;
+        if (!terminal || references === 0) {
+          throw new Error("Chat input actor has no live admission");
+        }
+        const assertCurrent = () => {
+          if (!actorLifetimeActive || !terminal.isActive()) {
+            throw new Error("Chat input actor admission ended");
+          }
+        };
+        inputActor = acquireSessionInputActor(
+          {
+            agentId: terminal.target.agentId,
+            storePath: terminal.storePath,
+            readSource: terminal.target.readSource,
+            target: {
+              canonicalKey: terminal.target.canonicalKey,
+              storeKeys: [...terminal.target.storeKeys],
+            },
+          },
+          { assertCurrent, assertReadable: assertCurrent },
+        );
+      }
+      return inputActor;
+    },
     isActive: () => references > 0,
     release: hold(),
     retain,

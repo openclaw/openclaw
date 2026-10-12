@@ -6,12 +6,16 @@ import type {
   MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { warnMentionInboxDeprecation } from "../plugins/compat/mention-inbox-deprecation.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
+import {
+  openClawStateDatabaseCache,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
@@ -22,7 +26,6 @@ import {
   mentionInboxUnavailable,
 } from "./mention-inbox-presentation.js";
 import {
-  MAX_GLOBAL_ITEMS,
   createMentionProjection,
   createMentionMutationProjection,
   reconcileMentionProfiles,
@@ -582,6 +585,30 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   void refresh();
 
+  function recordCommittedInputAsync(committedInput: MentionCommittedInput): Promise<void> {
+    const input = {
+      ...committedInput,
+      recipientProfileIds: [...committedInput.recipientProfileIds],
+      committedSource: { ...committedInput.committedSource },
+    };
+    return enqueue(async () => {
+      if (!prepareCommittedInput(input)) {
+        return;
+      }
+      await policy.recordCommittedInvolvementAsync(input);
+      const committed = await mutate<StoredMention[]>(
+        (draft, guards, bounds) => applyCommittedInput(input, draft, guards, bounds),
+        () => input.recipientProfileIds.map((id) => policy.readProfile(id)?.profileId ?? id),
+      );
+      context.admission.assertCurrent();
+      refreshConnectedViews();
+      scheduleExpiry();
+      publishCommittedMentions(committed);
+    }).catch(() => {
+      log.warn("Mention delivery could not be completed; the posted message is unchanged.");
+    });
+  }
+
   return {
     async mentionable(client, input, publish) {
       let preparationFailure: Result<never, ErrorShape> | undefined;
@@ -661,54 +688,17 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       if (closing || scheduler.signal.aborted) {
         return;
       }
-      try {
-        if (!prepareCommittedInput(input)) {
-          return;
-        }
-        policy.recordCommittedInvolvement(input);
-        let committed: StoredMention[] = [];
-        mutateNative(
-          (draft) => {
-            committed = applyCommittedInput(input, draft, [], {
-              sourceIndex: draft.processed,
-              itemLimit: MAX_GLOBAL_ITEMS,
-            });
-          },
-          () => {
-            try {
-              publishCommittedMentions(committed);
-            } catch {
-              log.warn("Mention delivery could not be completed; the posted message is unchanged.");
-            }
-          },
-        );
-      } catch {
-        log.warn("Mention delivery could not be completed; the posted message is unchanged.");
+      const captured = structuredClone(input);
+      const record = () => void recordCommittedInputAsync(captured);
+      // Legacy callers may still submit inside a transaction. Rollback must not enqueue a mention.
+      const database = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
+        context.admission.identity.canonicalPath,
+      );
+      if (!database || !deferSqlitePostCommitPublication(database.db, record)) {
+        record();
       }
     },
-    recordCommittedInputAsync(committedInput: MentionCommittedInput): Promise<void> {
-      const input = {
-        ...committedInput,
-        recipientProfileIds: [...committedInput.recipientProfileIds],
-        committedSource: { ...committedInput.committedSource },
-      };
-      return enqueue(async () => {
-        if (!prepareCommittedInput(input)) {
-          return;
-        }
-        await policy.recordCommittedInvolvementAsync(input);
-        const committed = await mutate<StoredMention[]>(
-          (draft, guards, bounds) => applyCommittedInput(input, draft, guards, bounds),
-          () => input.recipientProfileIds.map((id) => policy.readProfile(id)?.profileId ?? id),
-        );
-        context.admission.assertCurrent();
-        refreshConnectedViews();
-        scheduleExpiry();
-        publishCommittedMentions(committed);
-      }).catch(() => {
-        log.warn("Mention delivery could not be completed; the posted message is unchanged.");
-      });
-    },
+    recordCommittedInputAsync,
     invalidate,
     invalidateAsync,
     dispose,

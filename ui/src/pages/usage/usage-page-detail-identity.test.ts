@@ -30,7 +30,7 @@ function usagePoints(timestamp: number, count: number) {
   }));
 }
 
-function dragTimelineRange(page: HTMLElement) {
+function dragTimelineRange(page: Pick<HTMLElement, "querySelector">) {
   const svg = page.querySelector<SVGSVGElement>(".timeseries-svg")!;
   const handle = page.querySelector<HTMLElement>(".chart-handle-right")!;
   vi.spyOn(svg, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 118));

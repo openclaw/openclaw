@@ -83,6 +83,9 @@ or isolation reason. Unavailable optional live proof may use meaningful boundary
 proof with the limitation stated. Explicit live requests, external API contracts,
 and changes whose risk requires authenticated execution keep their required proof.
 Never describe mocks, skipped checks, or an older head as live evidence.
+For behavioral changes, apply the [boundary-proof contract](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary)
+and `$test-audit`. Check requested behavior separately from repository standards;
+meeting one does not establish the other.
 
 ## CODEOWNERS review
 
@@ -101,6 +104,7 @@ second reviewer by default. Do not add another mandatory CLI review pass.
 Reopen review for substantive changes or unresolved concerns, not a patch-identical
 rebase or a mechanical head change. Address real human/bot findings and explain
 rejected ones; bot scores and Rank-up lists do not create separate obligations.
+ClawSweeper reviews advisory. Never wait for bot comment before landing.
 
 Use the current PR template. Lead with the plain-language problem and concrete
 user impact; keep the explanation short and leave implementation inventories in

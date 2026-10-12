@@ -394,25 +394,22 @@ export function resumePendingAuthProfileMigrationArchives(
       try {
         verifyAuthProfileMigrationTarget(receipt);
       } catch {
+        let status: "retryable" | "superseded" = "retryable";
         if (!sourceExists) {
           // Restore only hash-verified archive bytes, without replacing a
           // source recreated by a non-cooperating legacy writer or restore.
           const restored = restoreAuthProfileMigrationArchiveNoClobber(receipt);
           if (restored === "source-exists") {
             const currentBytes = fs.readFileSync(receipt.sourcePath);
-            const status =
-              sha256Hex(currentBytes) === receipt.sourceSha256 ? "retryable" : "superseded";
-            updateAuthProfileMigrationReceipt(receipt, status, "imported");
-            changes.push(
-              status === "retryable"
-                ? "Reset an interrupted auth migration receipt for retry."
-                : "Retired an interrupted auth migration receipt for a changed source.",
-            );
-            continue;
+            status = sha256Hex(currentBytes) === receipt.sourceSha256 ? "retryable" : "superseded";
           }
         }
-        updateAuthProfileMigrationReceipt(receipt, "retryable", "imported");
-        changes.push("Reset an interrupted auth migration receipt for retry.");
+        updateAuthProfileMigrationReceipt(receipt, status, "imported");
+        changes.push(
+          status === "retryable"
+            ? "Reset an interrupted auth migration receipt for retry."
+            : "Retired an interrupted auth migration receipt for a changed source.",
+        );
         continue;
       }
       archiveAuthProfileMigrationSource(receipt);

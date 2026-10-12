@@ -15,6 +15,7 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
+import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
@@ -108,6 +109,7 @@ type PrepareEmbeddedAttemptStreamInput = {
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
   markExternalAbort: () => void;
+  recoverStalledModelCall?: () => boolean;
   getRunState: () => StreamRunState;
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
@@ -131,6 +133,8 @@ function prepareStream(
 ) {
   const { attempt, agentSession } = input;
   const { activeSession, hookRunner } = agentSession;
+  const recoverStalledModelCall = input.recoverStalledModelCall;
+  let stalledModelRecoveryAccepted = false;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let activeQueueAdmissions = 0;
@@ -573,6 +577,29 @@ function prepareStream(
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     terminalReplyExpectation: resolveReplyExpectation(attempt),
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
+    recoverStalledModelCall: recoverStalledModelCall
+      ? () => {
+          if (stalledModelRecoveryAccepted) {
+            // Keep recovery eligible during settlement, but stop shielding a
+            // parent cancelled by Stop or bounded lane reclamation.
+            return (
+              !externalAbortAccepted &&
+              !attempt.abortSignal?.aborted &&
+              registration !== undefined &&
+              ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
+              ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle &&
+              ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle
+            );
+          }
+          stalledModelRecoveryAccepted =
+            isSteeringAdmissionOpen() &&
+            !subscription.isCompacting() &&
+            countActiveToolExecutions(attempt.runId) === 0 &&
+            hasCurrentRegistration() &&
+            recoverStalledModelCall();
+          return stalledModelRecoveryAccepted;
+        }
+      : undefined,
     cancel: abortActiveRunExternally,
     abort: abortActiveRunExternally,
   };

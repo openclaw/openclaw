@@ -164,11 +164,8 @@ function parseContentLength(raw: string | null, errorPrefix: string): number | u
   if (!trimmed) {
     return undefined;
   }
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
-  }
   const value = Number(trimmed);
-  if (!Number.isSafeInteger(value)) {
+  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(value)) {
     throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
   }
   return value;

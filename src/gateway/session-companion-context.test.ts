@@ -13,7 +13,6 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
-import * as transcriptReaders from "./session-transcript-readers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -37,6 +36,22 @@ function createScope(prefix: string) {
 }
 
 describe("session companion context", () => {
+  it("reads replaced session identities without host SQL", async () => {
+    const scope = createScope("companion-context-identity");
+    for (const sessionId of [scope.sessionId, `${scope.sessionId}-replacement`]) {
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(defaultSessionCompanionContextReader.currentSessionId(scope)).resolves.toBe(
+          sessionId,
+        );
+        expect(hostSql.queries).toEqual([]);
+      } finally {
+        hostSql.restore();
+      }
+    }
+  });
+
   it.each(
     [false, true].flatMap((warm) =>
       (["reset", "dispose", "request-abort", "backing-reset"] as const).map((cancellation) => ({
@@ -351,9 +366,7 @@ describe("session companion context", () => {
     const result = await defaultSessionCompanionContextReader
       .read(scope)
       .finally(() => hostSql.restore());
-    expect(
-      hostSql.queries.filter((query) => query.includes("session_transcript_active_events")),
-    ).toEqual([]);
+    expect(hostSql.queries).toEqual([]);
     expect(result).toEqual({
       kind: "ready",
       context: {
@@ -365,47 +378,6 @@ describe("session companion context", () => {
         sessionId: scope.sessionId,
       },
     });
-  });
-
-  it("rejects context assembled across different transcript snapshots", async () => {
-    const scope = createScope("companion-context-snapshot-fence");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const page = vi
-      .spyOn(transcriptReaders, "readSessionTranscriptBoundedMessageTailPageAsync")
-      .mockResolvedValueOnce({
-        activeLeafEntryId: "leaf-1",
-        events: [
-          {
-            event: {
-              type: "message",
-              id: "message-1",
-              parentId: null,
-              message: { role: "user", content: "stable context", timestamp: 1 },
-            },
-            eventSeq: 1,
-            seq: 1,
-          },
-        ],
-        newestContiguousEventCount: 1,
-        scannedMessages: 1,
-        serializedBytes: 128,
-        snapshot: { generation: "generation-1", indexedSeq: 1 },
-        totalMessages: 1,
-      })
-      .mockResolvedValueOnce({
-        activeLeafEntryId: "leaf-1",
-        events: [],
-        newestContiguousEventCount: 0,
-        scannedMessages: 0,
-        serializedBytes: 0,
-        snapshot: { generation: "generation-2", indexedSeq: 1 },
-        totalMessages: 1,
-      });
-
-    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
-      kind: "unavailable",
-    });
-    expect(page).toHaveBeenCalledTimes(2);
   });
 
   it("keeps transcript-visible messages across compaction", async () => {

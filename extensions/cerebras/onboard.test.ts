@@ -1,3 +1,4 @@
+import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearLiveCatalogCacheForTests,
@@ -188,7 +189,8 @@ describe("Cerebras native catalog", () => {
       const model = catalog.models.find((entry) => entry.id === id);
       expect(model?.cost.input).toBeCloseTo(input, 10);
       expect(model?.cost.output).toBeCloseTo(output, 10);
-      expect(model?.cost).toMatchObject({ cacheRead: 0, cacheWrite: 0 });
+      expect(model?.cost.cacheRead).toBeCloseTo(input, 10);
+      expect(model?.cost.cacheWrite).toBe(0);
     }
   });
 
@@ -260,7 +262,7 @@ describe("Cerebras native catalog", () => {
     expect(recovered.models).toEqual([
       expect.objectContaining({
         id: NATIVE_TEXT_MODEL.id,
-        cost: { input: 0.35, output: 0.75, cacheRead: 0, cacheWrite: 0 },
+        cost: { input: 0.35, output: 0.75, cacheRead: 0.35, cacheWrite: 0 },
       }),
     ]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
@@ -275,5 +277,54 @@ describe("Cerebras native catalog", () => {
 
     await expect(provider.catalog?.run(ctx)).resolves.toBeNull();
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+});
+
+describe("Cerebras prompt cache routing", () => {
+  it.each([
+    { baseUrl: "https://api.cerebras.ai/v1", key: "synthetic-session" },
+    { baseUrl: "https://api.cerebras.ai/v1/", key: "synthetic-session" },
+    { baseUrl: "https://proxy.example/v1", key: undefined },
+    { baseUrl: "https://api.cerebras.ai/custom/v1", key: undefined },
+    { baseUrl: "https://api.cerebras.ai/v1", optOut: true, key: undefined },
+  ])("sends native cache affinity at $baseUrl with optOut=$optOut", async (route) => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const model: Model = {
+      id: "fixture-text-model",
+      name: "Synthetic model",
+      provider: "cerebras",
+      api: "openai-completions",
+      baseUrl: route.baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 128,
+      ...(route.optOut ? { compat: { supportsPromptCacheKey: false } } : {}),
+    };
+    const normalized =
+      provider.normalizeResolvedModel?.({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+      }) ?? model;
+    let payload: unknown;
+    const result = await streamSimple(
+      normalized,
+      { messages: [] },
+      {
+        apiKey: "synthetic-unused-key",
+        sessionId: "synthetic-session",
+        cacheRetention: "long",
+        onPayload(value) {
+          payload = value;
+          throw new Error("captured before request");
+        },
+      },
+    ).result();
+    expect(result.errorMessage).toBe("captured before request");
+    expect(payload).toMatchObject({ prompt_cache_key: route.key });
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+    expect(payload).not.toHaveProperty("prompt_cache_options");
   });
 });

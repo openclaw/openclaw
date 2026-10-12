@@ -96,7 +96,7 @@ Copilot CLI actually exposes a model before pinning it.
 
 ## Supported providers
 
-The harness supports the canonical `github-copilot` provider (owned by
+The harness supports the standard `github-copilot` provider (owned by
 `extensions/github-copilot`), plus custom `models.providers` entries when the
 model has a non-empty `baseUrl` and one of these `api` shapes:
 
@@ -245,8 +245,8 @@ messages, so user-facing chat history stays consistent.
 turn's messages into the OpenClaw session transcript. Journal identity is
 turn-scoped, not content-scoped: the initial user turn is keyed
 `${runId}:user` and SDK-sourced events are keyed
-`copilot-sdk:${sdkSessionId}:${eventId}`, with claimed event ids plus an
-idempotency scan at the transcript store, so re-emitted prior-turn entries
+`copilot-sdk:${sdkSessionId}:${eventId}`, with claimed event ids plus a
+duplicate check at the transcript store, so re-emitted prior-turn entries
 cannot duplicate.
 
 Assistant turns and their tool results are journaled as structurally complete
@@ -255,7 +255,7 @@ groups, so a crash between groups leaves a valid transcript prefix.
 tool topology; a structurally destructive rewrite suppresses the whole group
 instead of persisting a false replay.
 
-Persistence failures fail closed. The first write failure marks the journal
+Persistence failures stop the attempt. The first write failure marks the journal
 failed, aborts the in-flight SDK session, and flags the attempt's replay as
 unvalidated so the next run creates a fresh SDK session instead of trusting a
 partial transcript. Only the post-append transcript update notification is
@@ -328,7 +328,7 @@ codex-app-server's own native approval kinds
 (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`,
 `item/permissions/requestApproval`) route through `plugin.approval.request`
 (`extensions/codex/src/app-server/approval-bridge.ts`). The Copilot SDK
-equivalent — fail-closed `rejectAllPolicy` for any non-`custom-tool` kind
+equivalent — `rejectAllPolicy` that denies any non-`custom-tool` kind
 that ever reaches `onPermissionRequest` — is the same safety net, and it
 never fires in practice because `overridesBuiltInTool: true` displaces every
 built-in.
@@ -342,7 +342,7 @@ when selecting a backend or recovering a turn. The Copilot bridge in
 mapping, authentication, model context, and execution callbacks before
 awaiting `hostCapabilities.createToolSurfaceAsync`.
 `runAttempt` resolves sandbox context through the shared
-`resolveSandboxContext` seam, passes the SDK an effective working directory,
+`resolveSandboxContext` interface, passes the SDK an effective working directory,
 and forwards `sandbox` plus the subagent-spawn workspace into the tool
 bridge. The bridge also forwards the bounded tool-construction controls it
 can enforce at the SDK boundary: `includeCoreTools`, the runtime tool

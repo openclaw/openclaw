@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 type SelfChatCacheDebug = {
-  insertionOrder: Map<number, string>;
+  insertionOrder: { readonly size: number };
 };
 
 describe("createSelfChatCache", () => {

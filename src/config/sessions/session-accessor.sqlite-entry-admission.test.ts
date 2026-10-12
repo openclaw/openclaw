@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
@@ -234,26 +234,51 @@ it.each([
   expect(parentChecks()).toBe(0);
 });
 
-it.each(["warm", "incognito"] as const)("keeps %s updater invocation direct", async (mode) => {
-  const f = fixture(mode === "incognito" ? "agent:main:dashboard:incognito-admission" : undefined);
-  const native = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
-  let called = false;
-  const operation = own(
-    patchSessionEntryCore(
-      f.scope,
-      () => {
-        called = true;
-        return { label: mode };
-      },
-      { skipMaintenance: true },
-    ),
-  );
-  expect(called).toBe(true);
-  await expect(operation).resolves.toMatchObject({ label: mode });
-  expect(native).not.toHaveBeenCalled();
-  if (mode === "incognito") {
-    expect(fs.readdirSync(f.root)).toEqual([]);
-  }
+it.each(["worker", "incognito"] as const)(
+  "admits %s updater invocation through its owner",
+  async (mode) => {
+    const f = fixture(
+      mode === "incognito" ? "agent:main:dashboard:incognito-admission" : undefined,
+    );
+    const native = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
+    let called = false;
+    const operation = own(
+      patchSessionEntryCore(
+        f.scope,
+        () => {
+          called = true;
+          return { label: mode };
+        },
+        {
+          skipMaintenance: true,
+        },
+      ),
+    );
+    expect(called).toBe(mode !== "worker");
+    await expect(operation).resolves.toMatchObject({ label: mode });
+    expect(called).toBe(true);
+    expect(native).not.toHaveBeenCalled();
+    if (mode === "incognito") {
+      expect(fs.readdirSync(f.root)).toEqual([]);
+    }
+  },
+);
+
+it("returns an accepted unchanged patch receipt without publishing a new source", async () => {
+  const f = fixture();
+  const options = { skipMaintenance: true, preserveActivity: true };
+  await patchSessionEntryCore(f.scope, () => ({}), options);
+  const onCommitted = vi.fn();
+  const onCommittedSource = vi.fn();
+  const committed = await patchSessionEntryCore(f.scope, () => ({}), {
+    ...options,
+    onCommitted,
+    onCommittedSource,
+  });
+  expect(committed).toMatchObject({ sessionId: "original", updatedAt: 1 });
+  expect(onCommitted).toHaveBeenCalledExactlyOnceWith(committed);
+  expect(onCommittedSource).not.toHaveBeenCalled();
+  expect(loadSessionEntry(f.scope)).toEqual(committed);
 });
 
 it.each([false, true])(
@@ -278,7 +303,9 @@ it.each([false, true])(
       patchSessionEntryCore(
         scope,
         () => {
-          evictHandle(f.databasePath);
+          expect(
+            getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: f.databasePath }),
+          ).toBeUndefined();
           return { label: "original owner" };
         },
         { skipMaintenance: true },
@@ -315,7 +342,9 @@ it("keeps the physical database owner for logical rows in a shared store", async
       patchSessionEntryCore(
         secondary,
         () => {
-          evictHandle(storePath);
+          expect(
+            getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath }),
+          ).toBeUndefined();
           return { label: "shared owner" };
         },
         { skipMaintenance: true },
@@ -487,7 +516,7 @@ it.each(["cancel", "revoke"] as const)(
   },
 );
 
-it.each(["relative queued", "relative reopen"] as const)(
+it.each(["relative queued", "relative updater", "relative native reopen"] as const)(
   "pins the selected root for %s patch work",
   async (mode) => {
     const home = roots.make("session-patch-root-selection-");
@@ -513,11 +542,11 @@ it.each(["relative queued", "relative reopen"] as const)(
       cwd.mockReturnValue(successor);
     };
     const release = createDeferred();
+    const updaterEntered = createDeferred();
     releases.push(() => release.resolve());
     const blocker =
-      mode === "relative reopen"
-        ? undefined
-        : own(
+      mode === "relative queued"
+        ? own(
             runExclusiveSqliteSessionWrite(
               resolveSqliteScope(original),
               async () => {
@@ -525,19 +554,24 @@ it.each(["relative queued", "relative reopen"] as const)(
               },
               "session.transcript.batch",
             ),
-          );
+          )
+        : undefined;
     const operation = own(
       patchSessionEntryCore(
         scope,
         () => {
-          if (mode === "relative reopen") {
-            // The first read happened warm in A; commit must reopen A after the updater.
+          if (mode !== "relative queued") {
+            // The selected store stays A after the updater changes ambient root selection.
             evictHandle(selectedPath);
             shiftOwner();
           }
+          updaterEntered.resolve();
           return { label: "retained selected root" };
         },
-        { skipMaintenance: true },
+        {
+          skipMaintenance: true,
+          assertCommitAllowed: mode === "relative native reopen" ? () => {} : undefined,
+        },
       ),
     );
     if (blocker) {
@@ -547,6 +581,11 @@ it.each(["relative queued", "relative reopen"] as const)(
       release.resolve();
       await blocker;
     }
+    await awaitGateBeforeSettlement(
+      updaterEntered.promise,
+      operation,
+      "Patch settled before its root-selection updater",
+    );
     // Control: unchanged caller inputs now resolve elsewhere; the operation must use
     // its private resolved root, not repeat ambient selection after its await.
     expect(resolveStateDir(env)).toBe(path.join(successor, "state"));

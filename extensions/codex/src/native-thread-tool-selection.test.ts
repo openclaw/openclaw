@@ -1,7 +1,11 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
@@ -9,7 +13,6 @@ import {
   isCodexAppServerLiveThreadClaimed,
   retainCodexAppServerLiveThread,
 } from "./app-server/client-runtime.js";
-import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE } from "./app-server/rpc-error.js";
 import { createLazyCodexAppServerBindingStore } from "./app-server/session-binding-store.js";
 import {
   createCodexTestBindingStateStore,
@@ -25,13 +28,19 @@ const sharedClients = vi.hoisted(() => ({
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
   createIsolatedCodexAppServerClient: vi.fn(),
-  isCodexAppServerStartSelectionChangedError: () => false,
 }));
 
 vi.mock("./app-server/shared-client.js", () => sharedClients);
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    cleanup();
+  }),
+);
+
 describe("native Codex thread selection", () => {
-  it.each(["metadata", "connection", "session", "config"] as const)(
+  it.each(["connection", "session", "config"] as const)(
     "revalidates a native request after a %s change",
     async (change) => {
       const bindingStore = createCodexTestBindingStore();
@@ -46,13 +55,16 @@ describe("native Codex thread selection", () => {
       let config: OpenClawConfig = {};
       const session = {
         sessionId: identity.sessionId,
+        updatedAt: 1,
         modelSelectionLocked: false,
         inputTokens: 0,
       };
+      const storePath = path.join(tempDirs.make("codex-thread-selection-"), "sessions.json");
+      await upsertSessionEntry({ ...identity, storePath, entry: session });
       const runtime = createPluginRuntimeMock({
         agent: {
           session: {
-            getSessionEntry: () => ({ ...session, updatedAt: Date.now() }),
+            resolveStorePath: () => storePath,
           },
         },
       });
@@ -74,6 +86,7 @@ describe("native Codex thread selection", () => {
         } else if (change === "config") {
           config = { ...config };
         }
+        await upsertSessionEntry({ ...identity, storePath, entry: session });
         options.assertCurrent!();
         return dispatch();
       });
@@ -92,13 +105,8 @@ describe("native Codex thread selection", () => {
       });
 
       const pending = tool!.execute("selection-change", { action: "list" });
-      if (change === "metadata") {
-        await expect(pending).resolves.toMatchObject({ details: { data: [] } });
-        expect(dispatch).toHaveBeenCalledOnce();
-      } else {
-        await expect(pending).rejects.toThrow("native thread ownership changed");
-        expect(dispatch).not.toHaveBeenCalled();
-      }
+      await expect(pending).rejects.toThrow("native thread ownership changed");
+      expect(dispatch).not.toHaveBeenCalled();
     },
   );
 });
@@ -125,7 +133,9 @@ describe("native Codex fork ownership", () => {
       sessionId: "session-id",
       sessionKey: "agent:main:fork-ownership",
     };
-    const session = { sessionId: identity.sessionId, modelSelectionLocked: false };
+    const session = { sessionId: identity.sessionId, updatedAt: 1, modelSelectionLocked: false };
+    const storePath = path.join(tempDirs.make("codex-thread-fork-"), "sessions.json");
+    await upsertSessionEntry({ ...identity, storePath, entry: session });
     let invocationCurrent = true;
     const forkWritten = createDeferred<void>();
     const response = {
@@ -171,7 +181,7 @@ describe("native Codex fork ownership", () => {
       createCodexThreadsTool({
         bindingStore,
         runtime: createPluginRuntimeMock({
-          agent: { session: { getSessionEntry: () => ({ ...session, updatedAt: Date.now() }) } },
+          agent: { session: { resolveStorePath: () => storePath } },
         }),
         context: {
           config: {},
@@ -191,6 +201,7 @@ describe("native Codex fork ownership", () => {
       bindingStore,
       identity,
       session,
+      storePath,
       binding,
       harness,
       forkWritten,
@@ -323,21 +334,6 @@ describe("native Codex fork ownership", () => {
       }
     }));
 
-  it("unsubscribes a detached native fork without requiring an OpenClaw session", () =>
-    withFork(async (fixture) => {
-      fixture.forkResponse.resolve(fixture.response);
-      await expect(
-        fixture.tool(false).execute("detached-fork", {
-          action: "fork",
-          thread_id: "source-thread",
-          attach: false,
-        }),
-      ).resolves.toMatchObject({ details: { attached: false } });
-      expect(fixture.unsubscribed).toEqual(["forked-thread"]);
-      expect(fixture.bindingStore.read(fixture.identity)).toEqual(fixture.binding);
-      expect(hasCodexAppServerLiveThread(fixture.harness.client, "forked-thread")).toBe(false);
-    }));
-
   it("retires the exact client when a written fork times out without a thread id", () =>
     withFork(async (fixture) => {
       const pending = fixture.tool(false, 100).execute("unknown-fork", {
@@ -357,27 +353,6 @@ describe("native Codex fork ownership", () => {
       ).toHaveBeenCalledExactlyOnceWith(fixture.harness.client);
       expect(fixture.unsubscribed).toEqual([]);
       expect(fixture.bindingStore.read(fixture.identity)).toEqual(fixture.binding);
-    }));
-
-  it("keeps the client available after native overload rejects the fork", () =>
-    withFork(async (fixture) => {
-      const pending = fixture.tool(false).execute("overloaded-fork", {
-        action: "fork",
-        thread_id: "source-thread",
-        attach: false,
-      });
-      const rejected = expect(pending).rejects.toThrow("overloaded");
-      await fixture.forkWritten.promise;
-      fixture.forkResponse.reject({
-        code: CODEX_APP_SERVER_OVERLOADED_ERROR_CODE,
-        message: "overloaded",
-      });
-      await rejected;
-      await expect(
-        fixture.harness.client.request("thread/read", { threadId: "source-thread" }),
-      ).resolves.toMatchObject({ thread: { id: "source-thread" } });
-      expect(sharedClients.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
-      expect(fixture.unsubscribed).toEqual([]);
     }));
 
   it("retires a fork client after an invalid-request response assembly error", () =>
@@ -407,6 +382,11 @@ describe("native Codex fork ownership", () => {
         .mockResolvedValueOnce(fixture.harness.client)
         .mockImplementationOnce(async () => {
           fixture.session.modelSelectionLocked = true;
+          await upsertSessionEntry({
+            ...fixture.identity,
+            storePath: fixture.storePath,
+            entry: fixture.session,
+          });
           return fixture.harness.client;
         });
       await expect(

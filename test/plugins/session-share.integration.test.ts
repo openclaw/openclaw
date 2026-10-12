@@ -28,8 +28,12 @@ import {
   upsertSessionEntryCore,
 } from "../../src/config/sessions/session-accessor.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
-import { openOpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
-import { openClawStateDatabaseCache } from "../../src/state/openclaw-state-db-cache.js";
+import { createDeferredCore } from "../../src/shared/deferred.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../src/state/openclaw-agent-db.js";
+import * as stateReads from "../../src/state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import * as githubIdentities from "../../src/state/user-profile-github-identity.js";
 import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
@@ -191,6 +195,40 @@ async function withCatalogFixture(
 }
 
 describe("session-share node commands", () => {
+  it("refreshes shared metadata without rescanning the inventory on the node thread", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const source = commandFixture();
+      expect((await source.list()).sessions).toEqual([]);
+      const scope = { agentId: "main", sessionKey: "agent:main:shared-cache" };
+      const entry = {
+        sessionId: "shared-cache",
+        updatedAt: 100,
+        label: "Original",
+        category: "Team",
+      };
+      await replaceSessionEntry(scope, entry);
+      expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
+      const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+      const reads = trackSqliteStatementExecutions(db, ["inventory"], (sql) =>
+        sql.includes('from "session_nodes" order by "session_key"') && sql.includes('"entry_json"')
+          ? "inventory"
+          : null,
+      );
+      try {
+        expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
+        expect(reads.counts.inventory).toBe(0);
+        await replaceSessionEntry(scope, { ...entry, label: "Renamed" });
+        expect((await source.list()).sessions).toMatchObject([{ name: "Renamed" }]);
+        await replaceSessionEntry(scope, { ...entry, category: "Private" });
+        expect((await source.list()).sessions).toEqual([]);
+        await replaceSessionEntry(scope, { ...entry, sessionId: "replacement" });
+        expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
+      } finally {
+        reads.restore();
+      }
+    });
+  });
+
   it("derives titles only for the requested page while preserving transcript-title search", async () => {
     await withCatalogFixture(async (receiver) => {
       const source = commandFixture();
@@ -232,14 +270,19 @@ describe("session-share node commands", () => {
         },
       );
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-      const counter = trackSqliteStatementExecutions(db, ["transcript"], (sql) =>
-        /\btranscript_events\b/.test(sql) ? "transcript" : null,
+      const counter = trackSqliteStatementExecutions(db, ["transcript", "participants"], (sql) =>
+        /\bfrom\s+"?session_participants\b/i.test(sql)
+          ? "participants"
+          : /\btranscript_events\b/.test(sql)
+            ? "transcript"
+            : null,
       );
       try {
         expect((await source.list({ limit: 1 })).sessions).toMatchObject([
           { threadId: "agent:main:named", name: "Named session" },
         ]);
         expect.soft(counter.counts.transcript).toBe(0);
+        expect.soft(counter.counts.participants).toBe(0);
       } finally {
         counter.restore();
       }
@@ -466,7 +509,7 @@ describe("session-share node commands", () => {
           createdActor: publishedActor,
         },
       ]);
-      expect.soft(identityReads).toHaveBeenCalledTimes(1);
+      expect.soft(identityReads).not.toHaveBeenCalled();
       expect(first.nextCursor).toBeDefined();
       identityReads.mockClear();
       const older = await fixture.list({ limit: 1, cursor: first.nextCursor });
@@ -487,7 +530,7 @@ describe("session-share node commands", () => {
           createdActor: publishedActor,
         },
       ]);
-      expect.soft(identityReads).toHaveBeenCalledTimes(1);
+      expect.soft(identityReads).not.toHaveBeenCalled();
       expect(older.nextCursor).toBeDefined();
       identityReads.mockClear();
       const roots = await fixture.list({ cursor: older.nextCursor });
@@ -568,10 +611,8 @@ describe("session-share node commands", () => {
       let first: SessionPage;
       try {
         first = await fixture.list();
-        expect.soft(counter.counts.identities).toBeGreaterThan(0);
-        expect.soft(counter.counts.identities).toBeLessThanOrEqual(1);
-        expect.soft(counter.counts.profiles).toBeLessThanOrEqual(1);
-        expect.soft(counter.rowCounts.identities).toBe(9);
+        expect.soft(counter.counts.identities).toBe(0);
+        expect.soft(counter.counts.profiles).toBe(0);
       } finally {
         counter.restore();
       }
@@ -624,57 +665,7 @@ describe("session-share node commands", () => {
     });
   });
 
-  it.each(["profile", "identity"])(
-    "preserves the first creator's %s error when a later cohort row is corrupt",
-    async (first) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const fixture = commandFixture();
-        const profiles = [0, 1].map((index) =>
-          syncGitHubIdentity({
-            identity: { accountId: 6000 + index, login: `ordered-${index}` },
-            authenticationAlias: { kind: "email", email: `ordered-${index}@example.test` },
-          }),
-        );
-        const now = Date.now();
-        for (const [index, profile] of profiles.entries()) {
-          await replaceSessionEntry(
-            { agentId: "main", sessionKey: `agent:main:ordered-${index}` },
-            {
-              sessionId: `ordered-${index}`,
-              updatedAt: now - index,
-              label: `Ordered ${index}`,
-              category: "Team",
-              createdActor: { type: "human", source: "profile", id: profile.id },
-            },
-          );
-        }
-        const { db } = openOpenClawStateDatabase();
-        const profileIndex = first === "profile" ? 0 : 1;
-        db.prepare("UPDATE user_profiles SET updated_at = ? WHERE id = ?").run(
-          9223372036854775807n,
-          profiles[profileIndex]!.id,
-        );
-        db.prepare("UPDATE user_profiles SET primary_github_account_id = ? WHERE id = ?").run(
-          9007199254740992n,
-          profiles[1 - profileIndex]!.id,
-        );
-        const singleFailure: unknown = await fixture
-          .list({ limit: 1 })
-          .catch((error: unknown) => error);
-        expect(singleFailure).toBeInstanceOf(RangeError);
-        if (!(singleFailure instanceof Error)) {
-          throw new Error("Expected the first creator's native error");
-        }
-        await expect(fixture.list()).rejects.toMatchObject({
-          name: singleFailure.name,
-          message: singleFailure.message,
-          code: "ERR_OUT_OF_RANGE",
-        });
-      });
-    },
-  );
-
-  it("propagates terminal creator-query corruption without replaying through a fresh handle", async () => {
+  it("propagates a failed profile reader without replaying creator queries on the host", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fixture = commandFixture();
       const now = Date.now();
@@ -692,29 +683,76 @@ describe("session-share node commands", () => {
         );
       }
       const cached = openOpenClawStateDatabase();
-      const prepare = cached.db.prepare.bind(cached.db);
       const corruption = Object.assign(new Error("database disk image is malformed"), {
         code: "ERR_SQLITE_ERROR",
         errcode: 11,
       });
-      // Inject at native execution so both the Kysely error hook and cached-owner eviction run.
-      const failure = vi.spyOn(cached.db, "prepare").mockImplementation((sql) => {
-        if (sql.includes('from "user_profiles"') && sql.includes('"id" in')) {
-          throw corruption;
-        }
-        return prepare(sql);
-      });
+      const native = vi.spyOn(githubIdentities, "selectStoredGitHubIdentities");
+      const failure = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockRejectedValueOnce(corruption);
       try {
         await expect(fixture.list()).rejects.toBe(corruption);
-        expect(cached.db.isOpen).toBe(false);
-        expect(
-          openClawStateDatabaseCache.getCachedOpenClawStateDatabase(cached.path),
-        ).toBeUndefined();
+        expect(native).not.toHaveBeenCalled();
+        expect(cached.db.isOpen).toBe(true);
       } finally {
         failure.mockRestore();
       }
     });
   });
+
+  it.each(["list", "read"] as const)(
+    "refuses a replaced physical source during %s identity preparation",
+    async (operation) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureProfileForEmail("physical@example.test");
+        const scope = { agentId: "main", sessionKey: "agent:main:physical", sessionId: "physical" };
+        await upsertSessionEntryCore(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now(),
+          label: "Shared",
+          category: "Team",
+          createdActor: { type: "human", source: "profile", id: profile.id },
+        });
+        await appendSessionTranscriptMessageByIdentity({
+          ...scope,
+          message: {
+            role: "user",
+            content: "Shared",
+            __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
+          },
+        });
+        const pathname = openOpenClawAgentDatabase({ agentId: "main" }).path;
+        const accepted = createDeferredCore();
+        const release = createDeferredCore();
+        const execute = stateReads.executeExistingOpenClawStateRead;
+        vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
+          async (...args) => {
+            const result = await execute(...args);
+            accepted.resolve();
+            await release.promise;
+            return result;
+          },
+        );
+        const fixture = commandFixture();
+        const pending = operation === "list" ? fixture.list() : fixture.read(scope.sessionKey);
+        try {
+          await Promise.race([
+            accepted.promise,
+            pending.then(() => {
+              throw new Error("Read was not held");
+            }),
+          ]);
+          await closeOpenClawAgentDatabasesAsync();
+          fs.renameSync(pathname, `${pathname}.previous`);
+          fs.copyFileSync(`${pathname}.previous`, pathname);
+        } finally {
+          release.resolve();
+        }
+        await expect(pending).rejects.toThrow(/identity|changed/i);
+      });
+    },
+  );
 
   it("reads real newest-first transcript rows with portable sender and revokes moved sessions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -801,6 +839,79 @@ describe("session-share node commands", () => {
 });
 
 describe("session-share receiver identity integration", () => {
+  it("rejects an earlier host snapshot after another host prepares", async () => {
+    await withCatalogFixture(async (fixture) => {
+      syncGitHubIdentity({
+        identity: { accountId: 702, login: "second-host", name: "Second" },
+        authenticationAlias: { kind: "email", email: "second-host@example.test" },
+      });
+      fixture.list.mockResolvedValue({
+        nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
+      });
+      fixture.setConfig({
+        plugins: {
+          entries: {
+            "session-share": {
+              config: {
+                nodes: {
+                  alpha: { linkGitHubIdentities: false },
+                  beta: { linkGitHubIdentities: true },
+                },
+              },
+            },
+          },
+        },
+      });
+      fixture.invoke.mockImplementation(async ({ nodeId }) => ({
+        sessions: [
+          {
+            ...nativeSession,
+            createdActor: {
+              type: "human",
+              identity: { ...remoteIdentity, id: nodeId === "alpha" ? "701" : "702" },
+            },
+          },
+        ],
+      }));
+      await fixture.hydrate();
+      const firstPublished = createDeferredCore();
+      const secondPreparing = createDeferredCore();
+      const release = createDeferredCore();
+      const execute = stateReads.executeExistingOpenClawStateRead;
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
+        async (...args) => {
+          const result = await execute(...args);
+          secondPreparing.resolve();
+          await release.promise;
+          return result;
+        },
+      );
+      const pending = fixture.catalog.list({
+        onHost: (host) => {
+          if (host.hostId === "node:alpha") {
+            expect(host.sessions[0]?.threadId).toBe(nativeSession.threadId);
+            firstPublished.resolve();
+          }
+        },
+      });
+      try {
+        await Promise.race([
+          Promise.all([firstPublished.promise, secondPreparing.promise]),
+          pending.then(() => {
+            throw new Error("Second host was not held");
+          }),
+        ]);
+        fixture.list.mockResolvedValue({
+          nodes: [{ nodeId: "beta", connected: true, commands }],
+        });
+        await fixture.catalog.list({ hostIds: [] });
+      } finally {
+        release.resolve();
+      }
+      await expect(pending).rejects.toThrow("Session Share is unavailable");
+    });
+  });
+
   it("keeps claims remote by default and applies only explicit owner and numeric GitHub links", async () => {
     const nodeId = "alpha";
     await withCatalogFixture(async (fixture) => {
@@ -899,7 +1010,7 @@ describe("session-share receiver identity integration", () => {
       await fixture.hydrate();
       identityReads.mockClear();
       const linked = (await fixture.catalog.list({}))[0]!.sessions;
-      expect.soft(fullIdentityScans()).toBe(1);
+      expect.soft(fullIdentityScans()).toBe(0);
       expect(linked[0]?.createdActor).toMatchObject({
         type: "human",
         id: profile.id,
@@ -913,7 +1024,7 @@ describe("session-share receiver identity integration", () => {
         hostId,
         threadId: nativeSession.threadId,
       });
-      expect.soft(fullIdentityScans()).toBe(1);
+      expect.soft(fullIdentityScans()).toBe(0);
       expect(page.items.map((item) => item.sender)).toEqual([
         { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
         { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },

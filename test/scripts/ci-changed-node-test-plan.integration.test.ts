@@ -92,14 +92,6 @@ it.each(
       sources: ["scripts/bench-gateway-startup.ts"],
       preciseSubjects: true,
     },
-    {
-      target: "src/commands/doctor-lint.native-capture.test.ts",
-      sources: [
-        "src/commands/doctor-lint.native-capture.test-support.ts",
-        "src/cli/run-main-plugin-cache.ts",
-      ],
-      preciseSubjects: false,
-    },
   ].flatMap(({ target, sources, preciseSubjects }) =>
     [target, ...sources].map((changedPath) => ({ target, changedPath, preciseSubjects })),
   ),
@@ -140,36 +132,6 @@ it.each(
   },
 );
 
-it("keeps precise first-signin targets under exclusive Gateway admission", () => {
-  const target = "src/gateway/setup-inference.first-signin.integration.test.ts";
-  const jobs = createChangedNodeTestShards([target], { runnerBackend: "hybrid" });
-  expect(jobs).not.toBeNull();
-  const owner = jobs?.find((job) =>
-    job.groups?.some((group) => group.includePatterns?.includes(target)),
-  );
-  expect(owner).toMatchObject({ planConcurrency: 1 });
-  expect(jobs?.flatMap((job) => job.targets ?? [])).not.toContain(target);
-});
-
-it("keeps boundary coverage when only a deferred proof helper changes", () => {
-  const helper = "test/helpers/sqlite-sessions-transcripts-flip-proof-assertions.ts";
-  const shards = createChangedNodeTestShards([helper]);
-  expect(shards).toContainEqual(
-    expect.objectContaining({
-      checkName: "checks-node-changed-boundary",
-      configs: ["test/vitest/vitest.boundary.config.ts"],
-    }),
-  );
-  const withDeleted = createChangedNodeTestShards([helper, "src/deleted-unowned-source.ts"]);
-  expect(withDeleted).not.toBeNull();
-  expect(selectedFiles(withDeleted)).toEqual(
-    expect.arrayContaining(["src/gateway/client-callsites.guard.test.ts"]),
-  );
-  expect(selectedFiles(withDeleted)).not.toContain(
-    "extensions/acpx/src/runtime-advertised-model.process.test.ts",
-  );
-});
-
 it("retains package and plugin consumers together in a mixed diff", () => {
   const changedPaths = [
     "packages/gateway-protocol/src/frame-guards.ts",
@@ -193,6 +155,29 @@ it("retains package and plugin consumers together in a mixed diff", () => {
   expect(extensionGroups.length).toBeGreaterThan(0);
   expect(extensionGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
 });
+
+it.each(["packages/markdown-core/src/render-aware-chunking.ts"])(
+  "selects channel chunk-contract suites when %s changes",
+  (source) => {
+    // Channels import the chunker through the Plugin SDK facade, below the PR import-walk depth.
+    expect(
+      resolveChangedNodeTestTargets([source], {
+        selectionMode: "aggressive",
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "extensions/googlechat/src/format.test.ts",
+        "extensions/signal/src/format.test.ts",
+        "extensions/slack/src/format.test.ts",
+        "extensions/sms/src/send.test.ts",
+        "extensions/telegram/src/format.test.ts",
+        "extensions/whatsapp/src/send.delivery-recovery.test.ts",
+      ]),
+    );
+  },
+);
 
 it("keeps UI and core changes with exact owners and direct consumers", () => {
   const paths = [
@@ -338,38 +323,6 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
     expect(selectedFiles(withHub)).not.toContain(
       "extensions/acpx/src/runtime-advertised-model.process.test.ts",
     );
-  }
-});
-
-it("adds the fixed smoke once to narrow, hub, and directly edited smoke plans", () => {
-  const smoke = [
-    "test/gateway-rpc-exporters.test.ts",
-    "src/config/io.load-async.test.ts",
-    "src/config/io.compat.test.ts",
-    "src/config/utility-model-separation-migration.io.test.ts",
-    "src/plugins/loader.runtime-registry.test.ts",
-    "test/qa-channel-message-tool-delivery.test.ts",
-  ];
-  for (const changedPaths of [
-    ["src/infra/retry.test.ts"],
-    ["tsconfig.json"],
-    ["test/gateway-rpc-exporters.test.ts"],
-  ]) {
-    const shards = createChangedNodeTestShards(changedPaths, {
-      includePrExemptRuntimeTests: false,
-      includeReleaseOnlyRuntimeTests: false,
-      dedicatedBuildArtifacts: false,
-    });
-    expect(shards).not.toBeNull();
-    const files = selectedFiles(shards);
-    for (const target of smoke) {
-      expect(
-        files.filter((file) => file === target),
-        target,
-      ).toHaveLength(1);
-    }
-    expect(files).not.toContain("extensions/acpx/src/runtime-advertised-model.process.test.ts");
-    expect(shards?.every((shard) => (shard.predictedSeconds ?? 0) <= 300)).toBe(true);
   }
 });
 

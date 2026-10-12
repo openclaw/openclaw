@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -23,6 +24,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type {
   SessionMetadataExpectedEntry,
   SessionOwnerAssignParams,
@@ -58,6 +60,7 @@ export function replaceSessionOwnerInTransaction(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   owner: SessionOwnerAssignment | undefined,
+  postimages?: SessionEntryWritePostimages,
 ): boolean {
   if (!hasSqliteSessionOwnerColumns(database.db)) {
     if (!owner?.actor.id) {
@@ -68,32 +71,39 @@ export function replaceSessionOwnerInTransaction(
     }
   }
   let updated: { current_session_id: string; lifecycle_revision: string | null } | undefined;
-  const writeGeneration = trackSessionEntryCacheWrite(database, () => {
-    updated = executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .updateTable("session_nodes")
-        .set({
-          owner_actor_type: owner?.actor.type ?? null,
-          owner_actor_id: owner?.actor.id ?? null,
-          owner_assigned_by_type: owner?.assignedBy?.type ?? null,
-          owner_assigned_by_id: owner?.assignedBy?.id ?? null,
-          owner_assigned_at: owner?.assignedAt ?? null,
-        })
-        .where("session_key", "=", sessionKey)
-        .returning((eb) => [
-          "current_session_id",
-          eb
-            .fn<string | null>("json_extract", [
-              eb.ref("entry_json"),
-              eb.val("$.lifecycleRevision"),
-            ])
-            .as("lifecycle_revision"),
-        ]),
-    ).rows[0];
-  });
+  const writeGeneration = trackSessionEntryCacheWrite(database, () =>
+    withSqliteDatabaseWriteScope(database.db, [sessionKey], () => {
+      updated = executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .updateTable("session_nodes")
+          .set({
+            owner_actor_type: owner?.actor.type ?? null,
+            owner_actor_id: owner?.actor.id ?? null,
+            owner_assigned_by_type: owner?.assignedBy?.type ?? null,
+            owner_assigned_by_id: owner?.assignedBy?.id ?? null,
+            owner_assigned_at: owner?.assignedAt ?? null,
+          })
+          .where("session_key", "=", sessionKey)
+          .returning((eb) => [
+            "current_session_id",
+            eb
+              .fn<string | null>("json_extract", [
+                eb.ref("entry_json"),
+                eb.val("$.lifecycleRevision"),
+              ])
+              .as("lifecycle_revision"),
+          ]),
+      ).rows[0];
+    }),
+  );
   if (!updated) {
     return false;
+  }
+  const postimage = postimages?.get(sessionKey);
+  if (postimage) {
+    postimage.entry = { ...postimage.entry, owner };
+    postimage.changed = true;
   }
   publishSessionEntryCacheInvalidation(
     database,

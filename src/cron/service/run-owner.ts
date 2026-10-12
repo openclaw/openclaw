@@ -82,7 +82,7 @@ export async function skipCronJobsWithoutOwners(
       }
       for (const notification of skipped.notifications) {
         historySource.assertCurrent();
-        runPostPersistCronNotifications(state, [notification]);
+        await runPostPersistCronNotifications(state, [notification]);
       }
     },
   });

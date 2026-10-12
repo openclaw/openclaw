@@ -6,7 +6,7 @@ import { ref } from "lit/directives/ref.js";
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 const measuredInputValues = new WeakMap<HTMLTextAreaElement, string>();
 
-type CommandPaletteInputProps = {
+export type CommandPaletteInputProps = {
   value: string;
   placeholder: string;
   onInputRef: (element: Element | undefined) => void;
@@ -36,7 +36,7 @@ function updatePaletteInputOverflow(textarea: HTMLTextAreaElement) {
 
 // This input is also the cold-loader surface. Keep its DOM/layout owner free of
 // search catalogs, draft creation, and the full chat composer's scroll lifecycle.
-function updatePaletteInputLayout(textarea: HTMLTextAreaElement, editing = false) {
+export function updatePaletteInputLayout(textarea: HTMLTextAreaElement, editing = false) {
   const root = textarea.closest<HTMLElement>(".cmd-palette__entry");
   const actions = root?.querySelector<HTMLElement>(".cmd-palette__input-actions");
   if (root && actions) {
@@ -67,7 +67,7 @@ function updatePaletteInputLayout(textarea: HTMLTextAreaElement, editing = false
   measuredInputValues.set(textarea, textarea.value);
 }
 
-function handlePaletteInputScroll(event: Event) {
+export function handlePaletteInputScroll(event: Event) {
   const textarea = event.currentTarget;
   if (textarea instanceof HTMLTextAreaElement && textarea.isConnected) {
     updatePaletteInputOverflow(textarea);

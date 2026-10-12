@@ -85,6 +85,22 @@ install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwis
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
 
+The default stable/full live-provider coverage includes the blocking `live-cache`
+suite; beta includes it when repo/live coverage is selected. Its assertions
+require serialized prompt-prefix stability and provider cache reuse through
+Anthropic Messages and OpenAI Responses, plus OpenRouter when its credential is
+available. Live agent scenarios exercise instruction refresh, activated prompt
+hooks, and persisted prompt-projection rehydration while forcing full-history
+requests through a cold provider transport. This is not a Gateway process-restart
+or retained HTTP continuation check. Focused verification uses
+`rerun_group=live-e2e` and `live_suite_filter=live-cache`; the cross-OS `provider`
+and `mode` inputs do not narrow these cache checks. Offline coverage also compares
+requests across authenticated Gateway chat, a spawned child's private completion, an
+in-process server stop/start, and subsequent authenticated chat in the same
+persisted session. It does not restart the OS process. Deterministic admitted-agent and Gateway
+regressions supply separate evidence from successful live-provider measurements; see
+[Prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 For selected official npm plugins, Full Release Validation packs and qualifies
 the exact tarballs intended for publication and records their immutable artifact
 descriptors. Publication consumes those same bytes. Unpacked source fixtures do
@@ -125,6 +141,19 @@ immutable admission artifact. Only then does that same helper dispatch Full
 Release Validation from an immutable `release-ci/*` ref at Q. A publication
 `release-publish/*` tag belongs to P, never to Q merely to make validation run.
 Admission is not a successful test result or publication approval.
+
+`pnpm release:candidate --workflow-sha <P>` pins helper and publication tooling,
+not the qualification harness. Stable `npm-stable-v1` and admitted stable/full
+qualification already include mock-provider package Telegram proof. The helper
+reuses that authenticated proof for the exact FRV-qualified package, without a
+Telegram waiver; `npm-beta-v1` remains deferred, never passed. Separately packed
+historical packages and explicitly selected live-provider Telegram checks need
+their own proof at C. A supplemental check uses only the original retained
+`release-ci/*` ref verified at Q=C, with `harness_ref` pinned to that SHA; missing
+or moved refs require newly bound candidate evidence, never a fallback to main.
+Supplemental run IDs stay in the candidate evidence bundle, not the publisher's
+optional postpublish diagnostic input. Local Parallels qualification likewise
+uses C's harness and dependencies from the validated candidate checkout.
 
 A candidate missing the required qualification contracts needs a deliberate
 backport. The helper does not silently use future-main checks or import
@@ -265,6 +294,13 @@ runbook. Former section links below lead to their corresponding procedures.
 <a id="stable-main-closeout" />
 
 [Stable main closeout](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/stable-main-closeout.md).
+
+After every stable release, regenerate the committed shipped Plugin SDK surface
+on `main` with `pnpm plugin-sdk:shipped-surface:gen -- --release <stable tag>`,
+then run `pnpm plugin-sdk:surface:check`. Commit the generated
+`scripts/lib/plugin-sdk-shipped-surface.json` as part of stable closeout; do not
+edit it by hand. The inventory records the stable tag's typed public declarations
+so later export-budget reductions cannot authorize their removal.
 
 <a id="post-release-documentation-publication" />
 

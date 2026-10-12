@@ -1,5 +1,4 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicySandboxPostureEvidence } from "../policy-state.js";
 import { CHECK_IDS } from "./check-ids.js";
 import { SANDBOX_CONTAINER_POLICY_RULES } from "./metadata.js";
@@ -8,10 +7,9 @@ import {
   policyEvidenceRuleFindings,
   type PolicyEvidenceRule,
 } from "./policy-evidence-finding.js";
-import { agentScopedPolicyTargets, scopedAgentIdMatches } from "./policy-scope.js";
-import { posturePolicyShapeFinding } from "./posture-shapes.js";
-import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
-import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
+import { scopedAgentIdMatches } from "./policy-scope.js";
+import { policySectionTargets } from "./policy-section-targets.js";
+import { readPolicyBoolean, readStringList } from "./utils.js";
 
 export function sandboxPostureFindings(
   policy: unknown,
@@ -19,34 +17,18 @@ export function sandboxPostureFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  if (!isRecord(policy)) {
-    return [];
-  }
   const findings: HealthFinding[] = [];
   const entries = evidence.sandboxPosture ?? [];
-  const sandboxPolicy = policy.sandbox;
-  if (
-    isRecord(sandboxPolicy) &&
-    posturePolicyShapeFinding("sandbox", sandboxPolicy, { policyDocName, policyPath }) === undefined
-  ) {
-    findings.push(
-      ...sandboxPostureFindingsForRule(sandboxPolicy, policyDocName, "sandbox", entries),
-    );
-  }
-  if (!hasValidScopedPolicy(policy, policyPath, policyDocName)) {
-    return findings;
-  }
-  for (const target of agentScopedPolicyTargets(policy)) {
-    const scopedSandboxPolicy = target.overlay.sandbox;
-    if (!isRecord(scopedSandboxPolicy)) {
-      continue;
-    }
+  for (const target of policySectionTargets(policy, policyPath, policyDocName, "sandbox")) {
+    const agentId = target.selectorId;
     findings.push(
       ...sandboxPostureFindingsForRule(
-        scopedSandboxPolicy,
+        target.policy,
         policyDocName,
-        `scopes/${ocPathSegment(target.scopeName)}/sandbox`,
-        entries.filter((entry) => scopedSandboxAgentMatches(entry, target.agentId, entries)),
+        target.requirementBase,
+        agentId === undefined
+          ? entries
+          : entries.filter((entry) => scopedSandboxAgentMatches(entry, agentId, entries)),
       ),
     );
   }

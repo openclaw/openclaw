@@ -19,7 +19,12 @@ export function parseControlUiSessionReturnPath(value: string, basePath: string)
   if (
     !url ||
     `${url.pathname}${url.search}` !== value ||
-    [...url.searchParams.keys()].some((key) => key !== "dashboard" && key !== "draft") ||
+    [...url.searchParams.keys()].some(
+      (key) => key !== "dashboard" && key !== "draft" && key !== "openclaw_mount_recovery",
+    ) ||
+    url.searchParams.getAll("openclaw_mount_recovery").length > 1 ||
+    (url.searchParams.has("openclaw_mount_recovery") &&
+      !/^[0-9]+$/u.test(url.searchParams.get("openclaw_mount_recovery") ?? "")) ||
     url.searchParams.getAll("draft").length > 1 ||
     url.searchParams.getAll("dashboard").length > 1 ||
     (url.searchParams.has("dashboard") && url.searchParams.get("dashboard") !== "expanded")

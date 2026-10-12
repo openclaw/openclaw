@@ -4,10 +4,10 @@ import {
   mutateSubagentCompletionInWorker,
 } from "../agents/subagents/completion/subagent-completion-admission.worker.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
+  WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
 import {
   type bindDeliveryQueueEntry,
@@ -29,8 +29,6 @@ import {
   type QueuedSessionDelivery,
 } from "./session-delivery-queue.records.js";
 import type { SessionDeliveryAgentRunUpdate } from "./session-delivery-queue.worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
-import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 function readSessionDelivery(
   database: OpenClawStateDatabase,
@@ -97,23 +95,16 @@ export const sessionDeliveryOperations = {
     input: Parameters<typeof admitSubagentCompletionInWorker>[0],
     { open },
   ) => admitSubagentCompletionInWorker(input, open()),
-  "sessionDelivery.enqueue": (input: PreparedEntry, { open }) => {
-    const database = open();
-    return runOpenClawStateWriteTransaction(
-      () => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+  "sessionDelivery.enqueue": (input: PreparedEntry, { writeAdmitted }) =>
+    writeAdmitted(
+      (database) => {
         upsertBoundDeliveryQueueEntryInDatabase(input, database);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       },
-      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
       { operationLabel: "sessionDelivery.enqueue" },
-    );
-  },
-  "sessionDelivery.enqueueClaimed": (input: PreparedEntry, { open }) => {
-    const database = open();
-    return runOpenClawStateWriteTransaction(
-      () => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    ),
+  "sessionDelivery.enqueueClaimed": (input: PreparedEntry, { writeAdmitted }) =>
+    writeAdmitted(
+      (database) => {
         const id = input.row.id;
         const claimed = upsertBoundDeliveryQueueEntryInDatabase(input, database);
         let status: DeliveryQueueStoredStatus;
@@ -122,13 +113,10 @@ export const sessionDeliveryOperations = {
         } catch {
           status = "unknown";
         }
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         return { id, claimed, status };
       },
-      { database, path: database.path, env: getSqliteWorkerStateContext().environment },
       { operationLabel: "sessionDelivery.enqueueClaimed" },
-    );
-  },
+    ),
   "sessionDelivery.releaseClaim": (input: { id: string }, { open }) => {
     const database = open();
     update(database, input.id, (entry) => ({ ...entry, availableAt: Date.now() }));
@@ -270,6 +258,6 @@ export const sessionDeliveryOperations = {
       }
     });
   },
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 export type SessionDeliveryWorkerOperations = WorkerOperations<typeof sessionDeliveryOperations>;

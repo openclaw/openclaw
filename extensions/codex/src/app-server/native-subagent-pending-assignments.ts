@@ -64,7 +64,7 @@ const inventorySchema = z
 export type CodexNativeSubagentPendingAssignment = z.infer<typeof assignmentSchema>;
 export type CodexNativeSubagentAssignmentStore = {
   assertCurrent(): void;
-  read(): readonly CodexNativeSubagentPendingAssignment[];
+  read(): Promise<readonly CodexNativeSubagentPendingAssignment[]>;
   record(
     assignment: CodexNativeSubagentPendingAssignment,
     assertCurrent: () => void,

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { projectProviderError } from "../../../packages/ai/src/utils/provider-error.js";
 import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import {
@@ -24,7 +23,7 @@ function errorMessage(message: string): AssistantMessage {
 }
 
 describe("isRetryableAssistantError", () => {
-  it.each([undefined, "{}", "invalid", '{"retrySafe":false}'])(
+  it.each([undefined, "invalid"])(
     "does not reclassify an identity conflict without safe-retry evidence: %s",
     (errorBody) => {
       const message = {
@@ -39,34 +38,13 @@ describe("isRetryableAssistantError", () => {
   // The classifier owns the full phrase corpus. Keep retry-specific evidence,
   // replay windows, and incomplete-stream regressions at this adapter boundary.
   it.each([
-    ["bedrock-incomplete-terminal-stream", true],
-    ["anthropic-incomplete-terminal-stream", true],
-    ["google-incomplete-terminal-stream", true],
     ["google-sse-eof-incomplete-frame", true],
     ["google-sse-malformed-json-frame", false],
-    ["mistral-incomplete-terminal-stream", true],
-    ["openai-completions-incomplete-terminal-stream", true],
-    ["openai-responses-incomplete-terminal-stream", true],
-    ["proxy-incomplete-terminal-stream", true],
-    ["retry-rate-limit-hyphen", true],
     ["billing-rate-limit-too-many", true],
     ["billing-service-capacity", true],
-    ["legacy-provider-matchers-012", true],
     ["billing-openai-structured-server-error", true],
     ["billing-econnrefused", true],
-    ["billing-connection-error", true],
-    ["retry-connection-refused", true],
-    ["retry-connection-lost", true],
-    ["retry-other-side-closed", true],
-    ["billing-fetch-failed", true],
-    ["retry-reset-before-headers", true],
-    ["retry-websocket-closed", true],
-    ["retry-websocket-error", true],
-    ["retry-http2-no-response", true],
     ["retry-delay", true],
-    ["retry-ended-without-terminal-response", true],
-    ["http-provider-timeout", true],
-    ["billing-undici-connect-timeout", true],
     ["legacy-billing-a-004", true],
     ["patterns-context-llamacpp-exceeded-500", true],
     ["billing-http402-rate-limit", true],
@@ -98,17 +76,18 @@ describe("isRetryableAssistantError", () => {
     ).toBe(false);
   });
 
-  it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
-    "does not retry replay-unsafe provider outcome %s",
-    (errorCode) => {
-      expect(
-        isRetryableAssistantError({
-          ...errorMessage("The WebSocket closed after dispatch"),
-          errorCode,
-        }),
-      ).toBe(false);
-    },
-  );
+  it.each([
+    PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+    PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+    "openclaw_repeated_tool_error",
+  ])("does not retry terminal outcome %s", (errorCode) => {
+    const message = {
+      ...errorMessage("The WebSocket closed after dispatch"),
+      errorCode,
+    };
+    expect(isTerminalAssistantError(message)).toBe(true);
+    expect(isRetryableAssistantError(message)).toBe(false);
+  });
 
   it("does not retry a structured provider refusal with transient-looking text", () => {
     expect(
@@ -155,15 +134,12 @@ describe("isRetryableAssistantError", () => {
     ).toBe(true);
   });
 
-  it.each([
-    "model gpt-5.5-preview-0429 not found",
-    "model model-x-500-preview not found",
-    "Image dimensions 1504x1504 exceed the maximum allowed size",
-    "Image width 500 exceeds the maximum allowed size",
-    "invalid api key sk-example502value",
-  ])("does not retry permanent errors with status-code substrings: %s", (text) => {
-    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
-  });
+  it.each(["model model-x-500-preview not found", "invalid api key sk-example502value"])(
+    "does not retry permanent errors with status-code substrings: %s",
+    (text) => {
+      expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+    },
+  );
 
   it("does not retry a future Retry-After date", () => {
     vi.useFakeTimers();
@@ -184,31 +160,11 @@ describe("isRetryableAssistantError", () => {
 
   it.each([
     "OpenAI API error (500): 500 The server had an error while processing your request. Sorry about that!",
-    "Azure OpenAI API error (502): Bad gateway from upstream",
-    "Mistral API error (503): service temporarily unavailable",
-    "Provider API error (504): gateway timeout",
   ])("retries built-in provider-wrapped transient 5xx: %s", (text) => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
   });
 
-  it.each([500, 502])("does not replay HTTP %s request-validation errors", (status) => {
-    expect(
-      isRetryableAssistantError({
-        ...errorMessage(`${status} Unknown parameter: 'logprobs'`),
-        errorType: "invalid_request_error",
-        errorCode: "unknown_parameter",
-      }),
-    ).toBe(false);
-    expect(
-      isRetryableAssistantError(
-        errorMessage(
-          `${status} {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}`,
-        ),
-      ),
-    ).toBe(false);
-  });
-
-  it.each([undefined, 400, 404, 422, 500, 502])(
+  it.each([undefined, 400, 500])(
     "does not replay a validation rejection with status %s",
     (status) => {
       const error = {
@@ -230,39 +186,17 @@ describe("isRetryableAssistantError", () => {
     },
   );
 
-  it("honors validation when projection keeps status outside the message", () => {
-    const error = {
-      type: "invalid_request_error",
-      code: "unknown_parameter",
-      message: "Unsupported parameter: timeout",
-    };
-    const projected = projectProviderError({ status: 502, message: error.message, error });
-    expect(
-      isRetryableAssistantError({ ...errorMessage(projected.errorMessage), ...projected }),
-    ).toBe(false);
-  });
-
-  it.each([
-    "500 request timed out",
-    "502 Bad gateway",
-    "503 service unavailable",
-    "529 Overloaded",
-  ])("keeps concrete outage evidence ahead of a generic invalid-request type: %s", (text) => {
-    expect(
-      isRetryableAssistantError({
-        ...errorMessage(text),
-        errorType: "invalid_request_error",
-      }),
-    ).toBe(true);
-  });
-
-  it("does not treat permanent provider-wrapped 4xx as retryable", () => {
-    expect(
-      isRetryableAssistantError(
-        errorMessage("OpenAI API error (400): 400 Model Id [gpt-5.4-nano] not found"),
-      ),
-    ).toBe(false);
-  });
+  it.each(["500 request timed out", "529 Overloaded"])(
+    "keeps concrete outage evidence ahead of a generic invalid-request type: %s",
+    (text) => {
+      expect(
+        isRetryableAssistantError({
+          ...errorMessage(text),
+          errorType: "invalid_request_error",
+        }),
+      ).toBe(true);
+    },
+  );
 
   it.each([
     ["authentication failure", "OpenAI API error (401): Invalid authentication credentials"],

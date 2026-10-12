@@ -694,6 +694,44 @@ function normalizePackModes(directory) {
   }
 }
 
+function runPackagePack(directory, destination, releaseRef, prepareRoot) {
+  const options = {
+    cwd: directory,
+    env: {
+      ...process.env,
+      OPENCLAW_PREPACK_PREPARED: "1",
+      ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+        ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+        : {}),
+    },
+    stdio: "inherit",
+    timeout: 30 * 60 * 1000,
+  };
+  if (prepareRoot) {
+    execFileSync("pnpm", ["run", "prepack"], options);
+  }
+  try {
+    prepareRoot?.();
+    // Bundled dependencies require the hoisted linker. Root bytes are already
+    // sealed after prepack; other packages keep their pack hooks enabled.
+    execFileSync(
+      "pnpm",
+      [
+        "pack",
+        ...(prepareRoot ? ["--config.ignore-scripts=true"] : []),
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        destination,
+      ],
+      options,
+    );
+  } finally {
+    if (prepareRoot) {
+      execFileSync("pnpm", ["run", "--if-present", "postpack"], options);
+    }
+  }
+}
+
 export function prepareNpmPackageBundle({
   sourceDir,
   outputDir,
@@ -739,64 +777,15 @@ export function prepareNpmPackageBundle({
       { cwd: sourceDir, stdio: "inherit" },
     );
   },
-  runPack = (directory, destination) =>
-    // Bundled dependencies only pack under the hoisted linker; prepack scripts stay enabled.
-    execFileSync(
-      "pnpm",
-      ["pack", "--config.node-linker=hoisted", "--pack-destination", destination],
-      {
-        cwd: directory,
-        env: {
-          ...process.env,
-          OPENCLAW_PREPACK_PREPARED: "1",
-          ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-            ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-            : {}),
-        },
-        stdio: "inherit",
-        timeout: 30 * 60 * 1000,
-      },
-    ),
-  runRootPack = (directory, destination) => {
-    const env = {
-      ...process.env,
-      OPENCLAW_PREPACK_PREPARED: "1",
-      ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-        ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-        : {}),
-    };
-    execFileSync("pnpm", ["run", "prepack"], {
-      cwd: directory,
-      env,
-      stdio: "inherit",
-      timeout: 30 * 60 * 1000,
-    });
-    try {
+  runPack = (directory, destination) => runPackagePack(directory, destination, releaseRef),
+  runRootPack = (directory, destination) =>
+    runPackagePack(directory, destination, releaseRef, () => {
       // Frozen prepack hooks may rebuild dist even when preparation already ran.
       // Sanitize the final declarations and refresh their hashes, then disable
       // pack hooks so those exact bytes and inventory stay sealed.
       sanitizeRootDeclarations(join(directory, "dist"));
       refreshRootDistInventory(directory);
-      execFileSync(
-        "pnpm",
-        [
-          "pack",
-          "--config.ignore-scripts=true",
-          "--config.node-linker=hoisted",
-          "--pack-destination",
-          destination,
-        ],
-        { cwd: directory, env, stdio: "inherit", timeout: 30 * 60 * 1000 },
-      );
-    } finally {
-      execFileSync("pnpm", ["run", "--if-present", "postpack"], {
-        cwd: directory,
-        env,
-        stdio: "inherit",
-        timeout: 30 * 60 * 1000,
-      });
-    }
-  },
+    }),
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
     sourceDir,

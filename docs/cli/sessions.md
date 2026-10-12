@@ -39,6 +39,13 @@ session keys.
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 
+The context denominator follows the selected model and runtime, using the local
+Gateway's published catalog, saved metadata, configured limits, or a matching
+verified run budget. Reading a session list does not start model discovery.
+Unknown capacity is `?` in the table and `null` in JSON, with no percentage.
+If Gateway inspection or its catalog read fails, the command warns and still lists
+stored sessions using saved or configured capacity.
+
 Flags:
 
 | Flag                 | Description                                                         |
@@ -99,7 +106,7 @@ skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-6-astra" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
@@ -249,7 +256,7 @@ remains supported. The real archive or delete request is authoritative.
 
 Agent-qualified aliases keep their selected owner through lookup and mutation.
 For example, `sessions delete agent:work:main --yes` still targets `work` when
-the Gateway describes that session using the canonical key `global`.
+the Gateway describes that session using the resolved key `global`.
 
 Example mixed-result JSON:
 
@@ -423,7 +430,7 @@ JSON result. Dry runs do not load harness plugins.
 Applied artifact cleanup counts only successful file removals. If a file cannot
 be deleted, it contributes no freed bytes and remains part of disk usage.
 Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
-other eligible files. Canonical SQLite archive pruning stops after a deletion
+other eligible files. SQLite archive pruning stops after a deletion
 error to retain its database recovery copy. If usage stays above the target,
 check filesystem permissions and retry after resolving the deletion failure.
 
@@ -504,7 +511,7 @@ owner; an explicit Doctor store selector otherwise defaults to `main`.
 
 `archive-age`, `archive-dashboard`, and `archive-cap` change session metadata
 while retaining transcript rows. Disk-budget cleanup can replace eligible
-history with compressed archives, whose canonical payload remains in SQLite.
+history with compressed archives, whose stored payload remains in SQLite.
 Doctor's `compact` step then reclaims free database pages with `VACUUM` and
 reports before/after database and WAL sizes. It does not choose more history
 to delete. Compare physical sizes and retained history, not only session counts;

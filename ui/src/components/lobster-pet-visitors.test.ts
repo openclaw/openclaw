@@ -128,6 +128,15 @@ describe("theme visitors and resident presence", () => {
       await element.updateComplete;
       expect(element.querySelector(".lobster-pet--passer")).toBeNull();
 
+      const parent = element.parentElement!;
+      element.remove();
+      await element.updateComplete;
+      parent.append(element);
+      await element.updateComplete;
+      await vi.advanceTimersByTimeAsync(10_000);
+      await element.updateComplete;
+      expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+
       element.seed = 55;
       await element.updateComplete;
       await vi.advanceTimersByTimeAsync(9000);
@@ -135,6 +144,26 @@ describe("theme visitors and resident presence", () => {
       expect(element.querySelector(".lobster-pet--fedora")).not.toBeNull();
     },
   );
+
+  it("publishes the resident's greeting at a visitor's midpoint", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    localStorage.setItem(
+      "openclaw.control.lobsterpet.familiarity.v1",
+      JSON.stringify({ visits: 15, shoos: 0 }),
+    );
+    const element = createPet(21);
+    await element.updateComplete;
+    // This load's stranger arrives at 8,403ms and crosses for 11 seconds.
+    await vi.advanceTimersByTimeAsync(13_902);
+    await element.updateComplete;
+    const resident = element.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
+    expect(resident).not.toBeNull();
+    expect(resident?.classList.contains("lobster-pet--act-wave")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await element.updateComplete;
+    expect(resident?.classList.contains("lobster-pet--act-wave")).toBe(true);
+  });
 
   it("earns the golden ledge trim once the Lobsterdex is complete", async () => {
     vi.useFakeTimers();

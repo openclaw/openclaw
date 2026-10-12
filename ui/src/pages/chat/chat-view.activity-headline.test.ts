@@ -3,6 +3,8 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createTestTranscript, renderChatInto } from "./chat-view.test-helpers.ts";
 import {
@@ -10,13 +12,13 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
-let container: HTMLDivElement;
+let container: ReturnType<typeof createComposerContainer>;
 let transcript: ReturnType<typeof createTestTranscript>;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(10_000);
   installTranscriptDomMocks();
-  container = document.createElement("div");
+  container = createComposerContainer();
   transcript = createTestTranscript();
 });
 afterEach(() => {
@@ -174,7 +176,7 @@ it("limits live copy to the newest activity group in the active run, not history
 
 it.each(["end", "session", "run", "connection"] as const)(
   "does not carry a pending title across a %s scope change",
-  (scope) => {
+  async (scope) => {
     draw([user, tool("first", "Inspect the first file")]);
     vi.advanceTimersByTime(100);
     const messages = [
@@ -206,7 +208,7 @@ it.each(["end", "session", "run", "connection"] as const)(
         ...(scope === "connection" ? { connectionEpoch: 2 } : {}),
       },
     );
-    expect(labels()).toEqual(["Fresh scope file…"]);
+    await waitForSolid(() => expect(labels()).toEqual(["Fresh scope file…"]));
     vi.advanceTimersByTime(3_000);
     expect(labels()).toEqual(["Fresh scope file…"]);
   },

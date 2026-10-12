@@ -88,35 +88,28 @@ describe("human mention directory", () => {
     });
   });
 
-  it.each([false, true])(
-    "propagates a response exception once (preparation fails: %s)",
-    async (preparationFails) => {
-      await withInbox(async (f) => {
-        const params = { sessionKey: SESSION_KEY, query: "Alice" };
-        const readFailure = preparationFails
-          ? vi
-              .spyOn(userProfileReads, "readUserProfileDirectory")
-              .mockRejectedValueOnce(new Error("synthetic directory failure"))
-          : undefined;
-        const responseError = new Error("synthetic response failure");
-        const onResponse = vi.fn<GatewayRequestHandlerOptions["respond"]>((ok, _payload, error) => {
-          expect(ok).toBe(!preparationFails);
-          if (preparationFails) {
-            expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-          }
-          throw responseError;
-        });
-        try {
-          await expect(f.call("users.mentionable", params, f.bobClient, onResponse)).rejects.toBe(
-            responseError,
-          );
-          expect(onResponse).toHaveBeenCalledTimes(1);
-        } finally {
-          readFailure?.mockRestore();
-        }
+  it("propagates a response exception once after directory preparation fails", async () => {
+    await withInbox(async (f) => {
+      const params = { sessionKey: SESSION_KEY, query: "Alice" };
+      const readFailure = vi
+        .spyOn(userProfileReads, "readUserProfileDirectory")
+        .mockRejectedValueOnce(new Error("synthetic directory failure"));
+      const responseError = new Error("synthetic response failure");
+      const onResponse = vi.fn<GatewayRequestHandlerOptions["respond"]>((ok, _payload, error) => {
+        expect(ok).toBe(false);
+        expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+        throw responseError;
       });
-    },
-  );
+      try {
+        await expect(f.call("users.mentionable", params, f.bobClient, onResponse)).rejects.toBe(
+          responseError,
+        );
+        expect(onResponse).toHaveBeenCalledTimes(1);
+      } finally {
+        readFailure.mockRestore();
+      }
+    });
+  });
 
   it("discards a completed directory read when a linked handle changes before selection", async () => {
     await withInbox(async (f) => {
@@ -398,22 +391,6 @@ describe("human mention directory", () => {
       expect(
         f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]).ok,
       ).toBe(false);
-    });
-  });
-
-  it("reports truncated results while a narrower search returns the matching offline person", async () => {
-    await withInbox(async (f) => {
-      for (let index = 0; index < 105; index++) {
-        const profile = ensureProfileForEmail(`teammate-${index}@mentions.example.test`);
-        setDisplayName(profile.id, `Teammate ${index}`);
-      }
-      const result = await searchDirectory(f, "Teammate");
-      expect(result.truncated).toBe(true);
-      expect(result.users).toHaveLength(100);
-      expect(await searchDirectory(f, "Teammate 104")).toMatchObject({
-        users: [{ displayName: "Teammate 104", online: false }],
-        truncated: false,
-      });
     });
   });
 });

@@ -12,11 +12,7 @@ import {
 } from "../../agents/tools/common.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
-import {
-  dispatchChannelMessageAction,
-  isFencedProviderReadAction,
-  isScheduledMessageWriteAction,
-} from "../../channels/plugins/message-action-dispatch.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -29,8 +25,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
-import { withEffectPreparation } from "../../shared/effect-authority.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
@@ -45,6 +39,8 @@ import {
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import {
+  loadMessageGatewayRuntime,
+  resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
   type OutboundGatewayRequestContext,
 } from "./message-gateway-options.js";
@@ -62,35 +58,9 @@ import {
 
 const log = createSubsystemLogger("outbound/message-action");
 
-// Gateway runtime is only needed for remote message action dispatch or
-// idempotency keys; keep normal in-process actions import-light.
-const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
-  () => import("./message.gateway.runtime.js"),
-);
-
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
-
-export function withMessageActionEffectAuthority<T>(
-  input: MessageActionInput,
-  run: () => Promise<T>,
-): Promise<T> {
-  const prepare = input.messageActionAuthorization?.scheduled?.prepareUse;
-  return withEffectPreparation(
-    prepare
-      ? () =>
-          prepare(
-            isFencedProviderReadAction(input.action) || isScheduledMessageWriteAction(input.action),
-            () => {
-              input.abortSignal?.throwIfAborted();
-              input.assertDirectAdapterHandoff?.();
-            },
-          )
-      : undefined,
-    run,
-  );
-}
 
 export function assertMessageDeliveryCurrent(input: MessageActionInput): void {
   throwIfAborted(input.abortSignal);
@@ -117,8 +87,7 @@ async function callGatewayMessageAction<T>(params: {
   abortSignal?: AbortSignal;
   onUnknownDeliveryOutcome?: () => void;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege, isGatewayTransportError } =
-    await loadMessageActionGatewayRuntime();
+  const { callGatewayLeastPrivilege, isGatewayTransportError } = await loadMessageGatewayRuntime();
   const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   // A timed-out send is reattached with the same idempotency key. Cap only the
   // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
@@ -235,14 +204,6 @@ export function projectGatewayQueuedDeliveryResult(error: unknown) {
   };
 }
 
-async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
-  if (idempotencyKey) {
-    return idempotencyKey;
-  }
-  const { randomIdempotencyKey } = await loadMessageActionGatewayRuntime();
-  return randomIdempotencyKey();
-}
-
 export async function applyMessageCrossContextMarker(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -318,7 +279,7 @@ export async function executeGatewayAction(
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     ctx.input.conversationReadOrigin,
   );
-  const idempotencyKey = await resolveGatewayActionIdempotencyKey(
+  const idempotencyKey = await resolveGatewayIdempotencyKey(
     normalizeOptionalString(ctx.params.idempotencyKey),
   );
   const callerOwnsTerminalReceipt =

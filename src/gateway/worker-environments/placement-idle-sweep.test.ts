@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
+import { createGatewayWorkerPlacementChangePublisher } from "../server-worker-placement-change-events.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -35,6 +38,7 @@ describe("worker placement idle suspension", () => {
       suspendAfter?: string | null;
       destroyFails?: boolean;
       reclaim?: Parameters<typeof createWorkerPlacementIdleSweep>[0]["dispatch"]["reclaim"];
+      reportChanges?: Parameters<typeof createWorkerPlacementIdleSweep>[0]["reportChanges"];
       isPlacementOperationInFlight?: (sessionId: string) => boolean;
       getSessionWorkAdmissionCheck?: (identity: {
         sessionId: string;
@@ -62,6 +66,7 @@ describe("worker placement idle suspension", () => {
       placements,
       environments: harness.environments,
       dispatch: { reclaim: options.reclaim ?? harness.service.reclaim },
+      reportChanges: options.reportChanges ?? ((operation) => operation()),
       getConfig: () => ({
         cloudWorkers: {
           profiles: {
@@ -96,6 +101,46 @@ describe("worker placement idle suspension", () => {
       },
     });
   }
+
+  it("skips reporting snapshots while suspension is disabled and reports when it becomes enabled", async () => {
+    const snapshots = vi.spyOn(placements, "readChangeSnapshot");
+    const changed = vi.fn();
+    const unsubscribe = sessionChanges.subscribe(changed);
+    const reportChanges = createGatewayWorkerPlacementChangePublisher({
+      placements,
+      getSessionChangeContext: () => ({
+        broadcastToConnIds: vi.fn(),
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+        getSessionEventSubscriberConnIds: () => new Set(),
+      }),
+      warn: vi.fn(),
+    });
+    try {
+      const { harness, idleSweep, profile } = createIdleFixture({
+        suspendAfter: null,
+        reportChanges,
+      });
+      await harness.service.dispatch(REQUEST);
+      nowMs += 60_000;
+      changed.mockClear();
+      await idleSweep.sweep();
+      expect(snapshots).not.toHaveBeenCalled();
+      expect(changed).not.toHaveBeenCalled();
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
+
+      profile.suspendAfter = "1m";
+      await idleSweep.sweep();
+      expect(snapshots).toHaveBeenCalledTimes(2);
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+      expect(changed).toHaveBeenCalledWith({
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
 
   it("suspends a never-run worker after its activation through the real reclaim teardown", async () => {
     const { harness, idleSweep, info, warn } = createIdleFixture();
@@ -329,18 +374,14 @@ describe("worker placement idle suspension", () => {
       });
       const active = await harness.service.dispatch(REQUEST);
       nowMs += 60_000;
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       let admissionReached = false;
-      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              admissionReached = true;
-              profile.suspendAfter = undefined;
-            }
-            admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(operationAdmission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          admissionReached = true;
+          profile.suspendAfter = undefined;
+        }
+        admit(request, grant);
+      });
       await idleSweep.sweep();
       expect(admissionReached).toBe(true);
       expect(placements.get(REQUEST.sessionId)).toMatchObject({

@@ -143,7 +143,7 @@ export interface AiTransportHost {
   buildModelFetch(
     model: Model,
     timeoutMs?: number,
-    options?: { sanitizeSse?: boolean },
+    options?: { sanitizeSse?: boolean; onSseComment?: () => void },
   ): typeof fetch | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
@@ -383,17 +383,8 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
   // Transport modules may register before host wiring. Drain once after a concrete
   // registrar installs so module caching cannot permanently lose those registrations.
   const pending = pendingCustomApiRegistrations.splice(0);
-  for (const [index, registration] of pending.entries()) {
-    try {
-      transportHost.registerCustomApi(
-        registration.registry,
-        registration.api,
-        registration.streamFn,
-      );
-    } catch (error) {
-      pendingCustomApiRegistrations.unshift(...pending.slice(index));
-      throw error;
-    }
+  for (const registration of pending) {
+    transportHost.registerCustomApi(registration.registry, registration.api, registration.streamFn);
   }
 }
 

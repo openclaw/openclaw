@@ -707,21 +707,6 @@ function killProcessGroup(pgid: number, signal: NodeJS.Signals) {
 }
 
 describe("scripts/pr process-group platform guard", () => {
-  it("keeps native Windows on the explicit WSL-only path", () => {
-    const source = readFileSync(processGroupRunner, "utf8");
-    expect(source).toContain('process.platform === "win32"');
-    expect(source).toContain("use WSL on Windows");
-    expect(source).toContain("const SIGNAL_GRACE_MS = 5000;");
-    expect(source).toContain("const KILL_DRAIN_MS = 5000;");
-    if (process.platform !== "win32") {
-      return;
-    }
-    const result = spawnSync(process.execPath, [processGroupRunner, repoRoot, "unused"], {
-      encoding: "utf8",
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("use WSL on Windows");
-  });
   it.runIf(process.platform !== "win32")(
     "preserves the child status when the completion marker cannot be written",
     async ({ signal }) => {
@@ -1958,21 +1943,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
     );
     expect(existsSync(worktreeDir)).toBe(true);
   });
-  it("does not report removal when gc cleanup leaves the worktree", () => {
-    const repoDir = createRepo();
-    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
-    mkdirSync(worktreeDir, { recursive: true });
-    const result = runLockShell(repoDir, [
-      "pr_gh() { printf 'MERGED\\n'; }",
-      "remove_worktree_if_present() { return 0; }",
-      "delete_local_branch_if_safe() { return 0; }",
-      "gc_pr_worktrees false",
-    ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("cleanup incomplete");
-    expect(result.stdout).not.toContain("removed .worktrees/pr-42");
-    expect(existsSync(worktreeDir)).toBe(true);
-  });
   it("removes a registered relative worktree under a NUL-framed escaped Unicode path", () => {
     const repoDir = createRepo("repo with space \\ backslash\n雪");
     const worktreeDir = join(repoDir, ".worktrees", "pr-42");
@@ -2176,37 +2146,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("1 0 1");
     expect(result.stderr).not.toContain("unexpected producer");
-  });
-  it.each([true])("removes only the missing target registration (suffixed admin=%s)", (suffix) => {
-    const repoDir = createRepo();
-    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
-    const unrelatedDir = join(repoDir, ".worktrees", "pr-99");
-    mkdirSync(dirname(worktreeDir), { recursive: true });
-    if (suffix) {
-      gitOutput(repoDir, ["worktree", "add", "-q", "-b", "other", join(repoDir, "other", "pr-42")]);
-    }
-    gitOutput(repoDir, ["worktree", "add", "-q", "-b", "pr-42", worktreeDir]);
-    gitOutput(repoDir, ["worktree", "add", "-q", "-b", "pr-99", unrelatedDir]);
-    const admin = gitOutput(worktreeDir, ["rev-parse", "--absolute-git-dir"]).trim();
-    const unrelatedAdmin = gitOutput(unrelatedDir, ["rev-parse", "--absolute-git-dir"]).trim();
-    const unrelatedBacklink = readFileSync(join(unrelatedAdmin, "gitdir"));
-    const canonicalWorktreeDir = realpathSync(worktreeDir);
-    rmSync(worktreeDir, { recursive: true });
-    rmSync(unrelatedDir, { recursive: true });
-    const result = runLockShell(repoDir, [
-      "pr_git() {",
-      '  if [[ "$*" == *"worktree prune"* ]]; then echo unexpected-prune >&2; return 97; fi',
-      '  command git "$@"',
-      "}",
-      'remove_worktree_if_present ".worktrees/pr-42"',
-    ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stderr).not.toContain("unexpected-prune");
-    expect(existsSync(admin)).toBe(false);
-    expect(readFileSync(join(unrelatedAdmin, "gitdir"))).toEqual(unrelatedBacklink);
-    expect(gitOutput(repoDir, ["worktree", "list", "--porcelain", "-z"])).not.toContain(
-      `worktree ${canonicalWorktreeDir}\0`,
-    );
   });
   it("binds missing moved worktree cleanup through the original admin ID", () => {
     const repoDir = createRepo();

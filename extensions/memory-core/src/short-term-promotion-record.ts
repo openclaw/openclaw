@@ -9,7 +9,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import {
-  listMemorySessionTombstones,
+  findForgottenMemorySessionIds,
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
@@ -98,17 +98,15 @@ export async function filterLiveShortTermRecallEntries(params: {
   };
   const results = await Promise.all(
     params.entries.map(async (entry) => {
-      let exists = false;
       for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
         if (await checkSourceFile(sourcePath)) {
-          exists = true;
-          break;
+          return entry;
         }
       }
-      return { entry, exists };
+      return undefined;
     }),
   );
-  return results.filter((result) => result.exists).map((result) => result.entry);
+  return results.filter((entry) => entry !== undefined);
 }
 
 function recallEventResult(result: MemorySearchResult) {
@@ -188,11 +186,7 @@ export async function recordShortTermRecalls(params: {
     for (const [agentId, sessionIds] of sourceSessions) {
       forgottenByAgent.set(
         agentId,
-        new Set(
-          (await listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] })).map(
-            (entry) => entry.sessionId,
-          ),
-        ),
+        await findForgottenMemorySessionIds({ agentId, sessionIds: [...sessionIds] }),
       );
     }
     // Revalidate after acquiring the shared mutation lock: a purge can finish
@@ -207,7 +201,7 @@ export async function recordShortTermRecalls(params: {
     }
     const origins: MemoryEntryOrigin[] = [];
     for (const result of admitted) {
-      const normalizedPath = normalizeMemoryPath(result.path);
+      const { path: normalizedPath, startLine, endLine, score } = recallEventResult(result);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
       if (
@@ -242,8 +236,8 @@ export async function recordShortTermRecalls(params: {
           ? buildDailyClaimEntryKey(claimHash)
           : buildEntryKey({
               path: normalizedPath,
-              startLine: Math.max(1, Math.floor(result.startLine)),
-              endLine: Math.max(1, Math.floor(result.endLine)),
+              startLine,
+              endLine,
               source: "memory",
               claimHash,
             });
@@ -254,7 +248,6 @@ export async function recordShortTermRecalls(params: {
         dailyClaimEntry?.key ??
         (signalType !== "recall" || store.entries[claimKey] ? claimKey : buildEntryKey(result));
       const existing = store.entries[key];
-      const score = clampScore(result.score);
       const effectiveQuery =
         signalType === "grounded" ? normalizeSnippet(result.query ?? query) || query : query;
       const queryHash = hashQuery(effectiveQuery);
@@ -312,12 +305,8 @@ export async function recordShortTermRecalls(params: {
       store.entries[key] = {
         key,
         path: preserveFirstDailySource ? existing.path : normalizedPath,
-        startLine: preserveFirstDailySource
-          ? existing.startLine
-          : Math.max(1, Math.floor(result.startLine)),
-        endLine: preserveFirstDailySource
-          ? existing.endLine
-          : Math.max(1, Math.floor(result.endLine)),
+        startLine: preserveFirstDailySource ? existing.startLine : startLine,
+        endLine: preserveFirstDailySource ? existing.endLine : endLine,
         source: "memory",
         snippet: snippet || existing?.snippet || "",
         recallCount,

@@ -106,24 +106,13 @@ function hasLegacyVectorTable(db: DatabaseSync): boolean {
   return tableHasColumns(db, LEGACY_MEMORY_VECTOR_TABLE, ["id", "embedding"]);
 }
 
-function tableRowCount(db: DatabaseSync, tableName: string): number {
+function tableRowCount(db: DatabaseSync, tableName: string, query = ""): number {
   const row = db
-    .prepare(`SELECT COUNT(*) AS count FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${tableName}`)
+    .prepare(
+      `SELECT COUNT(*) AS count FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${tableName} AS legacy ${query}`,
+    )
     .get() as { count?: unknown } | undefined;
   return Number(row?.count ?? 0);
-}
-
-function readLegacySidecarCounts(
-  db: DatabaseSync,
-  copyVectorRows: boolean,
-): Pick<LegacyMemorySidecarImportResult, "sources" | "chunks" | "cacheEntries" | "vectorEntries"> {
-  const vectorEntries = readLegacyVectorEntries(db, !copyVectorRows);
-  return {
-    sources: tableRowCount(db, "files"),
-    chunks: tableRowCount(db, "chunks"),
-    cacheEntries: hasLegacyEmbeddingCacheTable(db) ? tableRowCount(db, "embedding_cache") : 0,
-    vectorEntries,
-  };
 }
 
 function readLegacyVectorEntries(db: DatabaseSync, tolerateInvalid: boolean): number | undefined {
@@ -140,25 +129,23 @@ function readLegacyVectorEntries(db: DatabaseSync, tolerateInvalid: boolean): nu
   }
 }
 
-function assertLegacyDerivedRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
-  const row = db.prepare(query).get() as { missing?: unknown } | undefined;
-  if (Number(row?.missing ?? 0) > 0) {
+function assertLegacyDerivedRowsCopied(db: DatabaseSync, tableName: string, query: string): void {
+  if (tableRowCount(db, tableName, query) > 0) {
     throw new LegacyMemoryDerivedRowsConflictError(tableName);
   }
 }
 
 function assertLegacyVectorRowsReferenceChunks(db: DatabaseSync): void {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS missing
-       FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
-       WHERE NOT EXISTS (
+  if (
+    tableRowCount(
+      db,
+      LEGACY_MEMORY_VECTOR_TABLE,
+      `WHERE NOT EXISTS (
          SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
          WHERE chunk.id = legacy.id
        )`,
-    )
-    .get() as { missing?: unknown } | undefined;
-  if (Number(row?.missing ?? 0) > 0) {
+    ) > 0
+  ) {
     throw new Error(`legacy memory ${LEGACY_MEMORY_VECTOR_TABLE} rows reference missing chunks`);
   }
 }
@@ -264,11 +251,9 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync): void {
   assertLegacyVectorRowsReferenceChunks(db);
   assertLegacyDerivedRowsCopied(
     db,
-    `SELECT COUNT(*) AS missing
-     FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
-     JOIN main.${MEMORY_INDEX_VECTOR_TABLE} AS canonical ON canonical.id = legacy.id
-     WHERE canonical.embedding IS NOT legacy.embedding`,
     LEGACY_MEMORY_VECTOR_TABLE,
+    `JOIN main.${MEMORY_INDEX_VECTOR_TABLE} AS canonical ON canonical.id = legacy.id
+     WHERE canonical.embedding IS NOT legacy.embedding`,
   );
   db.exec(`
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_VECTOR_TABLE} (id, embedding)
@@ -282,14 +267,12 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync): void {
   `);
   assertLegacyDerivedRowsCopied(
     db,
-    `SELECT COUNT(*) AS missing
-     FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
-     WHERE NOT EXISTS (
+    LEGACY_MEMORY_VECTOR_TABLE,
+    `WHERE NOT EXISTS (
        SELECT 1 FROM main.${MEMORY_INDEX_VECTOR_TABLE} AS canonical
        WHERE canonical.id = legacy.id
          AND canonical.embedding IS legacy.embedding
      )`,
-    LEGACY_MEMORY_VECTOR_TABLE,
   );
 }
 
@@ -312,11 +295,10 @@ function copyLegacyMemoryIndexRows(db: DatabaseSync, copyVectorRows: boolean): v
     );
     assertLegacyDerivedRowsCopied(
       db,
-      `SELECT COUNT(*) AS missing FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${legacy} AS legacy
-       WHERE NOT EXISTS (
+      legacy,
+      `WHERE NOT EXISTS (
          SELECT 1 FROM main.${canonical} AS canonical WHERE ${matches.join(" AND ")}
        )`,
-      legacy,
     );
   }
   if (tableExists(db, "main", MEMORY_INDEX_FTS_TABLE)) {
@@ -348,9 +330,8 @@ function copyLegacyMemoryIndexRows(db: DatabaseSync, copyVectorRows: boolean): v
     // entire stale sidecar should yield to the canonical index.
     assertLegacyDerivedRowsCopied(
       db,
-      `SELECT COUNT(*) AS missing
-       FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.embedding_cache AS legacy
-       WHERE NOT EXISTS (
+      "embedding_cache",
+      `WHERE NOT EXISTS (
          SELECT 1 FROM main.${MEMORY_EMBEDDING_CACHE_TABLE} AS canonical
          WHERE canonical.provider = legacy.provider
            AND canonical.model = legacy.model
@@ -367,7 +348,6 @@ function copyLegacyMemoryIndexRows(db: DatabaseSync, copyVectorRows: boolean): v
              )
            )
        )`,
-      "embedding_cache",
     );
   }
   markInvalidImportedMemoryEmbeddings(db, LEGACY_MEMORY_SIDECAR_SCHEMA);
@@ -400,7 +380,15 @@ export function importLegacyMemorySidecarIndex(params: {
     if (!hasLegacyMemoryIndexTables(params.db)) {
       return skipped("legacy-schema-missing");
     }
-    const counts = readLegacySidecarCounts(params.db, params.copyVectorRows);
+    const vectorEntries = readLegacyVectorEntries(params.db, !params.copyVectorRows);
+    const counts = {
+      sources: tableRowCount(params.db, "files"),
+      chunks: tableRowCount(params.db, "chunks"),
+      cacheEntries: hasLegacyEmbeddingCacheTable(params.db)
+        ? tableRowCount(params.db, "embedding_cache")
+        : 0,
+      vectorEntries,
+    };
     params.db.exec("SAVEPOINT import_legacy_sidecar_memory_index");
     try {
       copyLegacyMemoryIndexRows(params.db, params.copyVectorRows);

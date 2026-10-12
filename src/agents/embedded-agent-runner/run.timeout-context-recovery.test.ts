@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { testing as deliveryTesting } from "../subagents/announce/subagent-announce-delivery.test-support.js";
@@ -49,10 +50,12 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
     assertRecoveryActive: vi.fn(),
     // Admission and writer fencing have composed coverage in run.compaction-runtime.test.ts.
     prepareRecoveryOwner: () => {
-      const assertActive = () => {
-        input.runParams.abortSignal?.throwIfAborted();
-        input.assertRecoveryActive();
-      };
+      const assertActive = composeSessionSourceAssertion([
+        () => {
+          input.runParams.abortSignal?.throwIfAborted();
+          input.assertRecoveryActive();
+        },
+      ]);
       assertActive();
       const session = input.getActiveSession();
       return {
@@ -75,7 +78,7 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
     },
     prepareRecoverySession: async () => ({
       sessionManager: undefined,
-      assertActive: vi.fn(),
+      assertActive: composeSessionSourceAssertion([]),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),

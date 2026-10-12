@@ -387,37 +387,7 @@ describe("Codex plugin metadata cache", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("starts a fresh load after invalidation while an older load is pending", async () => {
-    const cache = new CodexPluginMetadataCache();
-    const releases: Array<(response: v2.PluginListResponse) => void> = [];
-    const request = vi.fn(
-      async () =>
-        await new Promise<v2.PluginListResponse>((resolve) => {
-          releases.push(resolve);
-        }),
-    );
-    const params = {
-      appCacheKey: "runtime-a",
-      queryKind: "curated-global" as const,
-      requestParams: {},
-      request,
-    };
-
-    const beforeInstall = cache.load(params);
-    await vi.waitFor(() => expect(releases).toHaveLength(1));
-    cache.invalidate("runtime-a");
-    const afterInstall = cache.load(params);
-    await vi.waitFor(() => expect(releases).toHaveLength(2));
-    const current = pluginList("openai-curated-remote", "calendar");
-    releases[1]?.(current);
-    await expect(afterInstall).resolves.toMatchObject(current);
-    releases[0]?.(pluginList("openai-curated-remote"));
-    await expect(beforeInstall).resolves.toBeDefined();
-    expect(cache.read("runtime-a", "curated-global")).toBe(current);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries a joined load with the caller's request after the owner fails", async () => {
+  it("shares a failed load without retrying for every waiting caller", async () => {
     const cache = new CodexPluginMetadataCache();
     let rejectOwner: ((error: Error) => void) | undefined;
     const ownerRequest = vi.fn(
@@ -433,16 +403,20 @@ describe("Codex plugin metadata cache", () => {
     };
     const owner = cache.load({ ...params, request: ownerRequest });
     const ownerResult = owner.catch((error: unknown) => error);
-    await vi.waitFor(() => expect(rejectOwner).toBeTypeOf("function"));
     const joiningRequest = vi.fn(async () => pluginList("openai-curated-remote", "calendar"));
     const joining = cache.load({ ...params, request: joiningRequest });
+    const joiningResult = joining.catch((error: unknown) => error);
 
-    rejectOwner?.(new Error("owner cancelled"));
-    await expect(ownerResult).resolves.toBeInstanceOf(Error);
-    await expect(joining).resolves.toMatchObject({
+    const error = new Error("owner cancelled");
+    rejectOwner?.(error);
+    await expect(ownerResult).resolves.toBe(error);
+    await expect(joiningResult).resolves.toBe(error);
+    expect(ownerRequest).toHaveBeenCalledTimes(1);
+    expect(joiningRequest).not.toHaveBeenCalled();
+
+    await expect(cache.load({ ...params, request: joiningRequest })).resolves.toMatchObject({
       marketplaces: [{ plugins: [{ id: "calendar" }] }],
     });
-    expect(ownerRequest).toHaveBeenCalledTimes(1);
     expect(joiningRequest).toHaveBeenCalledTimes(1);
   });
 

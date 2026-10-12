@@ -15,7 +15,7 @@ export type OpenAIResponsesCompactionOutput = Array<
   ResponseInputItem.Message | ReplayableResponseCompactionItem
 >;
 export type OpenAIResponsesCompactedWindow =
-  | { state: "ready"; output: string }
+  | { state: "ready"; output: string; outputTokens?: number }
   | { state: "refresh-required" };
 
 // Schema validation, not coercion: supplied non-string fields must be rejected.
@@ -131,6 +131,14 @@ export function readOpenAIResponsesCompactionWindow(
 ): OpenAIResponsesCompactionOutput | undefined {
   const window = replay.compactedWindow;
   if (!isRecord(window) || window.state !== "ready" || typeof window.output !== "string") {
+    return undefined;
+  }
+  if (
+    window.outputTokens !== undefined &&
+    (!Number.isSafeInteger(window.outputTokens) ||
+      typeof window.outputTokens !== "number" ||
+      window.outputTokens < 0)
+  ) {
     return undefined;
   }
   if (

@@ -167,6 +167,9 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       configured: account.configured,
       dmPolicy: "disabled",
       guests: await (await import("./guests.js")).getXGuestStatus(getXRuntime(), account, cfg),
+      verifiedFromGitHub: await (
+        await import("./verified-github.js")
+      ).getXGitHubStatus(getXRuntime(), account),
     }),
   },
   gateway: { startAccount: async (ctx) => (await import("./monitor.js")).startXAccount(ctx) },

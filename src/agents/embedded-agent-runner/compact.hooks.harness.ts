@@ -24,6 +24,7 @@ import {
   createCompactHooksResolvedModel,
   emptyPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotMock,
+  mockCompactHooksContextEngine,
   mockCompactHooksPluginMetadata,
   resolveCompactHooksApiKeyMock,
   type CompactHooksQueuedCompaction,
@@ -712,12 +713,25 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
+  vi.doMock("../auth-profiles/store-runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../auth-profiles/store-runtime.js")>()),
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: async (
+      ...args: Parameters<typeof ensureAuthProfileStoreWithoutExternalProfilesMock>
+    ) => ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
+  }));
+
+  // mock-isolation: Compaction hooks use fixture auth results without host profile or key discovery.
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    ensureAuthProfileStoreAsync: async (...args: Parameters<typeof ensureAuthProfileStoreMock>) =>
+      ensureAuthProfileStoreMock(...args),
     ensureAuthProfileStoreWithoutExternalProfiles:
       ensureAuthProfileStoreWithoutExternalProfilesMock,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: async (
+      ...args: Parameters<typeof ensureAuthProfileStoreWithoutExternalProfilesMock>
+    ) => ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
     formatMissingAuthError: vi.fn(
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
@@ -726,7 +740,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
-    resolveModelAuthMode: vi.fn(() => "env"),
+    resolveModelAuthModeAsync: vi.fn(() => "env"),
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 
@@ -734,19 +748,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 
-  vi.doMock("../../context-engine/init.js", () => ({
-    ensureContextEnginesInitialized: vi.fn(),
-  }));
-
-  vi.doMock("../../context-engine/registry.js", () => ({
-    resolveContextEngine: resolveContextEngineMock,
-    resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
-    resolveLogicalTurnContextEngines: async () => {
-      const engine = await resolveContextEngineMock();
-      const ref = { engine, registeredId: "legacy" };
-      return { configured: ref, configuredId: "legacy", fallback: ref };
-    },
-  }));
+  mockCompactHooksContextEngine(resolveContextEngineMock);
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: enqueueCommandInLaneMock,
@@ -795,8 +797,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
+  // mock-isolation: Compaction hooks use fixture tools without consulting the active channel registry.
   vi.doMock("../channel-tools.js", () => ({
-    listChannelSupportedActions: vi.fn(() => undefined),
     resolveChannelMessageToolHints: vi.fn(() => undefined),
   }));
 

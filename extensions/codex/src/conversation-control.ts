@@ -4,9 +4,10 @@ import {
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
-  getSessionEntry,
-  patchSessionEntry,
+  getSessionEntryAsync,
+  prepareSessionEntryPatch,
   resolveStorePath,
+  type SessionEntrySourceAuthority,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isCodexAppServerNativeAuthProfile,
@@ -134,7 +135,7 @@ export async function setCodexConversationModel(input: {
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionEntrySourceAuthority;
 }): Promise<string> {
   const params = { ...input };
   const model = params.model.trim();
@@ -148,7 +149,7 @@ export async function setCodexConversationModel(input: {
   if (binding.connectionScope === "supervision") {
     throw new ModelSelectionLockedError();
   }
-  const modelProvider = resolveThreadRequestModelProvider({
+  const modelProvider = await resolveThreadRequestModelProvider({
     authProfileId: binding.authProfileId,
     modelProvider: resolveCodexBindingModelProviderFallback({
       bindingModel: binding.model,
@@ -157,13 +158,13 @@ export async function setCodexConversationModel(input: {
     }),
     ...lookup,
   });
-  const modelSelection = resolveCodexAppServerRequestModelSelection({
+  const modelSelection = await resolveCodexAppServerRequestModelSelection({
     model,
     modelProvider,
     authProfileId: binding.authProfileId,
     ...lookup,
   });
-  const nextModelProvider = normalizeCodexAppServerBindingModelProvider({
+  const nextModelProvider = await normalizeCodexAppServerBindingModelProvider({
     authProfileId: binding.authProfileId,
     modelProvider: modelSelection.modelProvider,
     ...lookup,
@@ -178,7 +179,7 @@ export async function setCodexConversationModel(input: {
   if (identity.kind === "session" && identity.sessionKey) {
     // SessionEntry owns the desired model; retain the loaded binding until
     // lifecycle reconciliation can rotate its native generation safely.
-    const updated = await patchSessionEntry({
+    const updated = await prepareSessionEntryPatch({
       agentId: identity.agentId,
       storePath:
         params.storePath ??
@@ -186,8 +187,10 @@ export async function setCodexConversationModel(input: {
       sessionKey: identity.sessionKey,
       requireWriteSuccess: true,
       replaceEntry: true,
-      assertCommitAllowed,
-      update: (entry) => {
+      authority: params.assertCommitAllowed
+        ? { kind: "source", source: params.assertCommitAllowed }
+        : { kind: "host", assertCurrent: params.assertCurrent },
+      prepare: (entry) => {
         if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
         }
@@ -262,6 +265,7 @@ export async function setCodexConversationPermissions(params: {
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
+  sourceAuthority?: SessionEntrySourceAuthority;
   session: { agentId: string; sessionId: string; sessionKey: string };
 }): Promise<string> {
   params.assertCurrent();
@@ -271,7 +275,7 @@ export async function setCodexConversationPermissions(params: {
       agentId: params.session.agentId,
     });
   if (!params.mode) {
-    const entry = getSessionEntry({
+    const entry = await getSessionEntryAsync({
       agentId: params.session.agentId,
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
@@ -284,14 +288,16 @@ export async function setCodexConversationPermissions(params: {
     }
     return `Codex permissions: ${formatPermissionsMode(entry.permissionMode)}.`;
   }
-  const updated = await patchSessionEntry({
+  const updated = await prepareSessionEntryPatch({
     agentId: params.session.agentId,
     storePath,
     sessionKey: params.session.sessionKey,
     requireWriteSuccess: true,
     replaceEntry: true,
-    assertCommitAllowed: params.assertCurrent,
-    update: (entry) => {
+    authority: params.sourceAuthority
+      ? { kind: "source", source: params.sourceAuthority }
+      : { kind: "host", assertCurrent: params.assertCurrent },
+    prepare: (entry) => {
       if (entry.sessionId !== params.session.sessionId) {
         throw new Error("Codex session changed while applying the permission mode.");
       }
@@ -363,14 +369,17 @@ export function buildCodexConversationAgentLookup(params: {
   };
 }
 
-export function resolveThreadRequestModelProvider(
+export async function resolveThreadRequestModelProvider(
   params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
-): string | undefined {
+): Promise<string | undefined> {
   const modelProvider = params.modelProvider?.trim();
   if (!modelProvider || modelProvider.toLowerCase() === "codex") {
     return undefined;
   }
-  if (isCodexAppServerNativeAuthProfile(params) && modelProvider.toLowerCase() === "openai") {
+  if (
+    modelProvider.toLowerCase() === "openai" &&
+    (await isCodexAppServerNativeAuthProfile(params))
+  ) {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;

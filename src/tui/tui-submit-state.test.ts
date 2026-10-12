@@ -25,14 +25,6 @@ describe("resolveTuiChatSubmitAdmission", () => {
       expected: { status: "allowed" },
     },
     {
-      name: "active run",
-      isConnected: true,
-      activeChatRunId: "run-active",
-      pendingSubmit: null,
-      message: "follow up",
-      expected: { status: "allowed" },
-    },
-    {
       name: "disconnected",
       isConnected: false,
       activeChatRunId: null,
@@ -47,22 +39,6 @@ describe("resolveTuiChatSubmitAdmission", () => {
       pendingSubmit: { phase: "sending", runId: "run-send", draftText: "hello" },
       message: "another",
       expected: { status: "blocked", reason: "pending" },
-    },
-    {
-      name: "accepted",
-      isConnected: true,
-      activeChatRunId: null,
-      pendingSubmit: { phase: "accepted", runId: "run-pending", draftText: "hello" },
-      message: "another",
-      expected: { status: "blocked", reason: "pending" },
-    },
-    {
-      name: "stop active run",
-      isConnected: true,
-      activeChatRunId: "run-active",
-      pendingSubmit: null,
-      message: "please stop",
-      expected: { status: "allowed" },
     },
     {
       name: "stop accepted run",
@@ -137,22 +113,6 @@ describe("pending submit transitions", () => {
       }),
     ).toBe(false);
     expect(state.pendingSubmit).toBeNull();
-  });
-
-  it("does not accept an already accepted submit again", () => {
-    const state: State = {
-      pendingSubmit: { phase: "accepted", runId: "run-accepted", draftText: null },
-    };
-
-    expect(
-      acceptPendingSubmit({
-        state,
-        provisionalRunId: "run-accepted",
-        acceptedRunId: "run-other",
-        preserveDraft: false,
-      }),
-    ).toBe(false);
-    expect(state.pendingSubmit?.runId).toBe("run-accepted");
   });
 
   it("keeps draft ownership while a submit is still sending", () => {

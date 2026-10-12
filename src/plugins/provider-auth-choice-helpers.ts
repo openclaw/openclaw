@@ -276,6 +276,19 @@ export function applyProviderAuthConfigPatch(
   );
 }
 
+export function restoreAgentsDefaultsModel(
+  cfg: OpenClawConfig,
+  model: AgentModelConfig | undefined,
+): OpenClawConfig {
+  const defaults = { ...cfg.agents?.defaults };
+  if (model === undefined) {
+    delete defaults.model;
+  } else {
+    defaults.model = model;
+  }
+  return { ...cfg, agents: { ...cfg.agents, defaults } };
+}
+
 /**
  * Restore `agents.defaults.model`, including its absence, after a provider auth config merge when
  * the user did not pass `--set-default`.
@@ -294,17 +307,5 @@ export function restorePriorAgentsDefaultsModelUnlessOptIn(params: {
   ) {
     return params.cfg;
   }
-  const defaults = { ...params.cfg.agents?.defaults };
-  if (params.priorAgentsDefaultsModel === undefined) {
-    delete defaults.model;
-  } else {
-    defaults.model = params.priorAgentsDefaultsModel;
-  }
-  return {
-    ...params.cfg,
-    agents: {
-      ...params.cfg.agents,
-      defaults,
-    },
-  };
+  return restoreAgentsDefaultsModel(params.cfg, params.priorAgentsDefaultsModel);
 }

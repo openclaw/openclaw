@@ -1,3 +1,4 @@
+import type { AgentDeletionWorkerGuard } from "../state/agent-deletion-worker-contract.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { PersistedClawMcpServerRef } from "./mcp-records.js";
 import type {
@@ -17,6 +18,7 @@ export type ClawProvenanceWriteOperations = {
       status: ClawPackageRefStatus;
       nowMs?: number;
       lease: OpenClawStateLeaseIdentity;
+      deletion?: AgentDeletionWorkerGuard;
     };
     output: PersistedClawPackageRef;
   };

@@ -79,6 +79,10 @@ async function withAcmeSpeechProvider(run: () => Promise<void>) {
           id: "acme",
           label: "Acme Speech",
           isConfigured: () => true,
+          resolveTalkConfig: ({ talkProviderConfig }) => ({
+            ...talkProviderConfig,
+            resolvedBy: "acme-test-provider",
+          }),
           synthesize: async () => {
             throw new Error("synthesize should be mocked at the handler boundary");
           },
@@ -116,56 +120,6 @@ describe("gateway talk runtime", () => {
     });
   });
 
-  it("allows extension speech providers through the talk setup", async () => {
-    await setAcmeTalkConfig();
-
-    await withSpeechProviders(
-      [
-        {
-          pluginId: "acme-plugin",
-          source: "test",
-          provider: {
-            id: "acme",
-            label: "Acme Speech",
-            isConfigured: () => true,
-            resolveTalkConfig: ({ talkProviderConfig }) => ({
-              ...talkProviderConfig,
-              resolvedBy: "acme-test-provider",
-            }),
-            synthesize: async () => {
-              throw new Error("synthesize should be mocked at the handler boundary");
-            },
-          },
-        },
-      ],
-      async () => {
-        const res = await invokeTalkSpeakDirect({
-          text: "Hello from talk mode.",
-        });
-        expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-        expect(res?.payload).toMatchObject({
-          provider: "acme",
-          audioBase64: Buffer.from([7, 8, 9]).toString("base64"),
-        });
-        const synthesizeParams = expectSingleSynthesizeSpeechCall();
-        expect(synthesizeParams.text).toBe("Hello from talk mode.");
-        expect(synthesizeParams.overrides).toEqual({ provider: "acme" });
-        expect(synthesizeParams.disableFallback).toBe(true);
-        const ttsConfig = (
-          synthesizeParams.cfg as {
-            tts?: {
-              provider?: string;
-              providers?: Record<string, { resolvedBy?: string; voiceId?: string }>;
-            };
-          }
-        ).tts;
-        expect(ttsConfig?.provider).toBe("acme");
-        expect(ttsConfig?.providers?.acme?.resolvedBy).toBe("acme-test-provider");
-        expect(ttsConfig?.providers?.acme?.voiceId).toBe("plugin-voice");
-      },
-    );
-  });
-
   it("uses the spoken fallback for code-heavy talk.speak replies", async () => {
     await setAcmeTalkConfig();
 
@@ -175,11 +129,18 @@ describe("gateway talk runtime", () => {
       });
 
       expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-      expect(expectSingleSynthesizeSpeechCall().text).toBe(CODE_HEAVY_SPOKEN_FALLBACK);
+      const synthesis = expectSingleSynthesizeSpeechCall();
+      expect(synthesis.text).toBe(CODE_HEAVY_SPOKEN_FALLBACK);
+      expect(synthesis.cfg).toMatchObject({
+        tts: {
+          provider: "acme",
+          providers: { acme: { resolvedBy: "acme-test-provider", voiceId: "plugin-voice" } },
+        },
+      });
     });
   });
 
-  it.each(["clawd", "__PROTO__"])(
+  it.each(["__PROTO__"])(
     "resolves talk voice alias %s and forwards provider overrides",
     async (voiceId) => {
       await setElevenLabsTalkConfig();

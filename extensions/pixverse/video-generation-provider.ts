@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -281,7 +281,8 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     defaultModel: DEFAULT_PIXVERSE_MODEL_ID,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [...PIXVERSE_VIDEO_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
+    isConfiguredAsync: (ctx) =>
+      isProviderApiKeyConfiguredAsync({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
       generate: buildPixVerseModeCapabilities(),
       imageToVideo: {

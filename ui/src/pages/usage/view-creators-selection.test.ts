@@ -1,11 +1,10 @@
-/* @vitest-environment jsdom */
-
-import { render } from "lit";
 import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { buildAggregatesFromSessions } from "./metrics.ts";
 import { createUsageProps, usageSession } from "./view.test-support.ts";
-import { renderUsage } from "./view.ts";
+import { renderUsage } from "./view.tsx";
 
 function creatorSession(id: string, multiplier: number) {
   const daily = [
@@ -63,22 +62,24 @@ it.each([
     }));
     const onExportJson = vi.fn();
     const container = document.createElement("div");
-    render(
-      renderUsage({
-        ...base,
-        data: {
-          ...base.data,
-          sessions: sessions.slice(0, 1),
-          sessionsLimitReached: true,
-          totals: report,
-          costDaily: report.dailyBreakdown,
-          aggregates: { ...buildAggregatesFromSessions(sessions), byCreator, sessionCount: 2 },
-        },
-        filters: { ...base.filters, endDate: "2026-05-15", selectedDays },
-        callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
-      }),
-      container,
+    mountSolid(
+      () =>
+        renderUsage({
+          ...base,
+          data: {
+            ...base.data,
+            sessions: sessions.slice(0, 1),
+            sessionsLimitReached: true,
+            totals: report,
+            costDaily: report.dailyBreakdown,
+            aggregates: { ...buildAggregatesFromSessions(sessions), byCreator, sessionCount: 2 },
+          },
+          filters: { ...base.filters, endDate: "2026-05-15", selectedDays },
+          callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
+        }),
+      { container },
     );
+    flush();
     expect(container.querySelector(".usage-creators-table")?.textContent).toContain("Jordan");
     expect(container.querySelectorAll(".usage-creators-table tbody tr")).toHaveLength(2);
     expect(
@@ -142,22 +143,24 @@ it("disables session-row exports without hiding complete creator totals beyond t
   }));
   const onExportJson = vi.fn();
   const container = document.createElement("div");
-  render(
-    renderUsage({
-      ...base,
-      data: {
-        ...base.data,
-        sessions: sessions.slice(0, 1),
-        sessionsLimitReached: true,
-        totals: { ...totals, input: 200, totalTokens: 200, inputCost: 2, totalCost: 2 },
-        costDaily: sessions.flatMap((session) => session.usage.dailyBreakdown),
-        aggregates: buildAggregatesFromSessions(sessions),
-      },
-      filters: { ...base.filters, endDate: "2026-05-15", selectedDays: ["2026-05-15"] },
-      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
-    }),
-    container,
+  mountSolid(
+    () =>
+      renderUsage({
+        ...base,
+        data: {
+          ...base.data,
+          sessions: sessions.slice(0, 1),
+          sessionsLimitReached: true,
+          totals: { ...totals, input: 200, totalTokens: 200, inputCost: 2, totalCost: 2 },
+          costDaily: sessions.flatMap((session) => session.usage.dailyBreakdown),
+          aggregates: buildAggregatesFromSessions(sessions),
+        },
+        filters: { ...base.filters, endDate: "2026-05-15", selectedDays: ["2026-05-15"] },
+        callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
+      }),
+    { container },
   );
+  flush();
 
   expect(container.querySelectorAll(".session-bar-row")).toHaveLength(0);
   expect(container.querySelectorAll(".usage-metric-badge strong")[2]?.textContent).toBe("1");

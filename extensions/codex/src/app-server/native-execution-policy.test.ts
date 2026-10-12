@@ -107,6 +107,20 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     });
   });
 
+  it("preserves a storage refusal instead of falling back to gateway execution", () => {
+    const refusal = new Error("The selected session is no longer current");
+    sessionStoreMocks.getSessionEntry.mockImplementation(() => {
+      throw refusal;
+    });
+    expect(() =>
+      resolveCodexNativeExecutionPolicy({
+        config: { tools: { exec: { host: "gateway" } } },
+        sessionKey: "agent:main:dashboard:incognito-refused",
+        readRuntimeSessionEntry: true,
+      }),
+    ).toThrow(refusal);
+  });
+
   it("honors persisted default-session exec hosts with explicit main agent policy", () => {
     sessionStoreMocks.getSessionEntry.mockReturnValue({
       sessionId: "session-1",

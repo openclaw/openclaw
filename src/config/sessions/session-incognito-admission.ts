@@ -12,7 +12,6 @@ import {
   type SqliteWorkerTransferFrame,
   type SqliteWorkerTransferHandle,
 } from "../../infra/sqlite-worker-transfer.js";
-import type { AgentDatabaseIncognitoOperations } from "../../state/openclaw-agent-execution-contract.js";
 import type {
   IncognitoSessionAuthority,
   IncognitoSessionFacts,
@@ -21,15 +20,48 @@ import type {
 import type { IncognitoEntryCreationOperations } from "./session-incognito-entry-creation-contract.js";
 import type {
   IncognitoEntryPatchOperations,
-  IncognitoEntryPatchResult,
+  IncognitoEntryPatchAuthorizer,
 } from "./session-incognito-entry-patch-contract.js";
+import {
+  incognitoHistoryKeys,
+  isIncognitoHistoryCommand,
+} from "./session-incognito-history-contract.js";
+import {
+  incognitoLifecycleKeys,
+  isIncognitoLifecycleCommand,
+  type IncognitoLifecycleOperations,
+} from "./session-incognito-lifecycle-contract.js";
+import { isIncognitoTranscriptReceiptCommand } from "./session-incognito-transcript-contract.js";
+import type { SessionSourceValidation } from "./session-source-authority.js";
+import type { IncognitoSessionTurnOperations } from "./session-turn.types.js";
 
 export type IncognitoEntryOperations = IncognitoEntryCreationOperations &
-  IncognitoEntryPatchOperations;
+  IncognitoEntryPatchOperations &
+  IncognitoSessionTurnOperations;
 
-export function readIncognitoGrantFacts(
+export type IncognitoSessionPublication<Key extends keyof IncognitoSessionOperations> = {
+  factsKey?: "entry";
+  prepare?(facts: unknown): void;
+  authorize(stage: "transaction" | "commit", facts: unknown): void;
+  decodeReceipt(facts: unknown): IncognitoSessionOperations[Key]["output"];
+};
+
+type IncognitoReceiptOperation =
+  | keyof IncognitoEntryOperations
+  | keyof IncognitoLifecycleOperations
+  | "session.goal.mutate"
+  | "session.manualCompact.commit"
+  | "session.rewrite.commit"
+  | "session.event.append"
+  | "session.correction.commit"
+  | "session.lock.replace"
+  | "session.workerTranscript.commit";
+
+export function readIncognitoGrantFacts<Key extends keyof IncognitoSessionOperations>(
   received: unknown,
   identity: IncognitoSessionFacts["identity"],
+  command: { type: Key; input: IncognitoSessionOperations[Key]["input"] },
+  committedTargets?: ReadonlySet<string>,
 ): IncognitoSessionFacts[] {
   if (
     !Array.isArray(received) ||
@@ -44,13 +76,62 @@ export function readIncognitoGrantFacts(
     throw new Error("Incognito session grant differs from its captured target");
   }
   // SAFETY: The paired kernel supplies these actor-bound publication facts.
-  return received as IncognitoSessionFacts[];
+  const facts = received as IncognitoSessionFacts[];
+  const keys = facts.map((entry) => entry.sessionKey);
+  const lifecycleKeys = isIncognitoLifecycleCommand(command)
+    ? incognitoLifecycleKeys(command, identity)
+    : undefined;
+  const historyKeys = isIncognitoHistoryCommand(command)
+    ? incognitoHistoryKeys(command)
+    : undefined;
+  if (
+    new Set(keys).size !== keys.length ||
+    (historyKeys && !isDeepStrictEqual(keys, historyKeys)) ||
+    (lifecycleKeys && !isDeepStrictEqual(keys, lifecycleKeys)) ||
+    (!historyKeys &&
+      "sessionKey" in command.input &&
+      (keys.length !== 1 || keys[0] !== command.input.sessionKey)) ||
+    (committedTargets && !isDeepStrictEqual(keys, [...committedTargets]))
+  ) {
+    throw new Error("Incognito session grant changed its target set");
+  }
+  return facts;
+}
+
+/** Install a detached publication without extending its existing session expiry. */
+export function installIncognitoSessionFacts(
+  identity: IncognitoSessionFacts["identity"],
+  entries: Map<string, IncognitoSessionFacts>,
+  facts: IncognitoSessionFacts,
+) {
+  if (!isDeepStrictEqual(facts.identity, identity)) {
+    throw new Error("Incognito publication belongs to another actor");
+  }
+  const previous = entries.get(facts.sessionKey);
+  if (previous && previous.revision > facts.revision) {
+    throw new Error("Incognito publication is older than committed facts");
+  }
+  const next = structuredClone(facts);
+  if (previous?.sharing?.entry?.sessionId === next.sharing?.entry?.sessionId && previous) {
+    next.expiresAt = previous.expiresAt;
+  }
+  const topologyChanged =
+    previous?.sharing?.entry?.sessionId !== next.sharing?.entry?.sessionId ||
+    previous?.sharing?.entry?.lifecycleRevision !== next.sharing?.entry?.lifecycleRevision;
+  // Misses belong to their scoped claim, not an ever-growing negative cache.
+  if (next.sharing?.entry) {
+    entries.set(next.sessionKey, next);
+  } else {
+    entries.delete(next.sessionKey);
+  }
+  return { revision: next.revision, topologyChanged };
 }
 
 /** Entry receipts publish the paired kernel's acknowledged result without replay. */
-export function incognitoEntryPublication<Key extends keyof IncognitoEntryOperations>(
+export function incognitoEntryPublication<Key extends IncognitoReceiptOperation>(
   type: Key,
-  authorizePrepared?: (refused?: IncognitoEntryPatchResult["refusedSource"]) => void,
+  authorizePrepared?: IncognitoEntryPatchAuthorizer,
+  authorizePublication?: (facts: unknown) => void,
 ) {
   let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
   let transferId: number | undefined;
@@ -96,13 +177,23 @@ export function incognitoEntryPublication<Key extends keyof IncognitoEntryOperat
         throw new Error("Incognito entry returned unexpected publication facts");
       }
     },
-    authorize(_stage: "transaction" | "commit", facts: unknown) {
-      if (candidate && "refusedSource" in candidate.value && candidate.value.refusedSource) {
-        authorizePrepared?.(candidate.value.refusedSource);
+    authorize(stage: "transaction" | "commit", facts: unknown) {
+      const value = candidate?.value;
+      if (value != null && "refusedSource" in value && value.refusedSource) {
+        authorizePrepared?.(value.refusedSource);
         throw new Error("Session source refusal was not rejected");
       }
       if (isRecord(facts) && facts.guarded === true) {
-        authorizePrepared?.();
+        authorizePrepared?.(
+          undefined,
+          // SAFETY: The paired entry kernel supplies the source validation for this grant.
+          facts.sourceValidation as SessionSourceValidation | undefined,
+        );
+      }
+      const publication =
+        stage === "commit" ? candidate?.value : isRecord(facts) ? facts.publication : undefined;
+      if (publication !== undefined) {
+        authorizePublication?.(publication);
       }
     },
     decodeReceipt(receipt: unknown): IncognitoSessionOperations[Key]["output"] {
@@ -143,17 +234,19 @@ export function isIncognitoEntryValidationGrant(
   previousGuarded: unknown,
 ): boolean {
   return (
-    type === "session.entry.patch.commit" &&
+    (type === "session.entry.patch.commit" ||
+      type === "session.turn.commit" ||
+      isIncognitoTranscriptReceiptCommand(type)) &&
     phase === "transaction" &&
     request.stage === "transaction" &&
-    previousGuarded === false &&
+    (type !== "session.entry.patch.commit" || previousGuarded === false) &&
     isRecord(request.facts) &&
     isRecord(request.facts.entry) &&
     request.facts.entry.guarded === true
   );
 }
 
-type Scope = Pick<SqliteWorkerStore<AgentDatabaseIncognitoOperations>, "execute">;
+type Scope = Pick<SqliteWorkerStore<IncognitoSessionOperations>, "execute">;
 
 export type IncognitoSessionRunner = <T>(
   authority: IncognitoSessionAuthority,

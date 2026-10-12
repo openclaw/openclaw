@@ -3,7 +3,6 @@ import type { AddressInfo, Socket } from "node:net";
 import { Bot } from "grammy";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler, runReplaceableTelegramRequest } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
@@ -13,111 +12,18 @@ import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js
 import {
   deleteMessageTelegram,
   editMessageTelegram,
-  reactMessageTelegram,
   resetTelegramClientOptionsCacheForTests,
   sendMessageTelegram,
 } from "./send.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
-import * as targetWriteback from "./target-writeback.js";
 
-describe("Telegram operation leases through real clients", () => {
+describe("Telegram request contracts through real clients", () => {
   const fixture = useTelegramHttpFixture();
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     // Flood gates are per-token process state; never leak one test's wait into the next.
     resetTelegramAccountThrottlersForTest();
-  });
-
-  it.each(["media", "mutation"] as const)(
-    "keeps a retired transport usable while %s preparation is pending",
-    async (kind) => {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      if (kind === "media") {
-        const load = webMedia.loadWebMedia;
-        vi.spyOn(webMedia, "loadWebMedia").mockImplementationOnce(async (...args) => {
-          entered.resolve();
-          await release.promise;
-          return load(...args);
-        });
-      } else {
-        const persist = targetWriteback.maybePersistResolvedTelegramTarget;
-        vi.spyOn(targetWriteback, "maybePersistResolvedTelegramTarget").mockImplementationOnce(
-          async (params) => {
-            entered.resolve();
-            await release.promise;
-            return persist(params);
-          },
-        );
-      }
-      const sending =
-        kind === "media"
-          ? sendMessageTelegram("123", "Caption", {
-              cfg: fixture.cfg,
-              mediaUrl: fixture.photoPath,
-              mediaLocalRoots: [fixture.mediaDir],
-            })
-          : reactMessageTelegram("123", 7, "❤", { cfg: fixture.cfg });
-      try {
-        await entered.promise;
-        resetTelegramClientOptionsCacheForTests();
-        expect(fixture.requests).toEqual([]);
-        release.resolve();
-        await sending;
-        expect(fixture.requests.map(({ method }) => method)).toEqual([
-          kind === "media" ? "sendPhoto" : "setMessageReaction",
-        ]);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([sending]);
-      }
-    },
-  );
-
-  it("holds the transport across Telegram's full flood-wait", async () => {
-    const scheduled = createDeferred<number>();
-    const release = createDeferred<void>();
-    const timer = global.setTimeout;
-    const realNow = Date.now.bind(Date);
-    let skippedMs = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skippedMs);
-    vi.spyOn(global, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      // The account limiter sleeps until Telegram's retry_after deadline.
-      if (delay !== undefined && delay > 44_000 && delay <= 45_000) {
-        scheduled.resolve(delay);
-        return timer(() => {
-          void release.promise.then(() => {
-            skippedMs += delay;
-            callback(...args);
-          });
-        }, 0);
-      }
-      return timer(callback, delay, ...args);
-    });
-    fixture.rejections.push({
-      error_code: 429,
-      description: "Too Many Requests",
-      parameters: { retry_after: 45 },
-    });
-    const sending = sendMessageTelegram("123", "After flood wait", {
-      cfg: fixture.cfg,
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
-    });
-    try {
-      expect(await scheduled.promise).toBeGreaterThan(44_000);
-      expect(fixture.requests).toHaveLength(1);
-      resetTelegramClientOptionsCacheForTests();
-      release.resolve();
-      await expect(sending).resolves.toMatchObject({ messageId: "2" });
-      expect(fixture.requests.map(({ fields }) => fields.text)).toEqual([
-        "After flood wait",
-        "After flood wait",
-      ]);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([sending]);
-    }
   });
 
   it.each(["current", "retired"] as const)(
@@ -360,7 +266,6 @@ describe("telegram transport cache eviction over real sockets", () => {
   const liveSockets = new Set<Socket>();
   const requestSockets = new Map<string, Socket>();
   let sendMessageCalls = 0;
-  let slowResponse: ReturnType<typeof createDeferred<() => void>> | undefined;
 
   beforeEach(() => {
     // This fixture owns its loopback sockets, not the operator's proxy route.
@@ -392,12 +297,6 @@ describe("telegram transport cache eviction over real sockets", () => {
         if (url.includes("/sendMessage") || url.includes("/editMessageText")) {
           requestSockets.set(url.slice(0, url.lastIndexOf("/")), req.socket);
           sendMessageCalls += 1;
-          if (slowResponse) {
-            slowResponse.resolve(() => {
-              respond({ message_id: sendMessageCalls, chat: { id: 123 } });
-            });
-            return;
-          }
           respond({ message_id: sendMessageCalls, chat: { id: 123 } });
           return;
         }
@@ -433,9 +332,8 @@ describe("telegram transport cache eviction over real sockets", () => {
     });
   });
 
-  it("closes retired transports only after their active sends finish", async () => {
+  it("closes evicted and reset transports", async () => {
     resetTelegramClientOptionsCacheForTests();
-
     const ACCOUNTS = 70;
     const cfg = {
       channels: {
@@ -449,92 +347,26 @@ describe("telegram transport cache eviction over real sockets", () => {
         },
       },
     };
-    const socketForAccount = (account: number) => {
+    const send = async (account: number) => {
+      await editMessageTelegram("123", 1, "preview", { cfg, accountId: `acct-${account}` });
       const socket = requestSockets.get(`/bot10${account}:e2e-token-${account}`);
       if (!socket) {
         throw new Error(`Telegram socket for acct-${account} was not captured`);
       }
       return socket;
     };
-    // Edits retain idle pooling; new messages deliberately do not. Exercise both
-    // through the same cached account transport and its active-operation lease.
-    const send = async (account: number, text: string, create = false) => {
-      const opts = { cfg, accountId: `acct-${account}` };
-      const result = create
-        ? await sendMessageTelegram("123", text, opts)
-        : await editMessageTelegram("123", 1, text, opts);
-      expect(result.messageId).toBeTruthy();
-      return socketForAccount(account);
-    };
-
-    // Fill the cache to its 64-entry cap, then let the peer retire an idle socket.
-    for (let i = 0; i < 64; i += 1) {
-      await send(i, `hello ${i}`);
+    const sockets: Socket[] = [];
+    for (let i = 0; i < ACCOUNTS; i += 1) {
+      sockets.push(await send(i));
+      if (i >= 64) {
+        await vi.waitFor(() => expect(liveSockets).not.toContain(sockets[i - 64]), {
+          timeout: 3000,
+        });
+      }
     }
-    expect(requestSockets.size).toBe(64);
-    const peerSocket = await send(0, "refresh before peer close");
-    const peerClosed = new Promise<void>((resolve) => {
-      peerSocket.once("close", resolve);
-    });
-    peerSocket.end();
-    await peerClosed;
-    expect(liveSockets.has(peerSocket)).toBe(false);
-
-    // Put acct-0 (the oldest cache entry) mid-flight on its replacement socket.
-    const inFlight = createDeferred<() => void>();
-    slowResponse = inFlight;
-    const slowSend = send(0, "slow", true);
-    const releaseResponse = await inFlight.promise;
-    slowResponse = undefined;
-    const activeSocket = socketForAccount(0);
-
-    try {
-      expect(activeSocket).not.toBe(peerSocket);
-      // New cache key retires acct-0, but its exact socket must survive the lease.
-      await send(64, "evictor");
-      expect(liveSockets.has(activeSocket)).toBe(true);
-    } finally {
-      releaseResponse();
-      await slowSend.catch(() => undefined);
-    }
-    expect(await slowSend).toBe(activeSocket);
-    await vi.waitFor(() => expect(liveSockets.has(activeSocket)).toBe(false), { timeout: 3000 });
-
-    // Refresh each idle entry before eviction so an earlier peer close cannot
-    // stand in for closing the transport's current socket.
-    for (let i = 65; i < ACCOUNTS; i += 1) {
-      const idleSocket = await send(i - 64, "refresh before eviction");
-      expect(liveSockets.has(idleSocket)).toBe(true);
-      await send(i, `hello ${i}`);
-      await vi.waitFor(() => expect(liveSockets.has(idleSocket)).toBe(false), { timeout: 3000 });
-    }
-
-    // Retained transports still deliver after an unrelated idle peer close.
-    await send(6, "retained");
-    expect(sendMessageCalls).toBe(ACCOUNTS + 8);
-    expect(requestSockets.size).toBe(ACCOUNTS);
-
-    const idleBeforeReset = await send(7, "idle before reset");
-    const resetInFlight = createDeferred<() => void>();
-    slowResponse = resetInFlight;
-    const resetSend = send(6, "active during reset", true);
-    const releaseResetResponse = await resetInFlight.promise;
-    slowResponse = undefined;
-    const activeBeforeReset = socketForAccount(6);
-    try {
-      resetTelegramClientOptionsCacheForTests();
-      expect(liveSockets.has(activeBeforeReset)).toBe(true);
-      await vi.waitFor(() => expect(liveSockets.has(idleBeforeReset)).toBe(false), {
-        timeout: 3000,
-      });
-    } finally {
-      releaseResetResponse();
-      await resetSend.catch(() => undefined);
-    }
-    expect(await resetSend).toBe(activeBeforeReset);
-    await vi.waitFor(() => expect(liveSockets.has(activeBeforeReset)).toBe(false), {
-      timeout: 3000,
-    });
-    expect(await send(6, "fresh after reset")).not.toBe(activeBeforeReset);
+    expect(sendMessageCalls).toBe(ACCOUNTS);
+    resetTelegramClientOptionsCacheForTests();
+    await vi.waitFor(() => expect(liveSockets.size).toBe(0), { timeout: 3000 });
+    expect(await send(6)).not.toBe(sockets[6]);
   });
 });

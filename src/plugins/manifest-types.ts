@@ -23,6 +23,7 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  icons?: Record<string, string>;
   hats?: Record<string, string>;
   critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
 };
@@ -137,6 +138,8 @@ export type PluginManifestProviderEndpoint = {
 export type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
+  /** Schema for this provider's per-model params; defaults are documentation only. */
+  modelParamsSchema?: JsonSchemaObject;
   openAICompletions?: {
     supportsStreamingUsage?: boolean;
   };

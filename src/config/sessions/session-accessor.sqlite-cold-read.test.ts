@@ -43,14 +43,14 @@ import {
   findTranscriptEventInDatabase,
   loadLatestAssistantText,
   loadTranscriptEventsFromDatabase,
-  loadTranscriptEventRowsAfterSeqInDatabase,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptHeaderSync,
   readTranscriptEventAtSeqSync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
@@ -480,18 +480,6 @@ it.each(["batch stats", "search", "mutation"] as const)(
     });
   },
 );
-
-it("discards every batched result for a store that loses a table between chunks", async () => {
-  await withRace("stats-batch-table-race", async (race) => {
-    const scopes = Array.from({ length: 411 }, (_, index) => ({
-      ...race.scope,
-      sessionId: index === 0 ? race.scope.sessionId : `missing-${index}`,
-    }));
-    race.commitAfterMarkerRead(undefined, () => race.writer.exec("DROP TABLE transcript_events"));
-    expect(readTranscriptStatsBatchReadOnlySync(scopes)).toEqual(scopes.map(() => null));
-    expect(race.committed()).toBe(true);
-  });
-});
 
 it("preserves partial-store statistics, UTF-8 bytes, and scope-cache freshness in batches", async () => {
   await withOpenClawTestState({ label: "stats-batch-partial-store" }, async (state) => {

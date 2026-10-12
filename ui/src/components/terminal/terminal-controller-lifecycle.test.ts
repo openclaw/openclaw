@@ -7,7 +7,7 @@ import {
   disposeTerminalController,
   replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
-import { createTerminalController } from "./terminal-panel.test-support.ts";
+import { createTerminalController } from "./terminal-controller.test-support.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
 const runtimeMocks = vi.hoisted(() => ({

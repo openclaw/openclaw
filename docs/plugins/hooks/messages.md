@@ -17,7 +17,7 @@ before ordinary model dispatch. Return `{ handled: true, text: "..." }` to
 send a final reply, or `{ handled: true }` to handle it without text. This is a
 claim, not an API for rewriting outbound or inbound content.
 
-`reply_dispatch` is the advanced takeover seam: it receives the finalized
+`reply_dispatch` is the advanced takeover hook: it receives the finalized
 message context and a host dispatcher, and a handled result reports
 `queuedFinal` and delivery `counts`. Use `before_agent_reply` for a simple
 synthetic reply, and the sending hooks below to transform outgoing payloads.
@@ -29,7 +29,7 @@ helper forwards all three automatically. Share the recorder so the runtime and
 Gateway do not append the same user turn independently; mark runtime
 persistence only after a successful transcript write.
 
-The host-provided preparer records display ownership before the canonical
+The host-provided preparer records display ownership before the stored
 assistant append, using original runtime text captured before transcript-only
 hooks. It preserves raw content and IDs and grants no file access or write
 authority. Keep it in process and bound to its owning turn; after that turn
@@ -40,7 +40,7 @@ The optional third `onAgentRunStart` argument can offer
 return `"reply-dispatch"` synchronously to accept completion ownership; observers
 and other callback results leave lifecycle completion unchanged. Wrappers must
 forward every callback argument and its return value. After dispatch settles,
-`getResult()` supplies the canonical `terminalOutcome` and, when an
+`getResult()` supplies the recorded `terminalOutcome` and, when an
 assistant write succeeded, its `assistantTranscript` receipt (target, message
 ID, idempotency key, and optional projection anchor). The host then emits one
 chat completion from the delivered, post-hook payloads while retaining runtime
@@ -87,14 +87,14 @@ has visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
 `replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these
 first-class fields before reading legacy metadata.
 
-`before_dispatch` receives the canonical inbound `messageId` in both its event
+`before_dispatch` receives the assigned inbound `messageId` in both its event
 and context.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
 
 Inbound claim and message-received events expose `media?:
-PluginHookMediaFact[]` as the canonical attachment API. Each fact can carry
+PluginHookMediaFact[]` as the standard attachment API. Each fact can carry
 `path`, `url`, `contentType`, `kind`, `transcribed`, `messageId`, and
 `workspaceDir`; array position is attachment identity. When a remote attachment
 has not been staged locally yet, `media` is omitted,

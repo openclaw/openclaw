@@ -13,8 +13,8 @@ import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import {
   applySecretRefHeaderSentinels,
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import { isOpenAIProvider } from "../openai-routing.js";
@@ -225,12 +225,12 @@ async function resolveHarnessCompactApiKey(params: {
     return fallbackResolution(initialHarness);
   }
   const runtimeAuthProfileStore = isOpenAIProvider(provider)
-    ? ensureAuthProfileStore(agentDir, {
+    ? await ensureAuthProfileStoreAsync(agentDir, {
         profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
-    : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    : await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
         profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });

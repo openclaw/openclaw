@@ -12,6 +12,7 @@ import {
   isCronDeliveryStatus,
   isCronRunStatus,
 } from "./run-history-detail.js";
+import { cronRunEntryMatchesLink } from "./run-link.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronRunRecord } from "./store/run-history.types.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
@@ -115,18 +116,24 @@ export function projectCronRunHistoryPage(
   const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
   const query = normalizeLowercaseStringOrEmpty(options.query);
   const sortMultiplier = options.sortDir === "asc" ? -1 : 1;
-  const rows = records
+  let rows = records
     .filter(
       (record) =>
         (!jobId || record.jobId === jobId) && cronRunRecordStoreKey(record) === options.storeKey,
     )
     .filter((record) => !agentId || record.agentId === agentId)
     .map((record) => ({ record, entry: cronRunRecordToRunLogEntry(record) }))
-    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null)
+    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null);
+  if (runId) {
+    const exact = rows.filter(({ entry }) => entry.runId === runId);
+    const aliases = exact.length
+      ? []
+      : rows.filter(({ entry }) => cronRunEntryMatchesLink(runId, entry));
+    // Public ids retain precedence; a reused session or start time cannot select another run.
+    rows = exact.length ? exact : aliases.length === 1 ? aliases : [];
+  }
+  rows = rows
     .filter(({ entry }) => {
-      if (runId && entry.runId !== runId) {
-        return false;
-      }
       if (statuses && (!entry.status || !statuses.includes(entry.status))) {
         return false;
       }

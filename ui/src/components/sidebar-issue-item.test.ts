@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import { createApplicationOverlays } from "../app/overlays.ts";
 import { updateRunHarness } from "../app/update-run.test-support.ts";
-import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -96,7 +95,7 @@ describe("renderSidebarMentionItem", () => {
   const pathname = "/team/chat/writer/chat/12345678-90ab-cdef-1234-567890abcdef";
   const navigation = {
     pathname,
-    search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(mention.sessionKey)}`,
+    search: undefined,
   };
 
   function renderMention(overrides: Partial<Parameters<typeof renderSidebarMentionItem>[0]> = {}) {

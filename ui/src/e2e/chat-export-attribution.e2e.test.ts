@@ -15,6 +15,7 @@ import {
   openSessionMenuSubmenu,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat export attribution",
@@ -114,10 +115,13 @@ suite.define(() => {
             }
             markdown = await text(stream);
           } else {
+            // Selecting All owners must not attribute this ownerless transcript to the viewer.
+            await selectAllSidebarSessions(page);
             const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
             await row.hover();
             await row.click({ button: "right" });
-            await openSessionMenuSubmenu(page, "Copy");
+            await openSessionMenuSubmenu(page, "Advanced");
+            await openSessionMenuSubmenu(page, "Copy details");
             const copy = page.locator("openclaw-session-menu").getByRole("menuitem", {
               name: "Conversation as Markdown",
               exact: true,
@@ -125,14 +129,16 @@ suite.define(() => {
             if (captureUiProofEnabled) {
               await waitForControlUiProofSurface(
                 page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
-                [page.getByRole("menuitem", { name: "Copy", exact: true })],
+                [page.getByRole("menuitem", { name: "Copy details", exact: true })],
               );
             }
             await captureUiProof(
               suite,
               page,
               "copy-menu.png",
-              page.getByRole("menuitem", { name: "Copy", exact: true }).locator('[part="submenu"]'),
+              page
+                .getByRole("menuitem", { name: "Copy details", exact: true })
+                .locator('[part="submenu"]'),
               [copy],
             );
             await copy.click({ trial: true });

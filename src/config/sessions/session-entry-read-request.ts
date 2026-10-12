@@ -20,16 +20,40 @@ import {
 /** Ordinary and ordered readers capture the same selection and ancillary facts. */
 export function captureSessionEntryWorkerRequest(input: SessionEntryWorkerRead) {
   const selection: SessionExactEntriesWorkerSelection = input.selection
-    ? { selection: input.selection, projection: input.projection }
+    ? hasSessionEntrySelection(input, "session-id")
+      ? { selection: { ...input.selection }, projection: input.projection }
+      : hasSessionEntrySelection(input, "children")
+        ? {
+            selection: {
+              ...input.selection,
+              parentSessionKeys: [...input.selection.parentSessionKeys],
+            },
+            projection: input.projection,
+          }
+        : { selection: { ...input.selection }, projection: input.projection }
     : { sessionKeys: [...new Set(input.sessionKeys)], projection: input.projection };
   return {
     ...selection,
+    expectedIdentity: input.preparedSource
+      ? {
+          key: `file:${input.preparedSource.databaseIdentity}` as const,
+          canonicalPath: input.preparedSource.path,
+          birthtime: input.preparedSource.databaseBirthtime,
+        }
+      : undefined,
     snapshotFields: input.snapshotFields,
     lifecycleSessionKey: input.lifecycleSessionKey,
     includeMembers: input.includeMembers,
     includeParticipantRecords: input.includeParticipantRecords,
     includeAuthorization: input.includeAuthorization,
   };
+}
+
+function hasSessionEntrySelection<Kind extends "session-id" | "children">(
+  input: SessionEntryWorkerRead,
+  kind: Kind,
+): input is Extract<SessionEntryWorkerRead, { selection: { kind: Kind } }> {
+  return input.selection?.kind === kind;
 }
 
 export function captureSessionEntryReadScope(input: SessionEntryReadScope) {

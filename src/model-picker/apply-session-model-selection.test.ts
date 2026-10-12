@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
+import { FOLLOWUP_QUEUES, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -191,6 +192,36 @@ describe("applySessionModelSelection", () => {
     expectNoSelectionEffects();
     expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "refreshes inherited thinking only with pending work=%s",
+    async (pending) => {
+      const params = createParams();
+      const observed = {
+        ...catalog[1]!,
+        reasoning: true,
+        thinkingLevelMap: { high: "high" },
+      } satisfies ModelCatalogEntry;
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([observed]);
+      if (pending) {
+        getFollowupQueue(params.sessionKey, { mode: "followup" }).droppedCount = 1;
+      }
+      try {
+        expect(await applySessionModelSelection(params)).toMatchObject({ status: "applied" });
+        expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledTimes(pending ? 1 : 0);
+        expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledWith(
+          expect.objectContaining({
+            nextThinking: expect.objectContaining({
+              level: undefined,
+              catalog: expect.arrayContaining([pending ? observed : catalog[1]]),
+            }),
+          }),
+        );
+      } finally {
+        FOLLOWUP_QUEUES.delete(params.sessionKey);
+      }
+    },
+  );
 
   it.each([undefined, { allow: ["openai/*"] }])(
     "persists an off-catalog selection under policy %j without credentials",

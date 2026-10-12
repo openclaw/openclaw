@@ -2,18 +2,25 @@
 // returned to model-visible content blocks.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { RastermillUnavailableError } from "rastermill";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { getImageMetadata } from "../media/image-ops.js";
+import { resizeToJpeg } from "../media/media-services.js";
 import {
   sanitizeContentBlocksImages,
   sanitizeImageBlocks,
   sanitizeToolResultImages,
 } from "./tool-images.js";
+
+vi.mock("../media/media-services.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/media-services.js")>();
+  return { ...actual, resizeToJpeg: vi.fn(actual.resizeToJpeg) };
+});
 
 describe("tool image sanitizing", () => {
   const getImageBlock = (
@@ -29,6 +36,83 @@ describe("tool image sanitizing", () => {
   const createWidePng = async () => {
     return createSolidPngBuffer(420, 120, { r: 0x7f, g: 0x7f, b: 0x7f });
   };
+
+  describe("persisted image outcome cache", () => {
+    const resizeToJpegMock = vi.mocked(resizeToJpeg);
+    const pngBlock = (png: Buffer) => ({
+      type: "image" as const,
+      data: png.toString("base64"),
+      mimeType: "image/png",
+    });
+    const replay = (block: ReturnType<typeof pngBlock>, maxDimensionPx?: number) =>
+      sanitizeContentBlocksImages([block], "session:history", {
+        verifyDecodability: true,
+        maxDimensionPx,
+      });
+
+    beforeEach(() => {
+      resizeToJpegMock.mockClear();
+    });
+
+    it("verifies an in-limit replay once and resizes when the limits change", async () => {
+      const block = pngBlock(createSolidPngBuffer(32, 24, { r: 17, g: 31, b: 47 }));
+
+      expect(await replay(block)).toEqual([block]);
+      expect(await replay(block)).toEqual([block]);
+      expect(resizeToJpegMock).toHaveBeenCalledTimes(1);
+
+      expect(getImageBlock(await replay(block, 16)).mimeType).toBe("image/jpeg");
+      expect(resizeToJpegMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("reuses the exact replacement for an oversized replay", async () => {
+      const block = pngBlock(createSolidPngBuffer(2001, 8, { r: 53, g: 71, b: 89 }));
+
+      const first = getImageBlock(await replay(block));
+      expect(first.mimeType).toBe("image/jpeg");
+      expect(resizeToJpegMock).toHaveBeenCalledTimes(1);
+      resizeToJpegMock.mockClear();
+
+      const second = getImageBlock(await replay(block));
+      expect(second.mimeType).toBe("image/jpeg");
+      expect(second.data).toBe(first.data);
+      expect(resizeToJpegMock).not.toHaveBeenCalled();
+    });
+
+    it("retries verification after the image backend was unavailable", async () => {
+      const block = pngBlock(createSolidPngBuffer(33, 25, { r: 97, g: 113, b: 131 }));
+      resizeToJpegMock.mockRejectedValueOnce(
+        new RastermillUnavailableError("encode", "backend missing"),
+      );
+
+      expect(await replay(block)).toEqual([block]);
+      expect(await replay(block)).toEqual([block]);
+      expect(resizeToJpegMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("evicts older replacements when retained bytes exceed the budget", async () => {
+      const blocks = Array.from({ length: 8 }, (_, index) =>
+        pngBlock(createSolidPngBuffer(2001, 16 + index, { r: 149, g: 163, b: 181 })),
+      );
+      const replacement = Buffer.alloc(3 * 1024 * 1024);
+      const replaced = (block: (typeof blocks)[number]) => [
+        { ...block, data: replacement.toString("base64"), mimeType: "image/jpeg" },
+      ];
+      for (const block of blocks) {
+        resizeToJpegMock.mockResolvedValueOnce(replacement);
+        expect(await replay(block)).toEqual(replaced(block));
+      }
+      resizeToJpegMock.mockClear();
+
+      // Check the newest entry before reinserting the evicted oldest entry.
+      const last = expectDefined(blocks.at(-1), "last image");
+      expect(await replay(last)).toEqual(replaced(last));
+      expect(resizeToJpegMock).not.toHaveBeenCalled();
+      const first = expectDefined(blocks[0], "first image");
+      expect(getImageBlock(await replay(first)).mimeType).toBe("image/jpeg");
+      expect(resizeToJpegMock).toHaveBeenCalledTimes(1);
+    });
+  });
 
   it.each([
     { name: "nonempty text", block: { type: "text", text: "hello" }, admitted: true },

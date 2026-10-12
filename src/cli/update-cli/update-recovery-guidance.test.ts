@@ -162,6 +162,85 @@ describe("update recovery reporting", () => {
     },
   );
 
+  it.each(["stopped", "healthy", "settled", "unsettled", "starting"])(
+    "publishes actionable migrated-state recovery with a %s Gateway",
+    async (state) => {
+      vi.mocked(isContainerEnvironment).mockReturnValue(false);
+      const run = createRun({ profile: "work" });
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const healthy = state === "healthy" || state === "settled";
+      const steps: UpdateRunResult["steps"] = [
+        {
+          name: "finalize-doctor",
+          command: "openclaw doctor --fix",
+          cwd: "/fixture",
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: "Doctor config promotion refused: authority-check-failed",
+        },
+        {
+          name: "database rollback",
+          command: "preserve migrated databases",
+          cwd: "/fixture",
+          durationMs: 0,
+          exitCode: 1,
+        },
+      ];
+      if (state === "settled" || state === "unsettled") {
+        steps.push({
+          name: "doctor process settlement",
+          command: "settle doctor process groups",
+          cwd: "/fixture",
+          durationMs: 0,
+          exitCode: state === "settled" ? 0 : 1,
+          stderrTail: "Doctor child PID 12345 remains unsettled.",
+        });
+      }
+      if (state === "starting") {
+        steps.push({
+          name: "gateway recovery verification",
+          command: "verify gateway readiness",
+          cwd: "/fixture",
+          durationMs: 0,
+          exitCode: null,
+          termination: "timeout",
+          advisory: { kind: "recoverable-maintenance", message: "Gateway is still starting." },
+        });
+      }
+
+      await publishUpdateCommandTerminalResult(
+        { opts: { json: true, run }, coreAlreadyCurrent: false },
+        failure({
+          reason: "state-migrated-no-rollback",
+          steps,
+          failedStep: steps[0],
+          recovery: healthy
+            ? { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" }
+            : { serviceRestartSafe: false, reason: "state-migration-started" },
+          verification: { serviceRunning: healthy || state === "starting" },
+        }),
+        { rolledBack: false },
+      );
+
+      const stored = getUpdateRun(run.runId, { env: run.env });
+      const action = stored?.origin.nextAction;
+      expect(stored).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+      expect(action).toContain("openclaw --profile work update repair");
+      expect(action).toContain("recovery snapshots");
+      if (state === "unsettled") {
+        expect(action).toContain("Doctor child PID 12345 remains unsettled.");
+        expect(action).toContain(
+          "Keep the Gateway stopped while Doctor writers may still be running",
+        );
+        expect(action).toContain("after the recorded processes have stopped");
+      } else if (state === "stopped") {
+        expect(action).toContain("Keep the gateway stopped");
+      }
+      expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
+      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
+    },
+  );
+
   it.each([false, true])(
     "records next action from the admitted row without a cold snapshot (terminal=%s)",
     async (terminal) => {
@@ -481,5 +560,18 @@ describe("update recovery reporting", () => {
     });
     expect(action).toContain("automatic rollback was refused to preserve them");
     expect(action).not.toContain(redeploy);
+  });
+
+  it("describes successful-update cleanup as permanent migration-original retirement", () => {
+    const action = resolveUpdateResultNextAction({
+      result: { status: "ok", mode: "git", steps: [], durationMs: 0 },
+      env: { OPENCLAW_PROFILE: "work", OPENCLAW_STATE_DIR: "/fixture/state" },
+    });
+
+    expect(action).toContain("After confirming the update and your conversations are healthy");
+    expect(action).toContain("retained migration originals eligible for permanent cleanup");
+    expect(action).toContain("`openclaw --profile work update cleanup --dry-run`");
+    expect(action).toContain("state `/fixture/state`");
+    expect(action).toContain("Use the same profile, state, and config settings.");
   });
 });

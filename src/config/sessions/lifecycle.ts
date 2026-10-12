@@ -57,7 +57,7 @@ export function resolveSessionLifecycleTimestamps(params: {
   });
 }
 
-function resolveTerminalMainSessionTranscriptRegistryCheck(
+export function resolveTerminalMainSessionTranscriptRegistryCheck(
   params: TerminalMainSessionTranscriptRegistryParams,
 ): TerminalMainSessionTranscriptRegistryCheck | undefined {
   if (!params.entry || !params.sessionKey) {

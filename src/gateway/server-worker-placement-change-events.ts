@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
+import type { WorkerSessionPlacementChangeSnapshot } from "./worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 
@@ -23,13 +24,18 @@ export function createGatewayWorkerPlacementChangePublisher(params: {
         placement,
       ]),
     );
-  return async <T>(operation: () => Promise<T>): Promise<T> => {
+  return async <T>(
+    operation: () => Promise<T>,
+    preparedBefore?: readonly WorkerSessionPlacementChangeSnapshot[],
+  ): Promise<T> => {
     let context: ReturnType<NonNullable<typeof params.getSessionChangeContext>>;
     let before: Awaited<ReturnType<typeof snapshotPlacements>> | undefined;
     try {
       context = params.getSessionChangeContext?.();
       if (context) {
-        before = await snapshotPlacements();
+        before = preparedBefore
+          ? new Map(preparedBefore.map((placement) => [placement.sessionId, placement]))
+          : await snapshotPlacements();
       }
     } catch (error) {
       warnPlacementChangeFailure(error);

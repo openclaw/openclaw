@@ -29,6 +29,8 @@ import {
   finalizePreparedSessionTranscriptProjectionInTransaction,
   prepareSessionTranscriptProjection,
 } from "./session-transcript-projection-rebuild.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -132,6 +134,9 @@ function projectionFixture() {
   const appenders = new Map(
     ["target", "sibling"].map((id) => [id, createTranscriptIndexAppenderInTransaction(db, id)]),
   );
+  const inserters = new Map(
+    ["target", "sibling"].map((id) => [id, createTranscriptEventInserter(db, id)]),
+  );
   for (let i = 0; i < 8; i++) {
     const id = i % 2 ? "sibling" : "target";
     const seq = Math.floor(i / 2);
@@ -142,9 +147,7 @@ function projectionFixture() {
       parentId: seq ? `${id}-${seq - 1}` : null,
       message: { role: "user", content: `needle ${eventId}` },
     };
-    db.prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-    ).run(id, seq, JSON.stringify(event), seq);
+    inserters.get(id)!({ seq, eventJson: JSON.stringify(event), createdAt: seq });
     expect(appenders.get(id)!({ seq, event, eventId, createdAt: seq })).toBe(false);
   }
   db.exec("COMMIT");
@@ -199,12 +202,20 @@ describe("exact session transcript FTS ownership", () => {
         .find((option) => option.startsWith("MAX_VARIABLE_NUMBER="));
       const bulkRows = Number(variableLimit?.split("=")[1] ?? 32766) + 1;
       const totalRows = bulkRows + 4;
-      db.exec(`BEGIN;
-        WITH RECURSIVE rows(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM rows WHERE n<${bulkRows - 1})
-        INSERT INTO transcript_events (session_id, seq, event_json, created_at) SELECT 'target', n+4,
+      db.exec("BEGIN");
+      db.prepare(`WITH RECURSIVE rows(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM rows WHERE n<${bulkRows - 1})
+        INSERT INTO transcript_events (session_id, seq, event_json, created_at,
+          navigation_type, navigation_custom_type, navigation_display, message_role,
+          navigation_last_type, navigation_last_custom_type, navigation_valid)
+        SELECT 'target', n+4,
           json_object('type','message','id','bulk-'||n,
             'parentId',CASE WHEN n=0 THEN 'target-3' ELSE 'bulk-'||(n-1) END,
-            'message',json_object('role','user','content','needle bulk-'||n)), n+4 FROM rows;
+            'message',json_object('role','user','content','needle bulk-'||n)), n+4,
+          $navigation_type, $navigation_custom_type, $navigation_display, $message_role,
+          $navigation_last_type, $navigation_last_custom_type, $navigation_valid FROM rows`).run(
+        deriveTranscriptPredicateFields('{"type":"message","message":{"role":"user"}}'),
+      );
+      db.exec(`
         INSERT INTO session_transcript_active_events
           SELECT session_id,seq,seq,seq,1 FROM transcript_events WHERE session_id='target' AND seq>=4;
         INSERT INTO session_transcript_fts(text,session_id,message_id,role,timestamp)

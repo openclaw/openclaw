@@ -36,6 +36,7 @@ import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
+import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import {
@@ -363,18 +364,17 @@ function inferCapturedNoteSeverity(text: string): HealthFinding["severity"] {
   if (text.includes("CRITICAL")) {
     return "error";
   }
-  if (
-    text.includes("- Fix:") ||
-    text.includes("unavailable") ||
-    text.includes("not found") ||
-    text.includes("missing") ||
-    text.includes("not readable") ||
-    text.includes("not writable") ||
-    text.includes("readonly")
-  ) {
-    return "warning";
-  }
-  return "info";
+  return [
+    "- Fix:",
+    "unavailable",
+    "not found",
+    "missing",
+    "not readable",
+    "not writable",
+    "readonly",
+  ].some((marker) => text.includes(marker))
+    ? "warning"
+    : "info";
 }
 
 function createNoteCollector(checkId: string): {
@@ -541,7 +541,7 @@ const codexSessionRoutesCheck: CoreHealthCheck = {
 
 const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
   id: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
-  description: "Telegram General-topic conversation bindings use the canonical chat target.",
+  description: "Telegram General-topic conversation bindings use the chat target.",
   async detect(ctx) {
     const { detectTelegramGeneralTopicConversationRepairs } =
       await import("../commands/doctor-telegram-general-topic-conversations.js");
@@ -554,7 +554,7 @@ const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
       severity: "warning" as const,
       message: `Agent ${repair.agentId} has a stale Telegram General-topic conversation identity.`,
       target: repair.agentId,
-      requirement: "One canonical chat-scoped conversation binding for Telegram General topic.",
+      requirement: "One chat-scoped conversation binding for Telegram General topic.",
       fixHint: "Run `openclaw doctor --fix` to merge the stale topic-qualified identity.",
     }));
   },
@@ -732,19 +732,9 @@ const shellCompletionCheck: CoreHealthCheck = {
   async detect() {
     return shellCompletionStatusToHealthFindings(await checkShellCompletionStatus());
   },
-  async repair(ctx) {
-    const status = await checkShellCompletionStatus();
-    const effects = shellCompletionStatusToRepairEffects(status);
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor shell-completion repair owns real mutations",
-      changes: [],
-      effects,
-    };
-  },
+  repair: legacyOwnedRepair(async () => {
+    return shellCompletionStatusToRepairEffects(await checkShellCompletionStatus());
+  }, "legacy doctor shell-completion repair owns real mutations"),
 };
 
 const uiProtocolFreshnessCheck: CoreHealthCheck = {
@@ -753,20 +743,11 @@ const uiProtocolFreshnessCheck: CoreHealthCheck = {
   async detect() {
     return (await detectUiProtocolFreshnessIssues()).map(uiProtocolFreshnessIssueToHealthFinding);
   },
-  async repair(ctx) {
-    const effects = (await detectUiProtocolFreshnessIssues()).flatMap(
+  repair: legacyOwnedRepair(async () => {
+    return (await detectUiProtocolFreshnessIssues()).flatMap(
       uiProtocolFreshnessIssueToRepairEffects,
     );
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor UI freshness repair owns real mutations",
-      changes: [],
-      effects,
-    };
-  },
+  }, "legacy doctor UI freshness repair owns real mutations"),
 };
 
 const workspaceSuggestionsCheck: CoreHealthCheck = {

@@ -1,6 +1,6 @@
 import {
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
 import {
   resolveNativeCommandsEnabled,
@@ -24,7 +24,7 @@ export const discordProviderRuntime = {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   isVerbose,
   shouldLogVerbose,
 };

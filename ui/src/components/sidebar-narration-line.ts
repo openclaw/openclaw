@@ -82,32 +82,26 @@ export function stripSidebarInternalRuntimeFragment(
   while (cursor < text.length) {
     const nextBegin = text.indexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN, cursor);
     const nextEnd = text.indexOf(INTERNAL_RUNTIME_CONTEXT_END, cursor);
-    if (depth === 0) {
-      if (nextBegin === -1 && nextEnd === -1) {
-        visible += text.slice(cursor);
-        break;
-      }
-      if (nextEnd !== -1 && (nextBegin === -1 || nextEnd < nextBegin)) {
-        // A stray closing delimiter means this fragment may start inside an
-        // already-trimmed block. Fail closed until that boundary passes.
-        cursor = nextEnd + INTERNAL_RUNTIME_CONTEXT_END.length;
-        continue;
-      }
-      visible += text.slice(cursor, nextBegin);
-      depth = 1;
-      cursor = nextBegin + INTERNAL_RUNTIME_CONTEXT_BEGIN.length;
-      continue;
-    }
     if (nextBegin === -1 && nextEnd === -1) {
+      if (depth === 0) {
+        visible += text.slice(cursor);
+      }
       break;
     }
-    if (nextBegin !== -1 && (nextEnd === -1 || nextBegin < nextEnd)) {
+    const opening = nextBegin !== -1 && (nextEnd === -1 || nextBegin < nextEnd);
+    const next = opening ? nextBegin : nextEnd;
+    if (opening) {
+      if (depth === 0) {
+        visible += text.slice(cursor, next);
+      }
       depth += 1;
-      cursor = nextBegin + INTERNAL_RUNTIME_CONTEXT_BEGIN.length;
-      continue;
+    } else if (depth !== 0) {
+      depth -= 1;
     }
-    depth -= 1;
-    cursor = nextEnd + INTERNAL_RUNTIME_CONTEXT_END.length;
+    // A stray close at depth zero skips its prefix: the fragment may have
+    // begun inside an already-trimmed block, so stay closed until it passes.
+    cursor =
+      next + (opening ? INTERNAL_RUNTIME_CONTEXT_BEGIN : INTERNAL_RUNTIME_CONTEXT_END).length;
   }
 
   const delimiterPrefix = trailingInternalDelimiterPrefix(text);

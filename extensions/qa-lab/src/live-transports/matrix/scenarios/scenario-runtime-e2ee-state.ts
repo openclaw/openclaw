@@ -89,7 +89,6 @@ export async function mutateMatrixQaCliStateLoss(params: {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
   const matrixRuntime = await loadMatrixQaE2eeRuntime();
   const recoveryKeyStoreOptions = matrixRuntime.openMatrixRecoveryKeyStoreOptions(accountRoot);
-  let recoveryKeyPreserved = false;
   let recoveryKeyState: unknown = null;
   if (params.preserveRecoveryKey) {
     recoveryKeyState = withMatrixQaStateStore(recoveryKeyStoreOptions, (store) =>
@@ -98,7 +97,6 @@ export async function mutateMatrixQaCliStateLoss(params: {
     if (!recoveryKeyState) {
       throw new Error("Matrix CLI recovery key state was not created");
     }
-    recoveryKeyPreserved = true;
   }
   await rm(accountRoot, { force: true, recursive: true });
   if (recoveryKeyState) {
@@ -109,7 +107,7 @@ export async function mutateMatrixQaCliStateLoss(params: {
   }
   return {
     accountRoot,
-    recoveryKeyPreserved,
+    recoveryKeyPreserved: Boolean(recoveryKeyState),
   };
 }
 

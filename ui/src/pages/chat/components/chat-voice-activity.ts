@@ -66,27 +66,20 @@ if (!customElements.get(MICROPHONE_ACTIVITY_TAG)) {
   customElements.define(MICROPHONE_ACTIVITY_TAG, MicrophoneActivityElement);
 }
 
-function activeStatus(
-  status: RealtimeTalkStatus | undefined,
-): "connecting" | "listening" | "thinking" {
-  return status === "connecting" || status === "thinking" ? status : "listening";
-}
-
 export function voiceStatusLabel(
   status: RealtimeTalkStatus | undefined,
   detail: string | null | undefined,
 ) {
-  const explicitDetail = detail?.trim();
-  if (explicitDetail) {
-    return explicitDetail;
-  }
-  if (status === "thinking") {
-    return t("chat.voice.asking");
-  }
-  if (status === "connecting") {
-    return t("chat.voice.connecting");
-  }
-  return t("chat.voice.listening");
+  return (
+    detail?.trim() ||
+    t(
+      status === "thinking"
+        ? "chat.voice.asking"
+        : status === "connecting"
+          ? "chat.voice.connecting"
+          : "chat.voice.listening",
+    )
+  );
 }
 
 type MicrophoneActivityProps = {
@@ -101,7 +94,7 @@ export function renderMicrophoneActivity(props: MicrophoneActivityProps): Templa
   return html`
     <openclaw-microphone-activity
       class="agent-chat__voice-activity"
-      data-status=${activeStatus(props.status)}
+      data-status=${props.status === "connecting" || props.status === "thinking" ? props.status : "listening"}
       data-source="microphone"
       aria-hidden="true"
       .signal=${props.inputLevel ?? EMPTY_LEVEL_SIGNAL}

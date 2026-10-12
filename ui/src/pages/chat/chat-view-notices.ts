@@ -13,7 +13,7 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
-import "./components/chat-child-attention.ts";
+import "./components/chat-child-attention.tsx";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";

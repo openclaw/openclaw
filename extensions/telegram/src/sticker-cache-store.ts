@@ -70,12 +70,8 @@ export async function searchStickers(query: string, limit = 10): Promise<CachedS
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
   for (const sticker of await getAllCachedStickers()) {
-    let score = 0;
     const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
-
-    if (descLower.includes(queryLower)) {
-      score += 10;
-    }
+    let score = descLower.includes(queryLower) ? 10 : 0;
 
     const descWords = descLower.split(/\s+/);
     for (const qWord of queryWords) {
@@ -84,13 +80,8 @@ export async function searchStickers(query: string, limit = 10): Promise<CachedS
       }
     }
 
-    if (sticker.emoji && query.includes(sticker.emoji)) {
-      score += 8;
-    }
-
-    if (normalizeLowercaseStringOrEmpty(sticker.setName).includes(queryLower)) {
-      score += 3;
-    }
+    score += sticker.emoji && query.includes(sticker.emoji) ? 8 : 0;
+    score += normalizeLowercaseStringOrEmpty(sticker.setName).includes(queryLower) ? 3 : 0;
 
     if (score > 0) {
       results.push({ sticker, score });

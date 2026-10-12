@@ -212,28 +212,25 @@ export function createSubagentRegistrySweeper(params: {
         string,
         { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
       >();
-      const phase = ([runId, entry]: [string, SubagentRunRecord]) =>
-        entry.requesterSettleWake
+      const phases: Array<Array<[string, SubagentRunRecord]>> = Array.from({ length: 7 }, () => []);
+      for (const item of runs) {
+        const [runId, entry] = item;
+        const phase = entry.requesterSettleWake
           ? 0
           : isSuspendedPendingFinalDelivery(entry)
             ? 1
             : entry.terminalOwner === "interrupted-recovery"
               ? 2
               : !getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number"
-                ? 3
+                ? isStaleUnendedSubagentRun(entry, now)
+                  ? 3
+                  : 4
                 : entry.killReconciliation
-                  ? 4
-                  : 5;
-      const runEntries = [...runs.entries()].toSorted((left, right) => {
-        const phaseDelta = phase(left) - phase(right);
-        return (
-          phaseDelta ||
-          (phase(left) === 3
-            ? Number(isStaleUnendedSubagentRun(right[1], now)) -
-              Number(isStaleUnendedSubagentRun(left[1], now))
-            : 0)
-        );
-      });
+                  ? 5
+                  : 6;
+        phases[phase]!.push(item);
+      }
+      const runEntries = phases.flat();
       // Completion stays fresh across awaits, but deletion must retain the earlier
       // CAS identity. Bind it to the exact run so replacements wait for another pass.
       const cleanupIdentities = new Map<object, FrozenSessionIdentity | undefined>();

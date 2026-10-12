@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { expect, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,6 +14,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 function createPrefixOnlyChannelPlugin(
@@ -149,7 +151,10 @@ export function createCronTestContext(
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
-      wake: vi.fn(() => ({ ok: true }) as const),
+      wake: vi.fn(async (opts: Parameters<CronService["wake"]>[0]) => {
+        opts.commitGuard?.();
+        return { ok: true } as const;
+      }),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
       readScratch: vi.fn<CronService["readScratch"]>(async () => ({ currentRevision: 0 })),
       writeScratch: vi.fn(
@@ -396,4 +401,47 @@ export function createCronTestInvoker(
     });
     return { context, respond };
   };
+}
+
+export function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ id: "cron-1" }), undefined);
+}
+
+export const requireRecord = createRequireRecord("record", "expected-label-object");
+
+export function requireCronAddPayload(
+  context: ReturnType<typeof createCronTestContext>,
+): Record<string, unknown> {
+  return requireRecord(context.cron.add.mock.calls[0]?.[0], "cron.add payload");
+}
+
+export function expectResponseError(
+  respond: ReturnType<typeof vi.fn>,
+  expected: { code?: string; messageIncludes?: string; details?: Record<string, unknown> },
+) {
+  const call = respond.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected response call");
+  }
+  expect(call[0]).toBe(false);
+  expect(call[1]).toBeUndefined();
+  const error = requireRecord(call[2], "response error");
+  if (expected.code) {
+    expect(error.code).toBe(expected.code);
+  }
+  if (expected.messageIncludes) {
+    expect(String(error.message)).toContain(expected.messageIncludes);
+  }
+  if (expected.details) {
+    expect(error.details).toEqual(expected.details);
+  }
+}
+
+export function callerClientWithCronCreatorAuthority(
+  grant: CronCreatorAuthorityGrant,
+): GatewayClient {
+  const client = createCronCallerClient("ops");
+  client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
+  client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
+  return client;
 }

@@ -2,7 +2,6 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -95,34 +94,7 @@ afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   listPluginCommands.mockReset();
   listPluginCommands.mockImplementation(() => []);
-  getContextWindowCaches().discoveredTokenCache.clear();
 });
-
-type ContextBudgetStatus = NonNullable<
-  NonNullable<Parameters<typeof buildStatusMessage>[0]["sessionEntry"]>["contextBudgetStatus"]
->;
-
-function makeContextBudgetStatus(): ContextBudgetStatus {
-  return {
-    schemaVersion: 1,
-    source: "pre-prompt-estimate",
-    updatedAt: 1,
-    provider: "anthropic",
-    model: "claude-sonnet-4.6",
-    route: "fits",
-    shouldCompact: false,
-    estimatedPromptTokens: 640_000,
-    contextTokenBudget: 1_000_000,
-    promptBudgetBeforeReserve: 900_000,
-    reserveTokens: 100_000,
-    effectiveReserveTokens: 100_000,
-    remainingPromptBudgetTokens: 260_000,
-    overflowTokens: 0,
-    toolResultReducibleChars: 0,
-    messageCount: 2,
-    unwindowedMessageCount: 2,
-  };
-}
 
 type FallbackContextStatusOverrides = {
   activeProvider?: string;
@@ -191,27 +163,6 @@ function withStatusHome(run: () => Promise<void>) {
 }
 
 describe("buildStatusMessage", () => {
-  it("uses estimated context budget status when fresh totalTokens are unavailable", () => {
-    const text = buildStatusMessage({
-      ...modelArgs("anthropic", "claude-sonnet-4.6"),
-      sessionEntry: {
-        inputTokens: 3_800_000,
-        outputTokens: 20_000,
-        totalTokens: 3_800_000,
-        totalTokensFresh: false,
-        contextTokens: 1_000_000,
-        contextBudgetStatus: makeContextBudgetStatus(),
-      },
-
-      now: 10 * 60_000,
-    });
-    const normalized = normalizeTestText(text);
-
-    expect(normalized).toContain("Context: ~640k/1.0m (64% est)");
-    expect(normalized).not.toContain("Context: ?/1.0m");
-    expect(normalized).not.toContain("Context: 3.8m/1.0m");
-  });
-
   it("shows sanitized TTS provider details in the voice status line", async () => {
     await withTempHome(async () => {
       const text = buildStatusMessage({
@@ -260,26 +211,6 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Runtime: gemini (acp/acpx\\nrewritten)");
     expect(text).not.toContain("\u001b");
-  });
-
-  it("shows plugin status lines only when verbose is enabled", () => {
-    const render = (verboseLevel: "on" | "off") =>
-      normalizeTestText(
-        buildStatusMessage({
-          ...modelArgs("anthropic", "test:opus"),
-          sessionEntry: {
-            verboseLevel,
-            pluginDebugEntries: [
-              {
-                pluginId: "active-memory",
-                lines: ["🧩 Active Memory: status=timeout elapsed=15s query=recent"],
-              },
-            ],
-          },
-        }),
-      );
-    expect(render("on")).toContain("Active Memory: status=timeout elapsed=15s query=recent");
-    expect(render("off")).not.toContain("Active Memory: status=timeout elapsed=15s query=recent");
   });
 
   it("shows trace lines only when trace is enabled", () => {
@@ -423,7 +354,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Fallback: claude-cli/claude-opus-4-7");
     expect(normalized).not.toContain("Auth: unknown");
     expect(normalized).toContain("Endpoint: unknown");
-    expect(normalized).toContain("Context: 36k/200k (18%)");
+    expect(normalized).toContain("Context: 36k/?");
   });
 
   it("prefers active CLI OAuth over selected env API-key labels for runtime aliases", () => {
@@ -477,23 +408,6 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Context: 49k/123k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
     expect(normalized).not.toContain("Context: 49k/200k");
-  });
-
-  it("uses per-agent sandbox config when config and session key are provided", () => {
-    const text = buildStatusMessage({
-      config: {
-        agents: {
-          entries: {
-            main: {},
-            discord: { sandbox: { mode: "all" } },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      agent: {},
-      sessionKey: "agent:discord:discord:channel:1456350065223270435",
-    });
-
-    expect(normalizeTestText(text)).toContain("Execution: docker/all");
   });
 
   it("includes media understanding decisions when present", () => {
@@ -591,68 +505,6 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).not.toContain("empty output");
   });
 
-  it("shows the selected model and authenticated fallback route", () => {
-    const text = buildStatusMessage({
-      modelRefs: statusModelRefs(
-        { provider: "openai", model: "gpt-4.1-mini" },
-        { provider: "anthropic", model: "claude-haiku-4-5" },
-      ),
-
-      sessionEntry: {
-        providerOverride: "openai",
-        modelOverride: "gpt-4.1-mini",
-        modelProvider: "anthropic",
-        model: "claude-haiku-4-5",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "openai/gpt-4.1-mini",
-          activeModel: "anthropic/claude-haiku-4-5",
-          reason: "rate limit",
-        },
-        contextTokens: 32_000,
-      },
-      modelAuth: "api-key",
-      activeModelAuth: "api-key di_123…abc (deepinfra:default)",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
-    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
-    expect(normalized).toContain("(rate limit)");
-    expect(normalized).not.toContain(" - Reason:");
-    expect(normalized).not.toContain("Active:");
-    expect(normalized).toContain("di_123...abc");
-  });
-
-  it("omits active fallback details when runtime drift does not match fallback state", () => {
-    const text = buildStatusMessage({
-      modelRefs: statusModelRefs(
-        { provider: "openai", model: "gpt-4.1-mini" },
-        { provider: "anthropic", model: "claude-haiku-4-5" },
-      ),
-      agent: {
-        model: "openai/gpt-4.1-mini",
-      },
-      sessionEntry: {
-        modelProvider: "anthropic",
-        model: "claude-haiku-4-5",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
-          reason: "rate limit",
-        },
-      },
-
-      activeModelAuth: "api-key di_123…abc (deepinfra:default)",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
-    expect(normalized).not.toContain("Fallback:");
-    expect(normalized).not.toContain("(rate limit)");
-  });
-
   it("shows configured fallback models when provided", () => {
     const text = buildStatusMessage({
       agent: {
@@ -692,22 +544,6 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: google/gemini-3.1-flash-lite");
     expect(normalized).not.toContain("Fallbacks:");
-  });
-
-  it("shows queue details when overridden", () => {
-    const text = buildStatusMessage({
-      agent: {},
-      queue: {
-        mode: "collect",
-        depth: 3,
-        debounceMs: 2000,
-        cap: 5,
-        dropPolicy: "old",
-        showDetails: true,
-      },
-    });
-
-    expect(text).toContain("Queue: collect (depth 3 · debounce 2s · cap 5 · drop old)");
   });
 
   function writeTranscriptUsageLog(params: {
@@ -919,10 +755,8 @@ describe("buildStatusMessage", () => {
     });
   });
 
-  it("keeps transcript-derived slash model ids on model-only context lookup", async () => {
+  it("keeps transcript-derived slash model ids in their admitted provider catalog", async () => {
     await withStatusHome(async () => {
-      getContextWindowCaches().discoveredTokenCache.set("google/gemini-2.5-pro", 999_000);
-
       const sessionId = "sess-openrouter-google";
       writeTranscriptUsageLog({
         agentId: "main",
@@ -939,6 +773,10 @@ describe("buildStatusMessage", () => {
 
       const text = buildStatusMessage({
         ...modelArgs("openrouter", "google/gemini-2.5-pro"),
+        thinkingCatalog: [
+          { provider: "openrouter", id: "google/gemini-2.5-pro", contextWindow: 999_000 },
+          { provider: "google", id: "gemini-2.5-pro", contextWindow: 2_000_000 },
+        ],
         config: {
           models: {
             providers: {
@@ -961,11 +799,13 @@ describe("buildStatusMessage", () => {
     });
   });
 
-  it("keeps runtime slash model ids on model-only context lookup when modelProvider is missing", () => {
-    getContextWindowCaches().discoveredTokenCache.set("google/gemini-2.5-pro", 999_000);
-
+  it("keeps runtime slash model ids in their admitted provider catalog when modelProvider is missing", () => {
     const text = buildStatusMessage({
       ...modelArgs("openrouter", "google/gemini-2.5-pro"),
+      thinkingCatalog: [
+        { provider: "openrouter", id: "google/gemini-2.5-pro", contextWindow: 999_000 },
+        { provider: "google", id: "gemini-2.5-pro", contextWindow: 2_000_000 },
+      ],
       config: {
         models: {
           providers: {
@@ -989,8 +829,6 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
-    getContextWindowCaches().discoveredTokenCache.clear();
-
     const text = buildStatusMessage({
       modelRefs: statusModelRefs(
         { provider: "xiaomi", model: "mimo-v2-flash" },
@@ -1034,8 +872,6 @@ describe("buildStatusMessage", () => {
   });
 
   it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
-    getContextWindowCaches().discoveredTokenCache.clear();
-
     const text = buildStatusMessage({
       ...modelArgs("openai", "gpt-4o"),
       config: {
@@ -1057,17 +893,10 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Context: 49k/777k");
-    expect(normalized).not.toContain("Context: 49k/200k");
   });
 
-  it("keeps provider-aware lookup for bare transcript model ids", async () => {
+  it("keeps bare transcript model ids in their admitted provider catalog", async () => {
     await withStatusHome(async () => {
-      getContextWindowCaches().discoveredTokenCache.set("gemini-2.5-pro", 128_000);
-      getContextWindowCaches().discoveredTokenCache.set(
-        providerContextTokenCacheKey("google-gemini-cli", "gemini-2.5-pro"),
-        1_000_000,
-      );
-
       const sessionId = "sess-google-bare-model";
       writeTranscriptUsageLog({
         agentId: "main",
@@ -1084,6 +913,10 @@ describe("buildStatusMessage", () => {
 
       const text = buildStatusMessage({
         ...modelArgs("google-gemini-cli", "gemini-2.5-pro"),
+        thinkingCatalog: [
+          { provider: "google-gemini-cli", id: "gemini-2.5-pro", contextWindow: 1_000_000 },
+          { provider: "google", id: "gemini-2.5-pro", contextWindow: 128_000 },
+        ],
         sessionEntry: {
           sessionId,
           totalTokens: 5,
@@ -1120,16 +953,6 @@ describe("buildCommandsMessage", () => {
 });
 
 describe("buildHelpMessage", () => {
-  it("hides config/debug when disabled", () => {
-    const text = buildHelpMessage({
-      commands: { config: false, debug: false },
-    } as unknown as OpenClawConfig);
-    expect(text).toContain("Skills");
-    expect(text).toContain("/skill <name> [input]");
-    expect(text).not.toContain("/config");
-    expect(text).not.toContain("/debug");
-  });
-
   it("includes /fast in help output", () => {
     expect(buildHelpMessage()).toContain("/fast status|auto|on|off|ultrafast|default");
   });

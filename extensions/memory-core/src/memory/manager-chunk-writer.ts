@@ -106,12 +106,21 @@ export function createMemoryChunkWriter(
         supersedes_key: parameter((row) => row.provenance.supersedesKey ?? null),
       })
       .onConflict((conflict) =>
-        conflict.column("chunk_id").doUpdateSet((eb) => ({
-          origin_class: eb.ref("excluded.origin_class"),
-          session_kind: eb.ref("excluded.session_kind"),
-          observed_at: eb.ref("excluded.observed_at"),
-          supersedes_key: eb.ref("excluded.supersedes_key"),
-        })),
+        conflict
+          .column("chunk_id")
+          .doUpdateSet((eb) => ({
+            origin_class: eb.ref("excluded.origin_class"),
+            session_kind: eb.ref("excluded.session_kind"),
+            observed_at: eb.ref("excluded.observed_at"),
+            supersedes_key: eb.ref("excluded.supersedes_key"),
+          }))
+          .where((eb) =>
+            eb.or(
+              (["origin_class", "session_kind", "observed_at", "supersedes_key"] as const).map(
+                (column) => eb(column, "is not", eb.ref(`excluded.${column}`)),
+              ),
+            ),
+          ),
       ),
   );
   let chunkStatement: StatementSync | undefined;
@@ -120,10 +129,15 @@ export function createMemoryChunkWriter(
 
   // One publication owns these statements, including large embeddings. Lazy
   // preparation keeps empty writes inert and later tables untouched on failure.
-  return (id: string, chunk: IndexedMemoryChunk, embedding: number[]): void => {
-    const row = { id, chunk, embedding };
-    (chunkStatement ??= database.prepare(chunkWrite.compiled.sql)).run(...chunkWrite.bind(row));
-    (recallStatement ??= database.prepare(recallWrite.compiled.sql)).run(...recallWrite.bind(row));
+  // An omitted embedding retains the indexed row and refreshes only provenance.
+  return (id: string, chunk: IndexedMemoryChunk, embedding?: number[]): void => {
+    if (embedding) {
+      const row = { id, chunk, embedding };
+      (chunkStatement ??= database.prepare(chunkWrite.compiled.sql)).run(...chunkWrite.bind(row));
+      (recallStatement ??= database.prepare(recallWrite.compiled.sql)).run(
+        ...recallWrite.bind(row),
+      );
+    }
     const provenance = chunk.provenance ?? {
       originClass: "untrusted" as const,
       sessionKind: "unknown" as const,

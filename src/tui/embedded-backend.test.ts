@@ -27,6 +27,12 @@ import {
   registerEmbeddedBackendStreamTests,
 } from "./embedded-backend.stream.test-support.js";
 import {
+  deferred,
+  flushMicrotasks,
+  localSessionEntry,
+  sendMainChat,
+} from "./embedded-backend.test-helpers.js";
+import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
 } from "./embedded-model-catalog.test-support.js";
@@ -122,29 +128,6 @@ const readChatHistoryPageMock = vi.fn(
     messages: [],
   }),
 );
-type LoadSessionEntryMockResult = {
-  agentId: string;
-  cfg: Record<string, unknown>;
-  canonicalKey: string;
-  storePath?: string;
-  store?: Record<string, unknown>;
-  entry?: Record<string, unknown>;
-};
-function localSessionEntry(
-  sessionKey: string,
-  opts?: { agentId?: string },
-  overrides: Partial<LoadSessionEntryMockResult> = {},
-): LoadSessionEntryMockResult {
-  return {
-    cfg: {},
-    agentId: opts?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "main",
-    canonicalKey: sessionKey,
-    storePath: "/tmp/openclaw-sessions.json",
-    store: {},
-    entry: {},
-    ...overrides,
-  };
-}
 const loadSessionEntryMock = vi.fn(localSessionEntry);
 let registeredListener: ((evt: unknown) => void) | undefined;
 const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
@@ -318,6 +301,20 @@ vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
   readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
+// mock-isolation: use the synthetic session fixture without opening Gateway worker databases.
+vi.mock("../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: ({
+    key,
+    cfg: _cfg,
+    ...opts
+  }: {
+    key: string;
+    cfg: unknown;
+    agentId?: string;
+    includeStoreChildEntries?: boolean;
+  }) => Promise.resolve(loadSessionEntryMock(key, opts)),
+}));
+
 vi.mock("../gateway/session-utils.js", () => ({
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
@@ -380,32 +377,10 @@ vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: () => ({}),
 }));
 
-function deferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((error?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 function emitRegisteredAgentEvent(evt: unknown) {
   if (registeredListener) {
     notifyListeners([registeredListener], evt);
   }
-}
-
-function sendMainChat(backend: EmbeddedTuiBackendType, message: string, runId: string) {
-  return backend.sendChat({ sessionKey: "agent:main:main", message, runId });
 }
 
 const selectedGlobalSessionCases = [
@@ -1739,9 +1714,14 @@ describe("EmbeddedTuiBackend", () => {
       expect(abortListener).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(5);
-      await stopPromise;
-
       expect(abortListener).toHaveBeenCalledTimes(1);
+      expect(stopped).toBe(false);
+      expect(isEmbeddedMode()).toBe(true);
+
+      // Cancellation does not own settlement: keep the runtime available for
+      // the aborted turn's final cleanup before releasing embedded ownership.
+      pending.resolve({ payloads: [], meta: { aborted: true } });
+      await stopPromise;
       expect(isEmbeddedMode()).toBe(false);
     });
   });

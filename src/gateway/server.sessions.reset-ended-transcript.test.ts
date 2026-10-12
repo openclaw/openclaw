@@ -153,7 +153,7 @@ test("sessions.reset delivers the ended SQLite window only to a loaded granted p
       reason: "conversation-access-required",
     });
     expect(historyRead).toHaveBeenCalledOnce();
-    expect(historyRead).toHaveBeenCalledWith({
+    expect(historyRead.mock.calls[0]?.[0]).toEqual({
       kind: "around-id",
       params: expect.objectContaining({
         options: expect.objectContaining({ closedResetInterval: true }),

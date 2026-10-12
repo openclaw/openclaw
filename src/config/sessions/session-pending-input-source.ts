@@ -7,6 +7,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
 import type { PendingInputScope } from "./session-pending-input-store.js";
@@ -23,6 +24,33 @@ export async function readPendingInputSource(
   idempotencyKey: string,
   pendingOnly: boolean,
 ) {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const snapshot = await memory.actor.storage!.read(
+      {
+        type: "session.pendingInput.read",
+        input: {
+          kind: "source",
+          sessionKey: memory.actor.target.sessionKey,
+          sessionId: scope.sessionId,
+          idempotencyKey,
+          pendingOnly,
+        },
+      },
+      memory.authority,
+    );
+    if (snapshot.kind !== "source") {
+      throw new Error("Submitted input returned a different operation");
+    }
+    return {
+      path: memory.path,
+      snapshot,
+      assertCurrent() {
+        memory.actor.assertReadable();
+        memory.authority.assertCurrent();
+      },
+    };
+  }
   const captured = {
     ...scope,
     incognito: scope.incognito ?? captureIncognitoSessionOperation(scope),

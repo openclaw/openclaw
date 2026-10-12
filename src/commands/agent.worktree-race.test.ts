@@ -100,6 +100,7 @@ async function createSessionWorktree(
   const created = await managedWorktrees.create({
     repoRoot: repo,
     name: "race-session",
+    baseRef: "main",
     ownerKind: "session",
     ownerId: sessionKey,
   });

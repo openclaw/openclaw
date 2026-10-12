@@ -5,6 +5,10 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
 type TranscriptFtsDatabase = Pick<DB, "session_transcript_fts_rows"> & {
@@ -42,8 +46,10 @@ export function createSessionTranscriptFtsInserter(db: DatabaseSync, sessionId: 
     }),
   );
   return (entry: TranscriptFtsEntry): void => {
-    insertIdentity(entry);
-    insertContent(entry);
+    withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => {
+      insertIdentity(entry);
+      insertContent(entry);
+    });
   };
 }
 
@@ -70,10 +76,15 @@ export function deleteSessionTranscriptFtsRowsInTransaction(
     selected = selected.limit(options.maxRows);
   }
   return Number(
-    executeSqliteQuerySync(
+    withSqliteDatabaseWriteScope(
       db,
-      kysely.deleteFrom("session_transcript_fts_rows").where("id", "in", selected),
-    ).numAffectedRows ?? 0n,
+      (typeof sessionIds === "string" ? [sessionIds] : sessionIds).map(sqliteSessionIdWriteScope),
+      () =>
+        executeSqliteQuerySync(
+          db,
+          kysely.deleteFrom("session_transcript_fts_rows").where("id", "in", selected),
+        ).numAffectedRows,
+    ) ?? 0n,
   );
 }
 

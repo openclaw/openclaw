@@ -26,7 +26,11 @@ import { cronStoreKey } from "../../cron/store/key.js";
 import { hasActiveCronRunReceiptsForAgent } from "../../cron/store/run-receipt-drain.js";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
 import { resolveHeartbeatSchedulerSeedAsync } from "../../infra/heartbeat-schedule.js";
-import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import {
+  readAgentDeletionJournal,
+  readAgentDeletionJournalAsync,
+  type AgentDeletionJournalEntry,
+} from "../../state/agent-deletion-journal.js";
 import { sleep } from "../../utils/sleep.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -115,8 +119,10 @@ function inspectMonitors(
   });
 }
 
-function readDeletionFenceJournal(agentId: string, operationId: string) {
-  const journal = readAgentDeletionJournal(agentId);
+function assertDeletionFenceJournal(
+  journal: AgentDeletionJournalEntry | undefined,
+  operationId: string,
+) {
   if (!journal || journal.operationId !== operationId || journal.cleanupCompleted) {
     throw new Error("Claw removal no longer owns the serving Gateway's deletion fence.");
   }
@@ -129,7 +135,7 @@ function assertDeletionFence(
   config: OpenClawConfig,
   install: PersistedClawInstall | undefined,
 ) {
-  const journal = readDeletionFenceJournal(agentId, operationId);
+  const journal = assertDeletionFenceJournal(readAgentDeletionJournal(agentId), operationId);
   // Orphaned ownership can outlive its install row, but must never remove a configured replacement.
   const agent = listAgentEntries(config).find((entry) => entry.id === agentId);
   if (agent && digestClawValue(agent) !== install?.agentConfigDigest) {
@@ -225,7 +231,11 @@ export const clawsMonitorHandlers = {
         );
         return;
       }
-      readDeletionFenceJournal(input.agentId, input.operationId);
+      assertDeletionFenceJournal(
+        await readAgentDeletionJournalAsync(input.agentId),
+        input.operationId,
+      );
+      assertBinding();
       const { install } = await readClawPackageOwnership({ agentId: input.agentId });
       const assertCurrent = () => {
         assertBinding();

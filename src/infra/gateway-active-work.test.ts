@@ -8,6 +8,11 @@ import {
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
+import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -146,6 +151,24 @@ describe("waitForGatewayActiveWork", () => {
       first?.release();
       second?.release();
       third?.release();
+    }
+  });
+
+  it("names the command lane holding queued work", async () => {
+    const lane = "session:shutdown-queued-owner";
+    setCommandLaneConcurrency(lane, 0);
+    const queued = enqueueCommandInLane(lane, async () => {});
+    const rejected = expect(queued).rejects.toThrow("cleared");
+    try {
+      const result = await waitForGatewayActiveWork(0);
+      expect(result.snapshot.blockers).toContainEqual({
+        kind: "queue",
+        count: 1,
+        message: `1 queued or active operation(s): ${lane} (active=0, queued=1)`,
+      });
+    } finally {
+      clearCommandLane(lane);
+      await rejected;
     }
   });
 

@@ -32,11 +32,9 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
 } from "../../../shared/device-bootstrap-profile.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import {
-  disconnectedUserGitHubConnection,
-  readUserGitHubConnection,
-  updateUserGitHubConnection,
-} from "../../../state/user-github-connections.js";
+import { readUserGitHubConnection } from "../../../state/user-github-connections.js";
+import { disconnectedUserGitHubConnection } from "../../../state/user-github-connections.kernel.js";
+import { updateUserGitHubConnection } from "../../../state/user-github-connections.test-support.js";
 import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
 import {
@@ -474,6 +472,7 @@ describe("gateway connect pairing exemptions", () => {
       expect(personalStatus).toHaveBeenCalledExactlyOnceWith({
         owner: "gateway-owner",
         assertCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
       });
       expect(personalAuthorize).not.toHaveBeenCalled();
       const afterRepair = await rpcReq<UsersListResult>(reconnect, "users.list", {});
@@ -980,6 +979,12 @@ describe("gateway connect pairing exemptions", () => {
       expect((await getPairedDevice(paired.identity.deviceId))?.approvedScopes).toEqual([
         "operator.read",
       ]);
+      expect((await listDevicePairing()).pending).toContainEqual(
+        expect.objectContaining({
+          deviceId: paired.identity.deviceId,
+          scopes: ["operator.write"],
+        }),
+      );
     } finally {
       ws?.close();
       await started.server.close();

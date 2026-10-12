@@ -10,7 +10,7 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
-import { hasLiveWorktreeRunLease } from "../../agents/worktrees/run-lease.js";
+import { hasLiveWorktreeRunLease } from "../../agents/worktrees/run-lease.test-support.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,

@@ -227,8 +227,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
 });
 
 async function appendPreparedTranscriptMessage(params: TranscriptAppendParams) {
-  const prepare =
-    params.prepareMessageAfterIdempotencyCheckAsync ?? params.prepareMessageAfterIdempotencyCheck;
+  const prepare = params.preparation?.prepareMessage;
   const message = prepare ? await prepare(params.message) : params.message;
   return message
     ? {
@@ -344,6 +343,7 @@ function makeParams(
     agentDir: "C:\\copilot-home",
     agentId: "agent-1",
     auth: { useLoggedInUser: true, ...(overrides as { auth?: object }).auth },
+    authProfileStore: { version: 1, profiles: {} },
     disableTools: true,
     hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,

@@ -11,7 +11,9 @@ import {
   getSecretRedactionRegistryRevision,
   redactSensitiveText,
 } from "./openclaw-runtime-io.js";
+import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
+  assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
@@ -21,7 +23,6 @@ import {
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
-  isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isIncognitoOpenClawAgentSqlitePath,
@@ -52,7 +53,7 @@ import { resolveBuildSessionSqliteIdentity } from "./session-entry-source.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
-  listSessionTranscriptCorpusEntriesForAgentSync,
+  listSessionTranscriptCorpusEntriesForAgent,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
 import type {
@@ -277,13 +278,13 @@ function isCanonicalSessionsDirForAgent(sessionsDir: string, agentId: string): b
   );
 }
 
-function loadSessionTranscriptClassificationForSessionsDir(
+async function loadSessionTranscriptClassificationForSessionsDir(
   sessionsDir: string,
-): SessionTranscriptClassification {
+): Promise<SessionTranscriptClassification> {
   const agentId = extractAgentIdFromSessionsDir(sessionsDir);
   if (agentId && isCanonicalSessionsDirForAgent(sessionsDir, agentId)) {
     return classifySessionTranscriptCorpusEntries(
-      listSessionTranscriptCorpusEntriesForAgentSync(agentId, { includeContentRevision: false }),
+      await listSessionTranscriptCorpusEntriesForAgent(agentId, { includeContentRevision: false }),
     );
   }
   const storePath = path.join(sessionsDir, "sessions.json");
@@ -346,10 +347,10 @@ function classifySessionTranscriptCorpusEntries(
   };
 }
 
-function classifySessionTranscriptFromSessionStore(absPath: string): {
+async function classifySessionTranscriptFromSessionStore(absPath: string): Promise<{
   generatedByDreamingNarrative: boolean;
   generatedByCronRun: boolean;
-} {
+}> {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
   const primarySessionId = parseUsageCountedSessionIdFromFileName(path.basename(absPath));
@@ -357,7 +358,7 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
     primarySessionId && isSessionArchiveArtifactName(path.basename(absPath))
       ? normalizeComparablePath(path.join(sessionsDir, `${primarySessionId}.jsonl`))
       : null;
-  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+  const classification = await loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
   const hasClassifiedPath = (paths: ReadonlySet<string>) =>
     paths.has(normalizedAbsPath) ||
     (normalizedPrimaryPath !== null && paths.has(normalizedPrimaryPath));
@@ -488,6 +489,13 @@ export function statSessionEntrySync(
 ): SessionFileState | null {
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   if (sqliteIdentity) {
+    if (!transcriptStats) {
+      assertBoundIncognitoMemorySyncAccess(
+        sqliteIdentity,
+        "statSessionEntrySync",
+        "buildSessionEntry",
+      );
+    }
     const stats = transcriptStats ?? readTranscriptStatsSync(sqliteIdentity);
     return sqliteSessionFileState(absPath, sqliteIdentity, stats, opts.updatedAtMs);
   }
@@ -586,7 +594,6 @@ export async function buildSessionEntryFromSnapshot(
   snapshot: SessionEntrySnapshot,
   assertCurrent: () => void,
 ): Promise<SessionFileEntry | null> {
-  assertCurrent();
   const { onTranscriptMessage, ...options } = opts;
   const result = await buildSessionEntryFromSource(
     absPath,
@@ -597,7 +604,6 @@ export async function buildSessionEntryFromSnapshot(
             onTranscriptMessage(message, observedAt) {
               assertCurrent();
               onTranscriptMessage(message, observedAt);
-              assertCurrent();
             },
           }
         : {}),
@@ -689,7 +695,7 @@ async function buildSessionEntryFromSource(
     const sessionStoreClassification =
       !sqliteIdentity &&
       (opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined)
-        ? classifySessionTranscriptFromSessionStore(absPath)
+        ? await classifySessionTranscriptFromSessionStore(absPath)
         : null;
     let generatedByDreamingNarrative =
       opts.generatedByDreamingNarrative ??

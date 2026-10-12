@@ -21,11 +21,9 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionArtifactPreparationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
-import {
-  planSessionStateDeleteIfUnreferenced,
-  readReferencedSessionIds,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   LifecycleArtifactCleanupInput,
   LifecycleArtifactCleanupPlan,
@@ -243,9 +241,7 @@ export function readSessionLifecycleArtifactCleanup(
   expectedSource: DatabaseFileIdentity,
 ): LifecycleArtifactCleanupPlan {
   assertOpenClawAgentDatabaseIdentity(database, expectedSource);
-  const plan = planSessionLifecycleArtifactCleanup(database, params);
-  assertOpenClawAgentDatabaseIdentity(database, expectedSource);
-  return plan;
+  return planSessionLifecycleArtifactCleanup(database, params);
 }
 
 export function planSessionLifecycleArtifactCleanup(

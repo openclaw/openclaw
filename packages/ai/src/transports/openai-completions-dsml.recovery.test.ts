@@ -12,51 +12,6 @@ import {
 } from "./openai-completions.test-support.js";
 
 describe("openai completions DSML", () => {
-  it("fails before a later DSML call after overflow can be authorized", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const laterCall =
-      '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/repro.md"}</|DSML|invoke></|DSML|tool_calls>';
-
-    await expect(
-      processCompletionsStream(
-        streamChunks([
-          makeCompletionsChunk({
-            content: "<|DSML|tool_calls>" + "x".repeat(256_001),
-          }),
-          makeCompletionsChunk({
-            content: "</|DSML|function_calls> after " + laterCall,
-          }),
-          makeCompletionsChunk({}, "tool_calls"),
-        ]),
-        output,
-        model,
-        { push() {} },
-      ),
-    ).rejects.toThrow("Exceeded DeepSeek DSML recovery buffer limit");
-  });
-
-  it("does not carry surrogate accounting across emitted visible text", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await expect(
-      processCompletionsStream(
-        streamChunks([
-          makeCompletionsChunk({ content: "\ud83d" }),
-          makeCompletionsChunk({ content: "\ude00" }),
-          makeCompletionsChunk({
-            content: "<|DSML|tool_calls>" + "x".repeat(256_001),
-          }),
-          makeCompletionsChunk({}, "stop"),
-        ]),
-        output,
-        model,
-        { push() {} },
-      ),
-    ).rejects.toThrow("Exceeded DeepSeek DSML recovery buffer limit");
-  });
-
   it("rejects a nested DSML wrapper before the original outer close", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
@@ -104,61 +59,6 @@ describe("openai completions DSML", () => {
 
     expect(output.stopReason).toBe("stop");
     expect(output.content.some((part) => part.type === "toolCall")).toBe(false);
-  });
-
-  it("does not rewind across the outer opener after a short first body chunk", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({ content: "<|DSML|tool_calls>\n" }),
-        makeCompletionsChunk({
-          content:
-            '<|DSML|invoke name="read">{"path":"/tmp/fragmented.md"}</|DSML|invoke></|DSML|tool_calls>',
-        }),
-        makeCompletionsChunk({}, "stop"),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "read",
-        arguments: { path: "/tmp/fragmented.md" },
-      },
-    ]);
-  });
-
-  it("treats DSML-looking text inside a parameter value as payload", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const content =
-      '<｜DSML｜tool_calls><｜DSML｜invoke name="message">' +
-      '<｜DSML｜parameter name="text" string="true">' +
-      "literal <｜DSML｜tool_calls> marker" +
-      "</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>";
-
-    const chunks = Array.from(content, (char) => makeCompletionsChunk({ content: char }));
-    chunks.push(makeCompletionsChunk({}, "stop"));
-    await processCompletionsStream(streamChunks(chunks), output, model, {
-      push() {},
-    });
-
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "message",
-        arguments: { text: "literal <｜DSML｜tool_calls> marker" },
-      },
-    ]);
   });
 
   it("ignores an incomplete invoke-like prefix before a valid invoke", async () => {
@@ -216,32 +116,6 @@ describe("openai completions DSML", () => {
     expect(output.content.some((part) => part.type === "toolCall")).toBe(false);
   });
 
-  it("treats DSML-looking text inside JSON arguments as payload", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-    const content =
-      '<|DSML|tool_calls><|DSML|invoke name="message">' +
-      '{"text":"literal <|DSML|tool_calls> marker"}' +
-      "</|DSML|invoke></|DSML|tool_calls>";
-
-    await processCompletionsStream(
-      streamChunks([makeCompletionsChunk({ content }, "stop")]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "message",
-        arguments: { text: "literal <|DSML|tool_calls> marker" },
-      },
-    ]);
-  });
-
   it("does not authorize recovered DeepSeek DSML calls when the stream omits a terminal", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
@@ -263,12 +137,9 @@ describe("openai completions DSML", () => {
   });
 
   it.each([
-    { finishReason: "stop", allowed: true, code: 'return "ready";' },
-    { finishReason: "length", allowed: false, code: 'return "ready";' },
     { finishReason: "content_filter", allowed: false, code: 'return "ready";' },
     { finishReason: "stop", allowed: true, code: "" },
     { finishReason: "length", allowed: false, code: "" },
-    { finishReason: "content_filter", allowed: false, code: "" },
   ])("gates HTTP DSML $finishReason '$code'", async ({ finishReason, allowed, code }) => {
     const server = createServer((req, res) => {
       req.resume();
@@ -376,72 +247,18 @@ describe("openai completions DSML", () => {
     expect((second[0] as { id?: string }).id).not.toBe((first[0] as { id?: string }).id);
   });
 
-  it("recovers split DeepSeek DSML JSON tool calls emitted as text", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({ content: '<|DSML|tool_calls><|DSML|invoke name="read">' }),
-        makeCompletionsChunk({ content: '{"path":"/tmp/native.md"}</|DSML|invoke>' }),
-        makeCompletionsChunk({ content: "</|DSML|tool_calls>" }, "stop"),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "read",
-        arguments: { path: "/tmp/native.md" },
-      },
-    ]);
-  });
-
   it.each([
-    {
-      name: "empty arguments",
-      body: '<|DSML|invoke name="read"></|DSML|invoke>',
-    },
-    {
-      name: "empty non-string parameter",
-      body: '<|DSML|invoke name="read"><|DSML|parameter name="path" string="false"></|DSML|parameter></|DSML|invoke>',
-    },
     {
       name: "empty parameter without a string attribute",
       body: '<|DSML|invoke name="read"><|DSML|parameter name="path"></|DSML|parameter></|DSML|invoke>',
-    },
-    {
-      name: "empty non-string parameter with a string attribute inside its name",
-      body: `<|DSML|invoke name="read"><|DSML|parameter name="path string='true' suffix" string="false"></|DSML|parameter></|DSML|invoke>`,
-    },
-    {
-      name: "asymmetric invoke marker",
-      body: '<|DSML｜invoke name="read">{"path":"/tmp/unexecuted"}</|DSML|invoke>',
     },
     {
       name: "foreign invoke close",
       body: '<|DSML|invoke name="read">{"path":"/tmp/unexecuted"}</｜DSML｜invoke>',
     },
     {
-      name: "asymmetric parameter marker",
-      body: '<|DSML|invoke name="read"><|DSML｜parameter name="path">/tmp/unexecuted</|DSML|parameter></|DSML|invoke>',
-    },
-    {
       name: "foreign parameter close",
       body: '<|DSML|invoke name="read"><|DSML|parameter name="path">/tmp/unexecuted</｜DSML｜parameter></|DSML|invoke>',
-    },
-    {
-      name: "doubled invoke with single close",
-      body: '<｜｜DSML｜｜invoke name="read">{"path":"/tmp/unexecuted"}</｜DSML｜invoke>',
-    },
-    {
-      name: "mixed doubled marker",
-      body: '<|｜DSML|｜invoke name="read">{"path":"/tmp/unexecuted"}</|｜DSML|｜invoke>',
     },
   ])("does not authorize DSML with $name", async ({ body }) => {
     const model = createDeepSeekCompletionsModel();

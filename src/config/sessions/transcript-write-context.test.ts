@@ -5,16 +5,18 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   ensureSessionEntrySync,
   loadSessionEntry,
   loadTranscriptEventsSync,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "./session-accessor.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   bindOwnedSessionTranscriptWrites,
   captureOwnedTranscriptWriteAssertion,

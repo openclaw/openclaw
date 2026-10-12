@@ -116,23 +116,6 @@ describe("skill_workshop review guard", () => {
     ).rejects.toThrow("run aborted");
     expect(await listWorkshopChanges("main", {})).toHaveLength(1);
   });
-
-  it("lets foreground runs patch without a prior view and counts their views as use", async () => {
-    const tool = createSkillWorkshopTool({ config: {}, agentId: "main", runId: "fg-run" });
-    await tool.execute("1", {
-      action: "patch",
-      name: "deploy",
-      old_text: "make deploy",
-      new_text: "make ship",
-    });
-    await tool.execute("2", { action: "view", name: "deploy" });
-    expect(await listWorkshopChanges("main", { runId: "fg-run" })).toEqual([
-      expect.objectContaining({ action: "patch", actor: "agent", summary: "patched SKILL.md" }),
-    ]);
-    expect(consumeRunSkillUsage("fg-run")).toEqual([
-      expect.objectContaining({ name: "deploy", source: "workspace", activation: "read" }),
-    ]);
-  });
 });
 
 describe("skill_workshop remove_file", () => {
@@ -160,6 +143,9 @@ describe("skill_workshop remove_file", () => {
     expect(text(await tool.execute("5", { action: "view", name: "deploy" }))).not.toContain(
       "references/old.md",
     );
+    expect(consumeRunSkillUsage("fg-run")).toEqual([
+      expect.objectContaining({ name: "deploy", source: "workspace", activation: "read" }),
+    ]);
 
     await tool.execute("6", { action: "restore", name: "deploy" });
     expect(

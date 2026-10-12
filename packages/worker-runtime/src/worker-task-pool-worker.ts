@@ -66,13 +66,14 @@ export function sendWorkerTaskInput<Input, Output>(params: {
     }
     const transferList = task.options.transferList?.(input);
     if (!task.done) {
+      const context = params.host.captureTaskContext(worker);
       postWorkerTaskInput(
         worker,
         slot,
         task,
         input,
-        transferList,
-        params.host.captureTaskContext(),
+        [...(transferList ?? []), ...(params.host.taskContextTransferList?.(context) ?? [])],
+        context,
       );
     }
   } catch (error) {

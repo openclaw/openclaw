@@ -1473,7 +1473,7 @@ extension ChatViewModelSessionActionTests {
             return try JSONSerialization.data(withJSONObject: payload)
         }
         let markdown = try await vm.sidebarMarkdown(session: session, connection: connection)
-        #expect(offsets == [0, 1, 0])
+        #expect(offsets == [0, 1])
         let older = try #require(markdown.range(of: "older question"))
         let newer = try #require(markdown.range(of: "newer answer"))
         #expect(older.lowerBound < newer.lowerBound)
@@ -1481,7 +1481,7 @@ extension ChatViewModelSessionActionTests {
         #expect(vm.sessionKey == "main")
     }
 
-    @Test(arguments: ["sessionId", "totalMessages", "deltaCursor", "activeLeafEntryId", "nextOffset"])
+    @Test(arguments: ["sessionId", "nextOffset"])
     func `sidebar Markdown refuses mixed or nonadvancing transcript pages`(_ changedField: String) async throws {
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: SessionActionTransport())
         let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
@@ -1505,9 +1505,6 @@ extension ChatViewModelSessionActionTests {
             if call > 1 || changedField == "nextOffset" {
                 switch changedField {
                 case "sessionId": payload[changedField] = "replacement"
-                case "totalMessages": payload[changedField] = 3
-                case "deltaCursor": payload[changedField] = "cursor-2"
-                case "activeLeafEntryId": payload["sessionInfo"] = [changedField: "leaf-2"]
                 default: payload[changedField] = 0
                 }
             }

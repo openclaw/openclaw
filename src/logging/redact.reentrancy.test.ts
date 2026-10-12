@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { redactSensitiveText } from "../plugin-sdk/security-runtime.js";
 import { compileSafeRegexDetailed } from "../security/safe-regex.js";
 import {
+  computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
   redactInputTextWithSourcePolicy,
   redactSensitiveFieldValue,
@@ -24,6 +25,36 @@ function sharedPatternMatching(input: string): RegExp {
 }
 
 describe("nested redaction calls", () => {
+  it("preserves shared regex state across nested bitmap scans", () => {
+    const pattern = /fixture/g;
+    const exec = pattern.exec.bind(pattern);
+    let nested = false;
+    const resolved = { mode: "tools" as const, patterns: [pattern] };
+    const spy = vi.spyOn(pattern, "exec").mockImplementation((input) => {
+      const match = exec(input);
+      if (match && !nested) {
+        nested = true;
+        try {
+          expect(computeSensitiveRedactionBitmap("fixture!", resolved).map(Number).join("")).toBe(
+            "11111110",
+          );
+        } finally {
+          nested = false;
+        }
+      }
+      return match;
+    });
+    pattern.lastIndex = 3;
+    try {
+      expect(
+        computeSensitiveRedactionBitmap("fixture fixture", resolved).map(Number).join(""),
+      ).toBe("111111101111111");
+      expect(pattern.lastIndex).toBe(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("keeps nested matcher input and pattern order", () => {
     const inputs: string[] = [];
     const nested: string[] = [];

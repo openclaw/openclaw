@@ -1,29 +1,58 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
-import { nothing } from "lit";
+import { createMemo, createSignal } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsUsageResult } from "../../api/types.ts";
+import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageDetailsController } from "./detail-controller.ts";
+import type { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { page as usageRoute } from "./route.ts";
 import type { UsageSessionEntry } from "./types.ts";
-import type { UsageRouteData } from "./usage-page.ts";
-import "./usage-page.ts";
+import { UsagePageModel, type UsageRouteData } from "./usage-page-model.ts";
 
-export type TestUsagePage = HTMLElement & {
+export type TestUsagePage = Pick<
+  HTMLElement,
+  "querySelector" | "querySelectorAll" | "textContent" | "isConnected" | "remove"
+> & {
+  readonly element: HTMLElement;
   context: ApplicationContext;
-  routeData: UsageRouteData;
+  routeData: UsageRouteData | undefined;
   usageError: string | null;
+  readonly usageResult: SessionsUsageResult | null;
+  readonly usageCostSummary: CostUsageSummary | null;
+  readonly usageLoading: boolean;
   usageSelectedSessions: string[];
   details: UsageDetailsController;
   providerUsageStalled: boolean;
   providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
   providerUsageUnavailable: boolean;
+  readonly refreshPolicy: UsageRefreshPolicy;
+  readonly gateway: {
+    applySnapshot: (
+      snapshot: ApplicationGatewaySnapshot,
+      binding: { initial: boolean; sourceChanged: boolean },
+    ) => void;
+  };
   loadUsage: () => Promise<void>;
   requestUpdate: () => void;
   render: () => unknown;
   readonly updateComplete: Promise<boolean>;
 };
+
+type InspectedUsagePageModel = Pick<
+  TestUsagePage,
+  | "details"
+  | "loadUsage"
+  | "providerUsageSummary"
+  | "usageSelectedSessions"
+  | "usageCostSummary"
+  | "refreshPolicy"
+  | "gateway"
+>;
+
+const pageCleanups = new Set<() => void>();
 
 type UsagePublicationFixture = {
   agentId?: string;
@@ -117,12 +146,133 @@ export async function createPage(
   renderView = false,
   context: ApplicationContext = contextWithClient(client),
 ): Promise<TestUsagePage> {
-  const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-  page.context = context;
-  if (!renderView) {
-    page.render = () => nothing;
-  }
-  document.body.append(page);
+  const content = renderView ? (await import("./usage-page.tsx")).UsagePageContent : undefined;
+  const container = document.createElement("div");
+  const [revision, setRevision] = createSignal(0);
+  const notify = () => setRevision((value) => value + 1);
+  let model = new UsagePageModel(context, notify);
+  let disposeView: (() => void) | undefined;
+  let disposed = false;
+  const inspect = () => model as unknown as InspectedUsagePageModel;
+  const mount = () => {
+    model.connect();
+    if (content) {
+      disposeView = mountSolid(
+        () => {
+          const state = createMemo(() => {
+            revision();
+            return model.read();
+          });
+          return content({
+            get state() {
+              return state();
+            },
+            context: model.context,
+            get result() {
+              revision();
+              return model.usageResult;
+            },
+          });
+        },
+        { container },
+      ).unmount;
+    }
+  };
+  const cleanup = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    disposeView?.();
+    model.dispose();
+    pageCleanups.delete(cleanup);
+  };
+  const page: TestUsagePage = {
+    element: container,
+    querySelector: container.querySelector.bind(container),
+    querySelectorAll: container.querySelectorAll.bind(container),
+    get textContent() {
+      return container.textContent;
+    },
+    get isConnected() {
+      return container.isConnected;
+    },
+    get context() {
+      return model.context;
+    },
+    set context(next: ApplicationContext) {
+      const routeData = model.routeData;
+      disposeView?.();
+      model.dispose();
+      model = new UsagePageModel(next, notify);
+      disposed = false;
+      pageCleanups.add(cleanup);
+      mount();
+      if (routeData) {
+        model.setRouteData(routeData);
+      }
+      notify();
+    },
+    get routeData() {
+      return model.routeData;
+    },
+    set routeData(data: UsageRouteData | undefined) {
+      model.setRouteData(data);
+    },
+    get usageError() {
+      return model.read().data.error;
+    },
+    get usageResult() {
+      return model.usageResult;
+    },
+    get usageCostSummary() {
+      return inspect().usageCostSummary;
+    },
+    get usageLoading() {
+      return model.read().data.loading;
+    },
+    get usageSelectedSessions() {
+      return model.read().filters.selectedSessions;
+    },
+    set usageSelectedSessions(sessions: string[]) {
+      inspect().usageSelectedSessions = sessions;
+      notify();
+    },
+    get details() {
+      return inspect().details;
+    },
+    get providerUsageStalled() {
+      return model.read().data.providerUsageStalled;
+    },
+    get providerUsageSummary() {
+      return inspect().providerUsageSummary;
+    },
+    get providerUsageUnavailable() {
+      return model.read().data.providerUsageUnavailable;
+    },
+    get refreshPolicy() {
+      return inspect().refreshPolicy;
+    },
+    get gateway() {
+      return inspect().gateway;
+    },
+    loadUsage: () => inspect().loadUsage(),
+    requestUpdate: notify,
+    render: () => undefined,
+    get updateComplete() {
+      return Promise.resolve().then(() => {
+        flush();
+        return true;
+      });
+    },
+    remove() {
+      cleanup();
+      container.remove();
+    },
+  };
+  document.body.append(container);
+  pageCleanups.add(cleanup);
+  mount();
   await page.updateComplete;
   return page;
 }
@@ -155,6 +305,9 @@ export function createPendingUsageRouteData(
 }
 
 export function cleanupUsagePageTest(): void {
+  for (const cleanup of pageCleanups) {
+    cleanup();
+  }
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();

@@ -15,6 +15,12 @@ const OPENCLAW_DEBUG_PROXY_URL = "OPENCLAW_DEBUG_PROXY_URL";
 const OPENCLAW_DEBUG_PROXY_CERT_DIR = "OPENCLAW_DEBUG_PROXY_CERT_DIR";
 const OPENCLAW_DEBUG_PROXY_SESSION_ID = "OPENCLAW_DEBUG_PROXY_SESSION_ID";
 const OPENCLAW_DEBUG_PROXY_REQUIRE = "OPENCLAW_DEBUG_PROXY_REQUIRE";
+export const DEBUG_PROXY_CHILD_CAPTURE_USERNAME = "openclaw-capture";
+
+export function readDebugProxyChildEndpoint(env: NodeJS.ProcessEnv = process.env): URL | undefined {
+  const endpoint = URL.parse(env[OPENCLAW_DEBUG_PROXY_URL]?.trim() ?? "");
+  return endpoint?.username === DEBUG_PROXY_CHILD_CAPTURE_USERNAME ? endpoint : undefined;
+}
 
 export type DebugProxySettings = {
   enabled: boolean;
@@ -40,13 +46,15 @@ export function resolveDebugProxySettings(
 ): DebugProxySettings {
   const enabled = isTruthy(env[OPENCLAW_DEBUG_PROXY_ENABLED]);
   const explicitSessionId = env[OPENCLAW_DEBUG_PROXY_SESSION_ID]?.trim() || undefined;
+  const childEndpoint = readDebugProxyChildEndpoint(env);
   // Local implicit sessions stay stable within one process so repeated callers
   // write to the same capture session until an explicit id overrides it.
   const sessionId = explicitSessionId ?? (cachedImplicitSessionId ??= randomUUID());
   return {
     enabled,
     required: isTruthy(env[OPENCLAW_DEBUG_PROXY_REQUIRE]),
-    proxyUrl: env[OPENCLAW_DEBUG_PROXY_URL]?.trim() || undefined,
+    // Child credentials belong only to the private capture endpoint, never stored facts or proxies.
+    proxyUrl: childEndpoint?.origin ?? (env[OPENCLAW_DEBUG_PROXY_URL]?.trim() || undefined),
     dbPath: resolveDebugProxyDbPath(env),
     blobDir: resolveDebugProxyBlobDir(env),
     certDir: env[OPENCLAW_DEBUG_PROXY_CERT_DIR]?.trim() || resolveDebugProxyCertDir(env),

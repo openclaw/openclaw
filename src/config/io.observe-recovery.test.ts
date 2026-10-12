@@ -6,6 +6,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareLegacyConfigMigrationRuntime } from "../commands/doctor/shared/legacy-config-migrate.test-support.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -550,16 +551,23 @@ describe("config observe recovery", () => {
               return deps.fs.renameSync(source, target);
             },
           };
-    const recover = (recoveryDeps: ObserveRecoveryDeps) => {
+    const recover = async (recoveryDeps: ObserveRecoveryDeps) => {
       const input = {
         deps: recoveryDeps,
         configPath,
         ...clobbered,
         prepareBackup: approveRecoveryCandidate,
       };
-      return mode === "async"
-        ? maybeRecoverSuspiciousConfigRead(input)
-        : maybeRecoverSuspiciousConfigReadSync(input);
+      const work = new AsyncWorkScope();
+      try {
+        return await work.run(() =>
+          mode === "async"
+            ? maybeRecoverSuspiciousConfigRead(input)
+            : maybeRecoverSuspiciousConfigReadSync(input),
+        );
+      } finally {
+        await work.drain();
+      }
     };
     const recovered = await recover({ ...deps, fs: failingFs });
 

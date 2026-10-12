@@ -51,6 +51,15 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+vi.mock("../session-utils-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store.js")>()),
+  withGatewaySessionEntry: async (
+    sessionKey: string,
+    opts: { agentId?: string } | undefined,
+    consume: (loaded: ReturnType<typeof loadSessionEntryMock>) => unknown,
+  ) => consume(loadSessionEntryMock(sessionKey, opts)),
+}));
+
 vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/embedded-agent-runner/runs.js")>(
     "../../agents/embedded-agent-runner/runs.js",
@@ -78,7 +87,9 @@ import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import type { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { callSessions } from "./sessions.abort-agent-scope.request.test-support.js";
 import {
   createActiveRun,
@@ -98,12 +109,31 @@ function expectRespondErrorMessage(respond: RespondFn, message: string): void {
 
 function mockChatSuccess(mock: typeof chatAbortMock, payload: Record<string, unknown>): void {
   mock.mockImplementationOnce(
-    (
-      { respond }: { respond: RespondFn },
-      lifecycle?: { onAuthorizedAfterQueuedAbort?: () => boolean },
-    ) => {
-      const additionalAborted = lifecycle?.onAuthorizedAfterQueuedAbort?.() ?? false;
-      respond(true, additionalAborted ? { ...payload, aborted: true } : payload);
+    async (...[options, lifecycle]: Parameters<typeof handleChatAbortRequestWithLifecycle>) => {
+      if (!lifecycle?.onAuthorizedBeforeEmbeddedAbort) {
+        options.respond(true, payload);
+        return;
+      }
+      // Session cleanup now consumes the real shared plan's embedded Stop outcome.
+      const agentId = options.params.agentId;
+      if (typeof agentId !== "string") {
+        throw new Error("Missing selected abort agent");
+      }
+      const cfg = options.context.getRuntimeConfig();
+      const capturedSession = {
+        ...loadSessionEntryMock.mock.results.at(-1)?.value,
+        cfg,
+        agentId,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+      };
+      loadSessionEntryMock.mockReturnValueOnce(capturedSession);
+      const actual =
+        await vi.importActual<typeof import("./chat-abort-handler.js")>("./chat-abort-handler.js");
+      Object.assign(options.context, {
+        ...createDirectChatContext({ getRuntimeConfig: options.context.getRuntimeConfig }),
+        ...options.context,
+      });
+      await actual.handleChatAbortRequestWithLifecycle(options, lifecycle);
     },
   );
 }

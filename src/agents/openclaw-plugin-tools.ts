@@ -78,13 +78,14 @@ function createPluginToolDelivery(params: {
   // Capabilities bind the source policy session, even when plugins execute in
   // a shared or durable session. Keep validation separate from execution identity.
   const policySessionKey = params.options?.agentSessionKey ?? sessionKey;
-  const messageActionAuthorization = resolveMessageActionTurnAuthorization({
+  const turnIdentity = {
     token,
     agentId,
     runId,
     sessionKey: policySessionKey,
     sessionId,
-  });
+  };
+  const messageActionAuthorization = resolveMessageActionTurnAuthorization(turnIdentity);
   if (messageActionAuthorization?.scheduled || messageActionAuthorization?.deliveryAttempt) {
     // Cron capabilities are consumed by individual message actions. They do not
     // delegate the source conversation's plugin delivery capability.
@@ -112,13 +113,7 @@ function createPluginToolDelivery(params: {
     ) {
       throw new Error("plugin delivery capability is no longer active");
     }
-    const authorization = resolveMessageActionTurnCapability({
-      token,
-      agentId,
-      runId,
-      sessionKey: policySessionKey,
-      sessionId,
-    });
+    const authorization = resolveMessageActionTurnCapability(turnIdentity);
     if (!authorization) {
       throw new Error("plugin delivery capability is no longer active");
     }

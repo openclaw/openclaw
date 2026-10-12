@@ -43,6 +43,7 @@ function createDispatch(
 ) {
   return coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
+      initialPlacements: placements.list(),
       placements,
       environments,
       runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -170,14 +171,14 @@ describe("targeted worker placement recovery", () => {
         targeted.then(() => "target-finished"),
         cleanupStarted.promise.then(() => "unrelated-move-cleanup"),
       ]);
-      retainedAfterTarget = placements.getPlacementMove(active.sessionId);
+      retainedAfterTarget = await placements.getPlacementMoveAsync(active.sessionId);
     } finally {
       releaseCleanup.resolve();
       await targeted;
     }
     await dispatch.reconcileActive();
     expect(placements.get(active.sessionId)?.state).toBe("local");
-    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(first).toBe("target-finished");
@@ -228,7 +229,7 @@ describe("targeted worker placement recovery", () => {
       }
       const dispatch = createDispatch(environments, placements);
       await dispatch.reconcileActive(match === "source" ? sourceId : destinationId);
-      expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       expect(placements.get(active.sessionId)?.state).toBe(
         match === "source" ? "failed" : "active",
       );

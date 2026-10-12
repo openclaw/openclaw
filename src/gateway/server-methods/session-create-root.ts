@@ -1,9 +1,15 @@
 import fs from "node:fs";
-import { ok, type Result } from "@openclaw/normalization-core/result";
+import path from "node:path";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ErrorShape,
   SessionsCreateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
@@ -11,13 +17,50 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 type PreparedSessionCreateRoot = {
   sessionCwd?: string;
   sessionRoot?: string;
 };
+
+export async function prepareSessionCreateRequestedCwd(params: {
+  cfg: OpenClawConfig;
+  requestedCwd?: string;
+  requestedExecNode?: string;
+  permissionMode?: SessionsCreateParams["permissionMode"];
+  clientPresent: boolean;
+  clientScopes: readonly string[];
+}): Promise<Result<string | undefined, ErrorShape>> {
+  const { requestedCwd, requestedExecNode } = params;
+  const cwdIsAbsolute =
+    !requestedCwd ||
+    (requestedExecNode
+      ? path.isAbsolute(requestedCwd) || path.win32.isAbsolute(requestedCwd)
+      : path.isAbsolute(requestedCwd));
+  if (!cwdIsAbsolute) {
+    return err(errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd must be absolute"));
+  }
+  if (
+    params.permissionMode === "full" &&
+    params.clientPresent &&
+    !params.clientScopes.includes(ADMIN_SCOPE)
+  ) {
+    return err(
+      missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+    );
+  }
+  if (requestedCwd && !requestedExecNode && !params.clientScopes.includes(ADMIN_SCOPE)) {
+    const containment = await resolveWorkspacePathContainment(requestedCwd, params.cfg);
+    return containment
+      ? ok(containment.path)
+      : err(missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }));
+  }
+  return ok(requestedCwd);
+}
 
 export function prepareSessionCreateFilesystemRoot(params: {
   cfg: OpenClawConfig;

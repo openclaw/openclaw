@@ -61,18 +61,6 @@ const scopedTargetWritebackCases = [
     resolvedTarget: "-100123:77",
     unmatchedTargets: ["@mychannel", "@mychannel:direct-topic:77", "@mychannel:88"],
   },
-  {
-    name: "unthreaded target",
-    rawTarget: "t.me/mychannel",
-    matchingTarget: "@MyChannel",
-    resolvedTarget: "-100123",
-    unmatchedTargets: [
-      "@mychannel:direct-topic:77",
-      "@mychannel:direct-topic:88",
-      "@mychannel:topic:77",
-      "@mychannel:77",
-    ],
-  },
 ] as const;
 
 vi.mock("openclaw/plugin-sdk/config-mutation", async () => {

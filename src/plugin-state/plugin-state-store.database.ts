@@ -69,7 +69,7 @@ function openPluginStateDatabase(
   }
 }
 
-function isMissingPluginStateTableError(error: unknown): boolean {
+export function isMissingPluginStateTableError(error: unknown): boolean {
   return (
     error instanceof Error &&
     hasErrnoCode(error, "ERR_SQLITE_ERROR") &&

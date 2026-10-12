@@ -26,6 +26,7 @@ function emitCompactionAgentEvent(
         willRetry: boolean;
         outcome: SessionCompactionEndEvent["outcome"]["status"];
         reason?: string;
+        qualityDegraded?: true;
       },
 ): void {
   const event = { stream: "compaction" as const, data };
@@ -95,7 +96,9 @@ export function handleCompactionStart(
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
-  runBestEffortCompactionHook(ctx, "before");
+  if (!evt.hooksHandled) {
+    runBestEffortCompactionHook(ctx, "before");
+  }
 }
 
 export function handleCompactionEnd(
@@ -205,12 +208,13 @@ export function handleCompactionEnd(
     completed,
     willRetry,
     outcome: outcome.status,
+    ...(completed && outcome.qualityDegraded ? { qualityDegraded: true } : {}),
     ...(outcomeReason ? { reason: outcomeReason } : {}),
   });
 
   // after_compaction runs only once the run will not retry, matching the visible
   // post-compaction session state plugin authors observe.
-  if (completed && !willRetry) {
+  if (completed && !willRetry && !evt.hooksHandled) {
     runBestEffortCompactionHook(ctx, "after");
   }
   return recording;

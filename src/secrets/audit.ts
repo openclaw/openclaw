@@ -316,21 +316,26 @@ function collectLegacyAuthSourceFindings(params: {
   collector: AuditCollector;
 }): void {
   const seen = new Set<string>();
+  const report = (source: { path: string; kind: string }, archived: boolean) => {
+    if (seen.has(source.path)) {
+      return;
+    }
+    seen.add(source.path);
+    params.collector.findings.push({
+      code: "LEGACY_RESIDUE",
+      severity: !archived && source.kind === "auth-state" ? "info" : "warn",
+      file: source.path,
+      jsonPath: "<root>",
+      message: archived
+        ? `Archived auth source ${source.kind} may contain plaintext credentials; retain it only as long as recovery requires.`
+        : `Retired auth source ${source.kind} is present; run openclaw doctor --fix to migrate and archive it.`,
+    });
+  };
   const targets = listAuthProfileStoreTargets(params.config, params.stateDir, params.env);
   for (const target of targets) {
     const agentDir = target.kind === "agent" ? target.agentDir : undefined;
     for (const source of listLegacyAuthProfileSources({ agentDir, env: params.env })) {
-      if (seen.has(source.path)) {
-        continue;
-      }
-      seen.add(source.path);
-      params.collector.findings.push({
-        code: "LEGACY_RESIDUE",
-        severity: source.kind === "auth-state" ? "info" : "warn",
-        file: source.path,
-        jsonPath: "<root>",
-        message: `Retired auth source ${source.kind} is present; run openclaw doctor --fix to migrate and archive it.`,
-      });
+      report(source, false);
     }
   }
   const sharedMainDir = resolveSharedMainAuthAgentDir(params.env);
@@ -340,17 +345,7 @@ function collectLegacyAuthSourceFindings(params: {
       .concat(sharedMainDir),
     env: params.env,
   })) {
-    if (seen.has(archive.path)) {
-      continue;
-    }
-    seen.add(archive.path);
-    params.collector.findings.push({
-      code: "LEGACY_RESIDUE",
-      severity: "warn",
-      file: archive.path,
-      jsonPath: "<root>",
-      message: `Archived auth source ${archive.kind} may contain plaintext credentials; retain it only as long as recovery requires.`,
-    });
+    report(archive, true);
   }
 }
 

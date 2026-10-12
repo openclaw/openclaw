@@ -18,6 +18,7 @@ import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import * as leases from "./run-lease.js";
+import { hasLiveWorktreeRunLease } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -98,6 +99,16 @@ describe("exact-state retirement admission and recovery", () => {
       exactState,
       request: { id: record.id, reason: "test retirement", exactState },
     };
+  }
+
+  function useExpiryClock() {
+    const clock = { now: Date.now() };
+    service = new ManagedWorktreeService({
+      env,
+      now: () => clock.now,
+      getConfig: () => ({ worktreeAcceleration: false }),
+    });
+    return clock;
   }
 
   it.each(["head", "branch", "index", "file", "activity", "claim", "authority"] as const)(
@@ -304,13 +315,13 @@ describe("exact-state retirement admission and recovery", () => {
         await expect(leases.acquireWorktreeRunLease(f.record.id, { env })).rejects.toThrow(
           "Worktree removal is incomplete",
         );
-        expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(false);
+        expect(hasLiveWorktreeRunLease(env, f.record.id)).toBe(false);
       }
       if (phase === "cleanup-ack") {
         const liveRun = await leases.acquireWorktreeRunLease(f.record.id, { env });
         try {
           await expect(recover()).rejects.toThrow(/busy|locked by live pid/);
-          expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
+          expect(hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
         } finally {
           await liveRun.release();
         }
@@ -324,7 +335,7 @@ describe("exact-state retirement admission and recovery", () => {
         expect(await refNames("refs/openclaw/removals/" + f.record.id)).toBe("");
         if (phase === "move-ack") {
           admitted = await leases.acquireWorktreeRunLease(f.record.id, { env });
-          expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
+          expect(hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
         }
       } finally {
         await admitted?.release();
@@ -480,38 +491,60 @@ describe("exact-state retirement admission and recovery", () => {
     }
   });
 
-  it("recovers source expiry interrupted after deleting the snapshot ref", async () => {
-    const f = await fixture();
-    let now = Date.now();
-    service = new ManagedWorktreeService({
-      env,
-      now: () => now,
-      getConfig: () => ({ worktreeAcceleration: false }),
-    });
-    const result = await service.remove(f.request);
-    let interrupted = false;
-    const run = commandRunner.runCommandWithTimeout;
-    vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      const value = await run(...args);
-      if (
-        !interrupted &&
-        args[0].includes("update-ref") &&
-        args[0].includes("-d") &&
-        args[0].includes(result.snapshotRef!)
-      ) {
-        interrupted = true;
-        throw new Error("controlled post-expiry-ref interruption");
+  it.each(["retained-source", "restore-receipt"] as const)(
+    "recovers %s expiry interrupted after retiring recovery refs",
+    async (kind) => {
+      const f = await fixture();
+      const clock = useExpiryClock();
+      const result = await service.remove(f.request);
+      const receiptRef = `refs/openclaw/restores/exact-v1/${f.record.id}`;
+      const run = commandRunner.runCommandWithTimeout;
+      if (kind === "restore-receipt") {
+        await git(repo, "worktree", "remove", "--force", result.recoveryPath!);
+        const interruptedRestore = vi
+          .spyOn(commandRunner, "runCommandWithTimeout")
+          .mockImplementation(async (...args) => {
+            if (args[0].includes("worktree") && args[0].includes("add")) {
+              throw new Error("controlled pre-registration interruption");
+            }
+            return run(...args);
+          });
+        try {
+          await expect(service.restore({ id: f.record.id })).rejects.toThrow(
+            "controlled pre-registration interruption",
+          );
+        } finally {
+          interruptedRestore.mockRestore();
+        }
+        expect(await refNames(receiptRef)).toBe(receiptRef);
+        await fs.rmdir(f.record.path);
       }
-      return value;
-    });
-    now = result.recoveryRetainedUntil! + 1;
-    expect((await service.gc()).snapshotsPruned).toBe(0);
-    expect(interrupted).toBe(true);
-    expect(getRegistryWorktree(env, f.record.id)).toBeDefined();
-    expect((await service.gc()).snapshotsPruned).toBe(1);
-    expect(getRegistryWorktree(env, f.record.id)).toBeUndefined();
-    expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
-  });
+      await git(repo, "pack-refs", "--all");
+      let interrupted = false;
+      vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
+        const value = await run(...args);
+        if (
+          !interrupted &&
+          args[0].includes("update-ref") &&
+          typeof args[1] !== "number" &&
+          args[1]?.input?.toString().includes(`delete ${result.snapshotRef}\0`)
+        ) {
+          interrupted = true;
+          throw new Error("controlled post-expiry-ref interruption");
+        }
+        return value;
+      });
+      clock.now = result.recoveryRetainedUntil! + 1;
+      expect((await service.gc()).snapshotsPruned).toBe(0);
+      expect(interrupted).toBe(true);
+      expect(getRegistryWorktree(env, f.record.id)).toBeDefined();
+      expect(await refNames(result.snapshotRef!)).toBe("");
+      expect(await refNames(receiptRef)).toBe("");
+      expect((await service.gc()).snapshotsPruned).toBe(1);
+      expect(getRegistryWorktree(env, f.record.id)).toBeUndefined();
+      expect(await git(repo, "rev-parse", f.record.branch)).toBe(f.exactState.branchHead);
+    },
+  );
 
   it("reconciles a native restore interrupted after moving the original source", async () => {
     const f = await fixture();
@@ -636,12 +669,7 @@ describe("exact-state retirement admission and recovery", () => {
     "preserves source and snapshot when expiration custody changes (%s)",
     async (kind) => {
       const f = await fixture();
-      let now = Date.now();
-      service = new ManagedWorktreeService({
-        env,
-        now: () => now,
-        getConfig: () => ({ worktreeAcceleration: false }),
-      });
+      const clock = useExpiryClock();
       const result = await service.remove(f.request);
       const original = path.join(path.dirname(f.record.path), "original-source-held");
       if (kind === "replacement") {
@@ -670,7 +698,7 @@ describe("exact-state retirement admission and recovery", () => {
           return value;
         });
       }
-      now = result.recoveryRetainedUntil! + 1;
+      clock.now = result.recoveryRetainedUntil! + 1;
       expect((await service.gc()).snapshotsPruned).toBe(0);
       expect(getRegistryWorktree(env, f.record.id)?.snapshotRef).toBe(result.snapshotRef);
       expect(await git(repo, "rev-parse", result.snapshotRef!)).toMatch(/^[a-f0-9]{40}$/u);
@@ -716,12 +744,7 @@ describe("exact-state retirement admission and recovery", () => {
     "excludes a competing lifecycle writer through expiry %s admission",
     async (phase) => {
       const f = await fixture();
-      let now = Date.now();
-      service = new ManagedWorktreeService({
-        env,
-        now: () => now,
-        getConfig: () => ({ worktreeAcceleration: false }),
-      });
+      const clock = useExpiryClock();
       const result = await service.remove(f.request);
       let attempted = false;
       let rejected = false;
@@ -755,15 +778,15 @@ describe("exact-state retirement admission and recovery", () => {
           if (
             !attempted &&
             args[0].includes("update-ref") &&
-            args[0].includes("-d") &&
-            args[0].includes(result.snapshotRef!)
+            typeof args[1] !== "number" &&
+            args[1]?.input?.toString().includes(`delete ${result.snapshotRef}\0`)
           ) {
             write();
           }
           return await run(...args);
         });
       }
-      now = result.recoveryRetainedUntil! + 1;
+      clock.now = result.recoveryRetainedUntil! + 1;
       const expired = await service.gc();
       if (phase === "registry") {
         expect(expired.snapshotsPruned).toBe(1);

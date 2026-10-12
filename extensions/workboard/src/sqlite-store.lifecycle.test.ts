@@ -44,11 +44,11 @@ describe("Workboard SQLite facade cleanup", () => {
     const failure = new SqliteWorkerError("connection cleanup failed", "unavailable");
     const { execute, release, stores } = workerFixture();
     execute
-      .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
+      .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
       .mockImplementationOnce(() => lookupResult.promise)
       .mockImplementationOnce(() => firstClose.promise)
       .mockResolvedValueOnce({ ok: true, value: undefined });
-    await expect(stores.ready).resolves.toBe(4);
+    await expect(stores.ready).resolves.toBeUndefined();
     const lookup = stores.cards.lookup("missing");
     const closing = stores.close();
     const rejected = expect(closing).rejects.toBe(failure);
@@ -84,7 +84,7 @@ describe("Workboard SQLite facade cleanup", () => {
     const failure = new Error("broker cleanup failed");
     const { execute, release, stores } = workerFixture();
     execute
-      .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
+      .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
       .mockResolvedValueOnce({ ok: true, value: undefined });
     release.mockRejectedValueOnce(failure);
     await stores.ready;
@@ -116,7 +116,7 @@ describe("Workboard SQLite facade cleanup", () => {
       expect(failure).not.toBeInstanceOf(SqliteWorkerError);
       const { execute, release, stores } = workerFixture();
       execute
-        .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
+        .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
         .mockRejectedValueOnce(failure);
       release.mockRejectedValueOnce(cleanupFailure).mockImplementationOnce(() => retired.promise);
       await stores.ready;
@@ -143,7 +143,7 @@ describe("Workboard SQLite facade cleanup", () => {
       const failure = Object.assign(new Error("close refused"), { code });
       const { execute, release, stores } = workerFixture();
       execute
-        .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
+        .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
         .mockRejectedValueOnce(failure)
         .mockResolvedValueOnce({ ok: true, value: undefined });
       await stores.ready;

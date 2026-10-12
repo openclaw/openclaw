@@ -141,7 +141,7 @@ describe("cron timer outcome and failure policy regressions", () => {
     },
   );
 
-  it("records failure diagnostics and auto-disables on the tenth consecutive failure", () => {
+  it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: DeferredCronNotifications = [];
     const enqueueSystemEvent = vi.fn();
@@ -218,7 +218,7 @@ describe("cron timer outcome and failure policy regressions", () => {
       consecutiveErrors: 10,
     });
     expect(deferredNotifications).toHaveLength(1);
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
@@ -374,13 +374,14 @@ describe("cron timer outcome and failure policy regressions", () => {
       id: "transient-agent-transport",
       payload: { kind: "agentTurn", message: "ping" },
       error: "stream disconnected before completion: upstream reset",
+      provider: "anthropic",
       errorClassification: undefined,
       expectedReason: "timeout",
       expectedRetryMs: 30_000,
     },
   ] as const)(
     "applies bounded retry classification for $id",
-    ({ id, payload, error, errorClassification, expectedReason, expectedRetryMs }) => {
+    ({ id, payload, error, provider, errorClassification, expectedReason, expectedRetryMs }) => {
       const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
       const endedAt = startedAt + 500;
       const job = createIsolatedRegressionJob({
@@ -404,6 +405,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         {
           status: "error",
           error,
+          provider,
           ...(errorClassification ? { errorClassification } : {}),
           executionStarted: true,
           startedAt,

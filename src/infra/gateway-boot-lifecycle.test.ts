@@ -14,6 +14,7 @@ import {
   completeGatewayBootLifecycle,
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
+  inspectGatewayCrashLoopBreakerAsync,
   readGatewayLastInstallationReplacement,
   readGatewayLastShutdown,
   recordGatewayBootStart,
@@ -254,6 +255,81 @@ describe("gateway crash-loop breaker", () => {
       tripped: false,
       uncleanBoots: 0,
     });
+  });
+
+  it("recovers after completed stopped-daemon failures but retains genuine crash protection", async () => {
+    const lifecycle = createLifecycleDb();
+    const nowMs = 1_000_000;
+    const safeModeBootId = recordGatewayBootStart(
+      lifecycle.env,
+      nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS - 1,
+      GATEWAY_CRASH_LOOP_BREAKER_REASON,
+    );
+    for (let index = 0; index < 3; index++) {
+      const bootId = recordGatewayBootStart(lifecycle.env, nowMs + index);
+      completeGatewayBootLifecycle(
+        bootId,
+        {
+          outcome: "startup_failed",
+          startupReason: "gateway.tailscale_backend_stopped",
+          reason: "Tailscale is stopped",
+        },
+        lifecycle.env,
+        nowMs + index + 1,
+      );
+    }
+    const recovered = await inspectGatewayCrashLoopBreakerAsync(lifecycle.env, nowMs + 4);
+    expect(recovered).toMatchObject({
+      tripped: false,
+      uncleanBoots: 0,
+      recovered: true,
+      recoveryPausedUntilMs: undefined,
+    });
+    expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs + 4)).toEqual(recovered);
+    const recoveredBootId = await recordGatewayCrashLoopRecovery(
+      safeModeBootId,
+      lifecycle.env,
+      nowMs + 5,
+    );
+    expect(recoveredBootId).toBeDefined();
+    expect(await inspectGatewayCrashLoopBreakerAsync(lifecycle.env, nowMs + 5)).toMatchObject({
+      recovered: false,
+      uncleanBoots: 1,
+    });
+    completeGatewayBootLifecycle(
+      recoveredBootId,
+      { outcome: "clean_stop" },
+      lifecycle.env,
+      nowMs + 6,
+    );
+    insertBootRows(lifecycle, [
+      {
+        bootId: "unclean-dependency",
+        startedAtMs: nowMs - 10,
+        startupReason: "gateway.tailscale_backend_stopped",
+      },
+      { bootId: "unclean-channel", startedAtMs: nowMs - 9 },
+      {
+        bootId: "unknown-failure",
+        startedAtMs: nowMs - 8,
+        completedAtMs: nowMs - 7,
+        outcome: "startup_failed",
+      },
+      {
+        bootId: "new-breaker-marker",
+        startedAtMs: nowMs + 7,
+        completedAtMs: nowMs + 8,
+        outcome: "safe_mode_stable",
+        startupReason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
+      },
+    ]);
+    const tripped = await inspectGatewayCrashLoopBreakerAsync(lifecycle.env, nowMs + 9);
+    expect(tripped).toMatchObject({
+      tripped: true,
+      uncleanBoots: 3,
+      recoveryPausedUntilMs: nowMs - 7 + GATEWAY_BOOT_LOOP_WINDOW_MS + 1,
+    });
+    expect(inspectGatewayCrashLoopBreaker(lifecycle.env, nowMs + 9)).toEqual(tripped);
   });
 
   it("writes the breaker bundle only on a persisted transition into tripped state", () => {

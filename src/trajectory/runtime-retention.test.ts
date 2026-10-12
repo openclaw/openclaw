@@ -24,7 +24,7 @@ const fixture = vi.hoisted(() => {
     unregisterAgent: vi.fn(),
     unregisterRoot: vi.fn(),
     releaseDatabase: vi.fn(),
-    closeReader: vi.fn(async () => {
+    releaseReader: vi.fn(() => {
       throw readerFailure;
     }),
     releaseExecution: vi.fn(async () => {
@@ -66,17 +66,20 @@ vi.mock("../state/openclaw-state-worker-context.js", () => ({
     runInCapturedSchemaScope: undefined,
   }),
 }));
-// mock-isolation: The reader's cleanup fails before any child process or database query is started.
-vi.mock("../infra/sqlite-readonly-worker.js", () => ({
-  createSqliteReadOnlyWorkerScope: () => ({
-    run<T>(operation: () => T): T {
-      return operation();
+// mock-isolation: Cleanup is tested without initializing the shared maintenance worker lane.
+vi.mock("../config/sessions/session-transcript-worker-resources.js", () => ({
+  maintenanceLane: {},
+}));
+// mock-isolation: The retained reader's release fails before any worker or database read starts.
+vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
+  retainSessionHistoryWorkerDatabase: () => ({
+    owner: {
+      readTrajectoryRetention() {
+        throw new Error("Revoked retention must not read");
+      },
     },
-    close: fixture.closeReader,
+    release: fixture.releaseReader,
   }),
-  runSqliteReadOnlyOperation: () => {
-    throw new Error("Revoked retention must not read");
-  },
 }));
 // mock-isolation: Native execution is never admitted; only its cleanup result is injected.
 vi.mock("../state/openclaw-agent-execution.js", () => ({
@@ -91,6 +94,9 @@ vi.mock("../state/openclaw-agent-execution.js", () => ({
     capturePreparedGenerationClaim: () => undefined,
     async prepare() {
       throw new Error("Unexpected database preparation");
+    },
+    async adoptNativeDatabase() {
+      throw new Error("Unexpected native database adoption");
     },
     async runExisting() {
       throw new Error("Revoked retention must not write");
@@ -149,7 +155,7 @@ it("retains failed cleanup custody and exposes the original failure to lifecycle
     expect(joined.reason).toBe(original.reason);
     await expect(root.close()).rejects.toBe(original.reason);
     expect(scheduleSqliteTrajectoryRuntimeRetention(request)).toBe(pending);
-    expect(fixture.closeReader).toHaveBeenCalledOnce();
+    expect(fixture.releaseReader).toHaveBeenCalledOnce();
     expect(fixture.releaseExecution).toHaveBeenCalledOnce();
     expect(fixture.unregisterAgent).not.toHaveBeenCalled();
     expect(fixture.unregisterRoot).not.toHaveBeenCalled();

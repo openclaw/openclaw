@@ -49,11 +49,11 @@ export function renderSlackRichText(
         );
       }
 
-      // Table cells preserve authored whitespace and display text on unknown leaf shapes.
+      if (element.type === "text" && typeof element.text === "string") {
+        return literal(element.text);
+      }
+      // Table cells also preserve display text on unknown leaf shapes.
       if (table) {
-        if (element.type === "text" && typeof element.text === "string") {
-          return element.text;
-        }
         const text = readNonBlankString(element.text);
         if (text) {
           return text;
@@ -61,8 +61,6 @@ export function renderSlackRichText(
       }
 
       switch (element.type) {
-        case "text":
-          return typeof element.text === "string" ? literal(element.text) : "";
         case "link":
           return literal(read(element.text) ?? read(element.url) ?? "");
         case "user":
