@@ -8,6 +8,7 @@ import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { resetCodeModeTestState, resultDetails, testing } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { expectedTurnSendNotice } from "./tools/message-tool.test-support.js";
 import { resetTurnSendLedgerForTest } from "./tools/turn-send-ledger.js";
 
 const conversation = {
@@ -124,7 +125,7 @@ describe("Code Mode guest receives the conversations_send budget notice", () => 
     expect(value.first).not.toHaveProperty("content");
     expect(value.second).toMatchObject({
       status: "sent",
-      turnSendNotice: expect.stringContaining("already sent 2 messages"),
+      turnSendNotice: expectedTurnSendNotice(2, "conversation"),
     });
     // The presentation content never crosses into the guest value.
     expect(value.second).not.toHaveProperty("content");

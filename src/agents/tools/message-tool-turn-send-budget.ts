@@ -17,6 +17,8 @@ import { resolveOutboundActionRoute } from "./message-tool-outbound-route.js";
 import {
   buildTurnSendLedgerSessionKey,
   commitTurnSend,
+  formatTurnSendBlockedNotice,
+  formatTurnSendNotice,
   releaseTurnSend,
   reserveTurnSend,
   type TurnSendReserveResult,
@@ -53,8 +55,8 @@ function buildMessageToolTurnSendSessionKey(input: {
 
 /**
  * Gate for the per-turn send budget. The loop detector can't see reworded resends of
- * the same answer (it hashes full params), so the message tool counts successful sends
- * per (turn, target) and nudges from the second onward. This runs independently of
+ * the same answer (it hashes full params), so the message tool counts sends handed to
+ * delivery per (turn, target) and nudges from the second onward. This runs independently of
  * `loopDetection.enabled` — it is on by default. A budget applies only to a
  * cross-context write action with a single normalized target, a ledger session key, and
  * a run id; broadcast fan-out and dry-runs are excluded, leaving the budget inert.
@@ -233,7 +235,7 @@ export function prepareMessageToolTurnSendBudget(input: {
     }
     const sendCount = commitTurnSend(reservation.reservation);
     return sendCount >= 2 && effectiveMessageTools?.turnSendNudge !== false
-      ? `You have already sent ${sendCount} messages to this target this turn; if this is a rewrite of the same reply, finalize now instead of sending another variant.`
+      ? formatTurnSendNotice(sendCount, "target")
       : undefined;
   };
   return {
@@ -242,7 +244,7 @@ export function prepareMessageToolTurnSendBudget(input: {
         ? jsonResult({
             status: "suppressed",
             reason: "turn_send_budget_exhausted",
-            message: `Blocked: reached this turn's configured limit of ${maxPerTurn} message(s) to this target (maxMessagesPerTurnPerTarget). Finalize your reply instead of sending another message.`,
+            message: formatTurnSendBlockedNotice(maxPerTurn, "target"),
           })
         : undefined,
     release,

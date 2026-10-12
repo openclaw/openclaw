@@ -34,6 +34,7 @@ import {
   createConversationsTurnTool,
 } from "./conversation-tools.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import { expectedTurnSendNotice } from "./message-tool.test-support.js";
 import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
 
 // conversations_send declares its output schema inline (the Gateway send result
@@ -353,7 +354,7 @@ describe("conversations_send per-turn send budget", () => {
     return result.content
       .filter((entry): entry is { type: "text"; text: string } => entry.type === "text")
       .map((entry) => entry.text)
-      .find((text) => text.includes("already sent"));
+      .find((text) => text.includes("already submitted"));
   }
 
   function blockedNotice(result: { content: Array<{ type: string; text?: string }> }) {
@@ -433,12 +434,12 @@ describe("conversations_send per-turn send budget", () => {
     const first = await tool.execute("c1", args);
     const second = await tool.execute("c2", args);
     expect(softNotice(first)).toBeUndefined();
-    expect(softNotice(second)).toContain("already sent 2 messages");
+    expect(softNotice(second)).toBe(expectedTurnSendNotice(2, "conversation"));
     // The reminder also rides in declared details so a Code Mode guest (which only
     // receives the projected details) sees it; the two strings are identical.
     expect(second.details).toMatchObject({
       status: "sent",
-      turnSendNotice: expect.stringContaining("already sent 2 messages"),
+      turnSendNotice: expectedTurnSendNotice(2, "conversation"),
     });
     expect(Value.Check(conversationSendToolResultSchema, second.details)).toBe(true);
     expect(first.details).not.toHaveProperty("turnSendNotice");
@@ -487,6 +488,29 @@ describe("conversations_send per-turn send budget", () => {
       expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("words the reminder as submitted, not delivered, when earlier sends are only queued", async () => {
+    const deps = createDeps();
+    const queued = {
+      status: "queued" as const,
+      conversationRef: conversation.conversationRef,
+      channel: "reef",
+    };
+    deps.callGatewayMock.mockResolvedValueOnce(queued as never);
+    deps.callGatewayMock.mockResolvedValueOnce(queued as never);
+    const tool = createConversationsSendTool(budgetOptions, deps);
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    await tool.execute("c1", args);
+    const second = await tool.execute("c2", args);
+    // Neither send is confirmed, so the count must not claim either was delivered.
+    expect(second.details).toEqual({
+      ...queued,
+      turnSendNotice: expectedTurnSendNotice(2, "conversation"),
+    });
+    expect(second.content.map((entry) => ("text" in entry ? entry.text : ""))).not.toContainEqual(
+      expect.stringContaining("already sent"),
+    );
+  });
 
   it("lets an idempotent replay through the cap without double-counting or a fresh nudge", async () => {
     const deps = createDeps();
@@ -586,7 +610,7 @@ describe("message and conversations_send share the per-turn budget", () => {
     return result.content
       .filter((entry): entry is { type: "text"; text: string } => entry.type === "text")
       .map((entry) => entry.text)
-      .find((text) => text.includes("already sent"));
+      .find((text) => text.includes("already submitted"));
   }
 
   function createMixedMessageTool(config: Record<string, unknown>) {
@@ -643,7 +667,7 @@ describe("message and conversations_send share the per-turn budget", () => {
       conversationRef: conversation.conversationRef,
       message: "hello again",
     });
-    expect(softNotice(second)).toContain("already sent 2 messages");
+    expect(softNotice(second)).toBe(expectedTurnSendNotice(2, "conversation"));
 
     // 3rd send (message tool again): blocked by the shared cap of 2.
     const third = await sendViaMessageTool(messageTool, "third variant");
@@ -852,7 +876,7 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
     );
     expect(second).toMatchObject({
       status: "sent",
-      turnSendNotice: expect.stringContaining("already sent 2 messages"),
+      turnSendNotice: expectedTurnSendNotice(2, "conversation"),
     });
   });
 
@@ -894,7 +918,7 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
       await projectViaBridge({ runtime, catalogRef, toolName: "message", input }),
     );
     expect(second).toMatchObject({
-      turnSendNotice: expect.stringContaining("already sent 2 messages"),
+      turnSendNotice: expectedTurnSendNotice(2, "target"),
     });
   });
 
@@ -934,7 +958,7 @@ describe("Code Mode bridge projects the send-budget notice into the guest value"
       content: expect.arrayContaining([
         expect.objectContaining({
           type: "text",
-          text: expect.stringContaining("already sent 2 messages"),
+          text: expectedTurnSendNotice(2, "target"),
         }),
       ]),
     });

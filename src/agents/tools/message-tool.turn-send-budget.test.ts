@@ -17,7 +17,11 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { wrapStreamFnTrimToolCallNames } from "../embedded-agent-runner/run/attempt-tool-call-stream-normalization.js";
 import { createMessageTool } from "./message-tool-execution.js";
-import { createChannelPlugin, type RunMessageActionInput } from "./message-tool.test-support.js";
+import {
+  createChannelPlugin,
+  expectedTurnSendNotice,
+  type RunMessageActionInput,
+} from "./message-tool.test-support.js";
 import {
   buildTurnSendLedgerSessionKey,
   buildTurnSendTargetKey,
@@ -250,7 +254,7 @@ describe("per-turn send budget", () => {
     return result.content
       .filter((entry): entry is { type: "text"; text: string } => entry.type === "text")
       .map((entry) => entry.text)
-      .find((text) => text.includes("already sent"));
+      .find((text) => text.includes("already submitted"));
   }
 
   async function send(tool: ReturnType<CreateMessageTool>, message: string, action = "send") {
@@ -270,17 +274,17 @@ describe("per-turn send budget", () => {
     const first = await send(tool, "first");
     const second = await send(tool, "second variant");
     const third = await send(tool, "third variant");
-    expect(softNotice(second)).toContain("already sent 2 messages");
-    expect(softNotice(third)).toContain("already sent 3 messages");
+    expect(softNotice(second)).toBe(expectedTurnSendNotice(2, "target"));
+    expect(softNotice(third)).toBe(expectedTurnSendNotice(3, "target"));
     // The reminder also rides in the projected details so a Code Mode guest, which
     // only receives details (content is dropped), still sees it. The details string
     // matches the content notice by construction.
     expect(first.details).not.toMatchObject({ turnSendNotice: expect.any(String) });
     expect(second.details).toMatchObject({
-      turnSendNotice: expect.stringContaining("already sent 2 messages"),
+      turnSendNotice: expectedTurnSendNotice(2, "target"),
     });
     expect(third.details).toMatchObject({
-      turnSendNotice: expect.stringContaining("already sent 3 messages"),
+      turnSendNotice: expectedTurnSendNotice(3, "target"),
     });
     // Never blocks without an opt-in cap.
     expect(second.details).not.toMatchObject({ status: "suppressed" });
@@ -326,7 +330,7 @@ describe("per-turn send budget", () => {
     const second = await send(tool, "second");
     expect(softNotice(second)).toBeUndefined();
     const third = await send(tool, "third");
-    expect(softNotice(third)).toContain("already sent 2 messages");
+    expect(softNotice(third)).toBe(expectedTurnSendNotice(2, "target"));
   });
 
   it("does not let a failed best-effort send block the next send under the hard cap", async () => {
@@ -352,7 +356,7 @@ describe("per-turn send budget", () => {
     // partial_failed counts, so the second send to the same target nudges at count 2.
     stubSend({ deliveryStatus: "partial_failed" });
     const second = await send(tool, "second");
-    expect(softNotice(second)).toContain("already sent 2 messages");
+    expect(softNotice(second)).toBe(expectedTurnSendNotice(2, "target"));
   });
 
   it("blocks the next send after a partial_failed send reaches the hard cap", async () => {
@@ -810,7 +814,7 @@ describe("per-turn send budget", () => {
     expect(second.details).not.toMatchObject({ status: "suppressed" });
     expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
     // ...but the soft reminder still fires.
-    expect(softNotice(second)).toContain("already sent 2 messages");
+    expect(softNotice(second)).toBe(expectedTurnSendNotice(2, "target"));
   });
 
   it("suppresses the soft reminder when turnSendNudge is disabled", async () => {
