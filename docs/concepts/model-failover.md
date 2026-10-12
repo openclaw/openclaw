@@ -18,7 +18,9 @@ same-model recovery for temporary rate limits and provider failures. It continue
 the existing transcript, preserving partial output and completed work. The agent
 is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
-available. No additional configuration is required.
+available. No additional configuration is required. A ChatGPT Responses
+WebSocket that closes normally (code 1000) before the terminal event is treated
+as a dropped stream and follows this recovery policy.
 
 Thinking-level recovery applies only when the provider identifies a reasoning or
 thinking parameter. Model/account restrictions and unrelated unsupported options

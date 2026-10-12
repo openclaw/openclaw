@@ -139,11 +139,16 @@ describe("ChatGPT Responses WebSocket failures", () => {
   });
 
   it.each([
-    { closeCode: 1001, closeReason: "going away" },
-    { closeCode: 1013, closeReason: "try again later" },
+    { closeCode: 1000, closeReason: "", message: "WebSocket closed 1000" },
+    { closeCode: 1001, closeReason: "going away", message: "WebSocket closed 1001 going away" },
+    {
+      closeCode: 1013,
+      closeReason: "try again later",
+      message: "WebSocket closed 1013 try again later",
+    },
   ])(
     "classifies retry-directed WebSocket close $closeCode as transient",
-    async ({ closeCode, closeReason }) => {
+    async ({ closeCode, closeReason, message }) => {
       installWebSocketEvent(
         Object.assign(new Event("close"), {
           code: closeCode,
@@ -159,7 +164,7 @@ describe("ChatGPT Responses WebSocket failures", () => {
 
       expect(result).toMatchObject({
         stopReason: "error",
-        errorMessage: `WebSocket closed ${closeCode} ${closeReason}`,
+        errorMessage: message,
         errorCode: "ERR_WEBSOCKET_TRANSPORT",
       });
       expect(
