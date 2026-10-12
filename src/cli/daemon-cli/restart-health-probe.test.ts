@@ -108,7 +108,7 @@ describe("restart health", () => {
         waitForGatewayHttpReadiness({
           attempts: 1,
           onObservation,
-          deadlineAt: Date.now() + 1_000,
+          deadlineAt: performance.now() + 1_000,
           delayMs: 0,
           port: address.port,
         }),
@@ -174,7 +174,7 @@ describe("restart health", () => {
 
     try {
       const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
-      const startedAt = Date.now();
+      const startedAt = performance.now();
       await expect(
         waitForGatewayHttpReadiness({
           attempts: 10,
@@ -183,7 +183,7 @@ describe("restart health", () => {
           port: address.port,
         }),
       ).resolves.toEqual({ healthz: null, readyz: null });
-      expect(Date.now() - startedAt).toBeLessThan(1_500);
+      expect(performance.now() - startedAt).toBeLessThan(1_500);
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
