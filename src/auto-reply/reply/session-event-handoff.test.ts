@@ -578,50 +578,53 @@ describe("session event target custody", () => {
     },
   );
 
-  it.each(["awaited", "ignored"] as const)(
-    "reports a queued event's policy failure once with an %s receipt",
-    async (receiptUse) => {
-      await withTargetFixture(async ({ env }) => {
-        const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-        const receipt = enqueueSessionEventForHost("Process completed", {
-          agentId: "main",
-          sessionKey,
-          source: "exec",
-          expectedTarget: target,
-        });
-        setRuntimeConfigSnapshot({
-          ...getRuntimeConfigSnapshot(),
-          tools: { deny: ["write", "message"] },
-        });
-
-        if (receiptUse === "awaited") {
-          await expect(receipt.settled).resolves.toMatchObject({
-            status: "failed",
-            executionStarted: false,
-            delivered: false,
-            error: expect.stringContaining("configuration changed"),
-          });
-        }
-        // Join the independent owner without requiring a producer to consume its receipt.
-        await Promise.allSettled(
-          continuation.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
-        expect(receipt.cancel()).toBe(false);
-        resetSystemEventsForTest();
-        expect(eventLogError).toHaveBeenCalledExactlyOnceWith("session event execution failed", {
-          source: "exec",
-          agentId: "main",
-          sessionKey,
-          eventId: receipt.id,
-          error: expect.stringContaining("configuration changed"),
-        });
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+  it("re-admits a pending occurrence when a policy publication races admission", async () => {
+    await withTargetFixture(async ({ env }) => {
+      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      // The publication lands after enqueue but before admission starts.
+      const receipt = enqueueSessionEventForHost("Process completed", {
+        agentId: "main",
+        sessionKey,
+        source: "exec",
+        expectedTarget: target,
       });
-    },
-  );
+      setRuntimeConfigSnapshot({
+        ...getRuntimeConfigSnapshot(),
+        tools: { deny: ["write", "message"] },
+      });
+      // The re-admission dispatches under the published policy and completes.
+      dispatch.mockImplementationOnce(
+        async (params: {
+          cfg?: { tools?: { deny?: string[] } };
+          replyOptions?: { internalEventExecution?: { onStarted?: () => void } };
+        }) => {
+          expect(params.cfg?.tools?.deny).toEqual(["write", "message"]);
+          params.replyOptions?.internalEventExecution?.onStarted?.();
+          return {};
+        },
+      );
+
+      // Always join the re-admission before the fixture boundary: the re-enqueued
+      // occurrence runs its own detached continuation, and letting it escape would
+      // consume the next test's dispatch expectations.
+      await expect(receipt.settled).resolves.toMatchObject({
+        status: "completed",
+        executionStarted: true,
+        delivered: false,
+      });
+      // Join the independent owner without requiring a producer to consume its receipt.
+      await Promise.allSettled(
+        continuation.mock.results.flatMap((result) =>
+          result.type === "return" ? [result.value] : [],
+        ),
+      );
+      expect(receipt.cancel()).toBe(false);
+      // No failure is reported for a rejected-then-readmitted occurrence.
+      expect(eventLogError).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    });
+  });
 
   it("re-admits an accepted deferred occurrence under the current policy after a config publication", async () => {
     await withTargetFixture(async ({ env }) => {
@@ -673,6 +676,9 @@ describe("session event target custody", () => {
 
         // Adoption under the stale policy rejects; the queued run still holds the old config.
         await expect(onAdopted()).rejects.toThrow("configuration changed");
+        // The real queue lifecycle reports the policy-rejected adoption as abandonment
+        // before settling; that report must not consume the occurrence.
+        adoption.onAbandoned?.();
         adoption.onSettled?.();
         operation.complete();
 

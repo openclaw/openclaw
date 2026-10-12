@@ -201,11 +201,16 @@ export function enqueueSessionEventForHost(
   let deferred = false;
   let adopted = false;
   // Set when admission observed a policy publication. finish() uses it to re-admit an
-  // accepted, unstarted occurrence under the current policy instead of destroying it.
+  // unstarted occurrence under the current policy instead of destroying it.
   let configPublicationChanged = false;
+  // Set when adoption was attempted; queue bookkeeping reports a policy-rejected
+  // adoption as abandonment, so only pre-adoption abandonment is terminal.
+  let adoptionAttempted = false;
   // Set when the queue owner abandons this occurrence (Stop, lifecycle cleanup).
   // Abandonment is terminal even when a policy publication also fired.
   let abandoned = false;
+  // The live re-admission attempt; receipt.cancel forwards to it once it exists.
+  let readmittedReceipt: SessionEventReceipt | undefined;
   let operation: ReplyOperation | undefined;
   let replyRunRegistry: (typeof import("./reply-run-registry.js"))["replyRunRegistry"];
   let delivered = false;
@@ -301,16 +306,13 @@ export function enqueueSessionEventForHost(
     const complete = () => {
       settlement = "finished";
       acceptanceAssertion = undefined;
-      // Only a policy publication retains an accepted, unstarted occurrence: it is
-      // re-admitted under the current policy instead of being destroyed. Stop, abort,
-      // abandonment, and failure settle terminally and consume the occurrence.
+      // Only a policy publication retains an unstarted occurrence: it is re-admitted
+      // under the current policy instead of being destroyed. The rejection may land
+      // before acceptance (a publication racing admission) or at adoption (a
+      // publication while deferred); producers never retry either way. Stop, abort,
+      // and abandonment still settle terminally and consume the occurrence.
       const configChangeRetention =
-        configPublicationChanged &&
-        (accepted || deferred) &&
-        !started &&
-        !deliveryAttempted &&
-        !signal.aborted &&
-        !abandoned;
+        configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
       if (status === "failed" && !configChangeRetention) {
         log.error("session event execution failed", {
@@ -319,12 +321,6 @@ export function enqueueSessionEventForHost(
           sessionKey,
           eventId: occurrence.id,
           error: failure,
-        });
-      }
-      if (!accepted) {
-        acceptance.resolve({
-          ok: false,
-          error: failure ?? "Session event was cancelled before acceptance",
         });
       }
       signal.removeEventListener("abort", onAbort);
@@ -341,8 +337,10 @@ export function enqueueSessionEventForHost(
         if (attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
           try {
             // Re-dispatch from scratch so admission, execution, and delivery all bind
-            // the current policy; the destination is re-captured and re-validated.
-            const readmitted = enqueueSessionEventForHost(eventText, {
+            // the current policy. The captured target, producer authority ceiling,
+            // settings, delivery opt-out, liveness assertion, and cancellation signal
+            // all carry over; a destination move or retired producer still rejects.
+            readmittedReceipt = enqueueSessionEventForHost(eventText, {
               agentId,
               sessionKey,
               source: options.source,
@@ -350,17 +348,18 @@ export function enqueueSessionEventForHost(
               ...(options.deliveryContext
                 ? { deliveryContext: structuredClone(options.deliveryContext) }
                 : {}),
+              ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+              ...(options.expectedTarget ? { expectedTarget: options.expectedTarget } : {}),
+              ...(options.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
               occurrences,
               preserveOccurrenceOnRejection: true,
               readmissionAttempt: attempt + 1,
               // A durable producer still commits its attempt only once the re-admitted
-              // turn is adopted; producer liveness and request signals stay behind.
+              // turn is adopted.
               ...(options.onAdopted ? { onAdopted: options.onAdopted } : {}),
               ...(options.deliver !== undefined ? { deliver: options.deliver } : {}),
               ...(options.createIfMissing ? { createIfMissing: options.createIfMissing } : {}),
             });
-            resolve(readmitted.settled);
-            return;
           } catch (error) {
             // Re-admission itself rejected; the released occurrence stays in passive
             // custody for the next ordinary turn.
@@ -370,6 +369,20 @@ export function enqueueSessionEventForHost(
             });
           }
         }
+      }
+      if (!accepted) {
+        // A producer waiting on acceptance observes the re-admission's acceptance
+        // outcome, not the stale rejection that triggered it.
+        acceptance.resolve(
+          readmittedReceipt?.accepted ?? {
+            ok: false,
+            error: failure ?? "Session event was cancelled before acceptance",
+          },
+        );
+      }
+      if (readmittedReceipt) {
+        resolve(readmittedReceipt.settled);
+        return;
       }
       resolve({
         status,
@@ -599,6 +612,7 @@ export function enqueueSessionEventForHost(
               return true;
             },
             onAdopted: async () => {
+              adoptionAttempted = true;
               adopted = true;
               operation = replyRunRegistry.get(sessionKey);
               if (!operation) {
@@ -630,7 +644,13 @@ export function enqueueSessionEventForHost(
               accept();
             },
             onAbandoned: () => {
-              abandoned = true;
+              // Queue bookkeeping also reports a policy-rejected adoption as
+              // abandonment; that is the publication rejection, not a cancellation.
+              // Only abandonment before any adoption attempt (Stop, lifecycle
+              // cleanup) is terminal.
+              if (!adoptionAttempted || !configPublicationChanged) {
+                abandoned = true;
+              }
               failure ??= "Session event was abandoned before execution";
             },
             onSettled: () => {
@@ -663,6 +683,11 @@ export function enqueueSessionEventForHost(
   return {
     id: occurrence.id,
     cancel: () => {
+      // After a policy re-admission, cancellation must reach the live attempt;
+      // producers (e.g. exec completion ack) keep this original handle.
+      if (readmittedReceipt) {
+        return readmittedReceipt.cancel();
+      }
       if (options.preserveOccurrenceOnRejection && !adopted && !started) {
         if (settlement === "finished" || signal.aborted) {
           return false;
