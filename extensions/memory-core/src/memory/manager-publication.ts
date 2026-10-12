@@ -3,6 +3,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentSqliteWorkerStoreV2,
+  runSqliteWorkerStoreWrite,
+  type OpenClawAgentSqliteWorkerStore,
   type SqliteWorkerStore,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
@@ -23,10 +25,43 @@ import {
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+export type PublicationWorker = {
+  store: Pick<
+    OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>,
+    "execute" | "run" | "close"
+  >;
+  busyTimeoutMs: number;
+};
 type PublicationRetry = <T>(
   run: () => Promise<MemoryPublicationResult<T>>,
   prepare: () => Promise<boolean>,
 ) => Promise<T | undefined>;
+
+export function bindShadowPublicationWorker(
+  store: SqliteWorkerStore<MemoryPublicationOperations>,
+  busyTimeoutMs: number,
+  owner: { assertCurrent(): void; getPath(): string },
+): PublicationWorker {
+  const run = <T>(operation: (scope: PublicationScope) => Promise<T>, assertCurrent: () => void) =>
+    runSqliteWorkerStoreWrite(
+      store,
+      operation,
+      () => {
+        owner.assertCurrent();
+        assertCurrent();
+      },
+      [owner.getPath()],
+    );
+  return {
+    store: {
+      run,
+      execute: (command, assertCurrent, options) =>
+        run((scope) => scope.execute(command, options), assertCurrent),
+      close: () => store.close(),
+    },
+    busyTimeoutMs,
+  };
+}
 
 export async function initializePublishedMemory(
   options: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0],
