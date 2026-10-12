@@ -183,6 +183,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner.media-ownership.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.fallback.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-final.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.verbose-worker.test.ts",
   "src/auto-reply/reply/before-deliver.test.ts",
   "src/auto-reply/reply/route-reply.delivery-result.test.ts",
   "src/auto-reply/reply/followup-turn-execution.worker.test.ts",
