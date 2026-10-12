@@ -22,7 +22,7 @@ export type AdmittedStore = {
   storeId?: string;
   namespace?: string;
 };
-export type TransactionRecipes<Connection extends SqlConnection> = {
+type TransactionRecipes<Connection extends SqlConnection> = {
   write<T>(connection: Connection, operation: () => T): T;
   read<T>(connection: Connection, operation: () => T): T;
 };
