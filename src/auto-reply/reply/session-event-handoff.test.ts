@@ -131,8 +131,7 @@ beforeEach(() => {
   eventLogError.mockClear();
   continuation.mockClear();
   dispatch.mockClear();
-  // mockClear keeps persistent implementations; restore the throwing default so a
-  // collecting mock installed by one case never leaks into the next.
+  // mockClear keeps persistent implementations; restore the throwing default.
   dispatch.mockImplementation(() => {
     throw new Error("Unexpected reply dispatch for a retired event target");
   });
@@ -596,7 +595,6 @@ describe("session event target custody", () => {
       // The publication lands after enqueue but before admission starts.
       const receipt = enqueueCompletion(target);
       publishDeny(["write", "message"]);
-      // The re-admission dispatches under the published policy and completes.
       dispatch.mockImplementationOnce(async (params) => {
         expect(params.cfg?.tools?.deny).toEqual(["write", "message"]);
         params.replyOptions?.internalEventExecution?.onStarted?.("run-test");
@@ -627,7 +625,6 @@ describe("session event target custody", () => {
       if (!adoptions[0]) {
         throw new Error("Expected a deferred turn adoption lifecycle for the accepted occurrence");
       }
-      // The re-admission dispatches under the published policy and completes.
       dispatch.mockImplementationOnce(async (params) => {
         readmissionDeny = params.cfg?.tools?.deny;
         params.replyOptions?.internalEventExecution?.onStarted?.("run-test");
@@ -695,14 +692,27 @@ describe("session event target custody", () => {
   // the latest adoption under a fresh publication exactly as the real queue reports
   // it (a rejected adoption surfaces as abandonment before settlement).
   const collectDeferredAdoptions = (adoptions: TurnAdoptionLifecycle[]) => {
+    // Owned retry signal: dispatch resolves the gate awaiting the Nth call, so
+    // tests await the retry itself (root AGENTS.md prohibits new polling).
+    const gates: { count: number; resolve: () => void }[] = [];
     dispatch.mockImplementation(async (params) => {
       const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
       if (lifecycle) {
         adoptions.push(lifecycle);
         lifecycle.onDeferred?.();
       }
+      const called = dispatch.mock.calls.length;
+      const all = gates.splice(0);
+      all.filter((g) => g.count <= called).forEach((g) => g.resolve());
+      gates.push(...all.filter((g) => g.count > called));
       return dispatchResult({ deferredToActiveRun: "followup" });
     });
+    return (count: number) =>
+      dispatch.mock.calls.length >= count
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            gates.push({ count, resolve });
+          });
   };
   const beginReplyOwner = () =>
     replyRunRegistry.begin({ sessionKey, sessionId: "original-session", resetTriggered: false });
@@ -725,25 +735,26 @@ describe("session event target custody", () => {
   };
   const joinContinuations = () =>
     Promise.allSettled(
-      continuation.mock.results.flatMap((result) =>
-        result.type === "return" ? [result.value] : [],
-      ),
+      continuation.mock.results.flatMap((r) => (r.type === "return" ? [r.value] : [])),
     );
   type EnqueueExtras = Omit<
     Parameters<typeof enqueueSessionEventForHost>[1],
     "agentId" | "sessionKey" | "expectedTarget"
   >;
   // One deferred-adoption fixture per case: captured target, collecting dispatch
-  // mock, and a reply-owner registry reset on exit.
+  // mock, retry gate, and a reply-owner registry reset on exit.
   const withDeferredFixture = (
     adoptions: TurnAdoptionLifecycle[],
-    fn: (target: SessionEventTarget) => Promise<void>,
+    fn: (
+      target: SessionEventTarget,
+      whenDispatchCalled: (count: number) => Promise<void>,
+    ) => Promise<void>,
   ) =>
     withTargetFixture(async ({ env }) => {
       const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-      collectDeferredAdoptions(adoptions);
+      const whenDispatchCalled = collectDeferredAdoptions(adoptions);
       try {
-        await fn(target);
+        await fn(target, whenDispatchCalled);
       } finally {
         replyRunTesting.resetReplyRunRegistry();
       }
@@ -759,12 +770,12 @@ describe("session event target custody", () => {
 
   it("consumes a canceled re-admission instead of preserving it for a later turn", async () => {
     const adoptions: TurnAdoptionLifecycle[] = [];
-    await withDeferredFixture(adoptions, async (target) => {
+    await withDeferredFixture(adoptions, async (target, whenDispatchCalled) => {
       const operation = beginReplyOwner();
       const receipt = enqueueCompletion(target);
       await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
       await rejectLatestAdoption(adoptions, ["write", "message"], operation);
-      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+      await whenDispatchCalled(2);
 
       // The producer cancels the still-deferred re-admission.
       expect(receipt.cancel()).toBe(true);
@@ -784,7 +795,7 @@ describe("session event target custody", () => {
 
   it("settles terminally after the bounded re-admission budget is exhausted", async () => {
     const adoptions: TurnAdoptionLifecycle[] = [];
-    await withDeferredFixture(adoptions, async (target) => {
+    await withDeferredFixture(adoptions, async (target, whenDispatchCalled) => {
       let operation = beginReplyOwner();
       const receipt = enqueueCompletion(target);
       await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
@@ -792,8 +803,7 @@ describe("session event target custody", () => {
       for (const deny of [["write"], ["write", "message"], ["write", "message", "exec"]]) {
         await rejectLatestAdoption(adoptions, deny, operation);
         if (adoptions.length < 3) {
-          const expectedDispatches = adoptions.length + 1;
-          await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(expectedDispatches));
+          await whenDispatchCalled(adoptions.length + 1);
           // A completed owner leaves the registry; the next attempt adopts a fresh one.
           operation = beginReplyOwner();
         }
@@ -804,8 +814,7 @@ describe("session event target custody", () => {
         executionStarted: false,
       });
       expect(dispatch).toHaveBeenCalledTimes(3);
-      // The exhausted occurrence is consumed with a loud error, never parked as
-      // passive text for a later turn.
+      // The exhausted occurrence is consumed with a loud error; no passive leak.
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
       expect(eventLogError).toHaveBeenCalledWith(
         "session event policy readmission attempts exhausted; occurrence settled",
@@ -832,8 +841,7 @@ describe("session event target custody", () => {
       const lifecycle = adoptions[0];
       await expect(lifecycle?.onAdopted?.()).rejects.toThrow("configuration changed");
       lifecycle?.onAbandoned?.();
-      // The producer retires before settlement re-dispatches, so the re-admission
-      // rejects synchronously.
+      // The retired producer makes settlement's re-dispatch reject synchronously.
       retired = true;
       lifecycle?.onSettled?.();
       operation.complete();
@@ -842,8 +850,7 @@ describe("session event target custody", () => {
         status: "failed",
         executionStarted: false,
       });
-      // The rejected re-admission consumes the occurrence; nothing drains as
-      // contract-less text under a later turn's authority.
+      // The rejected re-admission consumes the occurrence; no passive leak.
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
       expect(eventLogError).toHaveBeenCalledWith(
@@ -885,8 +892,8 @@ describe("session event target custody", () => {
         executionStarted: false,
       });
       await expect(receipt.accepted).resolves.toMatchObject({ ok: false });
-      // Revoked ingress rejected the re-dispatch before any new turn admission,
-      // and the occurrence was consumed rather than parked as passive text.
+      // Revoked ingress rejected the re-dispatch before any new turn admission;
+      // the occurrence was consumed rather than parked as passive text.
       expect(dispatch).not.toHaveBeenCalled();
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
       expect(eventLogError).toHaveBeenCalledWith(
