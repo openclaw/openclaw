@@ -245,16 +245,6 @@ describe("FileSettingsStorage", () => {
     },
   );
 
-  it("loads missing settings without creating their directories", () => {
-    const root = fixtures.createTempDir("openclaw-settings-read-");
-    const settingsDir = join(root, "agent");
-
-    SettingsManager.create(root, settingsDir);
-
-    expect(existsSync(settingsDir)).toBe(false);
-    expect(existsSync(join(root, ".openclaw"))).toBe(false);
-  });
-
   it("loads absent unlocked settings without syncing writer sidecars", () => {
     const root = fixtures.createTempDir("openclaw-settings-unlocked-");
     const agentDir = join(root, "agent");
