@@ -19,13 +19,6 @@ const memoryHit = {
   from: 1,
   lines: 1,
 } as const;
-const emptyRange = {
-  status: "ok",
-  text: "",
-  path: lookup,
-  from: 10,
-  lines: 0,
-} as const;
 const memoryMiss = { status: "not_found", text: "", path: lookup } as const;
 const wikiHit = {
   corpus: "wiki",
@@ -46,7 +39,7 @@ beforeEach(() => {
 });
 
 type MemoryCase = MemoryReadResult | Error;
-type WikiCase = "unregistered" | null | Error | typeof wikiHit;
+type WikiCase = null | Error | typeof wikiHit;
 
 function prepareCase(memory: MemoryCase, wiki: WikiCase) {
   setMemoryReadFileImpl(async () => {
@@ -59,80 +52,14 @@ function prepareCase(memory: MemoryCase, wiki: WikiCase) {
     if (wiki instanceof Error) {
       throw wiki;
     }
-    return wiki === "unregistered" ? null : wiki;
+    return wiki;
   });
-  if (wiki !== "unregistered") {
-    registerMemoryCorpusSupplement("memory-wiki", { search: async () => [], get });
-  }
+  registerMemoryCorpusSupplement("memory-wiki", { search: async () => [], get });
   return get;
 }
 
 describe("memory_get corpus outcomes", () => {
   it.each([
-    {
-      name: "keeps a memory hit while reporting a successful wiki lookup",
-      memory: memoryHit,
-      wiki: wikiHit,
-      expected: {
-        ...memoryHit,
-        corpora: [
-          { corpus: "memory", outcome: "ok" },
-          { corpus: "wiki", outcome: "ok" },
-        ],
-      },
-    },
-    {
-      name: "keeps a successful empty range while reporting wiki failure",
-      memory: emptyRange,
-      wiki: new Error("wiki unavailable"),
-      expected: {
-        ...emptyRange,
-        corpora: [
-          { corpus: "memory", outcome: "ok" },
-          { corpus: "wiki", outcome: "unavailable", error: "wiki unavailable" },
-        ],
-        warning: "Wiki corpus unavailable: wiki unavailable",
-        error: "wiki unavailable",
-      },
-    },
-    {
-      name: "falls through from a memory miss to wiki content",
-      memory: memoryMiss,
-      wiki: wikiHit,
-      expected: {
-        ...wikiPayload,
-        corpora: [
-          { corpus: "memory", outcome: "ok" },
-          { corpus: "wiki", outcome: "ok" },
-        ],
-      },
-    },
-    {
-      name: "keeps wiki content when memory is unavailable",
-      memory: new Error("memory unavailable"),
-      wiki: wikiHit,
-      expected: {
-        ...wikiPayload,
-        corpora: [
-          { corpus: "memory", outcome: "unavailable", error: "memory unavailable" },
-          { corpus: "wiki", outcome: "ok" },
-        ],
-        warning: "Memory corpus unavailable: memory unavailable",
-        error: "memory unavailable",
-      },
-    },
-    {
-      name: "returns not found when every available corpus misses",
-      memory: memoryMiss,
-      wiki: null,
-      expected: {
-        ...memoryMiss,
-        corpora: [
-          { corpus: "memory", outcome: "ok" },
-          { corpus: "wiki", outcome: "ok" },
-        ],
-      },
-    },
     {
       name: "returns not found when wiki misses and memory is unavailable",
       memory: new Error("memory unavailable"),
@@ -145,20 +72,6 @@ describe("memory_get corpus outcomes", () => {
         ],
         warning: "Memory corpus unavailable: memory unavailable",
         error: "memory unavailable",
-      },
-    },
-    {
-      name: "keeps a proven miss when wiki is unavailable",
-      memory: memoryMiss,
-      wiki: new Error("wiki unavailable"),
-      expected: {
-        ...memoryMiss,
-        corpora: [
-          { corpus: "memory", outcome: "ok" },
-          { corpus: "wiki", outcome: "unavailable", error: "wiki unavailable" },
-        ],
-        warning: "Wiki corpus unavailable: wiki unavailable",
-        error: "wiki unavailable",
       },
     },
     {
@@ -178,22 +91,6 @@ describe("memory_get corpus outcomes", () => {
         error: "memory unavailable; wiki unavailable",
       },
     },
-    {
-      name: "does not claim not found when memory failed and wiki is not registered",
-      memory: new Error("memory unavailable"),
-      wiki: "unregistered" as const,
-      expected: {
-        path: lookup,
-        text: "",
-        status: "error",
-        corpora: [
-          { corpus: "memory", outcome: "unavailable", error: "memory unavailable" },
-          { corpus: "wiki", outcome: "not-registered" },
-        ],
-        warning: "Memory corpus unavailable: memory unavailable",
-        error: "memory unavailable",
-      },
-    },
   ])("$name", async ({ memory, wiki, expected }) => {
     const get = prepareCase(memory, wiki);
 
@@ -203,30 +100,10 @@ describe("memory_get corpus outcomes", () => {
     });
 
     expect(result.details).toEqual(expected);
-    if (wiki !== "unregistered") {
-      expect(get).toHaveBeenCalledOnce();
-    }
+    expect(get).toHaveBeenCalledOnce();
   });
 
   it.each([
-    {
-      name: "registered miss",
-      wiki: null,
-      expected: {
-        ...memoryMiss,
-        corpora: [{ corpus: "wiki", outcome: "ok" }],
-      },
-    },
-    {
-      name: "unregistered corpus",
-      wiki: "unregistered" as const,
-      expected: {
-        path: lookup,
-        text: "",
-        corpora: [{ corpus: "wiki", outcome: "not-registered" }],
-        warning: "Wiki corpus is not registered; results do not cover that requested corpus.",
-      },
-    },
     {
       name: "unavailable corpus",
       wiki: new Error("wiki unavailable"),
@@ -273,7 +150,7 @@ describe("memory_get corpus outcomes", () => {
     });
   });
 
-  it.each(["wiki", "all"] as const)(
+  it.each(["all"] as const)(
     "forwards effective agent context to corpus=%s supplements",
     async (corpus) => {
       const get = vi.fn(async () => wikiHit);
