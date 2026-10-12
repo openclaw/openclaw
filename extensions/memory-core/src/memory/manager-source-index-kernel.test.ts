@@ -309,16 +309,41 @@ describe("memory source index session delta", () => {
   it("keeps unchanged rows, writes new rows, and removes stale rows with derived data", async () => {
     const database = await createDatabase();
     const db = database.db;
-    write(database, session("v1", [1, 2, 3]));
+    write(database, session("v1", [1, 2, 3, 4]));
     const [first, second] = readChunks(db);
 
-    // Line 3 was rewritten into line 4; lines 1-2 are unchanged.
-    writeDelta(database, { ...session("v2", [1, 2, 4]), now: 500 }, [1, 2]);
+    const vectorDeletes = new Set<string>();
+    const statements = observeHostDataSql((sql, preparingDatabase) => {
+      if (!preparingDatabase && /^DELETE FROM memory_index_chunks_vec\b/i.test(sql)) {
+        vectorDeletes.add(sql);
+      }
+    });
+    try {
+      // Two removals expose sqlite-vec's full scan for multi-value IN predicates.
+      writeDelta(database, { ...session("v2", [1, 2, 5, 6]), now: 500 }, [1, 2]);
+    } finally {
+      statements.restore();
+    }
+
+    const pointLookup = db
+      .prepare("EXPLAIN QUERY PLAN DELETE FROM memory_index_chunks_vec WHERE id = ?")
+      .all("unused")
+      .map((row) => row.detail);
+    expect(vectorDeletes.size).toBeGreaterThan(0);
+    for (const sql of vectorDeletes) {
+      expect(
+        db
+          .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+          .all(...Array.from(sql.matchAll(/\?/g), () => "unused"))
+          .map((row) => row.detail),
+      ).toEqual(pointLookup);
+    }
 
     expect(readChunks(db)).toEqual([
       first,
       second,
-      expect.objectContaining({ start_line: 4, text: "turn 4", updated_at: 500 }),
+      expect.objectContaining({ start_line: 5, text: "turn 5", updated_at: 500 }),
+      expect.objectContaining({ start_line: 6, text: "turn 6", updated_at: 500 }),
     ]);
     expect(readHash(db)).toEqual({ hash: "v2" });
     for (const table of [

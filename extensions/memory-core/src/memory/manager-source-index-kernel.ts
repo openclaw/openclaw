@@ -289,13 +289,12 @@ export class MemorySourceIndexKernel {
             .run(pathname, source);
           return;
         }
-        for (let offset = 0; offset < ids.length; offset += SOURCE_WRITE_BATCH_SIZE) {
-          const batch = ids.slice(offset, offset + SOURCE_WRITE_BATCH_SIZE);
-          this.database
-            .prepare(
-              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (${batch.map(() => "?").join(",")})`,
-            )
-            .run(...batch);
+        // sqlite-vec only uses its primary-key lookup for scalar equality.
+        const deletion = this.database.prepare(
+          `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
+        );
+        for (const id of ids) {
+          deletion.run(id);
         }
       });
     } catch {
