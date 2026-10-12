@@ -2,14 +2,55 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { readSqlToken } from "../infra/sqlite-schema-sql.js";
+
+const tableColumns = new WeakMap<SqliteSchemaFacts, Map<string, Set<string>>>();
 
 export function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
   return readTableColumns(db, tableName).has(columnName);
 }
 
 function readTableColumns(db: DatabaseSync, tableName: string): Set<string> {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  const sql = schema?.tableSql.get(tableName);
+  if (
+    schema &&
+    !sql &&
+    ![...schema.tables, ...schema.views].some(
+      (name) => name.toLowerCase() === tableName.toLowerCase(),
+    )
+  ) {
+    return new Set();
+  }
+  if (schema && sql && /^CREATE TABLE\b/iu.test(sql) && !/\bAS\b/iu.test(sql)) {
+    let tables = tableColumns.get(schema);
+    const retained = tables?.get(tableName);
+    if (retained) {
+      return retained;
+    }
+    const definition = parseSqliteTableDefinition(sql, tableName);
+    // table_info omits generated columns and preserves identifier spelling.
+    // Views, virtual tables, and noncanonical identifiers keep native inspection.
+    if (
+      [...definition.columns.values()].every((column) =>
+        /^[a-z_][a-z0-9_]*$/u.test(readSqlToken(column, 0)?.raw ?? ""),
+      )
+    ) {
+      const columns = new Set(definition.columns.keys());
+      if (!tables) {
+        tables = new Map();
+        tableColumns.set(schema, tables);
+      }
+      tables.set(tableName, columns);
+      return columns;
+    }
+  }
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }

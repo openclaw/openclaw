@@ -1,14 +1,18 @@
-import { createRenderEffect, onCleanup, Show, untrack } from "solid-js";
+import { createRenderEffect, getOwner, onCleanup, runWithOwner, Show, untrack } from "solid-js";
 import { hasComposerContent, renderComposerContent } from "./chat-composer-controls.ts";
 
 /** Opaque content keeps its Lit owner until that caller is ported. */
 export function LitContent(props: { value: unknown }) {
   let element: HTMLSpanElement | undefined;
+  // Effect callbacks run without an ambient owner; restoring this one makes
+  // nested Solid directives defer their roots instead of halting reactivity.
+  const owner = getOwner();
   createRenderEffect(
     () => props.value,
     (value) => {
       if (element) {
-        renderComposerContent(value, element);
+        const node = element;
+        runWithOwner(owner, () => renderComposerContent(value, node));
       }
     },
   );

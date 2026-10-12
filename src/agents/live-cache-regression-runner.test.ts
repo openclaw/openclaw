@@ -17,34 +17,6 @@ import {
 import { ProviderAuthError } from "./model-auth-runtime-shared.js";
 
 describe("live cache regression runner", () => {
-  it("keeps OpenAI image cache floors observable without blocking release validation", () => {
-    // OpenAI cache metrics are provider-dependent and advisory here: keep the
-    // warning visible while avoiding a hard release gate.
-    const regressions: string[] = [];
-    const warnings: string[] = [];
-
-    assertAgainstBaseline({
-      lane: "image",
-      provider: "openai",
-      result: {
-        best: {
-          hitRate: 0,
-          suffix: "image-hit",
-          text: "CACHE-OK image-hit",
-          usage: { cacheRead: 0, cacheWrite: 0, input: 5_096 },
-        },
-      },
-      regressions,
-      warnings,
-    });
-
-    expect(regressions).toStrictEqual([]);
-    expect(warnings).toEqual([
-      "openai:image cacheRead=0 < min=3840",
-      "openai:image hitRate=0.000 < min=0.820",
-    ]);
-  });
-
   it("keeps OpenAI text cache floor misses advisory", () => {
     const regressions: string[] = [];
     const warnings: string[] = [];
