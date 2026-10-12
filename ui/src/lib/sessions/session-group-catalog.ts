@@ -105,7 +105,11 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     return null;
   };
 
-  const loadAttempt = async (scope: SessionConnectionScope, advertised: boolean | null) => {
+  const loadAttempt = async (
+    scope: SessionConnectionScope,
+    advertised: boolean | null,
+    isCurrentLoad: () => boolean,
+  ) => {
     try {
       const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
       if (!host.connection.isCurrent(scope)) {
@@ -123,6 +127,10 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         }).allowed
       ) {
         if (settings.length === 0) {
+          // Legacy import replaces persisted groups; an invalidated read cannot authorize it.
+          if (!isCurrentLoad()) {
+            return null;
+          }
           const put = await scope.client.request("sessions.groups.put", { names: legacy });
           if (!host.connection.isCurrent(scope)) {
             return null;
@@ -187,7 +195,11 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       return [];
     }
     // Concurrent catalog changes settle best effort until the next invalidation or reconnect.
-    const promise = loadAttempt(scope, advertised).finally(() => {
+    const promise: Promise<readonly SessionGroupSettings[] | null> = loadAttempt(
+      scope,
+      advertised,
+      () => pendingLoad === promise,
+    ).finally(() => {
       if (pendingLoad === promise) {
         pendingLoad = null;
       }
