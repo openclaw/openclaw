@@ -19,6 +19,11 @@ import { ExitError } from "../../runtime.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
+import {
+  clearGatewayRunConfigEnvironment,
+  prepareGatewayRunBootstrap,
+  takeAcceptedGatewayRunMigrations,
+} from "../gateway-cli/pre-bootstrap.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
 const pluginPackagingRecoveryHint = [
@@ -277,14 +282,9 @@ describe("ensureConfigReady", () => {
     { name: "missing-config", exists: false, valid: true, pending: undefined },
     { name: "invalid", exists: true, valid: false, pending: undefined },
   ])("hands the final gateway read $name accepted migration facts once", async (fixture) => {
-    const preBootstrap = await import("../gateway-cli/pre-bootstrap.js");
     try {
-      expect(
-        await preBootstrap.prepareGatewayRunBootstrap({
-          opts: {},
-          runtime: makeRuntime() as never,
-        }),
-      ).toBe(true);
+      const runtime = makeRuntime() as never;
+      expect(await prepareGatewayRunBootstrap({ opts: {}, runtime })).toBe(true);
       const sourceConfig = { gateway: { mode: "local" as const } };
       // Preflight snapshots carry their migration generation only when it is nonempty.
       setDeferredPluginMigrationConfigFacts(sourceConfig, fixture.pending ?? [pendingMigration]);
@@ -301,12 +301,12 @@ describe("ensureConfigReady", () => {
 
       await runEnsureConfigReady(["gateway", "run"]);
 
-      expect(preBootstrap.takeAcceptedGatewayRunMigrations()).toEqual(
+      expect(takeAcceptedGatewayRunMigrations()).toEqual(
         fixture.pending ? { deferredPluginMigrations: fixture.pending } : {},
       );
-      expect(preBootstrap.takeAcceptedGatewayRunMigrations()).toEqual({});
+      expect(takeAcceptedGatewayRunMigrations()).toEqual({});
     } finally {
-      preBootstrap.clearGatewayRunConfigEnvironment();
+      clearGatewayRunConfigEnvironment();
     }
   });
 
