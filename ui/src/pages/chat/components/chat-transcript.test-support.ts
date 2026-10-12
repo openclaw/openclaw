@@ -94,7 +94,8 @@ export function stubTranscriptFrames() {
   return () => {
     flushFrames();
     // The shared layout owner observes the root after rAF, then reads after layout.
-    for (const observer of [...resizeObservers]) {
+    const observers = [...resizeObservers];
+    for (const observer of observers) {
       observer.emitTarget(document.documentElement, 0, 0);
     }
   };
