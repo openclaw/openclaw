@@ -3,7 +3,9 @@ import { expect, it, vi } from "vitest";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
+  requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   settleSqliteWorkerOperationContext,
@@ -25,10 +27,12 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import { acquireSessionInputActor } from "./session-input-actor.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -39,7 +43,7 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 
-it("declines native incognito without changing its existing owner", async () => {
+it("keeps production incognito acquisition on its native owner without creating a memory actor", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = {
       agentId: "main",
@@ -55,11 +59,17 @@ it("declines native incognito without changing its existing owner", async () => 
       });
       return opened;
     }, database);
-    const actor = await createDurableSessionActorFactory(database).acquire(
-      { sessionKey, database: { kind: "native-incognito" } },
+    const actor = await acquireSessionInputActor(
+      {
+        agentId: database.agentId,
+        storePath: database.path,
+        env,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      },
       { assertCurrent() {}, assertReadable() {} },
     );
-    expect(actor).toEqual({ kind: "not-actor-owned" });
+    expect(actor).toBeUndefined();
+    expect(memorySessionActorOwners.read(database)).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
     expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
       sessionId: "native-session",
@@ -121,12 +131,14 @@ async function withActor(
   run: (fixture: {
     actor: ReturnType<typeof createSessionActor>;
     commands: string[];
+    admissions: SqliteWorkerAdmissionRequest[];
     fault: {
       reply: "normal" | "lost" | "unknown";
       workerPublicationFailure?: boolean;
       afterCommitted?: () => Promise<void>;
       drain?: Promise<void>;
       onExecuted?: () => void;
+      admissionCancelled?: boolean;
     };
     retireGeneration(this: void): void;
     nativePatch(this: void, updatedAt: number): void;
@@ -150,9 +162,18 @@ async function withActor(
     };
     const options = { agentId: "main", path: database.path };
     const commands: string[] = [];
+    const admissions: SqliteWorkerAdmissionRequest[] = [];
     const fault: Parameters<typeof run>[0]["fault"] = { reply: "normal" };
     let epoch = 0;
-    const lifetime = { assertCurrent() {}, assertReadable() {} };
+    const lifetime = {
+      assertAdmission() {
+        if (fault.admissionCancelled) {
+          throw new Error("Admission cancelled");
+        }
+      },
+      assertCurrent() {},
+      assertReadable() {},
+    };
     const replica = createSessionActorReplica({
       target,
       lifetime,
@@ -192,8 +213,9 @@ async function withActor(
             commands.push(command.type);
             const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
             const retained = { settled: completion.promise };
-            const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
-              grant();
+            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+              admissions.push(request);
+              authorize(request, { admission, retained }, grant);
             });
             const dropped = fault.reply === "unknown";
             const postMessage = admission.port.postMessage.bind(admission.port);
@@ -215,11 +237,7 @@ async function withActor(
               port: admission.port,
             };
             admit = (stage, publication) =>
-              authorize(
-                { stage, facts: { identity, publication } },
-                { admission, retained },
-                () => true,
-              );
+              requestSqliteWorkerOperationAdmission({ stage, facts: { identity, publication } });
             try {
               await kernel.prepare(command);
               const value = withSqliteWorkerOperationAdmission(native, () =>
@@ -277,6 +295,7 @@ async function withActor(
     try {
       await run({
         actor,
+        admissions,
         commands,
         fault,
         retireGeneration() {
@@ -313,6 +332,25 @@ it("serves installed state without a request and reconciles a retired worker gen
     const restored = await actor.read(authority);
     expect(restored.entry?.sessionId).toBe(initial.entry?.sessionId);
     expect(restored.version.epoch).not.toBe(initial.version.epoch);
+    expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+  });
+});
+
+it.each([1, 2])("bounds empty-replica recovery after %i superseding writes", async (writes) => {
+  await withActor(async ({ actor, commands, fault, nativePatch }) => {
+    let remaining = writes;
+    fault.onExecuted = () => {
+      if (remaining > 0) {
+        nativePatch(700 + remaining);
+        remaining -= 1;
+      }
+    };
+    const reading = actor.read(authority);
+    if (writes === 1) {
+      expect((await reading).entry?.updatedAt).toBe(701);
+    } else {
+      await expect(reading).rejects.toThrow("changed before its read could publish");
+    }
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
@@ -498,6 +536,111 @@ it("preserves native commit through worker publication, reply, and observer fail
   });
 });
 
+it("isolates mutable policy callbacks from admitted snapshots and committed state", async () => {
+  await withActor(async ({ actor }) => {
+    const initial = await actor.read(authority);
+    const stages: string[] = [];
+    const result = await actor.patch(
+      {
+        commandId: "detached-policy",
+        phaseId: "turn",
+        reducers: [{ kind: "activity", updatedAt: 123 }],
+      },
+      {
+        assertCurrent() {},
+        authorize(stage, snapshot) {
+          stages.push(stage);
+          if (snapshot.entry) {
+            snapshot.entry.sessionId = "policy-mutated";
+          }
+          snapshot.version = { epoch: "policy-mutated", sequence: -1 };
+          snapshot.dependencySessionIds.length = 0;
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "committed",
+      receipt: {
+        beforeVersion: initial.version,
+        postimage: { entry: { sessionId: initial.entry?.sessionId, updatedAt: 123 } },
+      },
+    });
+    expect(stages).toContain("transaction");
+    expect(stages).toContain("commit");
+    expect(actor.snapshot(authority)?.entry?.sessionId).toBe(initial.entry?.sessionId);
+  });
+});
+
+it("admits tool appends once per transaction boundary without transferring transcript indexes", async () => {
+  await withActor(async ({ actor, admissions }) => {
+    const initial = await actor.read(authority);
+    const append = {
+      kind: "message" as const,
+      input: {
+        scope: {
+          agentId: "main",
+          storePath:
+            actor.target.database.kind === "file" ? actor.target.database.nativeLocation : "unused",
+          sessionKey: actor.target.sessionKey,
+          sessionId: initial.entry!.sessionId,
+        },
+        cwd: "/synthetic",
+        messageJson: JSON.stringify({
+          role: "toolResult",
+          toolCallId: "call",
+          toolName: "synthetic",
+          content: [{ type: "text", text: "tool output" }],
+          isError: false,
+          timestamp: 1,
+        }),
+      },
+    };
+    admissions.length = 0;
+    const result = await actor.appendToolResult(
+      { commandId: "tool", phaseId: "turn", append },
+      authority,
+    );
+    expect(result.kind).toBe("committed");
+    expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
+    for (const request of admissions) {
+      expect(request.facts).toMatchObject({
+        publication: {
+          snapshot: { target: actor.target, entry: { sessionId: initial.entry!.sessionId } },
+        },
+      });
+      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      expect(
+        isRecord(facts) && isRecord(facts.snapshot) && Object.hasOwn(facts.snapshot, "transcript"),
+      ).toBe(false);
+    }
+    const committed = actor.snapshot(authority)!;
+    expect(committed.transcript.anchors.length).toBeGreaterThan(initial.transcript.anchors.length);
+    const refused = await actor.appendToolResult(
+      {
+        commandId: "refused-tool",
+        phaseId: "turn",
+        append: { ...append, input: { ...append.input, freshMessageCheck: true } },
+      },
+      {
+        assertCurrent() {},
+        authorize(stage, _facts, publication) {
+          if (isRecord(publication) && publication.check === "fresh") {
+            throw new Error("Fresh-message authority revoked");
+          }
+          if (stage === "commit") {
+            throw new Error("Commit authority revoked");
+          }
+        },
+      },
+    );
+    expect(refused).toMatchObject({
+      kind: "rolled-back",
+      error: { message: "Fresh-message authority revoked" },
+    });
+    expect((await actor.read(authority)).transcript).toEqual(committed.transcript);
+  });
+});
+
 it("retains rollback state and fences unknown commits until an explicit read", async () => {
   await withActor(async ({ actor, commands, fault }) => {
     const initial = await actor.read(authority);
@@ -571,5 +714,45 @@ it("release waits actual native settlement and flushes accepted phase work after
     await release;
     expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);
     expect(released).toHaveBeenCalledOnce();
+  });
+});
+
+it("refuses cancelled admission while an accepted phase settles its committed reducers", async () => {
+  await withActor(async ({ actor, fault, commands }) => {
+    const initial = await actor.read(authority);
+    const continuePhase = Promise.withResolvers<void>();
+    const operation = actor.withPhase("accepted-turn", authority, async (phase) => {
+      phase.patch([{ kind: "activity", updatedAt: 790 }]);
+      await continuePhase.promise;
+      return phase.actor.patch(
+        {
+          commandId: "accepted",
+          phaseId: "accepted-turn",
+          expected: initial.version,
+          reducers: [],
+        },
+        authority,
+      );
+    });
+    fault.admissionCancelled = true;
+    expect(() => actor.snapshot(authority)).toThrow("Admission cancelled");
+    expect(() => actor.read(authority)).toThrow("Admission cancelled");
+    expect(() => actor.withPhase("new-turn", authority, async () => {})).toThrow(
+      "Admission cancelled",
+    );
+    expect(() =>
+      actor.patch(
+        { commandId: "new", phaseId: "new-turn", expected: initial.version, reducers: [] },
+        authority,
+      ),
+    ).toThrow("Admission cancelled");
+    continuePhase.resolve();
+    const result = await operation;
+    expect(result.kind).toBe("committed");
+    if (result.kind !== "committed") {
+      throw new Error("Expected accepted commit");
+    }
+    expect(result.receipt.postimage.entry?.updatedAt).toBe(790);
+    expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);
   });
 });

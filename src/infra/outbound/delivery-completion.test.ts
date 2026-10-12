@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as harnessRecovery from "../../agents/agent-harness-completion-recovery.js";
@@ -8,10 +9,16 @@ import { commitMainSessionRecovery } from "../../agents/main-session-recovery/ma
 import type { HarnessCompletionRecovery } from "../../config/sessions/restart-recovery-types.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessionActors from "../../config/sessions/session-actor.js";
+import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
+import * as workerAdmission from "../sqlite-worker-operation-admission.js";
 import { settleDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
 
 const recoveryMocks = vi.hoisted(() => ({
@@ -27,8 +34,14 @@ vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () 
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
 
-function observePatchCommands(beforeCommit?: () => void) {
+function observeActorCommands(
+  hooks: {
+    beforeCommand?: () => void;
+    beforeCommit?: () => void;
+  } = {},
+) {
   const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const commands: string[] = [];
   const observer = vi
     .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
@@ -46,8 +59,8 @@ function observePatchCommands(beforeCommit?: () => void) {
               run({
                 execute: (command, commandOptions) => {
                   commands.push(command.type);
-                  if (command.type === "session.entry.patch.commit") {
-                    beforeCommit?.();
+                  if (command.type === "session.actor.deliverySettled") {
+                    hooks.beforeCommand?.();
                   }
                   return worker.execute(command, commandOptions);
                 },
@@ -56,7 +69,29 @@ function observePatchCommands(beforeCommit?: () => void) {
           ),
       };
     });
-  return { commands, restore: () => observer.mockRestore() };
+  const admissionObserver = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((authorize, attachment) =>
+      createAdmission((request, grant) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-actor-admission" &&
+          request.facts.publication.final === true
+        ) {
+          hooks.beforeCommit?.();
+        }
+        return authorize(request, grant);
+      }, attachment),
+    );
+  return {
+    commands,
+    restore() {
+      admissionObserver.mockRestore();
+      observer.mockRestore();
+    },
+  };
 }
 
 describe("pending-final delivery completion", () => {
@@ -152,6 +187,50 @@ describe("pending-final delivery completion", () => {
     ).resolves.toMatchObject({ transition: { kind: "rejected", reason: "stale_revision" } });
   });
 
+  it("settles native incognito custody on its retained memory owner", async () => {
+    const nativePath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tmpDir },
+    });
+    const scope = { sessionKey, storePath: nativePath, env: { OPENCLAW_STATE_DIR: tmpDir } };
+    const nativeCompletion = { ...completion, storePath: nativePath };
+    try {
+      await replaceSessionEntry(scope, {
+        sessionId: completion.sessionId,
+        incognito: true,
+        updatedAt: 1,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "private final",
+          createdAt: 1,
+          intentId: completion.intentId,
+          deliveries: [{ id: completion.deliveryId, state: "prepared" }],
+        },
+      });
+      await expect(
+        settlePendingFinalDelivery(nativeCompletion, "queued", ["prepared"], { stateDir: tmpDir }),
+      ).resolves.toEqual({ state: "queued" });
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "queued" },
+      ]);
+      await expect(
+        settlePendingFinalDelivery(nativeCompletion, "delivered", ["queued"], { stateDir: tmpDir }),
+      ).resolves.toEqual({ state: "delivered" });
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "delivered" },
+      ]);
+      await expect(
+        settlePendingFinalDelivery(nativeCompletion, "queued", ["prepared"], { stateDir: tmpDir }),
+      ).resolves.toEqual({ state: "stale" });
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "delivered" },
+      ]);
+      await expect(fs.stat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await disposeOpenClawAgentDatabaseByPath(nativePath);
+    }
+  });
+
   it("records queue custody without waking recovery", async () => {
     await expect(settlePendingFinalDelivery(completion, "queued", ["prepared"])).resolves.toEqual({
       state: "queued",
@@ -166,15 +245,67 @@ describe("pending-final delivery completion", () => {
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
   });
 
-  it("settles current foreign rows in one request without claiming stale queue custody", async () => {
+  it("settles queued final custody through an actor rebase while participant writes queue", async () => {
+    await settlePendingFinalDelivery(completion, "queued", ["prepared"]);
+    const scope = { agentId: "main", sessionKey, storePath };
+    const competingWrites: Promise<unknown>[] = [];
+    const createActor = sessionActors.createSessionActor;
+    vi.spyOn(sessionActors, "createSessionActor").mockImplementation((params) => {
+      const actor = createActor(params);
+      if (params.target.sessionKey === sessionKey) {
+        const settle = actor.deliverySettled;
+        vi.spyOn(actor, "deliverySettled").mockImplementationOnce(async (...command) => {
+          const recordParticipant = (promptedAt: number) =>
+            recordSessionParticipantInWorker(scope, {
+              identity: {
+                type: "observation",
+                pluginId: null,
+                accountId: null,
+                senderKind: "unknown",
+                id: "gateway-client",
+              },
+              promptedAt,
+              sessionAgentId: "main",
+            });
+          await recordParticipant(1);
+          const pending = settle(...command);
+          competingWrites.push(runOutsideStoreWriterContext(() => recordParticipant(2)));
+          const outcome = await pending;
+          expect(outcome).toMatchObject({
+            kind: "stale-version",
+            postimage: { target: actor.target },
+          });
+          return outcome;
+        });
+      }
+      return actor;
+    });
+    try {
+      await expect(
+        settlePendingFinalDelivery(completion, "delivered", ["queued"]),
+      ).resolves.toEqual({ state: "delivered" });
+      await Promise.all(competingWrites);
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "delivered" },
+      ]);
+      expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledOnce();
+    } finally {
+      await Promise.all(competingWrites);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("admits current custody in one command without a preparatory read", async () => {
     const scope = { sessionKey, storePath };
     const original = loadSessionEntry(scope)!;
     const pending = original.pendingFinalDelivery!;
     let changeBeforeCommit: (() => void) | undefined;
-    const observed = observePatchCommands(() => {
-      const change = changeBeforeCommit;
-      changeBeforeCommit = undefined;
-      change?.();
+    const observed = observeActorCommands({
+      beforeCommand() {
+        const change = changeBeforeCommit;
+        changeBeforeCommit = undefined;
+        change?.();
+      },
     });
     try {
       for (const change of [
@@ -206,7 +337,7 @@ describe("pending-final delivery completion", () => {
         ).resolves.toEqual({
           state: "label" in change ? "queued" : "stale",
         });
-        expect(observed.commands).toEqual(["session.entry.patch.commit"]);
+        expect(observed.commands).toEqual(["session.actor.deliverySettled"]);
         if ("label" in change) {
           expect(loadSessionEntry(scope)).toMatchObject({
             label: "foreign metadata",
@@ -238,7 +369,7 @@ describe("pending-final delivery completion", () => {
     );
   }
 
-  it("retains host claim validation and records its identified completion through prepare and CAS", async () => {
+  it("rechecks live host authority at actor commit and records exact identified completion", async () => {
     await installContextOnPendingFinal();
     const scope = { sessionKey, storePath };
     const initial = loadSessionEntry(scope);
@@ -265,7 +396,15 @@ describe("pending-final delivery completion", () => {
     const owed = vi
       .spyOn(harnessRecovery, "getOwedHarnessCompletionTask")
       .mockReturnValue(undefined);
-    const observed = observePatchCommands();
+    let revokeBeforeCommit = false;
+    const observed = observeActorCommands({
+      beforeCommit() {
+        if (revokeBeforeCommit) {
+          revokeBeforeCommit = false;
+          owed.mockReturnValue(undefined);
+        }
+      },
+    });
     try {
       await expect(
         settlePendingFinalDelivery({ ...ownedCompletion, intentId: "different" }, "delivered"),
@@ -279,15 +418,24 @@ describe("pending-final delivery completion", () => {
       expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
 
       owed.mockReturnValue(claim);
+      revokeBeforeCommit = true;
+      await expect(
+        settlePendingFinalDelivery(ownedCompletion, "delivered", ["prepared"], {
+          identifiedResult: { channel: "telegram", messageId: "revoked-final" },
+        }),
+      ).resolves.toEqual({ state: "stale" });
+      expect(loadSessionEntry(scope)).toEqual(initial);
+      expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
+
+      owed.mockReturnValue(claim);
       observed.commands.length = 0;
       await expect(
         settlePendingFinalDelivery(ownedCompletion, "delivered", ["prepared"], {
           identifiedResult: { channel: "telegram", messageId: "platform-final" },
         }),
       ).resolves.toEqual({ state: "delivered" });
-      expect(observed.commands).toEqual([
-        "session.entry.patch.prepare",
-        "session.entry.patch.commit",
+      expect(observed.commands.filter((command) => command !== "session.actor.read")).toEqual([
+        "session.actor.deliverySettled",
       ]);
       expect(owed).toHaveBeenLastCalledWith(claim, expect.objectContaining(initial!));
       expect(loadSessionEntry(scope)).toMatchObject({

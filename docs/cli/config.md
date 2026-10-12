@@ -104,7 +104,7 @@ openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 
 Prefer `agents.entries.<id>` paths for agent edits. The legacy `agents.list[0]`
 syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
-persist the canonical keyed roster. Indexed edits use the current roster order.
+persist the current keyed roster. Indexed edits use the current roster order.
 Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
 `$include` ownership protections still apply.

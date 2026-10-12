@@ -227,7 +227,7 @@ translations remain in `apps/.i18n/native-source.json` and
 `apps/.i18n/native/<locale>.json`; the existing `pnpm native:i18n:baseline` and
 `pnpm native:i18n:sync` workflow owns updates. Never edit or commit the generated
 lookup or `native_` resources. `pnpm android:i18n:check` validates the catalog
-against those canonical inputs.
+against those source inputs.
 
 ```bash
 pnpm install
@@ -421,7 +421,7 @@ Reports are written under:
 
 ## Perf CLI (low-noise)
 
-Deterministic startup measurement + hotspot extraction with compact CLI output:
+Repeatable startup measurement + hotspot extraction with compact CLI output:
 
 ```bash
 cd apps/android
@@ -617,7 +617,7 @@ What it does:
 - Skips `screen.record` and `talk.ptt.*` in this suite because they require
   interactive capture. Use `apps/android/scripts/voice-e2e.sh` for microphone
   and voice-path proof.
-- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
+- Asserts command contracts (success or the expected error for safe-invalid calls like `sms.send` and `notifications.actions`).
 
 Common failure quick-fixes:
 

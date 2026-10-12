@@ -844,11 +844,9 @@ suite.define(() => {
         await gateway.waitForRequest("connect", { after: connected });
         for (const collapsed of [false, true]) {
           if (collapsed) {
-            await page.locator(".sidebar-brand__collapse").click();
+            await page.locator('[data-navigation-view][aria-pressed="true"]').click();
           }
-          const chrome = page.locator(
-            collapsed ? ".shell-chrome-controls" : ".sidebar-brand__actions",
-          );
+          const chrome = page.locator(collapsed ? ".shell-chrome-controls" : ".sidebar-rail");
           await expect
             .poll(async () => {
               const banner = await page.locator(".connection-action-block").boundingBox();

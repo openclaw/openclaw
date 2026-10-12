@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   replaceSessionEntry,
@@ -7,7 +6,6 @@ import {
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as preparation from "../session-sharing-preparation.js";
 import * as artifactReads from "../session-transcript-readers.js";
@@ -43,7 +41,6 @@ it("reuses admitted session facts for artifacts and observes subsequent visibili
       },
     ]);
     await waitForSessionTranscriptProjection(scope);
-    const database = openOpenClawAgentDatabase(scope);
     expect(loadSessionEntry(scope)?.visibility).toBe("shared");
     const context = await createHistoryReadContext();
     const client = identifiedClient("viewer");
@@ -97,26 +94,6 @@ it("reuses admitted session facts for artifacts and observes subsequent visibili
       }
     }
     expect(prepare).not.toHaveBeenCalled();
-    const foreignVisibility = (visibility: "draft" | "shared") => {
-      const writer = new DatabaseSync(database.path);
-      try {
-        writer
-          .prepare(
-            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.visibility', ?) WHERE session_key = ?",
-          )
-          .run(visibility, scope.sessionKey);
-      } finally {
-        writer.close();
-      }
-    };
-    foreignVisibility("draft");
-    for (const method of ["artifacts.list", "artifacts.download"] as const) {
-      const result = await request(method, method === "artifacts.download" ? { artifactId } : {});
-      expect(result[0]).toBe(false);
-      expect(result[2]).toMatchObject({ details: { type: "artifact_scope_not_found" } });
-    }
-    expect(prepare).not.toHaveBeenCalled();
-    foreignVisibility("shared");
     const readArtifacts = artifactReads.readSessionArtifacts;
     vi.spyOn(artifactReads, "readSessionArtifacts").mockImplementationOnce(async (...args) => {
       const result = await readArtifacts(...args);

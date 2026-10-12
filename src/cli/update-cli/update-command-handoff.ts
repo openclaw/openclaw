@@ -178,10 +178,8 @@ export async function handoffUpdateFromGateway(params: {
     return false;
   }
   const parentPid = parsePositivePid(params.state.runtime?.pid);
-  if (
-    !parentPid ||
-    !inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }).pids.has(parentPid)
-  ) {
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+  if (!parentPid || !ancestry.complete || !ancestry.pids.has(parentPid)) {
     return false;
   }
   const supervisor =

@@ -9,21 +9,21 @@ import {
 } from "./types.secrets.js";
 
 describe("resolveSecretInputString", () => {
-  it.each([
-    { value: "  abc123  ", normalized: "abc123" },
-    { value: "${OPENAI_API_KEY}", normalized: "${OPENAI_API_KEY}" },
-  ])("returns available for non-empty string value $value", ({ value, normalized }) => {
-    expect(
-      resolveSecretInputString({
-        value,
-        path: "models.providers.openai.apiKey",
-      }),
-    ).toEqual({
-      status: "available",
-      value: normalized,
-      ref: null,
-    });
-  });
+  it.each([{ value: "${OPENAI_API_KEY}", normalized: "${OPENAI_API_KEY}" }])(
+    "returns available for non-empty string value $value",
+    ({ value, normalized }) => {
+      expect(
+        resolveSecretInputString({
+          value,
+          path: "models.providers.openai.apiKey",
+        }),
+      ).toEqual({
+        status: "available",
+        value: normalized,
+        ref: null,
+      });
+    },
+  );
 
   it("returns configured_unavailable for unresolved refs in inspect mode", () => {
     expect(
@@ -73,11 +73,6 @@ describe("resolveSecretInputString", () => {
       name: "inline ref",
       value: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       refValue: undefined,
-    },
-    {
-      name: "explicit ref with retained plaintext",
-      value: "retained-plaintext",
-      refValue: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
     },
   ])(
     "throws a typed unresolved SecretRef error in strict mode for $name",

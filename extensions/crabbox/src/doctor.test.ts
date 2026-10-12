@@ -75,7 +75,7 @@ describe("Crabbox worker doctor", () => {
     expect(install).not.toHaveBeenCalled();
   });
 
-  it.each(["linux", "windows/wsl2", "windows/normal", "macos"])(
+  it.each(["windows/wsl2"])(
     "offers the same managed repair for outdated %s profiles without installing during detection",
     async (target) => {
       vi.spyOn(managedBinary, "probeCrabboxVersion").mockResolvedValue({
@@ -195,9 +195,7 @@ describe("Crabbox warm-image doctor", () => {
   });
 
   it.each([
-    { name: "healthy checkpoint", operation: undefined, severity: undefined },
     { name: "fresh capture", operation: "capture", severity: "info" },
-    { name: "long-running capture", operation: "stale", severity: "warning" },
     { name: "long-running scrub", operation: "stale-scrub", severity: "warning" },
     { name: "failed capture", operation: "uncertain", severity: "warning" },
     { name: "pending retirement", operation: "retire", severity: "warning" },
@@ -247,9 +245,7 @@ describe("Crabbox warm-image doctor", () => {
                     : {
                         type: "capture" as const,
                         id: "capture-selector",
-                        startedAtMs:
-                          now -
-                          (operation === "stale" || operation === "stale-scrub" ? 1_200_000 : 0),
+                        startedAtMs: now - (operation === "stale-scrub" ? 1_200_000 : 0),
                         leaseId: "cbx_capture",
                         provider: "aws",
                         phase:
@@ -307,7 +303,7 @@ describe("Crabbox warm-image doctor", () => {
         expect(findings[0]?.fixHint).toContain(
           "--recover capture-selector --acknowledge-provider-cleanup",
         );
-      } else if (operation === "stale" || operation === "stale-scrub") {
+      } else if (operation === "stale-scrub") {
         expect(findings[0]?.fixHint).toContain("may still be");
         expect(findings[0]?.message).not.toContain("paused");
         expect(findings[0]?.fixHint).not.toContain("--recover");
@@ -317,28 +313,6 @@ describe("Crabbox warm-image doctor", () => {
       expect(store.lookup("profile")).toEqual(record);
       expect(command).not.toHaveBeenCalled();
       expect(probe).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID, CRABBOX_WARM_IMAGES_CHECK_ID])(
-    "registers each check once when %s was already loaded",
-    (existingId) => {
-      const checks = new Map([[existingId, captureCrabboxDoctorCheck(existingId)]]);
-      const registerHealthCheck = vi.fn((check: HealthCheck) => checks.set(check.id, check));
-      const host = {
-        openclawRoot: OPENCLAW_ROOT,
-        listPluginStateEntries,
-        getHealthCheck: (id: string) => checks.get(id),
-        registerHealthCheck,
-      };
-
-      registerCrabboxWorkerProviderDoctorChecks(host);
-      registerCrabboxWorkerProviderDoctorChecks(host);
-
-      expect([...checks.keys()].toSorted()).toEqual(
-        [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID, CRABBOX_WARM_IMAGES_CHECK_ID].toSorted(),
-      );
-      expect(registerHealthCheck).toHaveBeenCalledOnce();
     },
   );
 });

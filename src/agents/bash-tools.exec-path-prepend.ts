@@ -1,4 +1,5 @@
 import path from "node:path";
+import { prependShellPath } from "../infra/login-shell-path-carrier.js";
 import { findPathKey, removePathPrepend } from "../infra/path-prepend.js";
 
 /**
@@ -30,8 +31,5 @@ export function wrapPosixCommandWithPathPrepend(
     }
   }
 
-  // Pass the prepend string safely via a temporary environment variable.
-  env.OPENCLAW_PREPEND_PATH = pathPrepend.join(path.delimiter);
-
-  return `export PATH="\${OPENCLAW_PREPEND_PATH}\${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; ${command}`;
+  return prependShellPath(command, env, pathPrepend.join(path.delimiter));
 }

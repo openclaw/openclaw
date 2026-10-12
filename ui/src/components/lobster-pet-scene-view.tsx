@@ -341,7 +341,6 @@ function Scene(args: LobsterPetSceneProps) {
     };
   });
   // dynamic owns tracking of the selected factory and retains a crossing's nodes.
-  // eslint-disable-next-line solid/reactivity
   const Passer = dynamic(() => view().passerSprite);
   return (
     <Show when={args.scene.top}>

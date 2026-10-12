@@ -15,8 +15,9 @@ when the provider finishes. The completion agent follows the session's current
 visible-reply contract with a short
 user-facing caption and every structured generated attachment. If generation
 fails, the agent returns a concise visible failure instead. If the requester
-session is inactive or its active wake fails, OpenClaw sends an idempotent
-direct fallback with the generated images so the result is not lost.
+session is inactive or its active wake fails, OpenClaw sends a
+direct fallback with the generated images so the result is not lost. Retries do
+not post the same images again.
 
 You can send a follow-up while the completion agent is still working. The new
 turn waits for the completion and its delivery to settle before starting.
@@ -338,7 +339,7 @@ and ComfyUI support 1.
     `openai` OAuth profile is configured, OpenClaw reuses the same
     OAuth profile used by Codex subscription chat models and sends the
     image request through the Codex Responses backend. Legacy Codex base
-    URLs such as `https://chatgpt.com/backend-api` are canonicalized to
+    URLs such as `https://chatgpt.com/backend-api` are converted to
     `https://chatgpt.com/backend-api/codex` for image requests. OpenClaw
     does **not** silently fall back to `OPENAI_API_KEY` for that request -
     to force direct OpenAI Images API routing, configure
@@ -444,7 +445,7 @@ and ComfyUI support 1.
   </Accordion>
   <Accordion title="OpenRouter image models">
     OpenRouter image generation uses the same `OPENROUTER_API_KEY` and
-    routes canonical requests through OpenRouter's dedicated `/api/v1/images`
+    routes standard requests through OpenRouter's dedicated `/api/v1/images`
     endpoint. Configured custom OpenRouter base URLs retain the existing
     chat-completions image route for proxy compatibility. Select OpenRouter
     image models with the `openrouter/` prefix:

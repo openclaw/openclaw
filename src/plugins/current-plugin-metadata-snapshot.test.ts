@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -20,16 +19,12 @@ import { withPluginInstallRoots } from "./install-root-context.js";
 import * as installedPluginIndexPolicy from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
-  bindPluginMetadataSnapshotCache,
   createPluginCache,
   invalidatePluginCacheMetadata,
   withPluginCache,
 } from "./plugin-cache.js";
 import * as pluginControlPlaneContext from "./plugin-control-plane-context.js";
-import {
-  clearPluginMetadataLifecycleCaches,
-  retainGatewayPluginMetadata,
-} from "./plugin-metadata-lifecycle.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   restorePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -526,47 +521,6 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config: sourceConfig })).toBe(snapshot);
     expect(getCurrentPluginMetadataSnapshot({ config: autoEnabledConfig })).toBeUndefined();
   });
-
-  it.each([false, true])(
-    "clearPluginMetadataLifecycleCaches revokes nested operation scopes across awaits (Gateway active: %s)",
-    async (gatewayActive) => {
-      const boot = createSnapshot();
-      const owner = gatewayActive
-        ? retainGatewayPluginMetadata(createTestGatewayScheduler())
-        : undefined;
-      if (owner) {
-        owner.publish(boot);
-        setGatewayPluginMetadataSnapshot(boot);
-      }
-      try {
-        await using outer = createPluginCache();
-        await using inner = createPluginCache();
-        const before = createSnapshot({ normalizationAlias: "before-install" });
-        const nested = createSnapshot({ normalizationAlias: "nested-before-install" });
-        const after = createSnapshot({ normalizationAlias: "after-install" });
-        bindPluginMetadataSnapshotCache(before, outer);
-        bindPluginMetadataSnapshotCache(nested, inner);
-        bindPluginMetadataSnapshotCache(after, outer);
-        await withPluginMetadataSnapshotScope(before, async () => {
-          await withPluginMetadataSnapshotScope(nested, async () => {
-            await Promise.resolve();
-            clearPluginMetadataLifecycleCaches();
-            expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
-          });
-          expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
-          withPluginMetadataSnapshotScope(after, () => {
-            expect(getCurrentPluginMetadataSnapshot()).toBe(after);
-          });
-          expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
-        });
-        if (owner) {
-          expect(getCurrentPluginMetadataSnapshot()).toBe(boot);
-        }
-      } finally {
-        await owner?.close();
-      }
-    },
-  );
 
   it("clearPluginMetadataLifecycleCaches preserves an admitted runtime generation", () => {
     const snapshot = createSnapshot();

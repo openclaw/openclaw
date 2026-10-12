@@ -251,7 +251,6 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         runtime,
         reason: "profile deletion requested",
         terminal: "deleted",
-        advanceConfigRevision: true,
         closeRelay: resolved.driver === "extension",
         managedChrome: "release-profile-data",
         afterCleanup: persistDelete,

@@ -99,12 +99,10 @@ type AdmissionHandler = (
 ) => void;
 
 /** The optional continuation runs under live host authority before releasing the native writer. */
-export function createSqliteWorkerOperationAdmission(
+export const createSqliteWorkerOperationAdmission = (
   admit: AdmissionHandler,
   attachment?: unknown,
-): SqliteWorkerOperationAdmission {
-  return createOperationAdmission(admit, attachment);
-}
+): SqliteWorkerOperationAdmission => createOperationAdmission(admit, attachment);
 
 /** Task lifetime channels relay a broker's creation grant without acquiring database authority. */
 export function createSqliteDatabaseAdmissionRelay(
@@ -169,9 +167,7 @@ function createOperationAdmission(
   const invalidProtocol = (
     kind: "commit receipt" | "native settlement" | "admission request",
     code: "outcome-unknown" | "unavailable" = "outcome-unknown",
-  ) => {
-    recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
-  };
+  ) => recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
   const installCommitted = (receipt: NativeCommitReceipt): boolean => {
     if (nativeReceipt) {
       if (
@@ -467,8 +463,7 @@ function createOperationAdmission(
       );
     }
   };
-  port1.on("message", receive);
-  port1.unref();
+  port1.on("message", receive).unref();
   const service = () => {
     // Observers may inspect retained facts without recursively publishing the next receipt.
     if (observingCommit) {
@@ -644,7 +639,7 @@ export function assertSqliteWorkerCommitReceiptPending(database: DatabaseSync): 
   }
 }
 
-/** Called on the SQLite worker, after transaction entry and before its row mutation. */
+/** Ask the live host owner for a native stage; preparation precedes writer-lock acquisition. */
 export function requestSqliteWorkerOperationAdmission(
   request: SqliteWorkerAdmissionRequest,
   transferList: Transferable[] = [],
@@ -708,35 +703,22 @@ export function requestSqliteWorkerSchemaMaintenance(databasePath: string): bool
   return true;
 }
 
-/** Read optional owner-prepared data once, shared by kernels in the same operation. */
-export function readSqliteWorkerOperationAdmissionAttachment(): unknown {
+/** Require and cache owner-prepared data from this operation's private port. */
+export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
   const scope = currentAdmission.getStore();
   if (!scope?.active) {
-    return undefined;
-  }
-  if (scope.owner.attachment) {
-    return scope.owner.attachment.value;
-  }
-  const message: unknown = receiveMessageOnPort(scope.port)?.message;
-  if (
-    message !== undefined &&
-    (!isRecord(message) || message.kind !== "sqlite-operation-attachment")
-  ) {
-    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
-  }
-  const value = isRecord(message) ? message.value : undefined;
-  scope.owner.attachment = { value };
-  return value;
-}
-
-/** Require owner-prepared data from this executing operation's private port. */
-export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
-  if (!currentAdmission.getStore()?.active) {
     throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
   }
-  const attachment = readSqliteWorkerOperationAdmissionAttachment();
-  if (attachment === undefined) {
-    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
+  if (!scope.owner.attachment) {
+    const message: unknown = receiveMessageOnPort(scope.port)?.message;
+    if (
+      !isRecord(message) ||
+      message.kind !== "sqlite-operation-attachment" ||
+      message.value === undefined
+    ) {
+      throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
+    }
+    scope.owner.attachment = { value: message.value };
   }
-  return attachment;
+  return scope.owner.attachment.value;
 }

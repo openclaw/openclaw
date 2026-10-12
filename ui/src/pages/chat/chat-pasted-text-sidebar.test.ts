@@ -16,7 +16,7 @@ import {
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createPasteEvent, renderChatView } from "./chat-view.test-helpers.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
-import { renderComposerPastedText } from "./components/chat-composer-pasted-text.ts";
+import { renderComposerPastedText } from "./components/chat-composer-pasted-text.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -84,7 +84,9 @@ it.each(["restore", "preview"] as const)(
       expect(card.classList.contains("chat-selection-annotations__chip")).toBe(false);
       expect(restore.closest(".chat-attachment-file__body")).not.toBeNull();
       expect(
-        restore.parentElement?.firstElementChild?.classList.contains("chat-attachment-file__name"),
+        restore
+          .closest(".chat-attachment-file__body")
+          ?.firstElementChild?.classList.contains("chat-attachment-file__name"),
       ).toBe(true);
       expect(restore.closest("a, button button, [role=button]")).toBeNull();
       expect(card.querySelector(".chat-attachment-file__icon")).not.toBeNull();

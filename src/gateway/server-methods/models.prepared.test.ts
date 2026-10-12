@@ -3,6 +3,10 @@ import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as providerPolicySurface from "../../plugins/provider-policy-surface.js";
@@ -49,6 +53,8 @@ it("serves the published model-list projection and replaces it with its metadata
         workspaceDir: state.workspaceDir,
         catalog,
       });
+      let currentConfig = config;
+      context.getRuntimeConfig = () => currentConfig;
       const params = { agentId: "main", view: "all" as const };
       const expected = await modelsListResult.buildModelsListResult({
         source: { kind: "gateway", context },
@@ -115,6 +121,17 @@ it("serves the published model-list projection and replaces it with its metadata
           prepareStatement.mockRestore();
           executeStatement.mockRestore();
         }
+        currentConfig = {
+          ...config,
+          ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
+          meta: { lastTouchedVersion: "2026.10.11" },
+        };
+        setRuntimeConfigSnapshot(currentConfig, currentConfig);
+        harness.setConfig(currentConfig);
+        harness.setOwner({ ...owner, config: currentConfig });
+        await harness.runtime.refresh();
+        expect(await read()).toEqual(expected);
+        expect(prepareProjection).toHaveBeenCalledOnce();
         owner.modelCatalog.pendingProviders = ["test"];
         expect(await read()).toMatchObject({ pendingProviders: ["test"] });
         owner.modelCatalog.pendingProviders = undefined;
@@ -125,7 +142,7 @@ it("serves the published model-list projection and replaces it with its metadata
         current = false;
         await expect(read()).rejects.toThrow("Model catalog changed while preparing this result");
         const replacement = {
-          ...createChatMetadataOwner(config, "second", {}, "test", "openai-completions"),
+          ...createChatMetadataOwner(currentConfig, "second", {}, "test", "openai-completions"),
           pluginRegistry,
         };
         harness.setOwner(replacement);
@@ -139,6 +156,7 @@ it("serves the published model-list projection and replaces it with its metadata
       } finally {
         prepareProjection.mockRestore();
         await harness.runtime.stop();
+        clearRuntimeConfigSnapshot();
       }
     },
   );

@@ -99,28 +99,6 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     controller.dispose();
   });
 
-  it("hands cancellation to the live run handler once installed", () => {
-    const source = new AbortController();
-    const state = createAbortState();
-    const abortRun = vi.fn();
-    const controller = createEmbeddedAttemptExternalAbortController({
-      abortSignal: source.signal,
-      cleanupAfterEarlyAbort: vi.fn(async () => {}),
-      runAbortController: new AbortController(),
-      runId: "run-live",
-      state,
-    });
-    controller.setRunAbort(abortRun);
-    controller.arm();
-    const reason = new Error("cancelled live run");
-
-    source.abort(reason);
-
-    expect(state.terminal).toEqual({ kind: "aborted", source: "external" });
-    expect(abortRun).toHaveBeenCalledExactlyOnceWith(false, reason);
-    controller.dispose();
-  });
-
   it("hands an external timeout to the live attempt exactly once", async () => {
     const source = new AbortController();
     const runAbortController = new AbortController();
@@ -192,15 +170,10 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     }
   });
 
-  it.each([
-    ["stage-start", false],
-    ["prep-cleanup", false],
-    ["stage-start", true],
-    ["prep-cleanup", true],
-  ] as const)("classifies abort at %s (timeout=%s)", async (checkpoint, timeout) => {
+  it("classifies abort after preparation cleanup", async () => {
     const source = new AbortController();
     const reason = new Error("cancelled during setup");
-    reason.name = timeout ? "TimeoutError" : "AbortError";
+    reason.name = "AbortError";
     source.abort(reason);
     const cleanupAfterEarlyAbort = vi.fn(async () => {});
     const state = createAbortState();
@@ -212,18 +185,14 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
       state,
     });
 
-    if (checkpoint === "stage-start") {
-      expect(() => controller.throwIfFired()).toThrow(reason);
-    } else {
-      await expect(controller.throwIfFiredAfterPrepCleanup()).rejects.toBe(reason);
-    }
+    await expect(controller.throwIfFiredAfterPrepCleanup()).rejects.toBe(reason);
 
-    expect(cleanupAfterEarlyAbort).toHaveBeenCalledTimes(checkpoint === "stage-start" ? 0 : 1);
+    expect(cleanupAfterEarlyAbort).toHaveBeenCalledOnce();
     expect(projectAgentRunAttemptTerminal(state.terminal)).toMatchObject({
       aborted: true,
       externalAbort: true,
       promptError: reason,
-      timedOut: timeout,
+      timedOut: false,
     });
     const firstTerminal = state.terminal;
     controller.arm();

@@ -143,7 +143,7 @@ it.each([
     if (kind === "repair") {
       const result = await migrate();
       expect(result.warnings).toEqual([]);
-      expect(result.changes).toContain("Rebuilt shared-state SQLite indexes (1)");
+      expect(result.changes).toContain("Rebuilt canonical shared-state SQLite indexes (1)");
       expect(() => store.list()).toThrow("inventory has closed");
       const reopened = await createWorkerEnvironmentStore({ database });
       expect(reopened.list()).toEqual([]);

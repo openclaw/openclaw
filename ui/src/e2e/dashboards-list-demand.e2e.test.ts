@@ -24,7 +24,7 @@ const DASHBOARD_REQUEST_PARAMS = {
   includeGlobal: true,
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-  rowMode: "compact",
+  rowMode: "dashboard",
   source: "dashboard",
 } as const;
 
@@ -346,18 +346,14 @@ suite.define(() => {
             sessionsResult(`agent:main:canonical-${index + 1}`, canonicalLabel, 10 + index),
           );
           const sidebar = page.locator("openclaw-app-sidebar");
-          await sidebar
-            .locator(".sidebar-rail")
-            .getByRole("button", { name: "Sessions", exact: true })
-            .click();
-          // A resolved profileless connection exposes the all-owner canonical roster.
+          // The profileless roster has no ownership identities, so its title stays plain.
           await expect
             .poll(() =>
               sidebar
-                .getByRole("button", { name: "All", exact: true })
-                .getAttribute("aria-pressed"),
+                .locator(".sidebar-session-toolbar .sidebar-recent-sessions__label-text")
+                .textContent(),
             )
-            .toBe("true");
+            .toBe("Sessions");
           await sidebar.getByText(canonicalLabel, { exact: true }).waitFor();
         }),
       );

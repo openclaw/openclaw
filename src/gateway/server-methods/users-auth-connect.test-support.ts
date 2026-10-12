@@ -74,6 +74,8 @@ vi.mock("../../agents/auth-profiles/shared-main-dir.js", async (importOriginal) 
 vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: async (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfiles(...args),
 }));
 vi.mock("../../logging/secret-redaction-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../logging/secret-redaction-registry.js")>()),

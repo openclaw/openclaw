@@ -18,6 +18,7 @@ import {
   createTestGitHubPublicationRuntime as createGitHubPublicationRuntime,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistClaimPublicationWorkspace,
   persistPublicationTestSession,
   root,
   seedLocalPublication,
@@ -469,7 +470,6 @@ describe("Gateway GitHub publication boundaries", () => {
   it("continues settling other receipts when one workspace still needs Git recovery", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const coordinator = createLocalCoordinator(database);
-    coordinator.read("create-schema");
     seedLocalPublication(database, { requestId: "blocked", status: "publishing" });
     seedLocalPublication(database, { requestId: "following", status: "requested" });
     seedLocalPublication(database, {
@@ -543,7 +543,6 @@ describe("Gateway GitHub publication boundaries", () => {
       const coordinator = createTestGitHubPublicationCoordinator({
         placements: createWorkerSessionPlacementStore({ database }),
       });
-      coordinator.read("create-schema");
       const requestId = "publication-missing-credential";
       seedLocalPublication(database, {
         requestId,
@@ -575,8 +574,6 @@ describe("Gateway GitHub publication boundaries", () => {
 
   it("terminalizes local recovery when the managed worktree fingerprint changed", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const first = createLocalCoordinator(database);
-    first.read("create-schema");
     const requestId = "publication-stale-worktree";
     seedLocalPublication(database, {
       requestId,
@@ -604,7 +601,6 @@ describe("Gateway GitHub publication boundaries", () => {
   it("validates the live session owner before recovery can touch Git state", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const coordinator = createLocalCoordinator(database);
-    coordinator.read("create-schema");
     const requestId = "publication-stale-session-owner";
     seedLocalPublication(database, { requestId, status: "requested" });
     mocks.findWorktreeById.mockReturnValue({
@@ -644,7 +640,6 @@ describe("Gateway GitHub publication boundaries", () => {
       const coordinator = createTestGitHubPublicationCoordinator({
         placements: createWorkerSessionPlacementStore({ database }),
       });
-      coordinator.read("create-schema");
       const requestId = "publication-unsafe-recovery";
       seedLocalPublication(database, {
         requestId,
@@ -743,6 +738,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("publishes deferred session requests alongside an accepted turn claim", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {
@@ -785,6 +781,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("defers an orphaned turn request and publishes it when the workspace is quiescent", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {
@@ -833,6 +830,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("defers snapshot preparation failures without blocking workspace acceptance", async () => {
+    await persistClaimPublicationWorkspace();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     seedAttachedPlacementEnvironment(database, {

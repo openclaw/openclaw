@@ -241,7 +241,7 @@ export async function prepareSessionCreateDefaultAccount(params: {
     return selected;
   }
   const model = selected.selection;
-  const linked = resolveUserLinkedAuthProfile({
+  const linked = await resolveUserLinkedAuthProfile({
     cfg: resolveModelProviderAuthConfig({
       config: params.cfg,
       provider: model.provider,

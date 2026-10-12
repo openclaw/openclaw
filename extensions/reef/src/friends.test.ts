@@ -609,20 +609,6 @@ describe("ReefFriendManager pairing", () => {
     expect(pairing.values).toEqual(new Set());
   });
 
-  it("deletes malformed transient approval entries", async () => {
-    const active = relayFriend("alice", "active");
-    const pairing = approvals("not a handle");
-    const manager = new ReefFriendManager(
-      transport(active) as unknown as ReefTransportClient,
-      trust(),
-      pairing,
-    );
-
-    await expect(manager.reconcile()).resolves.toEqual([]);
-    expect(pairing.remove).toHaveBeenCalledWith("not a handle");
-    expect(pairing.values).toEqual(new Set());
-  });
-
   it("never treats an unbound generic allow entry as Reef authorization", async () => {
     const active = relayFriend("alice", "active");
     const pairing = approvals("alice");

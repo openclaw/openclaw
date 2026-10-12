@@ -6,7 +6,11 @@ import {
   findOpenAIStrictSchemaViolations,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
   normalizeOpenAIStrictCompatSchema,
+  inheritToolSchemaTruncation,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_NESTED_KEYS,
   stripUnsupportedSchemaKeywords,
+  truncateToolSchemaDepth,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 // Provider tool helpers expose shared tool-call payload contracts for provider plugins.
@@ -43,12 +47,20 @@ export function findUnsupportedSchemaKeywords(
   /** Schema keywords unsupported by the target provider family. */
   unsupportedKeywords: ReadonlySet<string>,
 ): string[] {
+  return inspectSchemaKeywords(truncateToolSchemaDepth(schema), path, unsupportedKeywords);
+}
+
+function inspectSchemaKeywords(
+  schema: unknown,
+  path: string,
+  unsupportedKeywords: ReadonlySet<string>,
+): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
   if (Array.isArray(schema)) {
     return schema.flatMap((item, index) =>
-      findUnsupportedSchemaKeywords(item, `${path}[${index}]`, unsupportedKeywords),
+      inspectSchemaKeywords(item, `${path}[${index}]`, unsupportedKeywords),
     );
   }
   const record = schema as Record<string, unknown>;
@@ -56,7 +68,7 @@ export function findUnsupportedSchemaKeywords(
   if (isSchemaRecord(record.properties)) {
     for (const [key, value] of Object.entries(record.properties)) {
       violations.push(
-        ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
+        ...inspectSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
       );
     }
   }
@@ -67,10 +79,14 @@ export function findUnsupportedSchemaKeywords(
     if (unsupportedKeywords.has(key)) {
       violations.push(`${path}.${key}`);
     }
-    if (value && typeof value === "object") {
-      violations.push(
-        ...findUnsupportedSchemaKeywords(value, `${path}.${key}`, unsupportedKeywords),
-      );
+    if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+      for (const [name, child] of Object.entries(value)) {
+        violations.push(
+          ...inspectSchemaKeywords(child, `${path}.${key}.${name}`, unsupportedKeywords),
+        );
+      }
+    } else if (SCHEMA_NESTED_KEYS.has(key)) {
+      violations.push(...inspectSchemaKeywords(value, `${path}.${key}`, unsupportedKeywords));
     }
   }
   return violations;
@@ -78,13 +94,14 @@ export function findUnsupportedSchemaKeywords(
 
 function normalizeToolSchemasIfChanged(
   ctx: ProviderNormalizeToolSchemasContext,
-  normalizeSchema: (schema: unknown) => unknown,
+  normalizeSchema: (schema: unknown, toolName?: string) => unknown,
 ): AnyAgentTool[] {
   return ctx.tools.map((tool) => {
     if (!tool.parameters || typeof tool.parameters !== "object") {
       return tool;
     }
-    const parameters = normalizeSchema(tool.parameters);
+    const bounded = truncateToolSchemaDepth(tool.parameters, tool.name);
+    const parameters = inheritToolSchemaTruncation(bounded, normalizeSchema(bounded, tool.name));
     return parameters === tool.parameters
       ? tool
       : {
@@ -99,7 +116,10 @@ function inspectToolSchemas(
   inspect: (schema: unknown, path: string) => string[],
 ): ProviderToolSchemaDiagnostic[] {
   return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = inspect(tool.parameters, `${tool.name}.parameters`);
+    const violations = inspect(
+      truncateToolSchemaDepth(tool.parameters, tool.name),
+      `${tool.name}.parameters`,
+    );
     return violations.length > 0 ? [{ toolName: tool.name, toolIndex, violations }] : [];
   });
 }
@@ -111,15 +131,7 @@ export function normalizeGeminiToolSchemas(
   /** Provider tool-schema normalization context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
-    }
-    return {
-      ...tool,
-      parameters: cleanSchemaForGemini(tool.parameters),
-    };
-  });
+  return normalizeToolSchemasIfChanged(ctx, cleanSchemaForGemini);
 }
 
 /**
@@ -164,7 +176,9 @@ export function normalizeOpenAIToolSchemas(
     }
     return {
       ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}),
+      parameters: normalizeOpenAIStrictCompatSchema(
+        truncateToolSchemaDepth(tool.parameters ?? {}, tool.name),
+      ),
     };
   });
 }
@@ -256,7 +270,17 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     Object.entries(record)
       .filter(([key]) => key !== unionKey)
       .map(([key, value]) => {
-        const next = normalizeDeepSeekSchema(value);
+        let next = value;
+        if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+          const entries = Object.entries(value).map(
+            ([name, child]) => [name, normalizeDeepSeekSchema(child)] as const,
+          );
+          if (entries.some(([name, child]) => child !== value[name])) {
+            next = Object.fromEntries(entries);
+          }
+        } else if (SCHEMA_NESTED_KEYS.has(key)) {
+          next = normalizeDeepSeekSchema(value);
+        }
         changed ||= next !== value;
         return [key, next];
       }),

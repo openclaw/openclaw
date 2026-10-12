@@ -8,6 +8,7 @@ import { canonicalizeWebhookRouteKey } from "openclaw/plugin-sdk/webhook-targets
 import { z } from "zod";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { resolveMSTeamsWebhookPath } from "./accounts-webhook.js";
+import { hasConfiguredMSTeamsCredentials } from "./token-config.js";
 
 type MSTeamsRefinementAccount = Pick<
   MSTeamsConfig,
@@ -36,27 +37,62 @@ function hasConfiguredValue(value: unknown): boolean {
     : value !== undefined && value !== null;
 }
 
-function hasEnvironmentBackedDefaultCredentials(value: MSTeamsRefinementConfig): boolean {
-  const hasAppId =
-    hasConfiguredValue(value.appId) || hasConfiguredValue(process.env.MSTEAMS_APP_ID);
-  const hasTenantId =
-    hasConfiguredValue(value.tenantId) || hasConfiguredValue(process.env.MSTEAMS_TENANT_ID);
-  const authType = value.authType ?? process.env.MSTEAMS_AUTH_TYPE ?? "secret";
-  if (authType === "federated") {
-    const hasCertificate =
-      hasConfiguredValue(value.certificatePath) ||
-      hasConfiguredValue(process.env.MSTEAMS_CERTIFICATE_PATH);
-    const usesManagedIdentity =
-      value.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
-    return hasAppId && hasTenantId && (hasCertificate || usesManagedIdentity);
-  }
-  const hasPassword =
-    hasConfiguredValue(value.appPassword) || hasConfiguredValue(process.env.MSTEAMS_APP_PASSWORD);
-  return hasAppId && hasTenantId && hasPassword;
-}
-
 function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
   return isHttpsUrlAllowedByHostnameSuffixAllowlist(value.trim(), ["botframework.azure.cn"]);
+}
+
+function refineEffectiveAccount(
+  account: MSTeamsRefinementAccount,
+  path: string[],
+  isDefault: boolean,
+  ctx: z.RefinementCtx,
+): void {
+  const label = isDefault
+    ? "The effective default Microsoft Teams account"
+    : "channels.msteams.accounts.*";
+  const field = (name: string) => `${label}${isDefault ? " " : "."}${name}`;
+  const allowFrom = isDefault
+    ? "allowFrom"
+    : "channels.msteams.accounts.*.allowFrom (or channels.msteams.allowFrom)";
+  requireOpenAllowFrom({
+    policy: account.dmPolicy,
+    allowFrom: account.allowFrom,
+    ctx,
+    path: [...path, "allowFrom"],
+    message: `${field('dmPolicy="open"')} requires ${allowFrom} to include "*"`,
+  });
+  requireAllowlistAllowFrom({
+    policy: account.dmPolicy,
+    allowFrom: account.allowFrom,
+    ctx,
+    path: [...path, "allowFrom"],
+    message: `${field('dmPolicy="allowlist"')} requires ${allowFrom} to contain at least one sender ID`,
+  });
+  const issue = (name: string, message: string) =>
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...path, ...name.split(".")], message });
+  if (account.sso?.enabled === true && !account.sso.connectionName?.trim()) {
+    issue(
+      "sso.connectionName",
+      `${field("sso.enabled=true")} requires sso.connectionName to identify the Bot Framework OAuth connection`,
+    );
+  }
+  const cloud = account.cloud;
+  const serviceUrl = account.serviceUrl?.trim();
+  if (cloud && cloud !== "Public" && cloud !== "China" && !serviceUrl) {
+    issue("serviceUrl", `${field("cloud")} requires serviceUrl for non-public Teams clouds`);
+  }
+  if (cloud === "China" && serviceUrl && !isAzureChinaBotFrameworkServiceUrl(serviceUrl)) {
+    issue(
+      "serviceUrl",
+      `${field("cloud=China")} requires serviceUrl to use an Azure China Bot Framework channel host`,
+    );
+  }
+  if (cloud !== "China" && serviceUrl && isAzureChinaBotFrameworkServiceUrl(serviceUrl)) {
+    issue(
+      "cloud",
+      `Azure China Bot Framework serviceUrl hosts require ${isDefault ? "the effective default Microsoft Teams account cloud=China" : "channels.msteams.accounts.*.cloud=China"}`,
+    );
+  }
 }
 
 export function refineMSTeamsConfig(value: MSTeamsRefinementConfig, ctx: z.RefinementCtx): void {
@@ -122,7 +158,7 @@ export function refineMSTeamsConfig(value: MSTeamsRefinementConfig, ctx: z.Refin
     ...accountsDefault,
     sso: { ...value.sso, ...accountsDefault?.sso },
   };
-  const hasEnvironmentDefaultCredentials = hasEnvironmentBackedDefaultCredentials(effectiveDefault);
+  const hasEnvironmentDefaultCredentials = hasConfiguredMSTeamsCredentials(effectiveDefault);
   if (rootDefaultIdentityFields && accountsDefaultIdentityFields) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -145,76 +181,7 @@ export function refineMSTeamsConfig(value: MSTeamsRefinementConfig, ctx: z.Refin
       : process.env.MSTEAMS_APP_ID;
   if (rootDefaultAccountEnabled && defaultAccountConfigured) {
     const defaultPath = accountsDefault ? accountsDefaultPath : [];
-    const effectiveDmPolicy = effectiveDefault.dmPolicy;
-    const effectiveAllowFrom = effectiveDefault.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: [...defaultPath, "allowFrom"],
-      message:
-        'The effective default Microsoft Teams account dmPolicy="open" requires allowFrom to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: [...defaultPath, "allowFrom"],
-      message:
-        'The effective default Microsoft Teams account dmPolicy="allowlist" requires allowFrom to contain at least one sender ID',
-    });
-
-    const effectiveSso = effectiveDefault.sso;
-    if (effectiveSso.enabled === true && !effectiveSso.connectionName?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...defaultPath, "sso", "connectionName"],
-        message:
-          "The effective default Microsoft Teams account sso.enabled=true requires sso.connectionName to identify the Bot Framework OAuth connection",
-      });
-    }
-
-    const effectiveCloud = effectiveDefault.cloud;
-    const effectiveServiceUrl = effectiveDefault.serviceUrl;
-    if (
-      effectiveCloud &&
-      effectiveCloud !== "Public" &&
-      effectiveCloud !== "China" &&
-      !effectiveServiceUrl?.trim()
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...defaultPath, "serviceUrl"],
-        message:
-          "The effective default Microsoft Teams account cloud requires serviceUrl for non-public Teams clouds",
-      });
-    }
-    if (
-      effectiveCloud === "China" &&
-      effectiveServiceUrl?.trim() &&
-      !isAzureChinaBotFrameworkServiceUrl(effectiveServiceUrl)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...defaultPath, "serviceUrl"],
-        message:
-          "The effective default Microsoft Teams account cloud=China requires serviceUrl to use an Azure China Bot Framework channel host",
-      });
-    }
-    if (
-      effectiveCloud !== "China" &&
-      effectiveServiceUrl?.trim() &&
-      isAzureChinaBotFrameworkServiceUrl(effectiveServiceUrl)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...defaultPath, "cloud"],
-        message:
-          "Azure China Bot Framework serviceUrl hosts require the effective default Microsoft Teams account cloud=China",
-      });
-    }
-  }
-  if (rootDefaultAccountEnabled && defaultAccountConfigured) {
+    refineEffectiveAccount(effectiveDefault, defaultPath, true, ctx);
     recordAppId(effectiveDefaultAppId, ["appId"]);
     recordWebhookPath(resolveMSTeamsWebhookPath(value, DEFAULT_ACCOUNT_ID, accountsDefault), [
       ...(accountsDefault ? accountsDefaultPath : []),
@@ -236,74 +203,18 @@ export function refineMSTeamsConfig(value: MSTeamsRefinementConfig, ctx: z.Refin
     if (!accountEnabled) {
       continue;
     }
-    const effectiveDmPolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
+    refineEffectiveAccount(
+      {
+        dmPolicy: account.dmPolicy ?? value.dmPolicy,
+        allowFrom: account.allowFrom ?? value.allowFrom,
+        sso: { ...value.sso, ...account.sso },
+        cloud: account.cloud ?? value.cloud,
+        serviceUrl: account.serviceUrl ?? value.serviceUrl,
+      },
+      path,
+      false,
       ctx,
-      path: [...path, "allowFrom"],
-      message:
-        'channels.msteams.accounts.*.dmPolicy="open" requires channels.msteams.accounts.*.allowFrom (or channels.msteams.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: [...path, "allowFrom"],
-      message:
-        'channels.msteams.accounts.*.dmPolicy="allowlist" requires channels.msteams.accounts.*.allowFrom (or channels.msteams.allowFrom) to contain at least one sender ID',
-    });
-
-    const effectiveSso = { ...value.sso, ...account.sso };
-    if (effectiveSso.enabled === true && !effectiveSso.connectionName?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...path, "sso", "connectionName"],
-        message:
-          "channels.msteams.accounts.*.sso.enabled=true requires sso.connectionName to identify the Bot Framework OAuth connection",
-      });
-    }
-
-    const effectiveCloud = account.cloud ?? value.cloud;
-    const effectiveServiceUrl = account.serviceUrl ?? value.serviceUrl;
-    if (
-      effectiveCloud &&
-      effectiveCloud !== "Public" &&
-      effectiveCloud !== "China" &&
-      !effectiveServiceUrl?.trim()
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...path, "serviceUrl"],
-        message:
-          "channels.msteams.accounts.*.cloud requires serviceUrl for non-public Teams clouds",
-      });
-    }
-    if (
-      effectiveCloud === "China" &&
-      effectiveServiceUrl?.trim() &&
-      !isAzureChinaBotFrameworkServiceUrl(effectiveServiceUrl)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...path, "serviceUrl"],
-        message:
-          "channels.msteams.accounts.*.cloud=China requires serviceUrl to use an Azure China Bot Framework channel host",
-      });
-    }
-    if (
-      effectiveCloud !== "China" &&
-      effectiveServiceUrl?.trim() &&
-      isAzureChinaBotFrameworkServiceUrl(effectiveServiceUrl)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [...path, "cloud"],
-        message:
-          "Azure China Bot Framework serviceUrl hosts require channels.msteams.accounts.*.cloud=China",
-      });
-    }
+    );
 
     if (!account.appId?.trim()) {
       ctx.addIssue({
