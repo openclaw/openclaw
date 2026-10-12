@@ -100,6 +100,9 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   extraSystemPrompt?: string;
   modelOverride?: string;
   streamParams?: AgentStreamParams;
+  // Command preparation otherwise derives the owner from the session key
+  // alone, which can disagree with the agent the request resolved to.
+  agentId: string;
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -160,6 +163,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         extraSystemPrompt: params.extraSystemPrompt || undefined,
         model: params.modelOverride,
         streamParams: params.streamParams,
+        agentId: params.agentId,
         sessionKey: params.sessionKey,
         runId: params.runId,
         deliver: false,

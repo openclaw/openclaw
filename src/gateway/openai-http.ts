@@ -687,6 +687,7 @@ export async function handleOpenAiHttpRequest(
       images,
       clientTools: toolChoice.tools,
       modelOverride,
+      agentId,
       sessionKey,
       runId,
       messageChannel,
