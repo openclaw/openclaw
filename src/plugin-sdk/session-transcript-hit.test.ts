@@ -19,6 +19,7 @@ const { loadGatewaySessionStore, loadGatewaySessionStoreAsync } = vi.hoisted(() 
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
   loadCombinedSessionStoreForGatewayCore: loadGatewaySessionStore,
 }));
+// mock-isolation: SDK projection tests supply synthetic snapshots without loading database owners.
 vi.mock("../config/sessions/combined-store-gateway-read.js", () => ({
   loadCombinedSessionStoreForGatewayCoreAsync: loadGatewaySessionStoreAsync,
 }));
