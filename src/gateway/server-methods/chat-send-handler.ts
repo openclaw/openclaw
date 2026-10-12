@@ -171,10 +171,9 @@ async function handleChatSendWithOptions(
     admission.settleTerminal({ ...terminalState, startedAt: admissionStartedAt });
   // sessions.create invokes chat only after committing a fresh session. Its eligible
   // initial input transfers custody with the transcript and restart claim, not before.
-  const commitInitialInput =
-    req.method === "sessions.create" &&
-    restartSafeAdmission !== undefined &&
-    !restartSafeAdmission.retryExpectedState;
+  const commitFreshInput =
+    restartSafeAdmission !== undefined && !restartSafeAdmission.retryExpectedState;
+  const commitInitialInput = req.method === "sessions.create" && commitFreshInput;
   let inputAdmissionAttempted = false;
   let replyAdmissionTicket: ReturnType<typeof reserveReplyAdmissionTicket>;
   let releaseBeforeDispatch: void | (() => void) = undefined;
@@ -192,6 +191,9 @@ async function handleChatSendWithOptions(
       (assertSource) => {
         admission.assertClientUploadAllowed?.();
         assertCustodyLifetimeCurrent();
+        if (commitFreshInput) {
+          sessionMutationAuthorization?.assertCurrent();
+        }
         assertSource();
       },
     );
@@ -363,10 +365,7 @@ async function handleChatSendWithOptions(
     if (restartSafeAdmission) {
       inputAdmissionAttempted = true;
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
-      if (
-        commitInitialInput ||
-        (!request.goalOperation && !restartSafeAdmission.retryExpectedState)
-      ) {
+      if (commitInitialInput || (!request.goalOperation && commitFreshInput)) {
         approvedInput = persistedUserTurn?.message;
       }
       const goalOperation = request.goalOperation;

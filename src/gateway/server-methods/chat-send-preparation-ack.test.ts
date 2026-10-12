@@ -1,6 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
@@ -15,13 +19,19 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/s
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import * as transcriptPersistence from "../../sessions/user-turn-transcript.persistence.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import {
+  setClientProfile,
+  useBrowserFollowupFixture,
+} from "./chat-send-pending-inputs.test-support.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -182,6 +192,83 @@ it.for(["durable", "native-incognito"] as const)(
       await fixture.cleanup();
     }
     expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+  },
+);
+
+it.each(["unchanged", "selected profile", "session access"] as const)(
+  "rechecks %s before committing unhooked idle input",
+  async (change) => {
+    const fixture = await createFixture({ active: false });
+    const source = ensureProfileForEmail("idle-admission-source@example.test");
+    const other = ensureProfileForEmail("idle-admission-owner@example.test");
+    setClientProfile(fixture.client, source);
+    fixture.client.connect.scopes = ["operator.read", "operator.write"];
+    await patchSessionEntryCore(fixture.scope, () => ({
+      createdActor: { type: "human", source: "profile", id: other.id },
+      visibility: "shared",
+    }));
+    const projection = await createSessionRowProjection({
+      cfg: fixture.context.getRuntimeConfig(),
+      modelCatalog: [],
+    });
+    bindSessionRowProjection(fixture.context, () => projection);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const persist = transcriptPersistence.persistUserTurnTranscript;
+    const pausedCommit = vi
+      .spyOn(transcriptPersistence, "persistUserTurnTranscript")
+      .mockImplementation(async (params) => {
+        entered.resolve();
+        await release.promise;
+        return persist(params);
+      });
+    const sending = fixture.send(undefined, { expectedProfileId: source.id });
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        sending,
+        "Idle send settled before reaching its transcript owner",
+      );
+      expect(fixture.beforeApprove).not.toHaveBeenCalled();
+      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      if (change === "selected profile") {
+        setClientProfile(fixture.client, other);
+      } else if (change === "session access") {
+        await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
+      }
+      release.resolve();
+      const respond = await sending;
+      expect(respond).toHaveBeenCalledOnce();
+      if (change === "unchanged") {
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        await fixture.dispatchedRecorder;
+        expect(loadTranscriptEventsSync(fixture.scope)).toHaveLength(
+          fixture.activeTranscript.length + 1,
+        );
+        expect(loadSessionEntry(fixture.scope)).toMatchObject({
+          restartRecoveryDeliveryRunId: fixture.params.idempotencyKey,
+        });
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      } else {
+        expect(respond.mock.calls[0]?.[0]).toBe(false);
+        expect(respond.mock.calls[0]?.[2]).toBeDefined();
+        expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+        expect(loadSessionEntry(fixture.scope)?.restartRecoveryDeliveryRunId).not.toBe(
+          fixture.params.idempotencyKey,
+        );
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      }
+      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+    } finally {
+      release.resolve();
+      await sending;
+      pausedCommit.mockRestore();
+      await fixture.cleanup();
+      projection.dispose();
+      await projection.ensureMaterialized();
+    }
   },
 );
 
