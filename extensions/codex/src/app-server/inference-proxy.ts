@@ -17,6 +17,7 @@ import {
 import { createCodexInferenceContext } from "./inference-context.js";
 import {
   authorizationFailure,
+  requestTooLargeFailure,
   CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE,
   createCodexInferenceDispatch,
   isTerminalResponse,
@@ -326,8 +327,11 @@ export async function createCodexInferenceProxy(params: {
         // Errors can contain headers, bodies, or the private URL: never log/reflect them.
         if (!res.headersSent && !res.destroyed) {
           const denied = authorizationFailure(error);
+          const tooLarge = requestTooLargeFailure(error);
           if (denied) {
             res.writeHead(403, { "content-type": "application/json" }).end(denied);
+          } else if (tooLarge) {
+            res.writeHead(400, { "content-type": "application/json" }).end(tooLarge);
           } else {
             res.writeHead(502, { "content-type": "text/plain" }).end(FAILURE);
           }
@@ -631,9 +635,9 @@ export async function createCodexInferenceProxy(params: {
                     await forward(frame);
                   } catch (error) {
                     prepared?.release();
-                    const denied = authorizationFailure(error);
-                    if (denied && accepted.readyState === WebSocket.OPEN) {
-                      accepted.send(denied, { binary: false }, close);
+                    const refused = authorizationFailure(error) ?? requestTooLargeFailure(error);
+                    if (refused && accepted.readyState === WebSocket.OPEN) {
+                      accepted.send(refused, { binary: false }, close);
                     } else {
                       close();
                     }
