@@ -37,6 +37,7 @@ import type {
   SessionTranscriptVisibleMessageDeltaLimits,
   SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.types.js";
+import { readSessionActorMemoryBoundedTail } from "./session-actor-memory-history-facts.js";
 import {
   createSessionActorMemoryHistoryNavigation,
   type SessionActorMemoryHistoryRow,
@@ -51,6 +52,7 @@ import {
   parseRawTranscriptCursor,
 } from "./session-transcript-raw-cursor.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
+import { readRecentTranscriptConversationText } from "./transcript-recent-text.js";
 
 export type SessionActorMemoryHistoryScope = {
   agentId: string;
@@ -356,6 +358,11 @@ export function readSessionActorMemoryProjection(
       (row) => isRecord(row.event) && row.event.id === id && isVisibleTranscriptRecord(row.event),
     );
   switch (selection.kind) {
+    case "recent-text":
+      return readRecentTranscriptConversationText(
+        (page) => readSessionActorMemoryBoundedTail(window, navigation, page),
+        selection.options,
+      );
     case "count":
       return history.length;
     case "delta": {

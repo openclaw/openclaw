@@ -64,6 +64,10 @@ Watches clean themselves up: cursor rows expire with signal-log retention, are r
 
 Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
 
+Recent user text used to recognize OpenClaw-origin prompts comes from one transcript
+snapshot, including long histories. Concurrent replies or transcript resets cannot
+repeat a page or combine messages from different history windows.
+
 OpenCode detection is deliberately conservative. OpenCode's v1 tables do not preserve message provenance, so reporting ambiguous rows would create false alarms. Per-message provenance exists only in its v2 schema. OpenCode therefore does not report image-only turns, `@file`-mention-only turns, slash commands routed to a subagent, or turns from ACP clients that annotate content with an audience (mapped by OpenCode to `synthetic` or `ignored`). It also suppresses text matching any of the preceding 50 user messages, to catch compaction replay. A human deliberately repeating the same text within that window can therefore be missed.
 
 If an adopted session's upstream source is deleted externally, three consecutive missing checks produce one `upstream_missing` signal for its watchers, and remove the upstream link. Three consecutive checks are about three monitor ticks. Continuing the catalog session again creates a fresh link.
